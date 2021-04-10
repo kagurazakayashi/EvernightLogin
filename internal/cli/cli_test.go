@@ -37,7 +37,7 @@ func TestExecuteExitCodes(t *testing.T) {
 			name:       "帮助成功",
 			args:       []string{"--help"},
 			wantCode:   0,
-			wantStdout: "当前只完成项目初始化",
+			wantStdout: "配置加载器已提供但尚未接入服务启动",
 		},
 		{
 			name:       "无参数明确失败",

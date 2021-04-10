@@ -1,7 +1,8 @@
 // Package cli 装配 login-server 的命令行入口。
 //
-// 本阶段只提供版本与帮助命令；配置加载、HTTP 监听、OAuth/OIDC 和管理接口
-// 尚未实现。不带参数运行会返回明确错误，不能用固定成功返回值伪装服务可用。
+// 本阶段只提供版本与帮助命令；配置加载器已在根包提供，但尚未接入服务启动。
+// HTTP 监听、OAuth/OIDC 和管理接口仍未实现。不带参数运行会返回明确错误，
+// 不能用固定成功返回值伪装服务可用。
 package cli
 
 import (
@@ -25,7 +26,7 @@ func New(build login.BuildInfo) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           programName,
 		Short:         "login 身份服务（当前仅提供版本与帮助）",
-		Long:          "login 身份服务的独立进程入口。\n\n当前只完成项目初始化，尚未实现配置加载、HTTP 监听、OAuth/OIDC 或管理接口。\n不带参数运行会明确失败，不会假装服务已启动。",
+		Long:          "login 身份服务的独立进程入口。\n\n当前只完成项目初始化：配置加载器已提供但尚未接入服务启动，HTTP 监听、OAuth/OIDC 和管理接口仍未实现。\n不带参数运行会明确失败，不会假装服务已启动。",
 		Version:       build.String(),
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,

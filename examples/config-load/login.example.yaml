@@ -1,0 +1,31 @@
+# login 最小配置示例。
+#
+# 覆盖顺序（后者覆盖前者）：内置默认值 < 本文件 < LOGIN_ 环境变量 < 显式代码选项。
+# 所有字段都可以省略以使用默认值；未知字段、重复键、类型错误、null、超范围
+# 或非法组合都会让加载失败，不会产生监听或数据库副作用。
+server:
+  # 默认仅监听本机回环地址；对外部署时改成 0.0.0.0:8443 并配置 https 公开地址。
+  listen_addr: "127.0.0.1:8080"
+  # 外部访问地址；留空表示尚未配置。使用 http 公开地址时只能监听回环地址。
+  public_base_url: ""
+  shutdown_timeout_seconds: 10
+logging:
+  level: info
+  format: text
+database:
+  # 当前版本只接受 sqlite；其他数据库适配在后续步骤增加。
+  driver: sqlite
+  path: "database/login.db"
+  # 显式 false 会保留，不会被默认值覆盖。
+  wal: true
+  busy_timeout_ms: 5000
+
+# 秘密不能直接写在本文件里，只能引用受保护来源。取消注释后可直接使用：
+# secrets:
+#   master_key:
+#     # 非 Windows 平台要求该文件仅所有者可读写。
+#     file: "P:/secure/login/master.key"
+# 也可以使用已受保护的环境变量（示例）：
+# secrets:
+#   master_key:
+#     env: LOGIN_MASTER_KEY
