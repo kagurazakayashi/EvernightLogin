@@ -6,8 +6,8 @@ login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立�
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；可独立调用的类型化配置加载器（内置默认值、YAML、`LOGIN_` 环境变量和显式代码选项的合并、严格校验、脱敏诊断、热更新/重启分类）。
-- 尚未实现：HTTP 监听、账户/认证/授权、数据库访问、OAuth/OIDC、Web 页面和审计；配置加载器尚未接入服务启动。
+- 已实现：版本与构建信息；可独立调用的类型化配置加载器（内置默认值、YAML、`LOGIN_` 环境变量和显式代码选项的合并、严格校验、脱敏诊断、热更新/重启分类）；核心实例生命周期契约（构造、启动、有期限关闭、启动失败回滚、多实例隔离、宿主资源所有权）。
+- 尚未实现：HTTP 监听、账户/认证/授权、数据库访问、OAuth/OIDC、Web 页面和审计；配置加载器与生命周期尚未接入 `login-server` 启动，也没有后台任务队列。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -63,6 +63,40 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 ```bat
 go run .\examples\config-load -config examples\config-load\login.example.yaml
 ```
+
+## 实例生命周期（步骤 04）
+
+核心实例使用显式依赖注入，不做全局单例，也不在 `init()` 中启动协程或监听。同一进程可以创建多个互不影响的实例。
+
+```go
+cfg, err := login.Load(login.LoadOptions{YAMLFile: "login.yaml"})
+if err != nil {
+    return err
+}
+instance, err := login.New(login.Options{Config: &cfg})
+if err != nil {
+    return err
+}
+defer instance.Close(context.Background())
+// 宿主可以只使用核心能力而不调用 Start；后台组件在后续步骤接入。
+if err := instance.Start(ctx); err != nil {
+    return err
+}
+```
+
+状态与重入规则：
+
+| 状态 | 含义 | 可执行操作 |
+|---|---|---|
+| `new` | 已构造，未启动组件 | `Start`、`Close` |
+| `running` | 后台组件已全部启动 | `Close`；再次 `Start` 返回 `ErrAlreadyStarted` |
+| `closed` | 已关闭或启动失败 | 只能重复 `Close`（安全返回 nil）；`Start` 返回 `ErrClosed` |
+
+- `New` 只校验配置并复制依赖，不启动组件、不监听端口、不打开数据库、不创建协程。
+- `Start` 按 `Options.Components` 顺序启动；任一组件失败时，已启动组件按逆序关闭，失败组件必须自行清理；启动失败后实例进入 `closed`，不会重复启动产生多套资源。
+- `Close` 按启动顺序逆序关闭，同时受调用方 `ctx` 期限与配置 `server.shutdown_timeout_seconds` 约束；可安全重复调用，关闭错误会聚合返回，但不会重复返回旧错误。
+- 后台组件实现 `login.BackgroundComponent`（`Start`/`Close`）。组件只关闭自己创建的资源；宿主传入的数据库、HTTP 服务器、日志器、密钥文件句柄等由宿主关闭。测试替身只用于测试，不是生产服务。
+- 本步没有后台任务队列；生命周期接口留给后续数据库、HTTP 和任务模块接入。
 
 ## 本地检查（Windows）
 
