@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -96,6 +97,12 @@ func (s Secret) MarshalJSON() ([]byte, error) {
 // MarshalYAML 实现 yaml.Marshaler，输出脱敏标记；不得据此序列化后回读为秘密。
 func (s Secret) MarshalYAML() (any, error) {
 	return s.String(), nil
+}
+
+// LogValue 实现 slog.LogValuer，确保把 Secret 直接写入结构化日志时只出现
+// [REDACTED] 或 [UNSET]，不会泄露内容。
+func (s Secret) LogValue() slog.Value {
+	return slog.StringValue(s.String())
 }
 
 // SecretSourceKind 是受保护秘密来源的类型。

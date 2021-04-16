@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 03）
+## 项目状态（步骤 05）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；可独立调用的类型化配置加载器（内置默认值、YAML、`LOGIN_` 环境变量和显式代码选项的合并、严格校验、脱敏诊断、热更新/重启分类）；核心实例生命周期契约（构造、启动、有期限关闭、启动失败回滚、多实例隔离、宿主资源所有权）。
-- 尚未实现：HTTP 监听、账户/认证/授权、数据库访问、OAuth/OIDC、Web 页面和审计；配置加载器与生命周期尚未接入 `login-server` 启动，也没有后台任务队列。
+- 已实现：版本与构建信息；类型化配置加载器（默认值、YAML、`LOGIN_` 环境变量和显式代码选项的合并、严格校验、脱敏诊断、热更新/重启分类）；核心实例生命周期契约（构造、启动、有期限关闭、启动失败回滚、多实例隔离、宿主资源所有权）；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志。
+- 尚未实现：HTTP 监听与访问日志、账户/认证/授权、数据库访问、OAuth/OIDC、Web 页面和审计数据库；配置加载器与生命周期尚未接入 `login-server` 启动，也没有后台任务队列。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -96,7 +96,24 @@ if err := instance.Start(ctx); err != nil {
 - `Start` 按 `Options.Components` 顺序启动；任一组件失败时，已启动组件按逆序关闭，失败组件必须自行清理；启动失败后实例进入 `closed`，不会重复启动产生多套资源。
 - `Close` 按启动顺序逆序关闭，同时受调用方 `ctx` 期限与配置 `server.shutdown_timeout_seconds` 约束；可安全重复调用，关闭错误会聚合返回，但不会重复返回旧错误。
 - 后台组件实现 `login.BackgroundComponent`（`Start`/`Close`）。组件只关闭自己创建的资源；宿主传入的数据库、HTTP 服务器、日志器、密钥文件句柄等由宿主关闭。测试替身只用于测试，不是生产服务。
+- 实例按 `Config.Logging` 创建结构化运行日志器；宿主可用 `Options.Logger` 完全注入自己的日志器，或用 `Options.LogOutput` 只注入输出目标（默认 `io.Discard`，嵌入模式静默）。实例不会关闭宿主日志器。
 - 本步没有后台任务队列；生命周期接口留给后续数据库、HTTP 和任务模块接入。
+
+## 错误码、请求编号与运行日志（步骤 05）
+
+- 错误码注册表与《login_错误码与排障手册》逐项一致：46 个设计码包含稳定 `code`、分类、默认公开说明和建议 HTTP 状态。未实现模块只注册约定，不伪造产生记录；测试会对照手册检查重复、缺失或含义漂移。
+- `login.AppError` 分离公开信息与内部原因：`Error()`、JSON 和结构化日志只包含 code、message、request_id、task_id；内部 cause、受限内部原因码（`WithInternalReasonCode`）和堆栈不会进入公开输出，但原因链仍支持 `errors.Is`/`errors.As`。
+- 未注册错误码自动回退 `INTERNAL_ERROR`；普通错误可用 `login.FromError` 包装为统一错误并生成请求编号。
+- 请求编号使用 `login.NewRequestID()` 生成 `req_` 前缀编号；`login.ValidateRequestID`/`ValidateTaskID` 限制长度与字符集，拒绝换行和控制字符，供未来 HTTP 层复用。`task_id` 与受限内部 `reason_code` 字段已预留，任务编号生成在后续步骤实现。
+- 运行日志使用 Go 标准库 `log/slog`，级别与格式来自配置（debug/info/warn/error，text/json）；`Secret` 与 `AppError` 实现 slog 脱敏输出，日志不写秘密、不直接展开内部原因。
+- 标准 OAuth/OIDC 错误使用小写协议字段（如 `invalid_grant`、`access_denied`），由未来协议适配层映射，不注册为全大写统一业务码，也不被统一 JSON 强行覆盖。
+- 本步不实现审计数据库、HTTP 访问日志或请求处理中间件。
+
+```go
+appErr := login.NewAppError(login.CodePermissionRequired, "",
+    login.WithRequestID(login.NewRequestID()))
+fmt.Println(appErr.Error()) // PERMISSION_REQUIRED: 缺少当前操作所需权限 request_id=...
+```
 
 ## 本地检查（Windows）
 

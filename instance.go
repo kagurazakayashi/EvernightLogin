@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/logging"
 )
 
 // State 表示 Instance 的生命周期状态。
@@ -63,12 +67,19 @@ type BackgroundComponent interface {
 // New 后使用核心能力而不调用 Start，后台组件在后续步骤接入。
 type Options struct {
 	// Config 为 nil 时使用 Default()；非 nil 时先通过 Config.Validate 校验，
-	// 校验失败时 New 返回配置错误。
+	// 校验失败时 New 返回 CONFIG_INVALID 的统一错误。
 	Config *Config
 	// Components 是 Instance 接管生命周期的后台组件，按声明顺序启动、按启动
 	// 顺序的逆序关闭。组件对象可以由宿主构造（扩展或测试），但一旦传入就由
 	// Instance 管理启动与关闭；同一组件不得同时交给多个 Instance。
 	Components []BackgroundComponent
+	// Logger 是宿主注入的结构化日志器。非 nil 时实例直接使用，由宿主负责其
+	// 级别、格式与生命周期，实例不会关闭或替换它；此时 Config.Logging 的级别
+	// 与格式不生效。nil 时实例按 Config.Logging 创建默认日志器。
+	Logger *slog.Logger
+	// LogOutput 只在 Logger 为 nil 时使用，作为默认日志器的输出目标；nil 表示
+	// io.Discard，让嵌入模式默认静默。独立服务器在后续步骤会传入标准错误输出。
+	LogOutput io.Writer
 }
 
 // Instance 是 login 的隔离实例。
@@ -78,13 +89,14 @@ type Options struct {
 // 启动成功后再次 Start 返回 ErrAlreadyStarted。
 //
 // 组件回调执行期间 Instance 持有内部锁；组件不得在 Start/Close 中同步调用
-// 同一实例的 Start/Close/State/Config，否则会阻塞或死锁。
+// 同一实例的 Start/Close/State/Config/Logger，否则会阻塞或死锁。
 type Instance struct {
 	mu           sync.Mutex
 	state        State
 	config       Config
 	components   []BackgroundComponent
 	started      []startedComponent
+	logger       *slog.Logger
 	closeTimeout time.Duration
 }
 
@@ -96,8 +108,8 @@ type startedComponent struct {
 }
 
 // New 构造一个 Instance，但不启动任何组件、不监听端口、不打开数据库、不创建
-// 协程。Options.Config 为 nil 时使用 Default()；传入非法配置或 nil 组件时
-// 返回错误。
+// 协程。Options.Config 为 nil 时使用 Default()；传入非法配置时返回
+// CONFIG_INVALID 的统一错误并保留配置校验原因链；nil 组件会被拒绝。
 //
 // 宿主可以只构造实例并使用核心能力；只有需要后台组件时才调用 Start。多个
 // Instance 可以在同一进程内并存且互不影响。
@@ -105,9 +117,20 @@ func New(opts Options) (*Instance, error) {
 	config := Default()
 	if opts.Config != nil {
 		if err := opts.Config.Validate(); err != nil {
-			return nil, fmt.Errorf("配置无效: %w", err)
+			return nil, NewAppError(CodeConfigInvalid, "",
+				WithCause(err), WithRequestID(NewRequestID()))
 		}
 		config = *opts.Config
+	}
+
+	logger := opts.Logger
+	if logger == nil {
+		created, err := logging.New(string(config.Logging.Level), string(config.Logging.Format), opts.LogOutput)
+		if err != nil {
+			return nil, NewAppError(CodeInternalError, "无法创建运行日志器",
+				WithCause(err), WithRequestID(NewRequestID()))
+		}
+		logger = created
 	}
 
 	components := make([]BackgroundComponent, len(opts.Components))
@@ -122,6 +145,7 @@ func New(opts Options) (*Instance, error) {
 		state:        StateNew,
 		config:       config,
 		components:   components,
+		logger:       logger,
 		closeTimeout: time.Duration(config.Server.ShutdownTimeoutSeconds) * time.Second,
 	}, nil
 }
@@ -141,6 +165,14 @@ func (i *Instance) Config() Config {
 	return i.config
 }
 
+// Logger 返回实例使用的结构化日志器：宿主注入时返回宿主日志器，否则返回按
+// Config.Logging 创建的默认日志器。宿主日志器由宿主管理，实例不关闭它。
+func (i *Instance) Logger() *slog.Logger {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.logger
+}
+
 // Start 按声明顺序启动所有后台组件。
 //
 // Start 只能成功调用一次：成功后再次调用返回 ErrAlreadyStarted；实例关闭后
@@ -148,6 +180,8 @@ func (i *Instance) Config() Config {
 // 之后不能再启动。任一组件启动失败时，已成功启动的组件按逆序关闭，失败组件
 // 由它自己清理；回滚关闭错误会与启动错误一起返回。
 //
+// 返回的生命周期错误是统一 AppError（未分类组件错误回退为 INTERNAL_ERROR），
+// 带 request_id 并写入结构化运行日志；组件返回的具体 AppError 会保留错误码。
 // 组件在 ctx 取消时仍应尽快返回错误，Instance 不启动后台协程等它结束。
 func (i *Instance) Start(ctx context.Context) error {
 	if ctx == nil {
@@ -165,32 +199,50 @@ func (i *Instance) Start(ctx context.Context) error {
 	}
 
 	if err := ctx.Err(); err != nil {
+		requestID := NewRequestID()
+		appError := NewAppError(CodeInternalError, "实例启动已取消",
+			WithCause(err), WithRequestID(requestID))
+		i.logger.Warn("实例启动已取消", "request_id", requestID, "error", appError)
 		i.state = StateClosed
-		return fmt.Errorf("启动前上下文已结束: %w", err)
+		return appError
 	}
 
+	i.logger.Debug("实例开始启动", "component_count", len(i.components))
 	i.started = make([]startedComponent, 0, len(i.components))
 	for index, component := range i.components {
 		if err := ctx.Err(); err != nil {
-			rollbackErr := i.rollbackStarted()
+			requestID := NewRequestID()
+			appError := NewAppError(CodeInternalError, "实例启动已取消",
+				WithCause(err), WithRequestID(requestID))
+			errs := []error{appError}
+			for _, rollbackErr := range i.rollbackStarted() {
+				errs = append(errs, classifyLifecycleError("启动取消后回滚关闭组件失败", rollbackErr, requestID))
+			}
+			i.logger.Error("实例启动已取消", "request_id", requestID, "error", appError)
 			i.state = StateClosed
-			return errors.Join(
-				fmt.Errorf("启动在第 %d 个组件前取消: %w", index, err),
-				rollbackErr,
-			)
+			return errors.Join(errs...)
 		}
+		i.logger.Debug("启动后台组件",
+			"component_index", index, "component_type", fmt.Sprintf("%T", component))
 		if err := component.Start(ctx); err != nil {
-			rollbackErr := i.rollbackStarted()
+			requestID := NewRequestID()
+			appError := classifyLifecycleError("后台组件启动失败", err, requestID)
+			errs := []error{appError}
+			for _, rollbackErr := range i.rollbackStarted() {
+				errs = append(errs, classifyLifecycleError("启动失败后回滚关闭组件失败", rollbackErr, requestID))
+			}
+			i.logger.Error("后台组件启动失败",
+				"component_index", index,
+				"component_type", fmt.Sprintf("%T", component),
+				"request_id", requestID, "error", appError)
 			i.state = StateClosed
-			return errors.Join(
-				fmt.Errorf("组件 %d（%T）启动失败: %w", index, component, err),
-				rollbackErr,
-			)
+			return errors.Join(errs...)
 		}
 		i.started = append(i.started, startedComponent{index: index, component: component})
 	}
 
 	i.state = StateRunning
+	i.logger.Info("实例启动完成", "component_count", len(i.started))
 	return nil
 }
 
@@ -200,7 +252,8 @@ func (i *Instance) Start(ctx context.Context) error {
 // Server.ShutdownTimeoutSeconds。Close 可以安全重复调用；第一次关闭后后续
 // 调用直接返回 nil。从未启动直接 Close 也会使实例进入 StateClosed。
 //
-// 关闭错误会聚合返回，但实例仍标记为已关闭；后续 Close 不重复返回旧错误。
+// 关闭错误会聚合返回（未分类组件错误回退为 INTERNAL_ERROR，带 request_id 并
+// 写入结构化运行日志），但实例仍标记为已关闭；后续 Close 不重复返回旧错误。
 // 组件关闭期间 Instance 持有内部锁，因此并发 Close 会串行化。
 func (i *Instance) Close(ctx context.Context) error {
 	if ctx == nil {
@@ -213,6 +266,7 @@ func (i *Instance) Close(ctx context.Context) error {
 	switch i.state {
 	case StateNew:
 		i.state = StateClosed
+		i.logger.Debug("实例在启动前关闭")
 		return nil
 	case StateClosed:
 		return nil
@@ -220,28 +274,56 @@ func (i *Instance) Close(ctx context.Context) error {
 
 	closeCtx, cancel := context.WithTimeout(ctx, i.closeTimeout)
 	defer cancel()
-	err := i.closeStarted(closeCtx)
+	requestID := NewRequestID()
+	closeErrors := i.closeStarted(closeCtx)
 	i.started = nil
 	i.state = StateClosed
-	return err
+
+	if len(closeErrors) == 0 {
+		i.logger.Info("实例已关闭", "request_id", requestID)
+		return nil
+	}
+	wrapped := make([]error, 0, len(closeErrors))
+	for _, closeErr := range closeErrors {
+		appError := classifyLifecycleError("关闭后台组件失败", closeErr, requestID)
+		wrapped = append(wrapped, appError)
+		i.logger.Error("关闭后台组件失败", "request_id", requestID, "error", appError)
+	}
+	return errors.Join(wrapped...)
+}
+
+// classifyLifecycleError 把生命周期错误转为统一 AppError。已经是 AppError 的
+// 组件错误保留错误码；如果没有请求编号则补上本次生命周期操作编号。未分类错误
+// 回退为 INTERNAL_ERROR，并保留原因链供受限诊断。
+func classifyLifecycleError(message string, err error, requestID string) *AppError {
+	if appError, ok := AsAppError(err); ok {
+		if appError.RequestID() != "" {
+			return appError
+		}
+		cloned := *appError
+		cloned.requestID = requestID
+		return &cloned
+	}
+	return NewAppError(CodeInternalError, message,
+		WithCause(err), WithRequestID(requestID))
 }
 
 // rollbackStarted 在启动失败时逆序关闭已启动组件。它使用独立于启动 ctx 的
 // 有期限上下文，确保启动被取消时仍尝试释放已创建资源。
-func (i *Instance) rollbackStarted() error {
+func (i *Instance) rollbackStarted() []error {
 	if len(i.started) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), i.closeTimeout)
 	defer cancel()
-	err := i.closeStarted(ctx)
+	errs := i.closeStarted(ctx)
 	i.started = nil
-	return err
+	return errs
 }
 
-// closeStarted 逆序关闭已启动组件并聚合错误。ctx 已结束时仍会对剩余组件调用
-// Close，由组件自行遵守取消；Instance 不创建额外协程强制执行。
-func (i *Instance) closeStarted(ctx context.Context) error {
+// closeStarted 逆序关闭已启动组件并返回全部错误。ctx 已结束时仍会对剩余组件
+// 调用 Close，由组件自行遵守取消；Instance 不创建额外协程强制执行。
+func (i *Instance) closeStarted(ctx context.Context) []error {
 	var errs []error
 	for position := len(i.started) - 1; position >= 0; position-- {
 		started := i.started[position]
@@ -250,8 +332,5 @@ func (i *Instance) closeStarted(ctx context.Context) error {
 				started.index, started.component, err))
 		}
 	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
+	return errs
 }
