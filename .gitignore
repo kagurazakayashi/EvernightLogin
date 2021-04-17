@@ -3,7 +3,6 @@
 /.ai/
 /.agents/
 /login_*.md
-/docs
 # 数据库、运行数据与备份；SQL 结构保留
 /database/*.db
 /database/*.db-*
