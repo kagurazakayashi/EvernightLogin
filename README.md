@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 06）
+## 项目状态（步骤 07）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制（迁移文件内嵌、版本排序、SHA-256 校验、失败记录、排他锁与事务契约）及隔离核心表的一号迁移。
-- 尚未实现：SQLite 连接与真实迁移执行（步骤 07）、HTTP 监听与访问日志、账户/认证/授权、OAuth/OIDC、Web 页面和审计数据库；配置加载器与生命周期尚未接入 `login-server` 启动，也没有后台任务队列。
+- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）。
+- 尚未实现：SQLite 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听与访问日志、账户/认证/授权、OAuth/OIDC、Web 页面、审计数据库、备份流程和后台任务队列仍未实现。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -125,6 +125,17 @@ fmt.Println(appErr.Error()) // PERMISSION_REQUIRED: 缺少当前操作所需权�
 - 时间统一 UTC 毫秒整数 `_at_ms`，布尔为 0/1 + CHECK，二进制为 BLOB，分页采用稳定排序键的键集游标，方言差异集中在后续 `internal/storage` 后端；完整约定见 [docs/database/存储模型与迁移设计.md](docs/database/存储模型与迁移设计.md)。
 - 本步骤用可控内存测试后端验证迁移机制，没有连接真实数据库；SQLite 连接、事务、外键执行与真实迁移执行在步骤 07 验收。
 
+## SQLite 存储与迁移执行（步骤 07）
+
+- 驱动：`modernc.org/sqlite v1.62.0`（纯 Go，`CGO_ENABLED=0`）。正式迁移文件仍由 `migrations` 包内嵌，`internal/storage/sqlite.Store.Migrate` 在 SQLite 上执行。
+- 打开方式：`sqlite.Open(ctx, sqlite.DefaultOptions(path))` 创建/打开文件库并验证 PRAGMA；`sqlite.WrapDB(host, options)` 包装宿主连接，宿主连接由宿主关闭，Store 不接管、不修改宿主连接池。
+- 连接配置：每个连接启用 `foreign_keys=1`、`busy_timeout`（默认 5s）、`_txlock=immediate`；WAL 开启时使用 `journal_mode=WAL`、`synchronous=NORMAL`。连接池默认 4、上限 16，不盲目放大；空闲连接 5 分钟回收。
+- 事务：`Store.Transaction` 成功提交、错误/panic/提交失败回滚；`IMMEDIATE` 开始即取得写锁，避免读事务升级写锁的不可重试 BUSY。`Store.WithConn` 是后续维护/在线备份的扩展入口，本步不实现备份流程。
+- 并发与重试：忙/锁错误映射为可识别的 `storage.ErrBusy`；事务开始只对该类错误做有界重试（默认最多 3 次、10ms～100ms），不无限循环。唯一性、约束、权限、磁盘、损坏分别映射为 `storage` 哨兵错误，公开错误文本不含 SQL、表名、参数或文件路径（原始原因仅供受限诊断）。
+- 版本冲突：按步骤 06 的 `row_version` 设计，调用方执行带 `WHERE row_version=?` 的条件更新后用 `storage.CheckVersionedUpdate` 检查受影响行数，0 行返回 `storage.ErrVersionConflict`。
+- `database/login.db` 是启动包设计基线，本步不读取、不修改、不对其执行迁移；所有测试使用临时目录数据库。SQLite 尚未接入 `cmd/login-server`、`Instance` 或 CLI 初始化，后续步骤负责装配。
+- 已验证（Windows amd64）：落盘重开、迁移执行/重复运行、事务提交与回滚、外键与级联删除、唯一约束、乐观版本冲突、锁等待成功/超时、有界重试、context 取消、错误映射；六目标仅编译。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -166,11 +177,11 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～06 已完成；继续时按 .ai/ 中的顺序处理步骤 07，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～07 已完成；继续时按 .ai/ 中的顺序处理步骤 08，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 完成第 17 步后，提供 MEMORY.md 与必要代码状态，再生成下一部分和更新 AGENTS.md。
 
-`database/login.db` 是启动包提供的设计基线，仅用于步骤 01/06/07 审查；Go 正式迁移尚未在真实数据库执行，步骤 07 接入 SQLite 后以 `migrations/` 中的版本化迁移为准。该库没有 root 初始密码，管理员将在步骤 28 的受控初始化流程创建。
+`database/login.db` 是启动包提供的设计基线，仅用于步骤 01/06/07 审查；Go 正式迁移已在 SQLite 存储层实现，但尚未对 `database/login.db` 执行，测试与后续初始化应使用独立数据库文件。该库没有 root 初始密码，管理员将在步骤 28 的受控初始化流程创建。
 
 可选检查（Windows 安装 Python 3 后，在本目录执行）：
 
