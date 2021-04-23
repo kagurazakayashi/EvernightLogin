@@ -182,17 +182,25 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载内嵌迁移失败：%v", err)
 	}
-	if len(migrations) != 1 {
-		t.Fatalf("内嵌迁移数量 = %d，期望 1", len(migrations))
+	if len(migrations) != 2 {
+		t.Fatalf("内嵌迁移数量 = %d，期望 2", len(migrations))
 	}
-	migration := migrations[0]
-	if migration.Version != "0001" {
-		t.Errorf("版本 = %q", migration.Version)
+	expectedVersions := []string{"0001", "0002"}
+	for index, migration := range migrations {
+		if migration.Version != expectedVersions[index] {
+			t.Errorf("第 %d 个迁移版本 = %q，期望 %q", index, migration.Version, expectedVersions[index])
+		}
+		if len(migration.Statements) == 0 {
+			t.Errorf("迁移 %s 没有可执行语句", migration.Version)
+		}
+		if len(migration.Checksum) != 64 {
+			t.Errorf("迁移 %s 校验和长度 = %d", migration.Version, len(migration.Checksum))
+		}
 	}
-	if len(migration.Statements) < 10 {
-		t.Errorf("语句数 = %d，期望包含多张表和索引", len(migration.Statements))
+	if len(migrations[0].Statements) < 10 {
+		t.Errorf("0001 语句数 = %d，期望包含多张表和索引", len(migrations[0].Statements))
 	}
-	if len(migration.Checksum) != 64 {
-		t.Errorf("校验和长度 = %d", len(migration.Checksum))
+	if len(migrations[1].Statements) != 3 {
+		t.Errorf("0002 语句数 = %d，期望建表与两个索引", len(migrations[1].Statements))
 	}
 }

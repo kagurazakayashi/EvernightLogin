@@ -1,7 +1,6 @@
 package migrations_test
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -170,6 +169,8 @@ func TestCrossDatabaseRepresentationConventions(t *testing.T) {
 	}
 }
 
+// TestEmbeddedMigrationFilesExist 检查内嵌目录存在核心迁移，且后续迁移延续
+// 同一命名与编码约定。
 func TestEmbeddedMigrationFilesExist(t *testing.T) {
 	entries, err := migrations.SQLite.ReadDir(".")
 	if err != nil {
@@ -185,15 +186,70 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	data, err := os.ReadFile(coreMigration)
-	if err != nil {
-		// 嵌入目录无法直接用 os.ReadFile；改用嵌入读取。
-		data, err = migrations.SQLite.ReadFile(coreMigration)
+	for _, name := range []string{coreMigration, credentialMigration} {
+		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
-			t.Fatalf("读取迁移内容失败：%v", err)
+			t.Fatalf("读取迁移 %s 失败：%v", name, err)
+		}
+		if strings.HasPrefix(string(data), "\ufeff") {
+			t.Errorf("迁移 %s 不应带 UTF-8 BOM", name)
 		}
 	}
-	if strings.HasPrefix(string(data), "\ufeff") {
-		t.Error("迁移文件不应带 UTF-8 BOM")
+}
+
+const credentialMigration = "0002_one_time_credentials.sql"
+
+// readCredentialMigration 读取 0002 一次性凭证迁移。
+func readCredentialMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(credentialMigration)
+	if err != nil {
+		t.Fatalf("读取一次性凭证迁移失败：%v", err)
+	}
+	return string(data)
+}
+
+// TestOneTimeCredentialMigration 校验步骤 09 的一次性凭证表结构、约束与索引，
+// 确保摘要使用 BLOB、时间使用毫秒整数、应用绑定有外键，且不提前创建其他表。
+func TestOneTimeCredentialMigration(t *testing.T) {
+	sqlText := readCredentialMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0002 CREATE TABLE 数量 = %d，期望只创建一次性凭证表", count)
+	}
+	definition := tableDefinition(t, sqlText, "one_time_credentials")
+	for _, want := range []string{
+		"id TEXT PRIMARY KEY NOT NULL",
+		"purpose TEXT NOT NULL",
+		"subject_id TEXT NOT NULL",
+		"app_id TEXT REFERENCES applications(id) ON DELETE CASCADE",
+		"verifier_hash BLOB NOT NULL UNIQUE",
+		"key_id TEXT",
+		"context_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(context_json))",
+		"attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0)",
+		"max_attempts INTEGER NOT NULL CHECK(max_attempts>0)",
+		"created_at_ms INTEGER NOT NULL",
+		"expires_at_ms INTEGER NOT NULL",
+		"consumed_at_ms INTEGER",
+		"revoked_at_ms INTEGER",
+		"CHECK(expires_at_ms>created_at_ms)",
+	} {
+		if !strings.Contains(definition, want) {
+			t.Errorf("one_time_credentials 定义缺少 %q", want)
+		}
+	}
+	// 摘要必须是二进制列；保持与跨数据库表示约定一致，不用十六进制文本。
+	if strings.Contains(definition, "verifier_hash TEXT") {
+		t.Error("verifier_hash 应使用 BLOB 二进制列")
+	}
+	for _, want := range []string{
+		"CREATE INDEX ix_one_time_credentials_expires_at_ms ON one_time_credentials(expires_at_ms);",
+		"CREATE INDEX ix_one_time_credentials_scope ON one_time_credentials(purpose,subject_id,app_id,created_at_ms);",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Errorf("0002 缺少索引 %q", want)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
 	}
 }
