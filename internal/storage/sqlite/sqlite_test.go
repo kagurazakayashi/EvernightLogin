@@ -552,10 +552,10 @@ func TestMigrateAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate() 失败：%v", err)
 	}
-	if result.UpToDate || len(result.Applied) != 2 {
+	if result.UpToDate || len(result.Applied) != 3 {
 		t.Fatalf("首次迁移结果 = %+v", result)
 	}
-	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != 2 {
+	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != 3 {
 		t.Errorf("schema_history 行数 = %d", got)
 	}
 	if got := queryInt(t, store, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`); got != 1 {
@@ -563,6 +563,9 @@ func TestMigrateAndReopen(t *testing.T) {
 	}
 	if got := queryInt(t, store, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='one_time_credentials'`); got != 1 {
 		t.Errorf("one_time_credentials 表未创建")
+	}
+	if got := queryInt(t, store, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='audit_events'`); got != 1 {
+		t.Errorf("audit_events 表未创建")
 	}
 	if got := queryInt(t, store, `SELECT COUNT(*) FROM scopes WHERE kind='system'`); got != 1 {
 		t.Errorf("system scope 行数 = %d", got)
@@ -608,7 +611,7 @@ func TestMigrateChecksumMismatchRejected(t *testing.T) {
 	if _, err := store.Migrate(context.Background(), changed); !errors.Is(err, migrate.ErrChecksumMismatch) {
 		t.Fatalf("错误 = %v，期望 ErrChecksumMismatch", err)
 	}
-	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != 2 {
+	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != 3 {
 		t.Errorf("校验和不符不应改变历史，实际 %d", got)
 	}
 }
@@ -681,8 +684,8 @@ func TestConcurrentMigrateTwoConnections(t *testing.T) {
 			t.Errorf("并发迁移 %d 失败：%v", index, err)
 		}
 	}
-	if got := queryInt(t, first, `SELECT COUNT(*) FROM schema_history`); got != 2 {
-		t.Errorf("schema_history 行数 = %d，期望 2", got)
+	if got := queryInt(t, first, `SELECT COUNT(*) FROM schema_history`); got != 3 {
+		t.Errorf("schema_history 行数 = %d，期望 3", got)
 	}
 	if got := queryInt(t, first, `SELECT COUNT(*) FROM schema_failures`); got != 0 {
 		t.Errorf("schema_failures 行数 = %d，期望 0", got)

@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 09）
+## 项目状态（步骤 10）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002。
-- 尚未实现：SQLite、`internal/secrets` 与 `internal/credential` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听与访问日志、账户/认证/授权、OAuth/OIDC、Web 页面、审计数据库、备份流程和后台任务队列仍未实现。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential` 与 `internal/audit` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听与访问日志、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程和后台任务队列仍未实现。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -182,6 +182,19 @@ fmt.Println(appErr.Error()) // PERMISSION_REQUIRED: 缺少当前操作所需权�
 - **尚未接入**：`Instance`、配置加载、`cmd/login-server`、HTTP、通知投递与账户流程；生产装配与业务接入由后续步骤完成。
 - **已验证（Windows amd64）**：迁移 0001+0002 在 `t.TempDir()` 临时 SQLite 库执行；签发与一次性消费、重复消费、有效期边界（到期前一毫秒成功、恰好到期失败）、错误用途/目标/应用、尝试上限（数据库层有界）、6 路并发消费仅一次成功、6 路并发错误尝试不突破上限、取消、替换、应用绑定、过期清理、数据库关闭与 context 取消不返回成功、密钥轮换后未过期验证码仍可验证、日志与错误不泄露秘密；六目标仅编译，非 Windows 未运行。
 
+## 安全审计与可靠记录（步骤 10）
+
+本步新增内部包 `internal/audit`（审计事件模型、可信身份、脱敏差异、可靠写入与告警）与 `internal/audit/sqlite`（生产 SQLite 持久化），并追加 `migrations/0003_audit_events.sql`。本步只实现写入与可靠记录，不实现审计查询/导出后台或 HTTP 接口；普通访问日志与运行日志仍由 `internal/logging` 负责，与安全审计分开。
+
+- **事件模型**：事件 ID、发生时间（UTC 毫秒）、操作者类型与稳定 ID、应用快照、动作、目标、结果（`success`/`failure`/`denied`）、对外错误码、受限内部原因码、`request_id`、`task_id`、脱敏变更差异（`detail_json`）与可选幂等键。
+- **可信身份**：操作者由认证/授权边界或宿主显式传入，本包不读取请求体或查询参数中的自称身份。四类身份明确区分：可信用户、系统任务、本地管理员、匿名失败；匿名事件不得携带 ID，不能把系统操作或请求参数伪造成 root/其他用户。
+- **字段与脱敏**：只允许接口字段入库；差异最多 16 个字段、字段名受限、单值不超过 256 字节、`detail_json` 不超过 8 KiB；密码/令牌/秘密/验证码/密钥/凭证/Cookie/授权头/摘要/种子/恢复码等字段值固定替换为 `[REDACTED]`；控制字符、非法 UTF-8、超长值直接拒绝，不存未受限大正文与秘密。
+- **可靠写入**：`Record` 在独立事务中追加事件；`RecordFailure` 使用 `context.WithoutCancel` 与有限期限独立事务写入，因此业务事务回滚或请求取消后失败审计仍保存；`ExecuteCritical` 在同一个数据库事务中执行关键变更并写入成功事件，成功审计写入失败时业务回滚、返回 `ErrAuditUnavailable`（对外映射 `AUDIT_WRITE_FAILED`）并触发运行告警；业务失败回滚后由独立事务补写 failure 事件，失败审计也失败时用 `errors.Join` 返回并告警。
+- **幂等**：可选 `DedupeKey` 对应唯一部分索引；已存在时 `ExecuteCritical` 返回 `ErrDuplicateEvent` 且不重复执行变更，`Record` 重复返回 `ErrDuplicateEvent`。
+- **存储**：`audit_events` 按设计基线字段落地；`app_id_snapshot` 不建外键，保留事件发生时的应用快照，避免应用删除/改名后审计丢失或失真；索引覆盖时间、`request_id`、`task_id`、`action`+时间；迁移 0003 追加，不修改 0001/0002。
+- **尚未接入**：审计写入尚未接入 `Instance`、认证/权限/账户流程或 HTTP；`internal/credential` 等业务模块尚未调用审计；审计查询、导出、报告、清理、外部接收端与 HTTP 访问日志留后续步骤；不暴露未鉴权审计接口。
+- **已验证（Windows amd64）**：临时 SQLite 上 0001→0003 迁移；事件字段与身份四类、匿名拒绝伪造；敏感差异脱敏且无秘密入库，超长/控制字符/超量字段拒绝；重复幂等键只记录一次；关键变更与成功审计一致提交；业务失败回滚后失败审计仍保存；触发器注入成功审计故障时业务回滚、返回 `ErrAuditUnavailable` 并告警且失败审计保存；审计库关闭与 ctx 取消不返回成功；6 路并发追加不丢失。六目标仅编译，非 Windows 未运行。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -211,7 +224,8 @@ go run .\cmd\login-server --help
 | cmd/、internal/、scripts/ | 最小入口、内部实现与本地检查命令 | 是 |
 | internal/secrets/ | 可还原秘密的认证加密、主密钥加载与密钥轮换（内部包） | 是 |
 | internal/credential/ | 一次性凭证服务与 SQLite 生产仓储（内部包） | 是 |
-| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表与一次性凭证表） | 是 |
+| internal/audit/ | 安全审计事件模型、可靠写入与 SQLite 持久化（内部包） | 是 |
+| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表与审计事件表） | 是 |
 | examples/ | 可运行的最小接入示例（当前为配置加载示例） | 是 |
 | docs/requirements/ | 功能清单和错误码手册 | 可以 |
 | docs/database/ | 数据库基线说明、表清单与检查记录 | 可以 |
@@ -225,7 +239,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～09 已完成；继续时按 .ai/ 中的顺序处理步骤 10，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～10 已完成；继续时按 .ai/ 中的顺序处理步骤 11，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 完成第 17 步后，提供 MEMORY.md 与必要代码状态，再生成下一部分和更新 AGENTS.md。
 

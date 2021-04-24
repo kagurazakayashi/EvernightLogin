@@ -186,7 +186,7 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	for _, name := range []string{coreMigration, credentialMigration} {
+	for _, name := range []string{coreMigration, credentialMigration, auditMigration} {
 		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
 			t.Fatalf("读取迁移 %s 失败：%v", name, err)
@@ -247,6 +247,67 @@ func TestOneTimeCredentialMigration(t *testing.T) {
 	} {
 		if !strings.Contains(sqlText, want) {
 			t.Errorf("0002 缺少索引 %q", want)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
+
+const auditMigration = "0003_audit_events.sql"
+
+// readAuditMigration 读取 0003 安全审计迁移。
+func readAuditMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(auditMigration)
+	if err != nil {
+		t.Fatalf("读取安全审计迁移失败：%v", err)
+	}
+	return string(data)
+}
+
+// TestAuditEventsMigration 校验步骤 10 的安全审计表结构、身份/结果枚举约束、
+// 应用快照无外键、脱敏差异 JSON、幂等键唯一索引与查询索引。
+func TestAuditEventsMigration(t *testing.T) {
+	sqlText := readAuditMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0003 CREATE TABLE 数量 = %d，期望只创建审计事件表", count)
+	}
+	definition := tableDefinition(t, sqlText, "audit_events")
+	for _, want := range []string{
+		"id TEXT PRIMARY KEY NOT NULL",
+		"occurred_at_ms INTEGER NOT NULL",
+		"actor_type TEXT NOT NULL CHECK(actor_type IN('user','system','local_admin','anonymous'))",
+		"actor_id TEXT",
+		"app_id_snapshot TEXT",
+		"action TEXT NOT NULL",
+		"target_type TEXT NOT NULL",
+		"target_id TEXT",
+		"outcome TEXT NOT NULL CHECK(outcome IN('success','failure','denied'))",
+		"error_code TEXT",
+		"reason_code TEXT",
+		"request_id TEXT",
+		"task_id TEXT",
+		"detail_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(detail_json))",
+		"dedupe_key TEXT",
+	} {
+		if !strings.Contains(definition, want) {
+			t.Errorf("audit_events 定义缺少 %q", want)
+		}
+	}
+	// 审计快照不能外键级联删除，避免应用删除后丢失安全事件。
+	if strings.Contains(definition, "app_id_snapshot TEXT REFERENCES") {
+		t.Error("app_id_snapshot 不应建立外键")
+	}
+	for _, want := range []string{
+		"CREATE INDEX ix_audit_events_occurred_at_ms ON audit_events(occurred_at_ms);",
+		"CREATE INDEX ix_audit_events_request_id ON audit_events(request_id);",
+		"CREATE INDEX ix_audit_events_task_id ON audit_events(task_id);",
+		"CREATE INDEX ix_audit_events_action_occurred_at_ms ON audit_events(action,occurred_at_ms);",
+		"CREATE UNIQUE INDEX ux_audit_events_dedupe_key ON audit_events(dedupe_key) WHERE dedupe_key IS NOT NULL;",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Errorf("0003 缺少索引 %q", want)
 		}
 	}
 	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
