@@ -133,8 +133,8 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 3 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" {
-		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003]", versions)
+	if len(versions) != 4 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" {
+		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004]", versions)
 	}
 	type column struct {
 		kind    string

@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 10）
+## 项目状态（步骤 11）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential` 与 `internal/audit` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听与访问日志、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程和后台任务队列仍未实现。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit` 与 `internal/task` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听与访问日志、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、定时调度/任务重试与失败补偿、备份流程仍未实现。任务执行器不提供网络/管理端点，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -195,6 +195,18 @@ fmt.Println(appErr.Error()) // PERMISSION_REQUIRED: 缺少当前操作所需权�
 - **尚未接入**：审计写入尚未接入 `Instance`、认证/权限/账户流程或 HTTP；`internal/credential` 等业务模块尚未调用审计；审计查询、导出、报告、清理、外部接收端与 HTTP 访问日志留后续步骤；不暴露未鉴权审计接口。
 - **已验证（Windows amd64）**：临时 SQLite 上 0001→0003 迁移；事件字段与身份四类、匿名拒绝伪造；敏感差异脱敏且无秘密入库，超长/控制字符/超量字段拒绝；重复幂等键只记录一次；关键变更与成功审计一致提交；业务失败回滚后失败审计仍保存；触发器注入成功审计故障时业务回滚、返回 `ErrAuditUnavailable` 并告警且失败审计保存；审计库关闭与 ctx 取消不返回成功；6 路并发追加不丢失。六目标仅编译，非 Windows 未运行。
 
+## 后台任务执行与状态追踪（步骤 11）
+
+本步新增 `internal/task`（可靠单实例后台任务执行器、状态机与语义）和 `internal/task/sqlite`（SQLite 状态持久化与同事务审计），并追加 `migrations/0004_jobs.sql`。本步不加入定时调度、重试/补偿执行或 outbox，也不开放网络/管理端点。
+
+- **状态机**：`queued` → `running` → `succeeded`/`failed`；取消请求可让 queued 直接 `cancelled`，或让 running 进入 `cancel_requested`，处理器真实结束后进入 `cancelled`；超过墙钟上限进入 `timed_out`。四个终态不能被晚到的取消覆盖；取消请求被接受不等于任务已取消。
+- **任务与身份**：唯一 `job_` 编号、任务类型、JSON 载荷、可信发起者（`user`/`system`/`local_admin`，匿名被拒绝）、执行器 `executed_by`、取消者类型/ID、取消原因与请求时间、墙钟上限、可选互斥键、错误码/安全失败说明、`request_id` 与各阶段时间戳。身份由可信调用边界传入，不提供匿名远程入口。
+- **执行器**：单实例执行器，可配置并发 1～6，队列轮询（不是定时调度）；`Start` 先识别重启前遗留的 `running`/`cancel_requested` 任务，无法确认外部副作用时统一标记 `failed`（`TASK_INTERRUPTED`）并审计，然后开始领取 queued 任务；`Stop` 停止领取、以系统主体记录 `cancel_requested`、取消处理器上下文并等待退出，超期返回 `ErrShutdownTimeout` 而不是假装清理完成；queued 任务保留给下次启动继续。
+- **处理器契约**：必须响应 `context` 取消与期限，使用 `exec.CommandContext` 等清理子进程，并自行保证幂等或补偿；执行器不承诺外部副作用恰好执行一次。处理器 panic 被隔离为失败终态。
+- **竞争与审计**：完成与取消由数据库条件更新裁决，记录真实最终状态与取消请求人。每个状态变化（enqueued/started/succeeded/failed/cancel_requested/cancelled/timed_out/recovered/cancel_rejected）都在同一 SQLite 事务写入安全审计事件；审计写入失败时拒绝状态变化（fail-closed），并在下次启动恢复遗留状态。
+- **尚未接入**：`Instance`、HTTP、服务层权限检查、定时调度、任务重试/补偿、outbox、任务查询/管理端点均未实现；本步不宣称通知/报告/备份流程可用。
+- **已验证（Windows amd64）**：成功/失败/未知处理器/panic 终态；排队、运行中、停机三类取消（停机取消记录系统主体）；完成与取消竞争保持真实最终状态并拒绝晚到取消；1 秒墙钟超时；Stop 对不响应取消的处理器如实返回超时；重启恢复遗留任务为 `TASK_INTERRUPTED` 并审计；并发上限 2 与互斥键不重叠；取消时清理测试子进程；领取/入队/恢复阶段审计故障 fail-closed；载荷与 `request_id` 持久化；匿名发起/取消被拒绝。六目标仅编译，非 Windows 未运行。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -225,7 +237,8 @@ go run .\cmd\login-server --help
 | internal/secrets/ | 可还原秘密的认证加密、主密钥加载与密钥轮换（内部包） | 是 |
 | internal/credential/ | 一次性凭证服务与 SQLite 生产仓储（内部包） | 是 |
 | internal/audit/ | 安全审计事件模型、可靠写入与 SQLite 持久化（内部包） | 是 |
-| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表与审计事件表） | 是 |
+| internal/task/ | 后台任务执行器、状态机与 SQLite 持久化（内部包） | 是 |
+| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表与后台任务表） | 是 |
 | examples/ | 可运行的最小接入示例（当前为配置加载示例） | 是 |
 | docs/requirements/ | 功能清单和错误码手册 | 可以 |
 | docs/database/ | 数据库基线说明、表清单与检查记录 | 可以 |
@@ -239,7 +252,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～10 已完成；继续时按 .ai/ 中的顺序处理步骤 11，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～11 已完成；继续时按 .ai/ 中的顺序处理步骤 12，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 完成第 17 步后，提供 MEMORY.md 与必要代码状态，再生成下一部分和更新 AGENTS.md。
 

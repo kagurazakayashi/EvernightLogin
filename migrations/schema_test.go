@@ -186,7 +186,7 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	for _, name := range []string{coreMigration, credentialMigration, auditMigration} {
+	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration} {
 		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
 			t.Fatalf("读取迁移 %s 失败：%v", name, err)
@@ -308,6 +308,73 @@ func TestAuditEventsMigration(t *testing.T) {
 	} {
 		if !strings.Contains(sqlText, want) {
 			t.Errorf("0003 缺少索引 %q", want)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
+
+const taskMigration = "0004_jobs.sql"
+
+// readTaskMigration 读取 0004 后台任务迁移。
+func readTaskMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(taskMigration)
+	if err != nil {
+		t.Fatalf("读取后台任务迁移失败：%v", err)
+	}
+	return string(data)
+}
+
+// TestJobsMigration 校验步骤 11 的后台任务表：状态枚举、可信发起/执行/取消身份、
+// 墙钟上限、互斥键、载荷 JSON 与索引；不提前创建后续重试/调度表。
+func TestJobsMigration(t *testing.T) {
+	sqlText := readTaskMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0004 CREATE TABLE 数量 = %d，期望只创建 jobs 表", count)
+	}
+	definition := tableDefinition(t, sqlText, "jobs")
+	for _, want := range []string{
+		"id TEXT PRIMARY KEY NOT NULL",
+		"kind TEXT NOT NULL",
+		"state TEXT NOT NULL CHECK(state IN('queued','running','succeeded','failed','cancel_requested','cancelled','timed_out'))",
+		"initiated_by_type TEXT NOT NULL CHECK(initiated_by_type IN('user','system','local_admin'))",
+		"initiated_by_id TEXT NOT NULL",
+		"executed_by TEXT",
+		"cancelled_by_type TEXT CHECK(cancelled_by_type IS NULL OR cancelled_by_type IN('user','system','local_admin'))",
+		"cancelled_by_id TEXT",
+		"cancellation_reason TEXT",
+		"cancel_requested_at_ms INTEGER",
+		"started_at_ms INTEGER",
+		"finished_at_ms INTEGER",
+		"timeout_seconds INTEGER NOT NULL CHECK(timeout_seconds>0)",
+		"attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt>=0)",
+		"max_attempts INTEGER NOT NULL DEFAULT 1 CHECK(max_attempts>0)",
+		"mutex_key TEXT",
+		"payload_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(payload_json))",
+		"request_id TEXT",
+		"error_code TEXT",
+		"failure_reason TEXT",
+		"created_at_ms INTEGER NOT NULL",
+		"updated_at_ms INTEGER NOT NULL",
+	} {
+		if !strings.Contains(definition, want) {
+			t.Errorf("jobs 定义缺少 %q", want)
+		}
+	}
+	for _, want := range []string{
+		"CREATE INDEX ix_jobs_state_created_at_ms ON jobs(state,created_at_ms);",
+		"CREATE INDEX ix_jobs_mutex_active ON jobs(mutex_key,state) WHERE mutex_key IS NOT NULL AND state IN('running','cancel_requested');",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Errorf("0004 缺少索引 %q", want)
+		}
+	}
+	// 后续步骤的表不得提前创建。
+	for _, future := range []string{"job_attempts", "schedules", "schedule_firings", "outbox_events"} {
+		if strings.Contains(sqlText, "CREATE TABLE "+future+" (") {
+			t.Errorf("0004 提前创建了后续步骤的表 %s", future)
 		}
 	}
 	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {

@@ -217,6 +217,21 @@ func NormalizeEvent(event Event) (Event, error) {
 	return normalized, nil
 }
 
+// PrepareEvent 填充事件 ID 与发生时间并规范化事件，供直接调用 audit.Store 的
+// 持久化实现复用（Recorder 内部也使用同样步骤）。ID 已存在时必须符合格式；
+// 发生时间由调用方提供并统一截断到 UTC 毫秒。
+func PrepareEvent(event Event, occurredAt time.Time) (Event, error) {
+	if event.ID == "" {
+		id, err := NewEventID()
+		if err != nil {
+			return Event{}, err
+		}
+		event.ID = id
+	}
+	event.OccurredAt = occurredAt.UTC().Truncate(time.Millisecond)
+	return NormalizeEvent(event)
+}
+
 // DetailJSON 把已规范化的变更差异序列化为 detail_json 文本。
 func DetailJSON(changes []FieldChange) (string, error) {
 	document := struct {

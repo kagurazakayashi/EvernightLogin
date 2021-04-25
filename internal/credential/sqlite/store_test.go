@@ -55,8 +55,8 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载迁移失败: %v", err)
 	}
-	if len(migrationSet) != 3 {
-		t.Fatalf("迁移数量 = %d，期望 3", len(migrationSet))
+	if len(migrationSet) != 4 {
+		t.Fatalf("迁移数量 = %d，期望 4", len(migrationSet))
 	}
 	// 第一次只执行到 0001，模拟步骤 08 已部署的数据库。
 	if _, err := store.Migrate(ctx, migrationSet[:1]); err != nil {
@@ -83,7 +83,7 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 3 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" {
+	if len(versions) != 4 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" {
 		t.Fatalf("升级后迁移历史 = %v", versions)
 	}
 }
@@ -112,8 +112,8 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 3 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" {
-		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003]", versions)
+	if len(versions) != 4 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" {
+		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004]", versions)
 	}
 
 	infoRows, err := env.sqliteStore.QueryContext(context.Background(),
