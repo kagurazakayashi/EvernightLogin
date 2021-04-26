@@ -38,6 +38,9 @@ const (
 	MaxTimeoutSeconds = 24 * 60 * 60
 	// MaxPayloadBytes 是任务载荷 JSON 的最大字节数，防止把执行器当大对象存储。
 	MaxPayloadBytes = 16 * 1024
+	// MaxJobAttempts 是允许配置的最大尝试次数（含首次执行）；重试必须同时受
+	// 退避策略约束，禁止无限重试。
+	MaxJobAttempts = 10
 	// MaxKindBytes、MaxMutexKeyBytes、MaxReasonBytes 是任务字段上限。
 	MaxKindBytes     = 64
 	MaxMutexKeyBytes = 128
@@ -87,7 +90,9 @@ func (s State) Terminal() bool {
 
 // Job 是持久化的后台任务。Initiator 是可信发起身份，ExecutorID 是执行器稳定
 // 标识，Canceller 记录取消请求人；CancellationReason 是取消原因。Payload 只
-// 保存 JSON，不保存秘密。
+// 保存 JSON，不保存秘密。Attempt 是已开始的尝试次数，MaxAttempts 是含首次执行
+// 的尝试上限；NextAttemptAt 是退避后的最早可领取时间（零值表示立即可领取）。
+// PermissionRequired 为 true 时执行器每次尝试前都必须通过可信权限复验。
 type Job struct {
 	ID                 string
 	Kind               string
@@ -101,6 +106,7 @@ type Job struct {
 	TimeoutSeconds     int
 	Attempt            int
 	MaxAttempts        int
+	PermissionRequired bool
 	ErrorCode          string
 	FailureReason      string
 	RequestID          string
@@ -109,6 +115,7 @@ type Job struct {
 	StartedAt          time.Time
 	CancelRequestedAt  time.Time
 	FinishedAt         time.Time
+	NextAttemptAt      time.Time
 }
 
 // Deadline 返回任务墙钟截止时间；尚未开始时以创建时间加超时估算。
@@ -129,14 +136,17 @@ func (j Job) Deadline() time.Time {
 type Handler func(ctx context.Context, job Job) error
 
 // EnqueueRequest 是入队参数。Actor 必须来自可信调用上下文，不得使用请求参数
-// 自称身份；匿名身份被拒绝。
+// 自称身份；匿名身份被拒绝。MaxAttempts 默认 1（不重试），范围 1～10；
+// PermissionRequired 为 true 时执行器必须在每次尝试前复验权限。
 type EnqueueRequest struct {
-	Kind           string
-	Actor          audit.Actor
-	Payload        json.RawMessage
-	MutexKey       string
-	TimeoutSeconds int
-	RequestID      string
+	Kind               string
+	Actor              audit.Actor
+	Payload            json.RawMessage
+	MutexKey           string
+	TimeoutSeconds     int
+	MaxAttempts        int
+	PermissionRequired bool
+	RequestID          string
 }
 
 // CancelRequest 是取消参数。Actor 是取消请求人（可信上下文），Reason 是取消
@@ -211,8 +221,16 @@ func normalizeEnqueueRequest(request EnqueueRequest) (EnqueueRequest, error) {
 	if err := validateCorrelationID("请求编号", request.RequestID); err != nil {
 		return EnqueueRequest{}, err
 	}
+	maxAttempts := request.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 1
+	}
+	if maxAttempts < 1 || maxAttempts > MaxJobAttempts {
+		return EnqueueRequest{}, fmt.Errorf("%w: 最大尝试次数必须在 1～%d 之间", ErrInvalidRequest, MaxJobAttempts)
+	}
 	request.Payload = payload
 	request.TimeoutSeconds = timeout
+	request.MaxAttempts = maxAttempts
 	return request, nil
 }
 

@@ -36,16 +36,18 @@ func (f *fakeStore) Enqueue(_ context.Context, job NewJob) (Job, error) {
 		f.jobs = make(map[string]Job)
 	}
 	record := Job{
-		ID:             job.ID,
-		Kind:           job.Kind,
-		State:          StateQueued,
-		Initiator:      job.Initiator,
-		Payload:        job.Payload,
-		MutexKey:       job.MutexKey,
-		TimeoutSeconds: job.TimeoutSeconds,
-		RequestID:      job.RequestID,
-		CreatedAt:      job.CreatedAt,
-		UpdatedAt:      job.CreatedAt,
+		ID:                 job.ID,
+		Kind:               job.Kind,
+		State:              StateQueued,
+		Initiator:          job.Initiator,
+		Payload:            job.Payload,
+		MutexKey:           job.MutexKey,
+		TimeoutSeconds:     job.TimeoutSeconds,
+		MaxAttempts:        job.MaxAttempts,
+		PermissionRequired: job.PermissionRequired,
+		RequestID:          job.RequestID,
+		CreatedAt:          job.CreatedAt,
+		UpdatedAt:          job.CreatedAt,
 	}
 	f.jobs[job.ID] = record
 	return record, nil
@@ -92,6 +94,25 @@ func (f *fakeStore) Get(_ context.Context, id string) (Job, bool, error) {
 	}
 	job, ok := f.jobs[id]
 	return job, ok, nil
+}
+
+// Retry 实现 Store：测试替身把任务放回 queued；真实重试状态与审计由 SQLite
+// 测试覆盖。
+func (f *fakeStore) Retry(_ context.Context, command RetryCommand) (Job, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job, ok := f.jobs[command.JobID]
+	if !ok {
+		return Job{}, false, ErrTaskNotFound
+	}
+	job.State = StateQueued
+	f.jobs[command.JobID] = job
+	return job, true, nil
+}
+
+// Attempts 实现 Store。
+func (f *fakeStore) Attempts(context.Context, string) ([]Attempt, error) {
+	return nil, nil
 }
 
 // TestStateValidAndTerminal 验证状态枚举与终态集合。

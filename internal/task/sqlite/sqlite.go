@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,15 +29,19 @@ const (
 	insertJobSQL = `INSERT INTO jobs(
 id,kind,state,initiated_by_type,initiated_by_id,executed_by,cancelled_by_type,cancelled_by_id,
 cancellation_reason,cancel_requested_at_ms,started_at_ms,finished_at_ms,timeout_seconds,attempt,
-max_attempts,mutex_key,payload_json,request_id,error_code,failure_reason,created_at_ms,updated_at_ms
-) VALUES(?,?,'queued',?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL,?,0,1,?,?,?,NULL,NULL,?,?)`
-
-	selectCandidateSQL = `SELECT id,kind,state,initiated_by_type,initiated_by_id,executed_by,
-cancelled_by_type,cancelled_by_id,cancellation_reason,cancel_requested_at_ms,started_at_ms,
-finished_at_ms,timeout_seconds,attempt,max_attempts,mutex_key,payload_json,request_id,error_code,
+max_attempts,permission_required,next_attempt_at_ms,mutex_key,payload_json,request_id,error_code,
 failure_reason,created_at_ms,updated_at_ms
+) VALUES(?,?,'queued',?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL,?,0,?,?,NULL,?,?,?,NULL,NULL,?,?)`
+
+	jobSelectColumns = `id,kind,state,initiated_by_type,initiated_by_id,executed_by,
+cancelled_by_type,cancelled_by_id,cancellation_reason,cancel_requested_at_ms,started_at_ms,
+finished_at_ms,timeout_seconds,attempt,max_attempts,permission_required,next_attempt_at_ms,
+mutex_key,payload_json,request_id,error_code,failure_reason,created_at_ms,updated_at_ms`
+
+	selectCandidateSQL = `SELECT ` + jobSelectColumns + `
 FROM jobs j
 WHERE j.state='queued'
+AND (j.next_attempt_at_ms IS NULL OR j.next_attempt_at_ms<=?)
 AND (j.mutex_key IS NULL OR NOT EXISTS (
   SELECT 1 FROM jobs active
   WHERE active.state IN('running','cancel_requested') AND active.mutex_key = j.mutex_key
@@ -44,20 +49,24 @@ AND (j.mutex_key IS NULL OR NOT EXISTS (
 ORDER BY j.created_at_ms, j.id
 LIMIT 1`
 
-	selectJobSQL = `SELECT id,kind,state,initiated_by_type,initiated_by_id,executed_by,
-cancelled_by_type,cancelled_by_id,cancellation_reason,cancel_requested_at_ms,started_at_ms,
-finished_at_ms,timeout_seconds,attempt,max_attempts,mutex_key,payload_json,request_id,error_code,
-failure_reason,created_at_ms,updated_at_ms
+	selectJobSQL = `SELECT ` + jobSelectColumns + `
 FROM jobs WHERE id=?`
 
-	claimJobSQL = `UPDATE jobs SET state='running',executed_by=?,started_at_ms=?,updated_at_ms=?
-WHERE id=? AND state='queued'`
+	claimJobSQL = `UPDATE jobs SET state='running',executed_by=?,started_at_ms=?,attempt=?,
+next_attempt_at_ms=NULL,updated_at_ms=?
+WHERE id=? AND state='queued' AND attempt=? AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms<=?)`
+
+	insertAttemptSQL = `INSERT INTO job_attempts(job_id,attempt,started_at_ms,executor_id) VALUES(?,?,?,?)`
+
+	closeOpenAttemptsSQL = `UPDATE job_attempts SET finished_at_ms=?,outcome=?,error_code=?
+WHERE job_id=? AND finished_at_ms IS NULL`
 
 	completeJobSQL = `UPDATE jobs SET state=?,finished_at_ms=?,error_code=?,failure_reason=?,updated_at_ms=?
 WHERE id=? AND state IN('running','cancel_requested')`
 
 	cancelQueuedSQL = `UPDATE jobs SET state='cancelled',cancelled_by_type=?,cancelled_by_id=?,
-cancellation_reason=?,cancel_requested_at_ms=?,finished_at_ms=?,updated_at_ms=?
+cancellation_reason=?,cancel_requested_at_ms=?,finished_at_ms=?,error_code='TASK_CANCELLED',
+failure_reason='任务在排队中被取消',updated_at_ms=?
 WHERE id=? AND state='queued'`
 
 	cancelRunningSQL = `UPDATE jobs SET state='cancel_requested',cancelled_by_type=?,cancelled_by_id=?,
@@ -130,19 +139,7 @@ func (s *Store) Enqueue(ctx context.Context, job task.NewJob) (task.Job, error) 
 	nowMS := job.CreatedAt.UTC().UnixMilli()
 	event := jobAuditEvent(job.ID, job.Initiator, "jobs.enqueued", "queued", job.RequestID, "", nil)
 	change := func(txCtx context.Context, tx audit.Tx) error {
-		_, err := tx.ExecContext(txCtx, insertJobSQL,
-			job.ID,
-			job.Kind,
-			string(job.Initiator.Type),
-			job.Initiator.ID,
-			job.TimeoutSeconds,
-			nullable(job.MutexKey),
-			string(job.Payload),
-			nullable(job.RequestID),
-			nowMS,
-			nowMS,
-		)
-		return err
+		return insertJobRow(txCtx, tx, job)
 	}
 	prepared, err := s.prepare(event)
 	if err != nil {
@@ -152,26 +149,53 @@ func (s *Store) Enqueue(ctx context.Context, job task.NewJob) (task.Job, error) 
 		return task.Job{}, mapStoreError(err)
 	}
 	return task.Job{
-		ID:             job.ID,
-		Kind:           job.Kind,
-		State:          task.StateQueued,
-		Initiator:      job.Initiator,
-		Payload:        job.Payload,
-		MutexKey:       job.MutexKey,
-		TimeoutSeconds: job.TimeoutSeconds,
-		Attempt:        0,
-		MaxAttempts:    1,
-		RequestID:      job.RequestID,
-		CreatedAt:      time.UnixMilli(nowMS).UTC(),
-		UpdatedAt:      time.UnixMilli(nowMS).UTC(),
+		ID:                 job.ID,
+		Kind:               job.Kind,
+		State:              task.StateQueued,
+		Initiator:          job.Initiator,
+		Payload:            job.Payload,
+		MutexKey:           job.MutexKey,
+		TimeoutSeconds:     job.TimeoutSeconds,
+		Attempt:            0,
+		MaxAttempts:        job.MaxAttempts,
+		PermissionRequired: job.PermissionRequired,
+		RequestID:          job.RequestID,
+		CreatedAt:          time.UnixMilli(nowMS).UTC(),
+		UpdatedAt:          time.UnixMilli(nowMS).UTC(),
 	}, nil
 }
 
-// Claim 领取一条 queued 任务：互斥键不能与运行中任务冲突；在同一事务中迁移到
-// running、记录执行器与开始时间并写入 jobs.started 审计。没有可领取任务时返回
-// (Job{}, false, nil)。
+// insertJobRow 在给定事务中插入一条 queued 任务行；Enqueue 与计划触发共用，
+// 保证两条入队路径的字段与校验一致。
+func insertJobRow(ctx context.Context, tx audit.Tx, job task.NewJob) error {
+	nowMS := job.CreatedAt.UTC().UnixMilli()
+	permission := 0
+	if job.PermissionRequired {
+		permission = 1
+	}
+	_, err := tx.ExecContext(ctx, insertJobSQL,
+		job.ID,
+		job.Kind,
+		string(job.Initiator.Type),
+		job.Initiator.ID,
+		job.TimeoutSeconds,
+		job.MaxAttempts,
+		permission,
+		nullable(job.MutexKey),
+		string(job.Payload),
+		nullable(job.RequestID),
+		nowMS,
+		nowMS,
+	)
+	return err
+}
+
+// Claim 领取一条 queued 任务：必须已到重试时间，互斥键不能与运行中任务冲突；
+// 在同一事务中迁移到 running、递增尝试序号、写入尝试历史、记录执行器与开始
+// 时间并写入 jobs.started 审计。没有可领取任务时返回 (Job{}, false, nil)。
 func (s *Store) Claim(ctx context.Context, executorID string, now time.Time) (task.Job, bool, error) {
-	rows, err := s.raw.QueryContext(ctx, selectCandidateSQL)
+	nowMS := now.UTC().UnixMilli()
+	rows, err := s.raw.QueryContext(ctx, selectCandidateSQL, nowMS)
 	if err != nil {
 		return task.Job{}, false, mapStoreError(err)
 	}
@@ -186,12 +210,17 @@ func (s *Store) Claim(ctx context.Context, executorID string, now time.Time) (ta
 	if err != nil {
 		return task.Job{}, false, mapStoreError(err)
 	}
-	nowMS := now.UTC().UnixMilli()
+	attempt := candidate.Attempt + 1
+	changes := []audit.FieldChange{
+		{Field: "state", Before: string(task.StateQueued), After: string(task.StateRunning)},
+		{Field: "attempt", Before: formatInt(candidate.Attempt), After: formatInt(attempt)},
+	}
 	event := jobAuditEvent(candidate.ID,
 		audit.Actor{Type: audit.ActorSystem, ID: executorID},
-		"jobs.started", "running", candidate.RequestID, "", stateChange("queued", "running"))
+		"jobs.started", "running", candidate.RequestID, "", changes)
 	change := func(txCtx context.Context, tx audit.Tx) error {
-		result, err := tx.ExecContext(txCtx, claimJobSQL, executorID, nowMS, nowMS, candidate.ID)
+		result, err := tx.ExecContext(txCtx, claimJobSQL,
+			executorID, nowMS, attempt, nowMS, candidate.ID, candidate.Attempt, nowMS)
 		if err != nil {
 			return err
 		}
@@ -201,6 +230,9 @@ func (s *Store) Claim(ctx context.Context, executorID string, now time.Time) (ta
 		}
 		if affected != 1 {
 			return task.ErrTransitionRejected
+		}
+		if _, err := tx.ExecContext(txCtx, insertAttemptSQL, candidate.ID, attempt, nowMS, executorID); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -216,8 +248,10 @@ func (s *Store) Claim(ctx context.Context, executorID string, now time.Time) (ta
 	}
 	candidate.State = task.StateRunning
 	candidate.ExecutorID = executorID
+	candidate.Attempt = attempt
 	candidate.StartedAt = time.UnixMilli(nowMS).UTC()
 	candidate.UpdatedAt = time.UnixMilli(nowMS).UTC()
+	candidate.NextAttemptAt = time.Time{}
 	return candidate, true, nil
 }
 
@@ -253,6 +287,14 @@ func (s *Store) Complete(ctx context.Context, completion task.Completion) (task.
 		}
 		if affected != 1 {
 			return task.ErrTransitionRejected
+		}
+		if _, err := tx.ExecContext(txCtx, closeOpenAttemptsSQL,
+			nowMS,
+			string(completion.State),
+			nullable(completion.ErrorCode),
+			completion.JobID,
+		); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -428,6 +470,10 @@ func (s *Store) RecoverInterrupted(ctx context.Context, executorID string, now t
 			if affected != 1 {
 				return task.ErrTransitionRejected
 			}
+			if _, err := tx.ExecContext(txCtx, closeOpenAttemptsSQL,
+				nowMS, "interrupted", "TASK_INTERRUPTED", entry.id); err != nil {
+				return err
+			}
 			return nil
 		}
 		prepared, err := s.prepare(event)
@@ -527,6 +573,8 @@ func scanJob(rows *sql.Rows) (task.Job, error) {
 		startedAt         sql.NullInt64
 		finishedAt        sql.NullInt64
 		timeoutSeconds    int
+		permission        int
+		nextAttemptAt     sql.NullInt64
 		mutexKey          sql.NullString
 		payload           string
 		requestID         sql.NullString
@@ -551,6 +599,8 @@ func scanJob(rows *sql.Rows) (task.Job, error) {
 		&timeoutSeconds,
 		&job.Attempt,
 		&job.MaxAttempts,
+		&permission,
+		&nextAttemptAt,
 		&mutexKey,
 		&payload,
 		&requestID,
@@ -564,6 +614,7 @@ func scanJob(rows *sql.Rows) (task.Job, error) {
 	job.State = task.State(state)
 	job.Initiator = audit.Actor{Type: audit.ActorKind(initiatorType), ID: initiatorID}
 	job.ExecutorID = executedBy.String
+	job.PermissionRequired = permission == 1
 	if cancelledByType.Valid {
 		canceller := audit.Actor{Type: audit.ActorKind(cancelledByType.String), ID: cancelledByID.String}
 		job.Canceller = &canceller
@@ -582,6 +633,9 @@ func scanJob(rows *sql.Rows) (task.Job, error) {
 	}
 	if startedAt.Valid {
 		job.StartedAt = time.UnixMilli(startedAt.Int64).UTC()
+	}
+	if nextAttemptAt.Valid {
+		job.NextAttemptAt = time.UnixMilli(nextAttemptAt.Int64).UTC()
 	}
 	if finishedAt.Valid {
 		job.FinishedAt = time.UnixMilli(finishedAt.Int64).UTC()
@@ -605,6 +659,9 @@ func validateNewJob(job task.NewJob) error {
 	}
 	if job.TimeoutSeconds < task.MinTimeoutSeconds || job.TimeoutSeconds > task.MaxTimeoutSeconds {
 		return fmt.Errorf("%w: 任务墙钟上限无效", task.ErrInvalidRequest)
+	}
+	if job.MaxAttempts < 1 || job.MaxAttempts > task.MaxJobAttempts {
+		return fmt.Errorf("%w: 最大尝试次数无效", task.ErrInvalidRequest)
 	}
 	if job.MutexKey != "" {
 		if err := validateSimpleToken("互斥键", job.MutexKey, task.MaxMutexKeyBytes); err != nil {
@@ -700,8 +757,16 @@ func mapStoreError(err error) error {
 		errors.Is(err, task.ErrUntrustedActor) ||
 		errors.Is(err, task.ErrTaskNotFound) ||
 		errors.Is(err, task.ErrTaskTerminal) ||
-		errors.Is(err, task.ErrTransitionRejected) {
+		errors.Is(err, task.ErrTransitionRejected) ||
+		errors.Is(err, task.ErrScheduleNotFound) ||
+		errors.Is(err, task.ErrScheduleForbidden) ||
+		errors.Is(err, task.ErrPermissionCheckRequired) {
 		return err
 	}
 	return fmt.Errorf("%w: %w", task.ErrStoreUnavailable, err)
+}
+
+// formatInt 把尝试序号转成审计差异字符串。
+func formatInt(value int) string {
+	return strconv.Itoa(value)
 }

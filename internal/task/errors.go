@@ -34,4 +34,14 @@ var (
 	ErrRecoveryFailed = errors.New("task: 遗留任务恢复失败")
 	// ErrInternalRandomSource 表示安全随机源不可用，无法生成任务编号。
 	ErrInternalRandomSource = errors.New("task: 安全随机源不可用")
+	// ErrScheduleNotFound 表示计划不存在。
+	ErrScheduleNotFound = errors.New("task: 定时计划不存在")
+	// ErrScheduleForbidden 表示调用者既不是计划所有者，也不是系统或本地管理员，
+	// 不能暂停、恢复或删除该计划；服务层仍必须先完成自己的授权检查。
+	ErrScheduleForbidden = errors.New("task: 调用者不能修改该计划")
+	// ErrPermissionCheckRequired 表示计划要求运行前权限复验但没有配置可信回调；
+	// 管理类计划不得在缺少权限校验时默认放行。
+	ErrPermissionCheckRequired = errors.New("task: 缺少必要的权限复验回调")
+	// ErrPermissionRevoked 表示运行前权限复验拒绝执行；任务不重试并记录安全原因。
+	ErrPermissionRevoked = errors.New("task: 运行前权限复验未通过")
 )

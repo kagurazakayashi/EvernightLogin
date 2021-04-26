@@ -203,6 +203,7 @@ func directEnqueue(t *testing.T, store task.Store, kind string, timeoutSeconds i
 		Initiator:      userActor("user-1"),
 		Payload:        []byte(`{}`),
 		TimeoutSeconds: timeoutSeconds,
+		MaxAttempts:    1,
 		CreatedAt:      time.Now().UTC().Truncate(time.Millisecond),
 	})
 	if err != nil {

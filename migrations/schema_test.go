@@ -186,7 +186,7 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration} {
+	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration} {
 		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
 			t.Fatalf("读取迁移 %s 失败：%v", name, err)
@@ -375,6 +375,96 @@ func TestJobsMigration(t *testing.T) {
 	for _, future := range []string{"job_attempts", "schedules", "schedule_firings", "outbox_events"} {
 		if strings.Contains(sqlText, "CREATE TABLE "+future+" (") {
 			t.Errorf("0004 提前创建了后续步骤的表 %s", future)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
+
+const scheduleMigration = "0005_schedules_attempts.sql"
+
+// readScheduleMigration 读取 0005 定时计划与尝试历史迁移。
+func readScheduleMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(scheduleMigration)
+	if err != nil {
+		t.Fatalf("读取定时计划迁移失败：%v", err)
+	}
+	return string(data)
+}
+
+// TestScheduleMigration 校验步骤 12 的计划、触发去重与尝试历史结构：可信身份、
+// 启用/权限/错过策略枚举、唯一触发键、作业重试列与索引，且只追加结构。
+func TestScheduleMigration(t *testing.T) {
+	sqlText := readScheduleMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 3 {
+		t.Fatalf("0005 CREATE TABLE 数量 = %d，期望计划、触发与尝试历史三张表", count)
+	}
+	attemptDefinition := tableDefinition(t, sqlText, "job_attempts")
+	for _, want := range []string{
+		"job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE",
+		"attempt INTEGER NOT NULL CHECK(attempt>=1)",
+		"started_at_ms INTEGER NOT NULL",
+		"finished_at_ms INTEGER",
+		"outcome TEXT",
+		"error_code TEXT",
+		"executor_id TEXT",
+		"PRIMARY KEY(job_id,attempt)",
+	} {
+		if !strings.Contains(attemptDefinition, want) {
+			t.Errorf("job_attempts 定义缺少 %q", want)
+		}
+	}
+	scheduleDefinition := tableDefinition(t, sqlText, "schedules")
+	for _, want := range []string{
+		"id TEXT PRIMARY KEY NOT NULL",
+		"kind TEXT NOT NULL",
+		"schedule_type TEXT NOT NULL CHECK(schedule_type IN('daily','weekly','monthly','custom'))",
+		"expression TEXT NOT NULL",
+		"timezone TEXT NOT NULL",
+		"owner_type TEXT NOT NULL CHECK(owner_type IN('user','system','local_admin'))",
+		"owner_id TEXT NOT NULL",
+		"execution_type TEXT NOT NULL CHECK(execution_type IN('user','system','local_admin'))",
+		"execution_id TEXT NOT NULL",
+		"scope_id TEXT NOT NULL REFERENCES scopes(id)",
+		"enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN(0,1))",
+		"permission_required INTEGER NOT NULL DEFAULT 1 CHECK(permission_required IN(0,1))",
+		"missed_policy TEXT NOT NULL DEFAULT 'skip' CHECK(missed_policy IN('skip','latest','all'))",
+		"max_catch_up INTEGER NOT NULL DEFAULT 24 CHECK(max_catch_up>0 AND max_catch_up<=1000)",
+		"config_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(config_json))",
+		"last_scheduled_at_ms INTEGER",
+		"created_at_ms INTEGER NOT NULL",
+		"updated_at_ms INTEGER NOT NULL",
+	} {
+		if !strings.Contains(scheduleDefinition, want) {
+			t.Errorf("schedules 定义缺少 %q", want)
+		}
+	}
+	firingDefinition := tableDefinition(t, sqlText, "schedule_firings")
+	for _, want := range []string{
+		"schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE",
+		"scheduled_at_ms INTEGER NOT NULL",
+		"job_id TEXT REFERENCES jobs(id)",
+		"outcome TEXT NOT NULL CHECK(outcome IN('enqueued','skipped','denied'))",
+		"error_code TEXT",
+		"reason_code TEXT",
+		"created_at_ms INTEGER NOT NULL",
+		"PRIMARY KEY(schedule_id,scheduled_at_ms)",
+	} {
+		if !strings.Contains(firingDefinition, want) {
+			t.Errorf("schedule_firings 定义缺少 %q", want)
+		}
+	}
+	for _, want := range []string{
+		"ALTER TABLE jobs ADD COLUMN next_attempt_at_ms INTEGER;",
+		"ALTER TABLE jobs ADD COLUMN permission_required INTEGER NOT NULL DEFAULT 0 CHECK(permission_required IN(0,1));",
+		"CREATE INDEX ix_jobs_retry_due ON jobs(next_attempt_at_ms) WHERE state='queued' AND next_attempt_at_ms IS NOT NULL;",
+		"CREATE INDEX ix_job_attempts_open ON job_attempts(job_id) WHERE finished_at_ms IS NULL;",
+		"CREATE INDEX ix_schedules_enabled ON schedules(enabled,created_at_ms);",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Errorf("0005 缺少结构 %q", want)
 		}
 	}
 	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {

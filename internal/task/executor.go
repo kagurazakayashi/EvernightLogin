@@ -33,6 +33,12 @@ type Options struct {
 	Logger *slog.Logger
 	// Now 是可注入时钟；nil 使用 time.Now。任务时间统一截断到 UTC 毫秒。
 	Now func() time.Time
+	// RetryPolicy 是可重试失败后的有界指数退避；0 使用默认值（1s 起、5m 封顶）。
+	// 只有任务行 MaxAttempts>1 且处理器返回可重试错误时才生效。
+	RetryPolicy RetryPolicy
+	// PermissionCheck 是运行前权限复验的可信回调。任务标记 PermissionRequired 时
+	// 每次尝试前必须通过；未配置时这类任务失败而不是默认放行。
+	PermissionCheck PermissionCheck
 }
 
 // executorState 是执行器内部生命周期状态。
@@ -59,6 +65,8 @@ type Executor struct {
 	shutdownTimeout time.Duration
 	logger          *slog.Logger
 	now             func() time.Time
+	retryPolicy     RetryPolicy
+	permissionCheck PermissionCheck
 
 	stopMu sync.Mutex
 	mu     sync.Mutex
@@ -121,6 +129,10 @@ func New(store Store, options Options) (*Executor, error) {
 	if now == nil {
 		now = time.Now
 	}
+	retryPolicy, err := options.RetryPolicy.normalize()
+	if err != nil {
+		return nil, err
+	}
 	return &Executor{
 		store:           store,
 		handlers:        handlers,
@@ -130,6 +142,8 @@ func New(store Store, options Options) (*Executor, error) {
 		shutdownTimeout: shutdownTimeout,
 		logger:          logger,
 		now:             now,
+		retryPolicy:     retryPolicy,
+		permissionCheck: options.PermissionCheck,
 		wake:            make(chan struct{}, 1),
 		running:         make(map[string]context.CancelFunc),
 	}, nil
@@ -298,28 +312,50 @@ func (e *Executor) Enqueue(ctx context.Context, request EnqueueRequest) (Job, er
 	}
 	now := e.clockNow()
 	job, err := e.store.Enqueue(ctx, NewJob{
-		ID:             id,
-		Kind:           normalized.Kind,
-		Initiator:      normalized.Actor,
-		Payload:        normalized.Payload,
-		MutexKey:       normalized.MutexKey,
-		TimeoutSeconds: normalized.TimeoutSeconds,
-		RequestID:      normalized.RequestID,
-		CreatedAt:      now,
+		ID:                 id,
+		Kind:               normalized.Kind,
+		Initiator:          normalized.Actor,
+		Payload:            normalized.Payload,
+		MutexKey:           normalized.MutexKey,
+		TimeoutSeconds:     normalized.TimeoutSeconds,
+		MaxAttempts:        normalized.MaxAttempts,
+		PermissionRequired: normalized.PermissionRequired,
+		RequestID:          normalized.RequestID,
+		CreatedAt:          now,
 	})
 	if err != nil {
 		return Job{}, err
+	}
+	e.Wake()
+	e.logger.Info("后台任务已入队",
+		"job_id", job.ID,
+		"kind", job.Kind,
+		"initiated_by_type", string(job.Initiator.Type),
+		"max_attempts", job.MaxAttempts,
+	)
+	return job, nil
+}
+
+// Wake 唤醒队列轮询，让在同一存储中由外部（例如定时计划触发）新增的 queued
+// 任务尽快被领取。它不创建任务、不改变状态、不阻塞。
+func (e *Executor) Wake() {
+	if e.wake == nil {
+		return
 	}
 	select {
 	case e.wake <- struct{}{}:
 	default:
 	}
-	e.logger.Info("后台任务已入队",
-		"job_id", job.ID,
-		"kind", job.Kind,
-		"initiated_by_type", string(job.Initiator.Type),
-	)
-	return job, nil
+}
+
+// Attempts 返回任务的尝试历史（按尝试序号升序）；任务不存在或编号非法时返回
+// 错误，空历史返回空切片。调用方必须是可信内部边界。
+func (e *Executor) Attempts(ctx context.Context, id string) ([]Attempt, error) {
+	ctx = normalizeContext(ctx)
+	if err := validateJobID(id); err != nil {
+		return nil, err
+	}
+	return e.store.Attempts(ctx, id)
 }
 
 // RequestCancel 接受可信取消请求。queued 任务会立即变为 cancelled；running 任务
@@ -417,9 +453,17 @@ func (e *Executor) dispatch(lifetime context.Context, done chan struct{}) {
 }
 
 // launch 为已领取任务创建带墙钟期限的执行上下文并启动处理器 goroutine。
+//
+// 期限长度用注入时钟计算（deadline - now），相对真实时间的计时由 context 负责；
+// 这样确定性测试注入的假时钟不会因为绝对时间在过去而立即到期，同时生产环境
+// 等价于 started_at + timeout_seconds 的绝对期限。
 func (e *Executor) launch(lifetime context.Context, job Job) {
 	deadline := job.StartedAt.Add(time.Duration(job.TimeoutSeconds) * time.Second)
-	runCtx, cancel := context.WithDeadline(lifetime, deadline)
+	remaining := deadline.Sub(e.clockNow())
+	if remaining <= 0 {
+		remaining = time.Nanosecond
+	}
+	runCtx, cancel := context.WithTimeout(lifetime, remaining)
 	e.mu.Lock()
 	e.running[job.ID] = cancel
 	e.mu.Unlock()
@@ -427,7 +471,11 @@ func (e *Executor) launch(lifetime context.Context, job Job) {
 	go e.runJob(runCtx, cancel, job)
 }
 
-// runJob 执行任务处理器并把真实终止结果写入持久化终态。
+// errHandlerUnknown 表示任务类型没有注册处理器；属于配置错误，不重试。
+var errHandlerUnknown = errors.New("任务类型没有注册处理器")
+
+// runJob 执行任务处理器并把真实终止结果写入持久化终态；可重试失败按退避策略
+// 重新排队，取消请求已接受的任务不会重试。
 func (e *Executor) runJob(runCtx context.Context, cancel context.CancelFunc, job Job) {
 	defer e.wg.Done()
 	defer cancel()
@@ -437,14 +485,7 @@ func (e *Executor) runJob(runCtx context.Context, cancel context.CancelFunc, job
 		e.mu.Unlock()
 	}()
 
-	handler := e.handlers[job.Kind]
-	var handlerErr error
-	handlerMissing := handler == nil
-	if handlerMissing {
-		handlerErr = fmt.Errorf("任务类型没有注册处理器")
-	} else {
-		handlerErr = e.invokeHandler(runCtx, job, handler)
-	}
+	handlerErr := e.executeHandler(runCtx, job)
 	now := e.clockNow()
 	deadline := job.StartedAt.Add(time.Duration(job.TimeoutSeconds) * time.Second)
 	completion := Completion{
@@ -466,13 +507,52 @@ func (e *Executor) runJob(runCtx context.Context, cancel context.CancelFunc, job
 		completion.ErrorCode = "TASK_CANCELLED"
 		completion.FailureReason = "任务在执行中被取消"
 	default:
-		completion.State = StateFailed
-		if handlerMissing {
-			completion.ErrorCode = "TASK_HANDLER_UNKNOWN"
+		if e.shouldRetry(job, handlerErr) {
+			retryCtx, retryCancel := context.WithTimeout(context.WithoutCancel(runCtx), e.shutdownTimeout)
+			_, retried, retryErr := e.store.Retry(retryCtx, RetryCommand{
+				JobID:         job.ID,
+				ExecutorID:    e.executorID,
+				Attempt:       job.Attempt,
+				ErrorCode:     classifyFailure(handlerErr),
+				FailureReason: sanitizeFailureReason(handlerErr.Error()),
+				NextAttemptAt: now.Add(e.retryPolicy.delayAfter(job.Attempt)),
+				Now:           now,
+			})
+			retryCancel()
+			if retryErr != nil && !errors.Is(retryErr, ErrTransitionRejected) {
+				e.logger.Error("后台任务重试入队失败",
+					"job_id", job.ID,
+					"attempt", job.Attempt,
+					"error", retryErr,
+				)
+				return
+			}
+			if retried {
+				e.logger.Info("后台任务已安排重试",
+					"job_id", job.ID,
+					"attempt", job.Attempt,
+					"max_attempts", job.MaxAttempts,
+					"next_attempt_at", now.Add(e.retryPolicy.delayAfter(job.Attempt)).UTC(),
+				)
+				return
+			}
+			// 重试被状态竞争拒绝：读取真实状态，取消请求已接受时写取消终态，
+			// 不能把已取消任务显示为失败或已安排重试。
+			latest, found, getErr := e.store.Get(context.WithoutCancel(runCtx), job.ID)
+			if getErr == nil && found && (latest.State == StateCancelRequested || latest.State == StateCancelled) {
+				completion.State = StateCancelled
+				completion.ErrorCode = "TASK_CANCELLED"
+				completion.FailureReason = "任务在执行中被取消"
+				break
+			}
+			completion.State = StateFailed
+			completion.ErrorCode = classifyFailure(handlerErr)
+			completion.FailureReason = sanitizeFailureReason(handlerErr.Error())
 		} else {
-			completion.ErrorCode = "TASK_FAILED"
+			completion.State = StateFailed
+			completion.ErrorCode = classifyFailure(handlerErr)
+			completion.FailureReason = sanitizeFailureReason(handlerErr.Error())
 		}
-		completion.FailureReason = sanitizeFailureReason(handlerErr.Error())
 	}
 	completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(runCtx), e.shutdownTimeout)
 	updated, err := e.store.Complete(completeCtx, completion)
@@ -489,16 +569,80 @@ func (e *Executor) runJob(runCtx context.Context, cancel context.CancelFunc, job
 		"job_id", updated.ID,
 		"kind", updated.Kind,
 		"state", string(updated.State),
+		"attempt", updated.Attempt,
 		"error_code", updated.ErrorCode,
 	)
 }
 
-// invokeHandler 隔离处理器 panic，把 panic 当作失败而不是让执行器 goroutine 崩溃。
+// executeHandler 在调用处理器前完成运行前权限复验：任务标记为需要权限时，
+// 缺少可信回调或复验失败都按不可重试失败处理，绝不默认放行。
+func (e *Executor) executeHandler(ctx context.Context, job Job) error {
+	if job.PermissionRequired {
+		if e.permissionCheck == nil {
+			return NonRetryable(fmt.Errorf("%w: 任务要求运行前权限复验，但没有配置可信回调", ErrPermissionRevoked))
+		}
+		if err := e.permissionCheck(ctx, PermissionRequest{
+			Kind:     job.Kind,
+			Actor:    job.Initiator,
+			Payload:  job.Payload,
+			MutexKey: job.MutexKey,
+			JobID:    job.ID,
+		}); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			e.logger.Warn("后台任务运行前权限复验未通过",
+				"job_id", job.ID,
+				"kind", job.Kind,
+				"error", err,
+			)
+			return NonRetryable(fmt.Errorf("%w: %s", ErrPermissionRevoked, sanitizeFailureReason(err.Error())))
+		}
+	}
+	handler := e.handlers[job.Kind]
+	if handler == nil {
+		return NonRetryable(errHandlerUnknown)
+	}
+	return e.invokeHandler(ctx, job, handler)
+}
+
+// shouldRetry 判断处理器失败是否还能重试：受尝试上限、显式不可重试、权限撤销
+// 与取消/期限约束，不自动重试整体墙钟超时（由 timed_out 终态处理）。
+func (e *Executor) shouldRetry(job Job, err error) bool {
+	if err == nil || job.MaxAttempts <= job.Attempt {
+		return false
+	}
+	if IsNonRetryable(err) {
+		return false
+	}
+	if errors.Is(err, ErrPermissionRevoked) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
+}
+
+// classifyFailure 把失败映射为内部错误码；对外错误码映射由服务层完成。
+func classifyFailure(err error) string {
+	switch {
+	case errors.Is(err, errHandlerUnknown):
+		return "TASK_HANDLER_UNKNOWN"
+	case errors.Is(err, ErrPermissionRevoked):
+		return "TASK_PERMISSION_REVOKED"
+	default:
+		return "TASK_FAILED"
+	}
+}
+
+// invokeHandler 隔离处理器 panic，把 panic 当作不可重试失败而不是让执行器
+// goroutine 崩溃。
 func (e *Executor) invokeHandler(ctx context.Context, job Job, handler Handler) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			e.logger.Error("后台任务处理器 panic", "job_id", job.ID, "kind", job.Kind)
-			err = fmt.Errorf("任务处理器发生 panic")
+			err = NonRetryable(fmt.Errorf("任务处理器发生 panic"))
 		}
 	}()
 	return handler(ctx, job)
