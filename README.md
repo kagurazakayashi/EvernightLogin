@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 12）
+## 项目状态（步骤 13）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit` 与 `internal/task` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听与访问日志、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。任务执行器与调度器不提供网络/管理端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听/多地址/可信代理/TLS、限流与浏览器安全头、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -222,6 +222,32 @@ fmt.Println(appErr.Error()) // PERMISSION_REQUIRED: 缺少当前操作所需权�
 - **尚未接入**：`Instance`、配置、HTTP、服务层授权/查询端点、通知/报告/备份具体处理器与 outbox/补偿仍未实现；跨进程多调度器只依赖数据库唯一键与游标条件更新，不做分布式租约。
 - **已验证（Windows amd64，临时 SQLite）**：日计划成功触发与执行、同一触发时刻重复 Tick/重复写入去重、调度器重启补跑、`skip`/`latest`/`all` 与 `max_catch_up` 有界补跑、跨时区准点、夏令时缺口触发、月末 31 日跳过与 `last`（含闰年）、互斥键串行执行、重试退避（20ms/40ms）与耗尽、非重试错误/未知处理器/panic 不重试、排队取消与运行中取消后不重试、运行前权限复验拒绝与恢复、重试期间撤权停止重试、暂停/恢复/删除不取消运行任务、调度器 goroutine 在 Stop 后退出；`examples/task-schedule` 实跑通过。六目标仅编译，非 Windows 未运行。
 
+## HTTP 接口基础与访问日志（步骤 13）
+
+本步新增内部传输层 `internal/transport` 与公开契约 `login.NewHTTPHandler`，把核心能力接到标准 `net/http`，但不开放尚未鉴权的业务或管理接口：
+
+```go
+handler, err := login.NewHTTPHandler(login.HTTPOptions{
+    Prefix:          "/login",
+    MaxBodyBytes:    1 << 20,
+    IdentityResolver: resolver, // 由宿主用已验证会话/令牌实现；nil 时受保护路由拒绝
+    AccessLogWriter: accessLog, // W3C Extended 输出；nil 表示不写访问日志
+    Logger:          logger,
+})
+// 宿主自行创建 http.Server、监听地址、TLS 与关闭流程（步骤 14～17）。
+```
+
+- **生产路由最小化**：只注册 `GET {prefix}/healthz`（固定 `{"status":"ok"}`，不泄露配置/数据库路径/密钥/版本）与 `GET {prefix}/openapi.json`。调试路由、测试路由、未鉴权管理功能都不注册；测试路由只能由内部测试构造器注入。
+- **路径与路由安全**：固定前缀必须是空或 `/segment(/segment)*`；拒绝百分号编码、重复斜杠、点段、尾斜杠、反斜杠、非 ASCII 与非规范路径，不做清理后重匹配或重定向，避免归一化绕过路由与权限；路径/查询串有长度上限。
+- **请求边界与参数规范化**：`Content-Length` 超限直接 413；所有请求体统一用 `MaxBytesReader` 限制；GET 端点拒绝请求体；JSON 只接受 `application/json`（charset 仅 utf-8），拒绝未知字段、多值 JSON 和尾随内容；文本参数去首尾空白、拒绝控制字符/非法 UTF-8/超长值，稳定标识只接受 ASCII `字母数字 . _ -`，重复查询参数/请求头被拒绝（防参数走私）。
+- **统一错误与编号**：错误响应为 `{"code","message","request_id"}`，错误码只来自 46 码注册表；`X-Request-ID` 在合法且唯一时复用客户端值，否则生成新编号，响应头与错误正文一致；错误/panic 不泄露原始错误文本、堆栈或请求内容。
+- **异常恢复与取消**：panic 隔离为 500 `INTERNAL_ERROR` 且服务继续可用；客户端取消经 `r.Context()` 传递，访问日志记录 499（nginx 约定，非标准状态，不向客户端承诺）。
+- **可信身份**：通过 `login.HTTPOptions.IdentityResolver` 从已验证会话/令牌建立 `login.Identity` 并放入请求上下文；`login.IdentityFromContext`/`WithIdentity` 提供服务层传递接口；公开健康端点不依赖身份解析，认证提供方故障时仍可探活；客户端自填 `X-User-ID`/`actor_id`/`user_id` 等字段不参与身份建立。
+- **OpenAPI**：`login.OpenAPIDocument(prefix)` 与 `{prefix}/openapi.json` 同源生成，错误码 enum 与 `x-login-error-registry` 直接来自注册表，新增错误码不会漏文档；`/oauth2` 前缀保留给未来 OAuth/OIDC 标准协议响应，不使用统一错误信封。
+- **W3C Extended 访问日志**：固定字段 `date time c-ip cs-method cs-uri-stem sc-status sc-bytes cs-bytes time-taken cs-version cs(User-Agent) cs(Referer) x-request-id x-error-code`；不记录查询串、认证头、Cookie 与正文，Referer 只保留来源与路径；字段按 W3C 规则转义（空格/控制字符/非 ASCII/引号/反斜杠 `%XX`），防日志注入；写入失败通过注入回调或运行日志告警，不改变响应，也不进入安全审计。
+- **尚未接入**：`Instance`/`cmd/login-server` 启动、真实监听、反向代理/公开地址、TLS、mTLS、限流与 CORS/安全响应头（步骤 14～17）、业务接口与身份存储均未实现；访问日志字段配置/轮转/保留策略仍未实现。
+- **已验证（Windows amd64，httptest）**：参数错误、非法 JSON/内容类型、未知字段、超大 Content-Length 与 chunked 请求体、GET 带请求体、未知路由/方法、路径编码/重复斜杠/点段/前缀绕过、panic→500 且服务可用、内部错误不泄露、客户端取消与 499、请求编号复用/拒绝注入、身份解析与客户端伪造 ID 忽略、身份失败默认拒绝、OpenAPI 与 46 码注册表逐项一致、W3C 日志字段/脱敏/注入防护/写失败告警+回调 panic 隔离、6 路并发请求与日志行数；六目标仅编译，非 Windows 未运行。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -253,6 +279,7 @@ go run .\cmd\login-server --help
 | internal/credential/ | 一次性凭证服务与 SQLite 生产仓储（内部包） | 是 |
 | internal/audit/ | 安全审计事件模型、可靠写入与 SQLite 持久化（内部包） | 是 |
 | internal/task/ | 后台任务执行器、定时计划、重试/尝试历史与 SQLite 持久化（内部包） | 是 |
+| internal/transport/ | 标准 net/http Handler、路由/错误响应/身份传递/OpenAPI/访问日志（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
 | docs/requirements/ | 功能清单和错误码手册 | 可以 |
@@ -267,7 +294,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～12 已完成；继续时按 .ai/ 中的顺序处理步骤 13，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～13 已完成；继续时按 .ai/ 中的顺序处理步骤 14，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 完成第 17 步后，提供 MEMORY.md 与必要代码状态，再生成下一部分和更新 AGENTS.md。
 

@@ -1,8 +1,8 @@
 // Package logging 构造 login 的结构化运行日志器。
 //
 // 它只负责把已验证的日志配置映射为 Go 标准库 log/slog 的处理器，不做审计、
-// HTTP 访问日志或日志轮转；那些分别在后续步骤实现。运行日志与安全审计必须
-// 分开，不能把审计记录当作普通日志。
+// HTTP 访问日志或日志轮转。HTTP 访问日志在内部传输层按 W3C Extended 格式输出，
+// 与运行日志和 SQLite 安全审计分开，不能互相替代。
 package logging
 
 import (
