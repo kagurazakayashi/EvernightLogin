@@ -24,6 +24,7 @@ var testErrorCodes = []ErrorCodeInfo{
 	{Code: "AUTH_FAILED", Category: "认证", Message: "无法完成登录", HTTPStatus: 401},
 	{Code: "ACCESS_DENIED", Category: "权限", Message: "请求未获准", HTTPStatus: 403},
 	{Code: "TOKEN_INVALID", Category: "令牌", Message: "访问凭证无效", HTTPStatus: 401},
+	{Code: "RATE_LIMITED", Category: "限流", Message: "请求过于频繁", HTTPStatus: 429},
 	{Code: "INTERNAL_ERROR", Category: "内部故障", Message: "服务发生未预期错误", HTTPStatus: 500},
 }
 

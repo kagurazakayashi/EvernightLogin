@@ -2,6 +2,7 @@ package transport
 
 import (
 	"io"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -130,16 +131,20 @@ func formatAccessEntry(entry accessEntry) string {
 	return builder.String()
 }
 
-// remoteHost 只保留 RemoteAddr 的主机部分；端口不是访问日志字段。该地址未经
-// 可信代理校验（可信代理与公开访问地址在后续步骤实现），不得用于授权判断。
+// remoteHost 只保留客户端地址；端口不是访问日志字段。调用方传入的地址已经由
+// 传输层按可信代理规则解析，日志本身不进一步判断信任关系。
 func remoteHost(remoteAddr string) string {
-	if remoteAddr == "" {
+	trimmed := strings.TrimSpace(remoteAddr)
+	if trimmed == "" {
 		return "-"
 	}
-	if host, _, err := splitHostPort(remoteAddr); err == nil && host != "" {
+	if address, err := netip.ParseAddr(trimmed); err == nil {
+		return address.Unmap().String()
+	}
+	if host, _, err := splitHostPort(trimmed); err == nil && host != "" {
 		return host
 	}
-	return remoteAddr
+	return w3cToken(trimmed, maxAccessLogValueBytes)
 }
 
 // w3cToken 把字段值转义为不含空白的 W3C 记号：空格、控制字符、非 ASCII 与

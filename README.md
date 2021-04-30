@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 13）
+## 项目状态（步骤 14）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 监听/多地址/可信代理/TLS、限流与浏览器安全头、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 真实监听/多地址/完整反向代理部署/TLS/mTLS（步骤 15～17）、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -248,6 +248,23 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **尚未接入**：`Instance`/`cmd/login-server` 启动、真实监听、反向代理/公开地址、TLS、mTLS、限流与 CORS/安全响应头（步骤 14～17）、业务接口与身份存储均未实现；访问日志字段配置/轮转/保留策略仍未实现。
 - **已验证（Windows amd64，httptest）**：参数错误、非法 JSON/内容类型、未知字段、超大 Content-Length 与 chunked 请求体、GET 带请求体、未知路由/方法、路径编码/重复斜杠/点段/前缀绕过、panic→500 且服务可用、内部错误不泄露、客户端取消与 499、请求编号复用/拒绝注入、身份解析与客户端伪造 ID 忽略、身份失败默认拒绝、OpenAPI 与 46 码注册表逐项一致、W3C 日志字段/脱敏/注入防护/写失败告警+回调 panic 隔离、6 路并发请求与日志行数；六目标仅编译，非 Windows 未运行。
 
+## HTTP 限流与浏览器请求防护（步骤 14）
+
+在步骤 13 的 Handler 外增加可复用防护能力；生产路由仍只有健康检查与 OpenAPI，不注册业务、管理、调试或测试路由。基础防护默认启用（安全响应头、限流、期限/并发、精确 CORS 配置入口）；CSRF 默认关闭，必须由宿主显式提供校验器并接入会话。宿主可调整或关闭限流，但没有任何“匿名绕过鉴权/CSRF”的配置或示例。
+
+- **多维有界限流**：按可信客户端地址、已认证用户、应用、接口和昂贵请求独立固定窗口限流。默认分别为 600/300/300/1200/30 每分钟；每个维度默认最多跟踪 4096 个键，按窗口/清理间隔删除过期条目，容量耗尽时先清理、仍不足则拒绝新键（fail-closed）；所有计数在互斥锁内完成，支持 6 路并发验证。`RateLimitOptions.Disabled` 可关闭限流，显式规则只启用设置了 `Limit` 与 `Window` 的维度。
+- **可信客户端地址**：只有直连对端命中显式 `TrustedProxies` IP/CIDR 时才解析 `X-Forwarded-For`；从右向左跳过可信代理，遇到第一个不可信地址作为客户端地址；转发链过长、条目过多或任一地址非法时回退直连地址。未配置可信代理时完全忽略转发头，`X-Real-IP` 等非标准头一律不信任，客户端无法伪造限流桶或访问日志 `c-ip`。
+- **身份维度**：用户/应用限流键只来自 `IdentityResolver` 建立的可信 `login.Identity`；匿名请求即使携带 `X-User-ID`、`user_id` 或 `actor_id` 也不会产生用户桶。健康端点不依赖身份解析。
+- **请求/响应超时与并发上限**：默认请求期限 30 秒，处理链在独立 goroutine 中缓冲响应；墙钟到期后丢弃未完成响应并返回 504 `INTERNAL_ERROR`，访问日志按超时状态记录。并发上限默认 256，超出立即返回 429 与等待建议，不排队堆积连接。处理器必须响应 `context`；忽略取消的处理器在超时后仍可能短暂占用 goroutine，这是已记录的契约限制，不能据此声称资源已完全释放。
+- **昂贵请求预算**：`HTTPProtectionOptions.ExpensivePaths` 可按完整路径标记昂贵接口，使用独立预算桶（按可信用户/应用，匿名按客户端地址），不影响普通接口计数。
+- **精确 CORS**：只接受显式 `scheme://host[:port]` 精确来源，不支持通配符、正则或后缀匹配；预检校验请求方法与请求头，拒绝来源不回显 `Access-Control-Allow-Origin`。CORS 只决定浏览器是否可读取响应，不代替身份、权限或 CSRF 校验。
+- **安全响应头**：默认 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、API 最小 CSP（`default-src 'none'; frame-ancestors 'none'`）、`Referrer-Policy: no-referrer`、COOP/CORP、Permissions-Policy 与 `Cache-Control: no-store`；HSTS 仅在显式启用时输出。`AllowFraming` 可放宽为同源嵌入；未来扫码/授权 HTML 页面可显式提供 CSP，避免安全头破坏合法页面。
+- **CSRF 契约**：为未来 Cookie 会话定义强制校验：不安全方法在检测到会话 Cookie（或显式要求全部不安全请求）时，Origin/Referer 必须命中精确允许来源，且唯一 CSRF 令牌必须通过宿主注入的 `CSRFValidator`；GET/HEAD/OPTIONS/TRACE 豁免以兼容顶层跨站授权跳转，form_post 等跨站写流程必须由协议层显式处理。CORS 允许来源不会跳过 CSRF，无会话 Cookie 的令牌认证接口不受影响。
+- **Cookie 策略**：`DefaultCookiePolicy` 为 Secure、HttpOnly、SameSite=Lax、Path=/，适合同站与顶层导航；仅当协议端点确实需要跨站 Cookie 时才可显式 SameSite=None（仍必须 Secure），并必须由协议层完成来源/CSRF 校验，不能用 SameSite=None 代替 CSRF；`__Host-`/`__Secure-` 前缀规则强制满足；本步只定义并校验契约，不创建会话 Cookie。
+- **错误与 OpenAPI**：限流返回 429 `RATE_LIMITED`，同时带 `Retry-After` 响应头与错误 JSON `retry_after_seconds`；OpenAPI Error schema 与 common error responses 同步记录 429/504。
+- **已验证（Windows amd64，httptest）**：伪造 `X-Forwarded-For` 不改变限流键、可信代理链解析、未认证伪造 user_id 不分桶、用户/应用/接口维度隔离、昂贵预算、容量耗尽 fail-closed 与过期清理、6 路并发限流计数、429 等待建议、精确 CORS 允许/拒绝与预检、CSRF 缺令牌/错令牌/错来源/安全方法豁免/Referer 兼容/CORS 不绕过、默认与可覆盖安全头、并发上限、响应墙钟超时（含不响应 context 的处理器）、公开防护配置错误映射 CONFIG_INVALID；跨平台只编译，非 Windows 未运行。
+- **尚未接入**：`Instance`/`cmd/login-server`、真实监听、多地址、TLS/mTLS、完整反向代理部署与公开地址/Issuer 校验（步骤 15～17）、业务接口、身份存储与真实 Cookie 会话均未实现；限流容量/窗口目前是进程内单实例状态，不提供共享限流适配器。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -279,6 +296,7 @@ go run .\cmd\login-server --help
 | internal/credential/ | 一次性凭证服务与 SQLite 生产仓储（内部包） | 是 |
 | internal/audit/ | 安全审计事件模型、可靠写入与 SQLite 持久化（内部包） | 是 |
 | internal/task/ | 后台任务执行器、定时计划、重试/尝试历史与 SQLite 持久化（内部包） | 是 |
+| internal/ratelimit/ | 有界并发安全固定窗口限流器（内部包） | 是 |
 | internal/transport/ | 标准 net/http Handler、路由/错误响应/身份传递/OpenAPI/访问日志（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
@@ -294,7 +312,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～13 已完成；继续时按 .ai/ 中的顺序处理步骤 14，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～14 已完成；继续时按 .ai/ 中的顺序处理步骤 15，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 完成第 17 步后，提供 MEMORY.md 与必要代码状态，再生成下一部分和更新 AGENTS.md。
 

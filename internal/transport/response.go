@@ -6,21 +6,43 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // problem 是传输层内部错误：统一错误码、HTTP 状态与公开说明。公开说明只由
 // 固定文本或根包已脱敏的 AppError 消息填充，绝不包含内部原因、堆栈或请求内容。
 type problem struct {
-	status  int
-	code    string
-	message string
-	cause   error
+	status     int
+	code       string
+	message    string
+	cause      error
+	retryAfter time.Duration
 }
 
 // newProblem 构造传输层错误；message 会再次压缩为单行并截断。
 func newProblem(status int, code, message string) *problem {
 	return &problem{status: status, code: code, message: sanitizeMessage(message)}
+}
+
+// newRateLimitedProblem 构造 429 限流错误；Retry-After 与 error JSON 的
+// retry_after_seconds 都来自同一个等待建议（至少 1 秒，避免客户端立即重试）。
+func newRateLimitedProblem(retryAfter time.Duration, message string) *problem {
+	if retryAfter <= 0 {
+		retryAfter = time.Second
+	}
+	return &problem{
+		status:     http.StatusTooManyRequests,
+		code:       "RATE_LIMITED",
+		message:    sanitizeMessage(message),
+		retryAfter: retryAfter,
+	}
+}
+
+// timeoutProblem 是请求处理超过期限时的统一 504 响应。
+func timeoutProblem() *problem {
+	return newProblem(http.StatusGatewayTimeout, "INTERNAL_ERROR", "请求处理超时")
 }
 
 // Error 返回单行诊断文本，仅用于内部日志与错误链，不直接写响应。
@@ -73,9 +95,10 @@ func sanitizeMessage(message string) string {
 // errorPayload 是统一错误响应正文；字段与错误码手册的返回约定一致，OAuth 协议
 // 响应不会使用该结构。
 type errorPayload struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id"`
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	RequestID         string `json:"request_id"`
+	RetryAfterSeconds int    `json:"retry_after_seconds,omitempty"`
 }
 
 // responseWriter 包装 http.ResponseWriter，记录状态、字节数与错误码，供访问日志
@@ -143,6 +166,13 @@ func writeProblem(w *responseWriter, requestID string, p *problem) {
 		status = http.StatusInternalServerError
 	}
 	payload := errorPayload{Code: p.code, Message: p.message, RequestID: requestID}
+	if p.retryAfter > 0 {
+		seconds := int((p.retryAfter + time.Second - 1) / time.Second)
+		if seconds < 1 {
+			seconds = 1
+		}
+		payload.RetryAfterSeconds = seconds
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		status = http.StatusInternalServerError
@@ -151,6 +181,9 @@ func writeProblem(w *responseWriter, requestID string, p *problem) {
 	header := w.Header()
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	header.Set("Cache-Control", "no-store")
+	if payload.RetryAfterSeconds > 0 {
+		header.Set("Retry-After", strconv.Itoa(payload.RetryAfterSeconds))
+	}
 	w.SetErrorCode(p.code)
 	w.WriteHeader(status)
 	_, _ = w.Write(body)

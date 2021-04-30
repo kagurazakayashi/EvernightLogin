@@ -106,8 +106,9 @@ func (f IdentityResolverFunc) ResolveIdentity(ctx context.Context, request *http
 
 // HTTPOptions 是构造标准 net/http Handler 的显式依赖。
 //
-// Handler 只提供本步安全的最小能力：健康检查与 OpenAPI 文档。身份解析函数用于
-// 未来受保护接口与宿主中间件；公开健康端点不依赖它。
+// Handler 只提供本步安全的最小能力：健康检查、OpenAPI 文档与默认启用的浏览器
+// 请求防护（限流、超时/并发、CORS、安全响应头、Cookie 会话 CSRF 契约）。身份
+// 解析函数用于未来受保护接口与宿主中间件；公开健康端点不依赖它。
 type HTTPOptions struct {
 	// Prefix 是固定路径前缀：空字符串或 /segment(/segment)*；不能以斜杠结尾。
 	// 前缀不匹配的路径一律 404，不做清理重写。
@@ -125,15 +126,25 @@ type HTTPOptions struct {
 	// OnAccessLogError 接收访问日志写入失败；nil 时通过 Logger.Error 告警。
 	// 访问日志写入失败不改变 HTTP 响应，也不影响安全审计语义。
 	OnAccessLogError func(error)
-	// Now 是可注入时钟；nil 使用 time.Now。访问日志时间与测试使用该时钟。
+	// Now 是可注入时钟；nil 使用 time.Now。访问日志时间、限流窗口与测试使用该时钟。
 	Now func() time.Time
+	// Protection 是限流、资源预算、请求超时/并发、CORS、安全响应头、Cookie 与
+	// CSRF 契约；nil 使用安全默认值。详见 HTTPProtectionOptions。
+	Protection *HTTPProtectionOptions
 }
 
 // NewHTTPHandler 构造标准 net/http Handler。生产实例只注册固定预热用的健康
-// 端点与 OpenAPI 文档；未鉴权的管理功能、调试路由和测试路由都不会注册。
+// 端点与 OpenAPI 文档；未鉴权的管理功能、调试路由和测试路由都不会注册。默认
+// 启用安全响应头、多维限流、请求期限/并发上限与精确 CORS 配置入口；CSRF 默认
+// 关闭，需宿主显式提供校验器并绑定 Cookie 会话契约。
 //
 // 选项非法时返回 CONFIG_INVALID 统一错误，不创建任何监听、协程或文件。
+// NewHTTPHandler 不创建服务器、不监听端口、不启动后台 goroutine。
 func NewHTTPHandler(options HTTPOptions) (http.Handler, error) {
+	protection, err := normalizeHTTPProtection(options.Protection)
+	if err != nil {
+		return nil, NewAppError(CodeConfigInvalid, "HTTP 防护配置无效", WithCause(err))
+	}
 	handler, err := transport.New(transport.Options{
 		Prefix:            options.Prefix,
 		MaxBodyBytes:      options.MaxBodyBytes,
@@ -146,6 +157,7 @@ func NewHTTPHandler(options HTTPOptions) (http.Handler, error) {
 		OnAccessLogError:  options.OnAccessLogError,
 		Now:               options.Now,
 		Version:           CurrentBuildInfo().Version,
+		Protection:        protection,
 	})
 	if err != nil {
 		return nil, NewAppError(CodeConfigInvalid, "HTTP 处理程序配置无效", WithCause(err))

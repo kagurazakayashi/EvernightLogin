@@ -12,6 +12,9 @@
 //     公开健康端点不依赖身份解析，认证提供方故障时仍可探活。
 //   - 访问日志省略查询参数、认证头、Cookie 与正文；字段经过 W3C Extended
 //     转义，防止日志注入；写入失败只告警，不改变响应，也不进入安全审计。
+//   - 浏览器请求防护由 Protection 选项控制：可信客户端地址、多维限流、昂贵
+//     请求预算、请求期限/响应超时、并发上限、精确来源 CORS、安全响应头与
+//     Cookie 会话 CSRF 契约；默认启用安全默认值。
 package transport
 
 import (
@@ -114,6 +117,9 @@ type Options struct {
 	Now func() time.Time
 	// Version 是 OpenAPI info.version；空字符串使用 "devel"。
 	Version string
+	// Protection 是限流、超时、并发、CORS、CSRF 与安全响应头配置；nil 使用安全
+	// 默认值。公开包负责把 HTTPProtectionOptions 转换成本类型。
+	Protection *ProtectionOptions
 
 	// extraRoutes 仅由同包测试构造器注入；生产 New 不设置。
 	extraRoutes []route

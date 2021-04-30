@@ -61,6 +61,12 @@ func buildOpenAPIDocument(prefix string, codes []ErrorCodeInfo, version string) 
 				"type":        "string",
 				"description": "可选后台任务编号。",
 			},
+			"retry_after_seconds": map[string]any{
+				"type":        "integer",
+				"format":      "int32",
+				"minimum":     1,
+				"description": "限流请求的建议等待秒数；与 Retry-After 响应头一致，仅限流响应出现。",
+			},
 		},
 	}
 	healthSchema := map[string]any{
@@ -80,7 +86,9 @@ func buildOpenAPIDocument(prefix string, codes []ErrorCodeInfo, version string) 
 		"413": errorResponse("请求体超过允许的大小"),
 		"414": errorResponse("请求地址过长"),
 		"415": errorResponse("请求内容类型不受支持"),
+		"429": errorResponse("请求过于频繁，按 retry_after_seconds 等待"),
 		"500": errorResponse("服务发生未预期错误"),
+		"504": errorResponse("请求处理超时"),
 	}
 	paths := map[string]any{
 		routePath(normalizedPrefix, healthSuffix): map[string]any{

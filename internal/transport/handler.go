@@ -32,6 +32,7 @@ type handler struct {
 	newRequestID      func() string
 	validateRequestID func(string) error
 	openAPIDocument   []byte
+	protection        *protection
 }
 
 // New 构造传输层 Handler。生产实例只注册健康与 OpenAPI 路由，不注册任何测试
@@ -58,12 +59,16 @@ func newHandler(options Options) (*handler, error) {
 	if err := validateOpenAPIDocument(document); err != nil {
 		return nil, err
 	}
+	protection, err := newProtection(options.Protection, options.Now)
+	if err != nil {
+		return nil, err
+	}
 	codeIndex := make(map[string]ErrorCodeInfo, len(options.ErrorCodes))
 	for _, code := range options.ErrorCodes {
 		codeIndex[code.Code] = code
 	}
 	// 传输层固定使用的错误码必须存在于注册表投影中，避免响应出现未登记码。
-	for _, required := range []string{"REQ_INVALID", "INTERNAL_ERROR", "AUTH_FAILED", "ACCESS_DENIED"} {
+	for _, required := range []string{"REQ_INVALID", "INTERNAL_ERROR", "AUTH_FAILED", "ACCESS_DENIED", "RATE_LIMITED"} {
 		if _, ok := codeIndex[required]; !ok {
 			return nil, fmt.Errorf("错误码注册表缺少传输层必需错误码 %s", required)
 		}
@@ -78,6 +83,7 @@ func newHandler(options Options) (*handler, error) {
 		newRequestID:      options.NewRequestID,
 		validateRequestID: options.ValidateRequestID,
 		openAPIDocument:   document,
+		protection:        protection,
 	}
 	h.accessLog = newAccessLog(options.AccessLogWriter, func(err error) {
 		if options.OnAccessLogError != nil {
@@ -104,7 +110,8 @@ func (h *handler) handleHealth(_ context.Context, w *responseWriter, _ *http.Req
 	return err
 }
 
-// ServeHTTP 是 Handler 入口：建立请求编号、限制请求体、恢复 panic、写访问日志。
+// ServeHTTP 是 Handler 入口：建立请求编号、应用安全头、并发/期限保护、恢复
+// panic、执行路由与限流/CORS/CSRF 检查，并写访问日志。
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	started := h.now().UTC()
 	tracker := newResponseWriter(writer)
@@ -114,6 +121,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	request = request.WithContext(ctx)
 	logPath := sanitizeLogPath(request.URL.EscapedPath())
 	tracker.logPath = logPath
+	clientIP := h.clientIP(request)
+	if h.protection != nil {
+		h.protection.applySecurityHeaders(tracker.Header())
+	}
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -121,8 +132,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			// 或响应，避免泄露秘密。
 			h.logger.Error("HTTP 请求处理发生 panic", "request_id", requestID)
 			if !tracker.wroteHeader {
-				p := internalProblem()
-				writeProblem(tracker, requestID, p)
+				writeProblem(tracker, requestID, internalProblem())
 			}
 		}
 		status := tracker.Status()
@@ -137,7 +147,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.accessLog.log(accessEntry{
 			started:       started,
 			finished:      finished,
-			remoteAddr:    request.RemoteAddr,
+			remoteAddr:    clientIP,
 			method:        request.Method,
 			path:          tracker.logPath,
 			status:        status,
@@ -151,7 +161,19 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		})
 	}()
 
-	requestProblem := h.serve(ctx, tracker, request)
+	var requestProblem *problem
+	if h.protection == nil {
+		requestProblem = h.serve(ctx, tracker, request)
+	} else if release, acquired := h.protection.tryAcquire(); !acquired {
+		requestProblem = newRateLimitedProblem(time.Second, "并发请求过多，请稍后重试")
+	} else {
+		defer release()
+		requestCtx, cancel := context.WithTimeout(ctx, h.protection.requestTimeout)
+		defer cancel()
+		request = request.WithContext(requestCtx)
+		h.setResponseDeadline(tracker, h.protection.requestTimeout)
+		requestProblem = h.serveWithTimeout(requestCtx, tracker, request, h.protection.requestTimeout)
+	}
 	if requestProblem != nil {
 		if requestProblem.status == clientClosedStatus {
 			writeClientClosed(tracker)
@@ -177,10 +199,27 @@ func (h *handler) serve(ctx context.Context, tracker *responseWriter, request *h
 		return pathProblem
 	}
 	tracker.logPath = sanitizeLogPath(path)
+	clientIP := h.clientIP(request)
+	if h.protection != nil {
+		if problem := h.checkRateLimit(h.protection.rateLimits.clientIP, "ip:"+clientIP); problem != nil {
+			return problem
+		}
+	}
 	if isOAuthReservedPath(h.prefix, path) {
-		// OAuth/OIDC 标准响应空间保留：不使用统一业务错误信封。
+		// OAuth/OIDC 标准响应空间保留：不使用统一业务错误信封，也不做 CORS
+		// 预检重写，避免把保留协议路径伪装成普通 API 路由。
 		http.NotFound(tracker, request)
 		return nil
+	}
+	if h.protection != nil {
+		if handled, corsProblem := h.protection.cors.handlePreflight(tracker, request); handled {
+			return corsProblem
+		}
+		origin, corsProblem := h.protection.cors.checkOrigin(request)
+		if corsProblem != nil {
+			return corsProblem
+		}
+		h.protection.cors.writeActualHeaders(tracker.Header(), origin)
 	}
 
 	var allowedMethods []string
@@ -204,6 +243,11 @@ func (h *handler) serve(ctx context.Context, tracker *responseWriter, request *h
 		}
 		return newProblem(http.StatusNotFound, "REQ_INVALID", "请求的资源不存在")
 	}
+	if h.protection != nil {
+		if problem := h.checkRateLimit(h.protection.rateLimits.endpoint, request.Method+" "+path); problem != nil {
+			return problem
+		}
+	}
 	// GET 只读端点不接受请求体：已知长度或 chunked 都拒绝，避免把大体积请求体
 	// 带进不需要它的处理路径。
 	if matched.method == http.MethodGet && (request.ContentLength > 0 || len(request.TransferEncoding) > 0) {
@@ -217,11 +261,27 @@ func (h *handler) serve(ctx context.Context, tracker *responseWriter, request *h
 		ctx = WithIdentity(ctx, identity)
 		request = request.WithContext(ctx)
 	}
+	if h.protection != nil {
+		if problem := h.checkIdentityRateLimits(ctx); problem != nil {
+			return problem
+		}
+		if problem := h.protection.csrf.check(ctx, request); problem != nil {
+			return problem
+		}
+		if h.protection.isExpensivePath(path) {
+			if problem := h.checkExpensiveBudget(ctx, clientIP); problem != nil {
+				return problem
+			}
+		}
+	}
 	if err := matched.handle(ctx, tracker, request); err != nil {
 		if errors.Is(err, context.Canceled) && request.Context().Err() != nil {
 			return &problem{status: clientClosedStatus, code: "REQ_INVALID", message: "客户端已取消请求"}
 		}
 		return problemFromError(ctx, err)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return timeoutProblem()
 	}
 	return nil
 }
