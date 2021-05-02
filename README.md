@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 14）
+## 项目状态（步骤 15）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server` 或 `Instance` 启动；HTTP 真实监听/多地址/完整反向代理部署/TLS/mTLS（步骤 15～17）、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；TLS/mTLS（步骤 16～17）、完整反向代理部署示例、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -40,7 +40,12 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 | 字段 | 环境变量 | 重载方式 |
 |---|---|---|
 | server.listen_addr | LOGIN_SERVER_LISTEN_ADDR | 需重启 |
+| server.extra_listen_addrs | LOGIN_SERVER_EXTRA_LISTEN_ADDRS | 需重启 |
 | server.public_base_url | LOGIN_SERVER_PUBLIC_BASE_URL | 需重启 |
+| server.path_prefix | LOGIN_SERVER_PATH_PREFIX | 需重启 |
+| server.allowed_hosts | LOGIN_SERVER_ALLOWED_HOSTS | 需重启 |
+| server.trusted_proxies | LOGIN_SERVER_TRUSTED_PROXIES | 需重启 |
+| server.tls_terminating_proxy | LOGIN_SERVER_TLS_TERMINATING_PROXY | 需重启 |
 | server.shutdown_timeout_seconds | LOGIN_SERVER_SHUTDOWN_TIMEOUT_SECONDS | 可热更新 |
 | logging.level | LOGIN_LOGGING_LEVEL | 可热更新 |
 | logging.format | LOGIN_LOGGING_FORMAT | 可热更新 |
@@ -54,7 +59,8 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 
 校验行为：
 
-- 未知字段、重复键、类型错误、`null`、超范围值、非法组合（例如公开地址使用 `http` 却监听非回环地址）都会在加载阶段失败，不产生监听或数据库副作用。
+- 未知字段、重复键、类型错误、`null`、超范围值、非法组合（例如公开地址使用 `http` 却监听非回环地址、公开地址路径与 `server.path_prefix` 不一致、启用 TLS 终止代理模式却缺少 https 公开地址或可信代理）都会在加载阶段失败，不产生监听或数据库副作用。
+- 监听主机只接受 IP 字面量、`localhost` 或空（所有接口），不接受任意域名；`server.extra_listen_addrs` 与主地址去重后最多 16 个。列表型环境变量用英文逗号分隔（例如 `127.0.0.1:8081,[::1]:8081`）。
 - YAML 只能写秘密来源引用（`secrets.master_key.file` 或 `secrets.master_key.env`）；秘密值也可来自 `LOGIN_SECRETS_MASTER_KEY` 环境变量或宿主显式选项。错误、日志和 `Diagnostic` 输出都不包含秘密内容。
 - 字段变更是否需要重启由 `login.Fields()` 与 `login.DiffReload` 给出；本步不实现配置后台或自动热更新。
 
@@ -265,6 +271,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **已验证（Windows amd64，httptest）**：伪造 `X-Forwarded-For` 不改变限流键、可信代理链解析、未认证伪造 user_id 不分桶、用户/应用/接口维度隔离、昂贵预算、容量耗尽 fail-closed 与过期清理、6 路并发限流计数、429 等待建议、精确 CORS 允许/拒绝与预检、CSRF 缺令牌/错令牌/错来源/安全方法豁免/Referer 兼容/CORS 不绕过、默认与可覆盖安全头、并发上限、响应墙钟超时（含不响应 context 的处理器）、公开防护配置错误映射 CONFIG_INVALID；跨平台只编译，非 Windows 未运行。
 - **尚未接入**：`Instance`/`cmd/login-server`、真实监听、多地址、TLS/mTLS、完整反向代理部署与公开地址/Issuer 校验（步骤 15～17）、业务接口、身份存储与真实 Cookie 会话均未实现；限流容量/窗口目前是进程内单实例状态，不提供共享限流适配器。
 
+## 独立监听、可信代理与公开访问地址（步骤 15）
+
+新增公开组件 `login.NewServer(login.ServerOptions)`，它实现 `login.BackgroundComponent`，可交给 `login.Instance` 管理启动/关闭，并复用 `login.NewHTTPHandler` 的 Handler。`NewServer` 只校验配置并构造代理边界与监听器，**不绑定端口**；`Start` 才真正监听，`Close` 释放端口。
+
+- **多地址监听与整体回滚**：`Config.Server.ListenAddresses()` 返回“主地址 + 额外地址”的去重列表，支持 IPv4、IPv6（`[::1]:8081`）、`localhost` 与空主机 `:8080`。`Start` 依次绑定全部地址，任一失败时关闭已打开的全部监听并返回错误，不遗留半启动状态或占用端口；启动失败后不能再次启动。
+- **默认限制回环、远程明文需显式授权**：默认只监听 `127.0.0.1:8080`。任何非回环（含 `0.0.0.0`、`::`）明文监听都要求显式设置 `server.tls_terminating_proxy=true`、配置可信代理与 `https` 公开地址，否则 `NewServer` 返回 `CONFIG_INVALID`；不提供“悄悄开放所有网卡”的开关。
+- **Host 与公开地址**：每个请求先经代理边界校验 Host。允许列表来自 `server.allowed_hosts` 与 `server.public_base_url` 的主机；两者都为空时只接受回环主机名（`localhost`、`127.0.0.0/8`、`::1`）。不匹配返回 421 `REQ_INVALID`，语法非法返回 400；被拒绝的主机名不回显到响应或日志。公开地址、未来的 OIDC Issuer 与 WebAuthn RP ID 各自来自独立显式配置，绝不由请求 Host 或转发头动态推导。
+- **可信代理边界**：只有直连对端命中 `server.trusted_proxies`（IP/CIDR）时才解析 `Forwarded`（RFC 7239）或 `X-Forwarded-For/Proto/Host`；否则全部忽略。同时存在两种头时 `Forwarded` 是唯一权威来源，畸形头 fail-closed 返回 400；地址链从右向左跳过可信代理，协议取最近一跳，主机只接受单值。边界消费后删除全部转发头，内层 Handler 与业务代码只能使用上下文中的可信客户端地址。
+- **限流使用验证后的地址**：代理边界把解析出的客户端地址放入请求上下文，`internal/transport` 的地址维度限流与访问日志 `c-ip` 优先使用该地址；没有边界时（嵌入模式直接使用 Handler）仍按 `HTTPProtectionOptions.TrustedProxies` 解析。
+- **路径前缀**：`Config.Server.PathPrefix` 与 `ServerOptions.Prefix` 必须一致，且 `server.public_base_url` 的路径必须与之一致；子路径前缀下 `/login/healthz` 可用而 `/healthz` 为 404。
+- **关停**：`Close` 受调用方期限与 `server.shutdown_timeout_seconds` 中较小值约束，期限到达时强制关闭连接与监听，并如实返回未完成原因；关闭后端口可重新绑定。重复关闭安全。
+- **已验证（Windows amd64，真实 TCP 监听）**：地址占用时整体回滚与端口释放、IPv4/IPv6 双地址监听、关停后端口重新绑定、伪造 `X-Forwarded-For`/`Forwarded` 不改变限流桶、可信代理链（含 RFC 7239 与 X-Forwarded-*）、不可信 Host 421、非法 Host 400、公开地址主机限制、子路径前缀、Instance 生命周期启动/关闭、未鉴权业务接口仍为 404。
+- **尚未接入**：`cmd/login-server` 仍未装配 `NewServer`；TLS/mTLS（步骤 16～17）、业务接口、完整反向代理部署示例、Access Log 轮转与代理协议（PROXY protocol）未实现。嵌入模式若自行监听端口，Host 校验需由宿主提供等价边界。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -297,7 +317,10 @@ go run .\cmd\login-server --help
 | internal/audit/ | 安全审计事件模型、可靠写入与 SQLite 持久化（内部包） | 是 |
 | internal/task/ | 后台任务执行器、定时计划、重试/尝试历史与 SQLite 持久化（内部包） | 是 |
 | internal/ratelimit/ | 有界并发安全固定窗口限流器（内部包） | 是 |
-| internal/transport/ | 标准 net/http Handler、路由/错误响应/身份传递/OpenAPI/访问日志（内部包） | 是 |
+| internal/transport/ | 标准 net/http Handler、路由/错误响应/身份传递/OpenAPI/访问日志、代理边界与 Host 校验（内部包） | 是 |
+| internal/netpolicy/ | 监听地址、允许主机与 HTTP Host 的严格解析（内部包） | 是 |
+| internal/proxytrust/ | Forwarded/X-Forwarded-* 可信代理链解析（内部包） | 是 |
+| internal/listener/ | 多地址 HTTP 监听、失败整体回滚与关停释放端口（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
 | docs/requirements/ | 功能清单和错误码手册 | 可以 |
@@ -312,7 +335,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～14 已完成；继续时按 .ai/ 中的顺序处理步骤 15，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～15 已完成；继续时按 .ai/ 中的顺序处理步骤 16，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 完成第 17 步后，提供 MEMORY.md 与必要代码状态，再生成下一部分和更新 AGENTS.md。
 

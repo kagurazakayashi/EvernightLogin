@@ -1,6 +1,7 @@
 package login
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -28,8 +29,18 @@ func (c Config) fieldValueString(field string) string {
 	switch field {
 	case "server.listen_addr":
 		return strconv.Quote(c.Server.ListenAddr)
+	case "server.extra_listen_addrs":
+		return formatStringList(c.Server.ExtraListenAddrs)
 	case "server.public_base_url":
 		return strconv.Quote(c.Server.PublicBaseURL)
+	case "server.path_prefix":
+		return strconv.Quote(c.Server.PathPrefix)
+	case "server.allowed_hosts":
+		return formatStringList(c.Server.AllowedHosts)
+	case "server.trusted_proxies":
+		return formatStringList(c.Server.TrustedProxies)
+	case "server.tls_terminating_proxy":
+		return strconv.FormatBool(c.Server.TLSProxyMode)
 	case "server.shutdown_timeout_seconds":
 		return strconv.Itoa(c.Server.ShutdownTimeoutSeconds)
 	case "logging.level":
@@ -49,6 +60,20 @@ func (c Config) fieldValueString(field string) string {
 	default:
 		return "[UNKNOWN]"
 	}
+}
+
+// formatStringList 把字符串列表格式化为诊断文本；空列表显示 []。
+func formatStringList(values []string) string {
+	var b strings.Builder
+	b.WriteString("[")
+	for index, value := range values {
+		if index > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(strconv.Quote(value))
+	}
+	b.WriteString("]")
+	return b.String()
 }
 
 // ReloadDiff 描述两份有效配置之间的差异，并按重载分类拆开。
@@ -92,7 +117,12 @@ func DiffReload(previous, next Config) ReloadDiff {
 	}
 
 	record("server.listen_addr", previous.Server.ListenAddr != next.Server.ListenAddr)
+	record("server.extra_listen_addrs", !slices.Equal(previous.Server.ExtraListenAddrs, next.Server.ExtraListenAddrs))
 	record("server.public_base_url", previous.Server.PublicBaseURL != next.Server.PublicBaseURL)
+	record("server.path_prefix", previous.Server.PathPrefix != next.Server.PathPrefix)
+	record("server.allowed_hosts", !slices.Equal(previous.Server.AllowedHosts, next.Server.AllowedHosts))
+	record("server.trusted_proxies", !slices.Equal(previous.Server.TrustedProxies, next.Server.TrustedProxies))
+	record("server.tls_terminating_proxy", previous.Server.TLSProxyMode != next.Server.TLSProxyMode)
 	record("server.shutdown_timeout_seconds",
 		previous.Server.ShutdownTimeoutSeconds != next.Server.ShutdownTimeoutSeconds)
 	record("logging.level", previous.Logging.Level != next.Logging.Level)

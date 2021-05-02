@@ -275,8 +275,10 @@ func isCookieToken(value string) bool {
 // CORS 默认关闭；CSRF 默认关闭；安全头始终启用；会话 Cookie 策略仅作为未来契约，
 // 本步不创建任何 Cookie。
 type HTTPProtectionOptions struct {
-	// TrustedProxies 是唯一允许提供 X-Forwarded-For 的直连代理 IP/CIDR；为空时
-	// 完全忽略转发头，防止客户端伪造地址。
+	// TrustedProxies 是唯一允许提供 Forwarded/X-Forwarded-For 等转发头的直连
+	// 代理 IP/CIDR；为空时完全忽略转发头，防止客户端伪造地址。独立监听服务
+	// （NewServer）还会用同源配置做 Host 与协议/域名边界校验；两处应使用同一份
+	// 配置（通常来自 ServerConfig.TrustedProxies）。
 	TrustedProxies []string
 	// RateLimit 是多维限流配置。
 	RateLimit RateLimitOptions

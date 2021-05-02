@@ -487,7 +487,12 @@ func TestInvalidConfigHasNoSideEffects(t *testing.T) {
 func TestEnvFieldMetadataStable(t *testing.T) {
 	want := []FieldInfo{
 		{Field: "server.listen_addr", Env: "LOGIN_SERVER_LISTEN_ADDR", Class: ReloadRestartRequired},
+		{Field: "server.extra_listen_addrs", Env: "LOGIN_SERVER_EXTRA_LISTEN_ADDRS", Class: ReloadRestartRequired},
 		{Field: "server.public_base_url", Env: "LOGIN_SERVER_PUBLIC_BASE_URL", Class: ReloadRestartRequired},
+		{Field: "server.path_prefix", Env: "LOGIN_SERVER_PATH_PREFIX", Class: ReloadRestartRequired},
+		{Field: "server.allowed_hosts", Env: "LOGIN_SERVER_ALLOWED_HOSTS", Class: ReloadRestartRequired},
+		{Field: "server.trusted_proxies", Env: "LOGIN_SERVER_TRUSTED_PROXIES", Class: ReloadRestartRequired},
+		{Field: "server.tls_terminating_proxy", Env: "LOGIN_SERVER_TLS_TERMINATING_PROXY", Class: ReloadRestartRequired},
 		{Field: "server.shutdown_timeout_seconds", Env: "LOGIN_SERVER_SHUTDOWN_TIMEOUT_SECONDS", Class: ReloadHotReloadable},
 		{Field: "logging.level", Env: "LOGIN_LOGGING_LEVEL", Class: ReloadHotReloadable},
 		{Field: "logging.format", Env: "LOGIN_LOGGING_FORMAT", Class: ReloadHotReloadable},

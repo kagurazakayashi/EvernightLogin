@@ -6,6 +6,21 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/internal/proxytrust"
+	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
+)
+
+// 监听与代理信任配置的上限。这些值同时是配置校验与监听构造的边界，避免配置
+// 无限增长造成启动阶段资源放大。
+const (
+	// MaxServerListenAddresses 是最多同时监听的地址数（主地址 + 额外地址）。
+	MaxServerListenAddresses = 16
+	// MaxServerAllowedHosts 是允许 Host 列表的最大条目数。
+	MaxServerAllowedHosts = 32
+	// MaxServerTrustedProxies 是可信反向代理 IP/CIDR 的最大条目数。
+	MaxServerTrustedProxies = proxytrust.MaxTrustedProxies
 )
 
 // Config 是 login 的完整有效配置快照。
@@ -32,15 +47,68 @@ type Config struct {
 
 // ServerConfig 是独立服务与嵌入模式共用的监听配置。
 type ServerConfig struct {
-	// ListenAddr 是监听地址，格式为 host:port；默认仅监听 127.0.0.1:8080。
+	// ListenAddr 是主监听地址，格式为 host:port；默认仅监听 127.0.0.1:8080。
+	// 监听主机只接受 IP 字面量、localhost 或空（所有接口），不接受任意域名。
 	// 修改后需要重启进程。
 	ListenAddr string
-	// PublicBaseURL 是外部可访问的基础地址（例如 https://login.example.com），
-	// 留空表示尚未配置外部地址。修改后需要重启进程。
+	// ExtraListenAddrs 是在 ListenAddr 之外额外监听的地址列表；与 ListenAddr
+	// 一起构成实际监听集合（去重后最多 MaxServerListenAddresses 个）。所有地址
+	// 全部成功绑定后才开始服务，任一失败时整体回滚。修改后需要重启进程。
+	ExtraListenAddrs []string
+	// PublicBaseURL 是独立配置的外部可访问基础地址（例如
+	// https://login.example.com 或 https://login.example.com/login），留空表示
+	// 尚未配置外部地址。它的主机自动加入允许 Host 列表；配置了 PathPrefix 时
+	// 路径必须与之一致，独立服务启动时还会与实际 Handler 前缀核对。外部地址、
+	// 未来 OIDC Issuer 与 WebAuthn RP ID 各自使用独立的显式配置，绝不允许从请求
+	// Host 或转发头动态推导后用于签发身份。修改后需要重启进程。
 	PublicBaseURL string
+	// PathPrefix 是独立服务的固定路径前缀：空字符串或 /segment(/segment)*。
+	// 嵌入模式直接设置 HTTPOptions.Prefix，并保持与 ServerOptions.Prefix 一致；
+	// 独立服务从该字段读取。修改后需要重启进程。
+	PathPrefix string
+	// AllowedHosts 是显式允许的 HTTP Host（host 或 host:port）。为空且未配置
+	// PublicBaseURL 时只接受本机回环主机名（localhost、127.0.0.0/8、::1）；
+	// 配置了 PublicBaseURL 时只接受该主机与这里的条目。修改后需要重启进程。
+	AllowedHosts []string
+	// TrustedProxies 是唯一允许提供 Forwarded/X-Forwarded-* 的直连反向代理
+	// IP/CIDR。为空时完全忽略转发头，客户端无法伪造地址、协议或域名。
+	// 修改后需要重启进程。
+	TrustedProxies []string
+	// TLSProxyMode 显式确认“当前明文监听只部署在受信任的 TLS 终止反向代理
+	// 后端”。默认 false；非回环明文监听只有在它为 true、而且配置了可信代理与
+	// https 公开地址时才允许，避免悄悄把明文服务开放到所有网卡。修改后需要
+	// 重启进程。
+	TLSProxyMode bool
 	// ShutdownTimeoutSeconds 是安全关闭的墙钟上限，单位秒，默认 10。
 	// 该值在关闭流程读取，因此可以热更新。
 	ShutdownTimeoutSeconds int
+}
+
+// ListenAddresses 返回实际监听地址列表：ListenAddr 在前，ExtraListenAddrs 在
+// 后，按规范化结果去重。返回值是副本；该方法是配置与监听组件之间的唯一映射
+// 点，避免两处各自拼接地址列表。
+func (c ServerConfig) ListenAddresses() []string {
+	addresses := make([]string, 0, 1+len(c.ExtraListenAddrs))
+	seen := make(map[string]struct{}, 1+len(c.ExtraListenAddrs))
+	appendAddress := func(raw string) {
+		if strings.TrimSpace(raw) == "" {
+			return
+		}
+		key := raw
+		if parsed, err := netpolicy.ParseListenAddress(raw, false); err == nil {
+			key = parsed.Key()
+		}
+		if _, duplicated := seen[key]; duplicated {
+			return
+		}
+		seen[key] = struct{}{}
+		addresses = append(addresses, raw)
+	}
+	appendAddress(c.ListenAddr)
+	for _, raw := range c.ExtraListenAddrs {
+		appendAddress(raw)
+	}
+	return addresses
 }
 
 // LoggingConfig 是结构化运行日志配置。它只影响运行日志，不代替安全审计。
@@ -151,7 +219,12 @@ const EnvVarPrefix = "LOGIN_"
 // 这些名称是稳定契约，测试会锁定；新增字段只能追加，不能改名已有变量。
 const (
 	envServerListenAddr      = EnvVarPrefix + "SERVER_LISTEN_ADDR"
+	envServerExtraListen     = EnvVarPrefix + "SERVER_EXTRA_LISTEN_ADDRS"
 	envServerPublicBaseURL   = EnvVarPrefix + "SERVER_PUBLIC_BASE_URL"
+	envServerPathPrefix      = EnvVarPrefix + "SERVER_PATH_PREFIX"
+	envServerAllowedHosts    = EnvVarPrefix + "SERVER_ALLOWED_HOSTS"
+	envServerTrustedProxies  = EnvVarPrefix + "SERVER_TRUSTED_PROXIES"
+	envServerTLSProxyMode    = EnvVarPrefix + "SERVER_TLS_TERMINATING_PROXY"
 	envServerShutdownTimeout = EnvVarPrefix + "SERVER_SHUTDOWN_TIMEOUT_SECONDS"
 	envLoggingLevel          = EnvVarPrefix + "LOGGING_LEVEL"
 	envLoggingFormat         = EnvVarPrefix + "LOGGING_FORMAT"
@@ -166,7 +239,12 @@ const (
 // 测试都据此保持一致；顺序就是诊断输出顺序。
 var configFields = []FieldInfo{
 	{Field: "server.listen_addr", Env: envServerListenAddr, Class: ReloadRestartRequired},
+	{Field: "server.extra_listen_addrs", Env: envServerExtraListen, Class: ReloadRestartRequired},
 	{Field: "server.public_base_url", Env: envServerPublicBaseURL, Class: ReloadRestartRequired},
+	{Field: "server.path_prefix", Env: envServerPathPrefix, Class: ReloadRestartRequired},
+	{Field: "server.allowed_hosts", Env: envServerAllowedHosts, Class: ReloadRestartRequired},
+	{Field: "server.trusted_proxies", Env: envServerTrustedProxies, Class: ReloadRestartRequired},
+	{Field: "server.tls_terminating_proxy", Env: envServerTLSProxyMode, Class: ReloadRestartRequired},
 	{Field: "server.shutdown_timeout_seconds", Env: envServerShutdownTimeout, Class: ReloadHotReloadable},
 	{Field: "logging.level", Env: envLoggingLevel, Class: ReloadHotReloadable},
 	{Field: "logging.format", Env: envLoggingFormat, Class: ReloadHotReloadable},
@@ -354,28 +432,95 @@ func configErrWrap(kind ConfigErrorKind, source, field string, line int, detail 
 }
 
 // listenAddrProblem 校验 host:port 监听地址，返回空字符串表示通过。
+//
+// 监听主机只接受 IP 字面量、localhost 或空（所有接口）；不接受任意域名，避免
+// 绑定结果随 DNS 变化而改变实际暴露面。
 func listenAddrProblem(addr string) string {
-	if strings.TrimSpace(addr) == "" {
+	if addr == "" {
 		return "监听地址不能为空"
 	}
-	if strings.ContainsAny(addr, " \t\r\n") {
-		return "监听地址不能包含空白字符"
+	if _, err := netpolicy.ParseListenAddress(addr, false); err != nil {
+		return err.Error()
 	}
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "监听地址必须为 host:port 形式"
+	return ""
+}
+
+// extraListenAddrsProblem 校验额外监听地址列表；空列表通过。
+func extraListenAddrsProblem(values []string) string {
+	if len(values) > MaxServerListenAddresses-1 {
+		return fmt.Sprintf("额外监听地址不能超过 %d 个", MaxServerListenAddresses-1)
 	}
-	if strings.Contains(host, "/") {
-		return "监听地址不能包含路径"
+	seen := make(map[string]struct{}, len(values))
+	for index, raw := range values {
+		address, err := netpolicy.ParseListenAddress(raw, false)
+		if err != nil {
+			return fmt.Sprintf("额外监听地址第 %d 项无效：%v", index+1, err)
+		}
+		if _, duplicated := seen[address.Key()]; duplicated {
+			return fmt.Sprintf("额外监听地址第 %d 项重复", index+1)
+		}
+		seen[address.Key()] = struct{}{}
 	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return "端口必须是 1～65535 的整数"
+	return ""
+}
+
+// combinedListenAddressesProblem 检查主地址与额外地址合并后的重复项。单个字段
+// 内部的重复由字段级校验报告；这里覆盖跨字段重复（例如主地址也出现在额外列表）。
+func combinedListenAddressesProblem(primary string, extras []string) string {
+	addresses := make([]string, 0, 1+len(extras))
+	addresses = append(addresses, primary)
+	addresses = append(addresses, extras...)
+	seen := make(map[string]int, len(addresses))
+	for index, raw := range addresses {
+		address, err := netpolicy.ParseListenAddress(raw, false)
+		if err != nil {
+			// 单项格式错误已由字段级校验报告，这里不重复报错。
+			continue
+		}
+		key := address.Key()
+		if firstIndex, duplicated := seen[key]; duplicated {
+			return fmt.Sprintf("监听地址第 %d 项与第 %d 项重复", index+1, firstIndex+1)
+		}
+		seen[key] = index
+	}
+	return ""
+}
+
+// pathPrefixProblem 校验固定路径前缀，返回空字符串表示通过。
+func pathPrefixProblem(prefix string) string {
+	if _, err := transport.NormalizePrefix(prefix); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// allowedHostsProblem 校验允许 Host 列表；空列表通过。
+func allowedHostsProblem(values []string) string {
+	if len(values) > MaxServerAllowedHosts {
+		return fmt.Sprintf("允许的主机名不能超过 %d 个", MaxServerAllowedHosts)
+	}
+	if _, err := netpolicy.NewHostSet(values); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// trustedProxiesProblem 校验可信代理 IP/CIDR 列表；空列表通过。
+func trustedProxiesProblem(values []string) string {
+	if len(values) > MaxServerTrustedProxies {
+		return fmt.Sprintf("可信代理不能超过 %d 个", MaxServerTrustedProxies)
+	}
+	if _, err := proxytrust.Parse(values); err != nil {
+		return err.Error()
 	}
 	return ""
 }
 
 // publicBaseURLProblem 校验外部公开地址；空字符串表示尚未配置，允许通过。
+//
+// 公开地址是对外身份的显式来源：必须是 http/https 绝对地址，不能包含用户信息、
+// 查询串或片段，主机必须是 LDH 主机名或 IP 字面量；路径必须是已规范化的固定
+// 前缀形式（不以斜杠结尾、无点段、无百分号编码），从而与 PathPrefix 可比较。
 func publicBaseURLProblem(raw string) string {
 	if raw == "" {
 		return ""
@@ -399,7 +544,33 @@ func publicBaseURLProblem(raw string) string {
 	if parsed.Fragment != "" {
 		return "公开地址不能包含片段"
 	}
+	if _, err := netpolicy.ParseRequestHost(parsed.Host); err != nil {
+		return "公开地址的主机名无效"
+	}
+	path := parsed.EscapedPath()
+	if path == "" || path == "/" {
+		return ""
+	}
+	if _, err := transport.NormalizePrefix(path); err != nil {
+		return "公开地址的路径必须是已规范化的固定前缀"
+	}
 	return ""
+}
+
+// publicBaseURLPath 返回公开地址的规范化路径；根路径返回空字符串。
+func publicBaseURLPath(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	path := parsed.EscapedPath()
+	if path == "/" {
+		return ""
+	}
+	return path
 }
 
 // listenAddrIsLoopback 报告监听地址是否只绑定本机回环接口。空主机名表示
@@ -423,8 +594,27 @@ func validateMerged(c Config) ConfigErrors {
 	if problem := listenAddrProblem(c.Server.ListenAddr); problem != "" {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "server.listen_addr", 0, problem))
 	}
+	if problem := extraListenAddrsProblem(c.Server.ExtraListenAddrs); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "server.extra_listen_addrs", 0, problem))
+	}
+	if problem := combinedListenAddressesProblem(c.Server.ListenAddr, c.Server.ExtraListenAddrs); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "server.extra_listen_addrs", 0, problem))
+	}
+	if len(c.Server.ListenAddresses()) > MaxServerListenAddresses {
+		errs = append(errs, configErr(ConfigErrorRange, "final", "server.extra_listen_addrs", 0,
+			fmt.Sprintf("监听地址总数不能超过 %d 个", MaxServerListenAddresses)))
+	}
 	if problem := publicBaseURLProblem(c.Server.PublicBaseURL); problem != "" {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "server.public_base_url", 0, problem))
+	}
+	if problem := pathPrefixProblem(c.Server.PathPrefix); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "server.path_prefix", 0, problem))
+	}
+	if problem := allowedHostsProblem(c.Server.AllowedHosts); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "server.allowed_hosts", 0, problem))
+	}
+	if problem := trustedProxiesProblem(c.Server.TrustedProxies); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "server.trusted_proxies", 0, problem))
 	}
 	if c.Server.ShutdownTimeoutSeconds < 1 || c.Server.ShutdownTimeoutSeconds > 300 {
 		errs = append(errs, configErr(ConfigErrorRange, "final", "server.shutdown_timeout_seconds", 0,
@@ -451,13 +641,46 @@ func validateMerged(c Config) ConfigErrors {
 			"锁等待超时必须是 1～600000 毫秒"))
 	}
 
-	// 非法组合：公开地址使用明文 http 时，服务不得监听非回环接口。否则认证
-	// 页面和令牌会以明文暴露在网络上。反向代理终止 TLS 时应配置 https 公开地址。
-	if c.Server.PublicBaseURL != "" && !listenAddrIsLoopback(c.Server.ListenAddr) {
+	// 非法组合：公开地址使用明文 http 时，服务不得监听非回环接口（主地址或额外
+	// 地址都算）。否则认证页面和令牌会以明文暴露在网络上。反向代理终止 TLS 时
+	// 应配置 https 公开地址。
+	if c.Server.PublicBaseURL != "" {
 		parsed, err := url.Parse(c.Server.PublicBaseURL)
 		if err == nil && parsed.Scheme == "http" {
+			for _, raw := range c.Server.ListenAddresses() {
+				if !listenAddrIsLoopback(raw) {
+					errs = append(errs, configErr(ConfigErrorConflict, "final", "server.public_base_url", 0,
+						"公开地址使用 http 时只能监听本机回环地址；对外提供服务必须使用 https"))
+					break
+				}
+			}
+		}
+	}
+
+	// 非法组合：公开地址的路径必须与固定路径前缀一致，否则外部访问地址与实际
+	// 路由前缀不符，客户端会拿到 404 或被代理改写到错误路径。路径前缀为空表示
+	// 由嵌入模式自行决定，此时只做 URL 形状校验，由 NewServer 在拿到实际
+	// Handler 前缀后再做一致性检查。
+	if c.Server.PublicBaseURL != "" && c.Server.PathPrefix != "" {
+		publicPath := publicBaseURLPath(c.Server.PublicBaseURL)
+		normalizedPrefix, prefixErr := transport.NormalizePrefix(c.Server.PathPrefix)
+		if prefixErr == nil && publicPath != normalizedPrefix {
 			errs = append(errs, configErr(ConfigErrorConflict, "final", "server.public_base_url", 0,
-				"公开地址使用 http 时只能监听本机回环地址；对外提供服务必须使用 https"))
+				"公开地址的路径必须与 server.path_prefix 一致"))
+		}
+	}
+
+	// 非法组合：启用 TLS 终止代理模式时必须明确外部 https 地址与可信代理；否则
+	// 既无法判断外部协议，也无法限制哪些代理可以声明转发信息。
+	if c.Server.TLSProxyMode {
+		parsed, err := url.Parse(c.Server.PublicBaseURL)
+		if c.Server.PublicBaseURL == "" || err != nil || parsed.Scheme != "https" {
+			errs = append(errs, configErr(ConfigErrorConflict, "final", "server.tls_terminating_proxy", 0,
+				"启用 TLS 终止代理模式必须配置 https 公开地址"))
+		}
+		if len(c.Server.TrustedProxies) == 0 {
+			errs = append(errs, configErr(ConfigErrorConflict, "final", "server.tls_terminating_proxy", 0,
+				"启用 TLS 终止代理模式必须配置可信代理"))
 		}
 	}
 

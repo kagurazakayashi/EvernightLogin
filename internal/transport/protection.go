@@ -3,12 +3,11 @@ package transport
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
-	"net/netip"
 	"strings"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/proxytrust"
 	"github.com/kagurazakayashi/EvernightLogin/internal/ratelimit"
 )
 
@@ -29,10 +28,7 @@ const (
 	MinConcurrentRequests = 1
 	MaxConcurrentRequests = 1024
 	// MaxTrustedProxies 是可信代理配置条目上限，避免代理列表无限增长。
-	MaxTrustedProxies = 32
-	// maxForwardedBytes/maxForwardedHops 限制 X-Forwarded-For 解析放大。
-	maxForwardedBytes = 2 << 10
-	maxForwardedHops  = 16
+	MaxTrustedProxies = proxytrust.MaxTrustedProxies
 )
 
 // 默认固定窗口限流：地址 600/分钟、已认证用户 300/分钟、应用 300/分钟、
@@ -117,7 +113,7 @@ type protection struct {
 	requestTimeout  time.Duration
 	maxConcurrent   int
 	semaphore       chan struct{}
-	trustedProxies  []netip.Prefix
+	trustedProxies  proxytrust.Trusted
 	rateLimits      rateLimitState
 	cors            *corsPolicy
 	csrf            *csrfPolicy
@@ -159,7 +155,7 @@ func newProtection(options *ProtectionOptions, now func() time.Time) (*protectio
 	if maxConcurrent < MinConcurrentRequests || maxConcurrent > MaxConcurrentRequests {
 		return nil, fmt.Errorf("请求并发上限必须在 %d～%d 之间", MinConcurrentRequests, MaxConcurrentRequests)
 	}
-	trustedProxies, err := parseTrustedProxies(config.TrustedProxies)
+	trustedProxies, err := proxytrust.Parse(config.TrustedProxies)
 	if err != nil {
 		return nil, err
 	}
@@ -273,125 +269,28 @@ func policyRule(policy ratelimit.Policy) RateLimitRule {
 	return RateLimitRule{Limit: policy.Limit, Window: policy.Window}
 }
 
-// parseTrustedProxies 解析可信代理 IP 或 CIDR；只信任显式配置的来源。
-func parseTrustedProxies(values []string) ([]netip.Prefix, error) {
-	if len(values) > MaxTrustedProxies {
-		return nil, fmt.Errorf("可信代理数量不能超过 %d", MaxTrustedProxies)
-	}
-	prefixes := make([]netip.Prefix, 0, len(values))
-	for _, raw := range values {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			return nil, fmt.Errorf("可信代理不能为空")
-		}
-		if strings.Contains(trimmed, "/") {
-			prefix, err := netip.ParsePrefix(trimmed)
-			if err != nil {
-				return nil, fmt.Errorf("可信代理 CIDR 无效: %q", trimmed)
-			}
-			if prefix.Addr().Is4In6() {
-				if prefix.Bits() < 96 {
-					return nil, fmt.Errorf("可信代理 CIDR 无效: %q", trimmed)
-				}
-				prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
-			}
-			prefixes = append(prefixes, prefix.Masked())
-			continue
-		}
-		address, err := netip.ParseAddr(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("可信代理地址无效: %q", trimmed)
-		}
-		address = address.Unmap()
-		prefixes = append(prefixes, netip.PrefixFrom(address, address.BitLen()))
-	}
-	return prefixes, nil
-}
-
-// isTrustedProxy 报告地址是否在显式可信代理列表中。
-func (p *protection) isTrustedProxy(address netip.Addr) bool {
-	for _, prefix := range p.trustedProxies {
-		if prefix.Contains(address) {
-			return true
-		}
-	}
-	return false
-}
-
 // clientIP 返回用于限流与访问日志的可信客户端地址。
 //
-// 只有直连对端本身是显式可信代理时才解析 X-Forwarded-For；否则完全忽略该请求
-// 头，防止客户端伪造地址。解析链从右向左跳过可信代理，遇到第一个不可信地址
-// 即视为客户端；长度超限、条目数超限或任一地址非法时回退到直连对端地址，避免
-// 用畸形头影响限流键。X-Real-IP 等非标准头一律不信任。
+// 代理边界（Boundary）已经完成可信解析并把结果放入请求上下文时直接使用该结果，
+// 保证限流键与访问日志使用同一个经过验证的地址。没有上下文结果时（嵌入模式
+// 直接使用 NewHTTPHandler），只有直连对端本身命中显式可信代理才解析
+// Forwarded/X-Forwarded-For；否则完全忽略请求头，防止客户端伪造地址。解析失败
+// 时回退到直连对端地址，不用畸形头影响限流键。X-Real-IP 等非标准头不信任。
 func (p *protection) clientIP(request *http.Request) string {
 	if request == nil {
 		return "unknown"
 	}
-	peer, ok := parsePeerAddress(request.RemoteAddr)
-	if !ok {
-		return "unknown"
+	if clientIP, ok := ClientIPFromContext(request.Context()); ok {
+		return clientIP
 	}
-	if len(p.trustedProxies) == 0 || !p.isTrustedProxy(peer) {
+	info, err := p.trustedProxies.Resolve(request.RemoteAddr, request.Header)
+	if err == nil && info.ClientAddr.IsValid() {
+		return info.ClientAddr.String()
+	}
+	if peer, ok := proxytrust.Peer(request.RemoteAddr); ok {
 		return peer.String()
 	}
-	forwarded := strings.Join(request.Header.Values("X-Forwarded-For"), ",")
-	if forwarded == "" || len(forwarded) > maxForwardedBytes {
-		return peer.String()
-	}
-	parts := strings.Split(forwarded, ",")
-	if len(parts) > maxForwardedHops {
-		return peer.String()
-	}
-	candidate := peer
-	for index := len(parts) - 1; index >= 0; index-- {
-		if !p.isTrustedProxy(candidate) {
-			break
-		}
-		address, ok := parseForwardedAddress(parts[index])
-		if !ok {
-			return peer.String()
-		}
-		candidate = address
-	}
-	return candidate.String()
-}
-
-// parsePeerAddress 从 RemoteAddr 解析直连对端地址；失败时返回 false。
-func parsePeerAddress(remoteAddr string) (netip.Addr, bool) {
-	trimmed := strings.TrimSpace(remoteAddr)
-	if trimmed == "" {
-		return netip.Addr{}, false
-	}
-	host, _, err := net.SplitHostPort(trimmed)
-	if err != nil {
-		host = trimmed
-	}
-	host = strings.Trim(host, "[]")
-	address, err := netip.ParseAddr(host)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return address.Unmap(), true
-}
-
-// parseForwardedAddress 解析 X-Forwarded-For 中的单个地址；允许可选的端口与
-// IPv6 方括号，其他内容一律视为非法。
-func parseForwardedAddress(raw string) (netip.Addr, bool) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return netip.Addr{}, false
-	}
-	value = strings.Trim(value, "\"")
-	if host, _, err := net.SplitHostPort(value); err == nil {
-		value = host
-	}
-	value = strings.Trim(value, "[]")
-	address, err := netip.ParseAddr(value)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return address.Unmap(), true
+	return "unknown"
 }
 
 // normalizeExpensivePaths 校验昂贵请求路径集合；路径必须是已规范化的完整路径

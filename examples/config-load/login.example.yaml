@@ -6,8 +6,22 @@
 server:
   # 默认仅监听本机回环地址；对外部署时改成 0.0.0.0:8443 并配置 https 公开地址。
   listen_addr: "127.0.0.1:8080"
+  # 额外监听地址（可选）：与 listen_addr 一起组成监听集合，全部绑定成功才提供服务。
+  # extra_listen_addrs:
+  #   - "[::1]:8081"
+  # 固定路径前缀（可选）：独立服务的路由都挂在该前缀下，公开地址路径必须一致。
+  path_prefix: ""
   # 外部访问地址；留空表示尚未配置。使用 http 公开地址时只能监听回环地址。
   public_base_url: ""
+  # 允许的 HTTP Host（可选）；留空且未配置公开地址时只接受本机回环主机名。
+  # allowed_hosts:
+  #   - "login.example.com"
+  # 可信反向代理 IP/CIDR（可选）：只有这些直连来源的 Forwarded/X-Forwarded-* 生效。
+  # trusted_proxies:
+  #   - "10.0.0.0/8"
+  # 显式确认明文监听只部署在受信任 TLS 终止反向代理后端；启用后必须配置
+  # trusted_proxies 与 https public_base_url，才允许非回环明文监听。
+  tls_terminating_proxy: false
   shutdown_timeout_seconds: 10
 logging:
   level: info

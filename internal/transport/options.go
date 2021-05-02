@@ -15,6 +15,9 @@
 //   - 浏览器请求防护由 Protection 选项控制：可信客户端地址、多维限流、昂贵
 //     请求预算、请求期限/响应超时、并发上限、精确来源 CORS、安全响应头与
 //     Cookie 会话 CSRF 契约；默认启用安全默认值。
+//   - NewBoundary 提供独立监听前的代理信任边界：校验 Host、只解析显式可信代理
+//     提供的 Forwarded/X-Forwarded-*、删除转发头并把验证后的客户端地址放入
+//     上下文；它不监听端口，由 internal/listener 与公开包 NewServer 装配。
 package transport
 
 import (

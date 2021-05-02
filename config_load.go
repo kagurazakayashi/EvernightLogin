@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -50,7 +51,12 @@ type Overrides struct {
 // ServerOverrides 是 ServerConfig 的显式覆盖项。
 type ServerOverrides struct {
 	ListenAddr             *string
+	ExtraListenAddrs       *[]string
 	PublicBaseURL          *string
+	PathPrefix             *string
+	AllowedHosts           *[]string
+	TrustedProxies         *[]string
+	TLSProxyMode           *bool
 	ShutdownTimeoutSeconds *int
 }
 
@@ -169,7 +175,12 @@ func Load(opts LoadOptions) (Config, error) {
 // configOverrides 是单层配置的内部表示；指针字段表示“该层显式设置了此字段”。
 type configOverrides struct {
 	serverListenAddr      *string
+	serverExtraListen     *[]string
 	serverPublicBaseURL   *string
+	serverPathPrefix      *string
+	serverAllowedHosts    *[]string
+	serverTrustedProxies  *[]string
+	serverTLSProxyMode    *bool
 	serverShutdownTimeout *int
 	loggingLevel          *LogLevel
 	loggingFormat         *LogFormat
@@ -181,13 +192,29 @@ type configOverrides struct {
 	secretValue           *Secret
 }
 
-// apply 把本层显式设置的值覆盖到配置上；未设置的字段保持原值。
+// apply 把本层显式设置的值覆盖到配置上；未设置的字段保持原值。切片字段复制后
+// 写入，避免多层共享同一底层数组。
 func (ov *configOverrides) apply(cfg *Config) {
 	if ov.serverListenAddr != nil {
 		cfg.Server.ListenAddr = *ov.serverListenAddr
 	}
+	if ov.serverExtraListen != nil {
+		cfg.Server.ExtraListenAddrs = append([]string(nil), (*ov.serverExtraListen)...)
+	}
 	if ov.serverPublicBaseURL != nil {
 		cfg.Server.PublicBaseURL = *ov.serverPublicBaseURL
+	}
+	if ov.serverPathPrefix != nil {
+		cfg.Server.PathPrefix = *ov.serverPathPrefix
+	}
+	if ov.serverAllowedHosts != nil {
+		cfg.Server.AllowedHosts = append([]string(nil), (*ov.serverAllowedHosts)...)
+	}
+	if ov.serverTrustedProxies != nil {
+		cfg.Server.TrustedProxies = append([]string(nil), (*ov.serverTrustedProxies)...)
+	}
+	if ov.serverTLSProxyMode != nil {
+		cfg.Server.TLSProxyMode = *ov.serverTLSProxyMode
 	}
 	if ov.serverShutdownTimeout != nil {
 		cfg.Server.ShutdownTimeoutSeconds = *ov.serverShutdownTimeout
@@ -243,9 +270,14 @@ type yamlConfig struct {
 }
 
 type yamlServer struct {
-	ListenAddr             *string `yaml:"listen_addr"`
-	PublicBaseURL          *string `yaml:"public_base_url"`
-	ShutdownTimeoutSeconds *int    `yaml:"shutdown_timeout_seconds"`
+	ListenAddr             *string   `yaml:"listen_addr"`
+	ExtraListenAddrs       *[]string `yaml:"extra_listen_addrs"`
+	PublicBaseURL          *string   `yaml:"public_base_url"`
+	PathPrefix             *string   `yaml:"path_prefix"`
+	AllowedHosts           *[]string `yaml:"allowed_hosts"`
+	TrustedProxies         *[]string `yaml:"trusted_proxies"`
+	TLSProxyMode           *bool     `yaml:"tls_terminating_proxy"`
+	ShutdownTimeoutSeconds *int      `yaml:"shutdown_timeout_seconds"`
 }
 
 type yamlLogging struct {
@@ -282,6 +314,8 @@ var (
 		"server": {
 			{name: "listen_addr", tag: "!!str"},
 			{name: "public_base_url", tag: "!!str"},
+			{name: "path_prefix", tag: "!!str"},
+			{name: "tls_terminating_proxy", tag: "!!bool"},
 			{name: "shutdown_timeout_seconds", tag: "!!int"},
 		},
 		"logging": {
@@ -293,6 +327,15 @@ var (
 			{name: "path", tag: "!!str"},
 			{name: "wal", tag: "!!bool"},
 			{name: "busy_timeout_ms", tag: "!!int"},
+		},
+	}
+
+	// yamlSectionListFields 描述字符串列表字段；值是该列表元素允许的 YAML 标签。
+	yamlSectionListFields = map[string]map[string]string{
+		"server": {
+			"extra_listen_addrs": "!!str",
+			"allowed_hosts":      "!!str",
+			"trusted_proxies":    "!!str",
 		},
 	}
 
@@ -382,13 +425,14 @@ func checkYAMLStructure(root *yaml.Node) ConfigErrors {
 			errs = append(errs, checkYAMLSecrets(value)...)
 			continue
 		}
-		errs = append(errs, checkYAMLMappedSection(value, name, specs)...)
+		errs = append(errs, checkYAMLMappedSection(value, name, specs, yamlSectionListFields[name])...)
 	}
 	return errs
 }
 
-// checkYAMLMappedSection 检查普通配置段的字段名、重复键与标量类型。
-func checkYAMLMappedSection(section *yaml.Node, prefix string, specs []yamlLeafSpec) ConfigErrors {
+// checkYAMLMappedSection 检查普通配置段的字段名、重复键、标量类型与字符串列表
+// 类型。
+func checkYAMLMappedSection(section *yaml.Node, prefix string, specs []yamlLeafSpec, listSpecs map[string]string) ConfigErrors {
 	allowed := make(map[string]string, len(specs))
 	for _, spec := range specs {
 		allowed[spec.name] = spec.tag
@@ -417,18 +461,43 @@ func checkYAMLMappedSection(section *yaml.Node, prefix string, specs []yamlLeafS
 		seen[name] = key.Line
 
 		tag, known := allowed[name]
-		if !known {
-			errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", fieldPath, key.Line,
-				"未定义的配置字段"))
+		if known {
+			if problem := yamlLeafProblem(value, tag); problem != nil {
+				problem.Source = "yaml"
+				problem.Field = fieldPath
+				errs = append(errs, problem)
+			}
 			continue
 		}
-		if problem := yamlLeafProblem(value, tag); problem != nil {
-			problem.Source = "yaml"
-			problem.Field = fieldPath
-			errs = append(errs, problem)
+		if listTag, listKnown := listSpecs[name]; listKnown {
+			if problem := yamlStringListProblem(value, listTag); problem != nil {
+				problem.Source = "yaml"
+				problem.Field = fieldPath
+				errs = append(errs, problem)
+			}
+			continue
 		}
+		errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", fieldPath, key.Line,
+			"未定义的配置字段"))
 	}
 	return errs
+}
+
+// yamlStringListProblem 检查字符串列表字段：必须是列表，元素必须是期望的标量
+// 类型且不能为 null；返回 nil 表示通过。
+func yamlStringListProblem(node *yaml.Node, itemTag string) *ConfigError {
+	if node.Kind == yaml.AliasNode {
+		return configErr(ConfigErrorType, "yaml", "", node.Line, "不支持 YAML 别名或锚点")
+	}
+	if node.Kind != yaml.SequenceNode {
+		return configErr(ConfigErrorType, "yaml", "", node.Line, "字段值必须是字符串列表")
+	}
+	for _, item := range node.Content {
+		if problem := yamlLeafProblem(item, itemTag); problem != nil {
+			return problem
+		}
+	}
+	return nil
 }
 
 // checkYAMLSecrets 检查 secrets 段：只允许 master_key，其值必须是仅含 env 或
@@ -541,7 +610,12 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 
 	if doc.Server != nil {
 		ov.serverListenAddr = doc.Server.ListenAddr
+		ov.serverExtraListen = doc.Server.ExtraListenAddrs
 		ov.serverPublicBaseURL = doc.Server.PublicBaseURL
+		ov.serverPathPrefix = doc.Server.PathPrefix
+		ov.serverAllowedHosts = doc.Server.AllowedHosts
+		ov.serverTrustedProxies = doc.Server.TrustedProxies
+		ov.serverTLSProxyMode = doc.Server.TLSProxyMode
 		ov.serverShutdownTimeout = doc.Server.ShutdownTimeoutSeconds
 	}
 	if doc.Logging != nil {
@@ -604,8 +678,43 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 	if value, ok := lookup(envServerListenAddr); ok {
 		ov.serverListenAddr = Ptr(value)
 	}
+	if value, ok := lookup(envServerExtraListen); ok {
+		addresses, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.extra_listen_addrs", 0, err.Error()))
+		} else {
+			ov.serverExtraListen = &addresses
+		}
+	}
 	if value, ok := lookup(envServerPublicBaseURL); ok {
 		ov.serverPublicBaseURL = Ptr(value)
+	}
+	if value, ok := lookup(envServerPathPrefix); ok {
+		ov.serverPathPrefix = Ptr(value)
+	}
+	if value, ok := lookup(envServerAllowedHosts); ok {
+		hosts, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.allowed_hosts", 0, err.Error()))
+		} else {
+			ov.serverAllowedHosts = &hosts
+		}
+	}
+	if value, ok := lookup(envServerTrustedProxies); ok {
+		proxies, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.trusted_proxies", 0, err.Error()))
+		} else {
+			ov.serverTrustedProxies = &proxies
+		}
+	}
+	if value, ok := lookup(envServerTLSProxyMode); ok {
+		flag, err := parseEnvBool(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_terminating_proxy", 0, err.Error()))
+		} else {
+			ov.serverTLSProxyMode = &flag
+		}
 	}
 	if value, ok := lookup(envServerShutdownTimeout); ok {
 		number, err := parseEnvInt(value)
@@ -667,7 +776,12 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 	ov := configOverrides{
 		serverListenAddr:      options.Server.ListenAddr,
+		serverExtraListen:     options.Server.ExtraListenAddrs,
 		serverPublicBaseURL:   options.Server.PublicBaseURL,
+		serverPathPrefix:      options.Server.PathPrefix,
+		serverAllowedHosts:    options.Server.AllowedHosts,
+		serverTrustedProxies:  options.Server.TrustedProxies,
+		serverTLSProxyMode:    options.Server.TLSProxyMode,
 		serverShutdownTimeout: options.Server.ShutdownTimeoutSeconds,
 		loggingLevel:          options.Logging.Level,
 		loggingFormat:         options.Logging.Format,
@@ -679,6 +793,24 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 	}
 	errs := validateOverrides(&ov, "options")
 	return ov, errs
+}
+
+// parseEnvList 解析环境变量中的逗号分隔列表。空字符串表示显式空列表；条目会
+// 去掉首尾空白，空条目报错而不是静默跳过。
+func parseEnvList(value string) ([]string, error) {
+	if value == "" {
+		return []string{}, nil
+	}
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			return nil, fmt.Errorf("列表值不能包含空条目")
+		}
+		items = append(items, trimmed)
+	}
+	return items, nil
 }
 
 // parseEnvBool 只接受小写 true/false，避免 1/0、yes/no 等平台差异。
@@ -718,10 +850,35 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 			add(ConfigErrorValue, "server.listen_addr", problem)
 		}
 	}
+	if ov.serverExtraListen != nil {
+		if problem := extraListenAddrsProblem(*ov.serverExtraListen); problem != "" {
+			add(ConfigErrorValue, "server.extra_listen_addrs", problem)
+		}
+	}
 	if ov.serverPublicBaseURL != nil {
 		if problem := publicBaseURLProblem(*ov.serverPublicBaseURL); problem != "" {
 			add(ConfigErrorValue, "server.public_base_url", problem)
 		}
+	}
+	if ov.serverPathPrefix != nil {
+		if problem := pathPrefixProblem(*ov.serverPathPrefix); problem != "" {
+			add(ConfigErrorValue, "server.path_prefix", problem)
+		}
+	}
+	if ov.serverAllowedHosts != nil {
+		if problem := allowedHostsProblem(*ov.serverAllowedHosts); problem != "" {
+			add(ConfigErrorValue, "server.allowed_hosts", problem)
+		}
+	}
+	if ov.serverTrustedProxies != nil {
+		if problem := trustedProxiesProblem(*ov.serverTrustedProxies); problem != "" {
+			add(ConfigErrorValue, "server.trusted_proxies", problem)
+		}
+	}
+	if ov.serverTLSProxyMode != nil && *ov.serverTLSProxyMode && ov.serverTrustedProxies != nil &&
+		len(*ov.serverTrustedProxies) == 0 {
+		// 单层内即可判定的矛盾提前报告；跨层组合在 validateMerged 再检查。
+		add(ConfigErrorConflict, "server.tls_terminating_proxy", "启用 TLS 终止代理模式必须配置可信代理")
 	}
 	if ov.serverShutdownTimeout != nil && (*ov.serverShutdownTimeout < 1 || *ov.serverShutdownTimeout > 300) {
 		add(ConfigErrorRange, "server.shutdown_timeout_seconds", "安全关闭超时必须是 1～300 秒")
