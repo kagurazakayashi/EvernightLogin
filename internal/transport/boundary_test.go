@@ -139,6 +139,9 @@ func TestBoundaryTrustedProxyChain(t *testing.T) {
 	if capture.clientIP != "198.51.100.7" {
 		t.Errorf("客户端地址 = %q，期望可信链解析结果", capture.clientIP)
 	}
+	if capture.host != "login.example.com" {
+		t.Errorf("内层 Host = %q，期望使用经过校验的外部主机", capture.host)
+	}
 	if values := capture.headers.Values("Forwarded"); len(values) > 0 {
 		t.Errorf("内层仍能看到 Forwarded：%v", values)
 	}
@@ -216,6 +219,46 @@ func TestBoundaryRequestIDHandling(t *testing.T) {
 	handler.ServeHTTP(recorder, invalid)
 	if got := recorder.Header().Get("X-Request-ID"); got == "" || got == "bad id with spaces" {
 		t.Errorf("非法请求编号应被替换，实际 %q", got)
+	}
+}
+
+func TestBoundaryForwardedSchemeMustMatchPublicURL(t *testing.T) {
+	handler, capture := newBoundaryCapture(t, BoundaryOptions{
+		PublicBaseURL:  "https://login.example.com",
+		TrustedProxies: []string{"10.0.0.1"},
+	})
+	request := httptest.NewRequest(http.MethodGet, "http://internal/healthz", nil)
+	request.RemoteAddr = "10.0.0.1:5555"
+	request.Header.Set("X-Forwarded-Proto", "http")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("协议不一致状态 = %d，期望 400", recorder.Code)
+	}
+	if capture.called {
+		t.Fatal("协议不一致时不应进入内层处理程序")
+	}
+
+	// 协议一致时正常通过。
+	matching := httptest.NewRequest(http.MethodGet, "http://internal/healthz", nil)
+	matching.Host = "login.example.com"
+	matching.RemoteAddr = "10.0.0.1:5555"
+	matching.Header.Set("X-Forwarded-Proto", "https")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, matching)
+	if recorder.Code != http.StatusOK || !capture.called {
+		t.Fatalf("协议一致时应通过，实际 %d", recorder.Code)
+	}
+
+	// 不可信对端伪造的协议头被忽略，不影响请求。
+	spoofed := httptest.NewRequest(http.MethodGet, "http://internal/healthz", nil)
+	spoofed.RemoteAddr = "192.0.2.9:4444"
+	spoofed.Host = "login.example.com"
+	spoofed.Header.Set("X-Forwarded-Proto", "http")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, spoofed)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("不可信对端的协议头应被忽略，实际 %d", recorder.Code)
 	}
 }
 

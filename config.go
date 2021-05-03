@@ -21,6 +21,10 @@ const (
 	MaxServerAllowedHosts = 32
 	// MaxServerTrustedProxies 是可信反向代理 IP/CIDR 的最大条目数。
 	MaxServerTrustedProxies = proxytrust.MaxTrustedProxies
+	// MaxServerTLSCertificates 是同时配置的 TLS 证书身份数量上限。
+	MaxServerTLSCertificates = 8
+	// DefaultServerTLSExpiryWarningDays 是证书到期提前告警的默认天数。
+	DefaultServerTLSExpiryWarningDays = 30
 )
 
 // Config 是 login 的完整有效配置快照。
@@ -76,12 +80,37 @@ type ServerConfig struct {
 	TrustedProxies []string
 	// TLSProxyMode 显式确认“当前明文监听只部署在受信任的 TLS 终止反向代理
 	// 后端”。默认 false；非回环明文监听只有在它为 true、而且配置了可信代理与
-	// https 公开地址时才允许，避免悄悄把明文服务开放到所有网卡。修改后需要
-	// 重启进程。
+	// https 公开地址时才允许，避免悄悄把明文服务开放到所有网卡。它与本地 TLS
+	// 证书配置互斥。修改后需要重启进程。
 	TLSProxyMode bool
+	// TLSCertFiles 是 PEM 证书链文件列表：每个文件的第一张证书是叶证书，其后
+	// 依次是中间证书。与 TLSKeyFiles 一一对应，最多 MaxServerTLSCertificates 个。
+	// 配置后监听地址提供 HTTPS 单向认证。修改后可在不重启进程时通过
+	// Server.ReloadTLS 重新加载。
+	TLSCertFiles []string
+	// TLSKeyFiles 是与 TLSCertFiles 一一对应的私钥 PEM 文件列表。私钥文件必须
+	// 是普通文件且通过受保护文件权限检查（仅所有者可读写 / Windows 受限 ACL）。
+	TLSKeyFiles []string
+	// TLSCAFile 是可选的附加 CA/中间证书 PEM 文件；其证书按顺序追加到每个 PEM
+	// 证书身份之后，用于证书文件只含叶证书的部署。PFX 模式下不允许设置。
+	TLSCAFile string
+	// TLSPFXFile 是 PKCS#12/PFX 证书文件路径；与 TLSCertFiles/TLSKeyFiles 互斥。
+	// 其密码必须通过 secrets.tls_pfx_password 从受保护来源配置。
+	TLSPFXFile string
+	// TLSExpiryWarningDays 是证书到期提前告警窗口天数，范围 0～365；0 表示使用
+	// 默认值 30（与 NewServer 的行为一致，显式 0 不会被当作“无告警”）。只影响
+	// TLSStatus 的 ExpiringSoon 判断，不发送通知、不自动续期；修改后需要重启。
+	TLSExpiryWarningDays int
 	// ShutdownTimeoutSeconds 是安全关闭的墙钟上限，单位秒，默认 10。
 	// 该值在关闭流程读取，因此可以热更新。
 	ShutdownTimeoutSeconds int
+}
+
+// TLSEnabled 报告是否配置了本地 TLS 证书材料（PEM 或 PFX）。它只判断配置形状，
+// 不表示证书文件已经成功加载或校验通过；加载与校验由 NewServer 完成。
+func (c ServerConfig) TLSEnabled() bool {
+	return len(c.TLSCertFiles) > 0 || len(c.TLSKeyFiles) > 0 ||
+		c.TLSCAFile != "" || c.TLSPFXFile != ""
 }
 
 // ListenAddresses 返回实际监听地址列表：ListenAddr 在前，ExtraListenAddrs 在
@@ -139,6 +168,10 @@ type SecretsConfig struct {
 	// MasterKey 是主密钥材料，供步骤 08 的加密服务使用。本步只负责读取和
 	// 脱敏，不生成、不轮换、不做格式解释。零值表示未配置。
 	MasterKey Secret
+	// TLSPFXPassword 是 TLS PFX/P12 文件的密码。秘密只能来自受保护来源
+	// （环境变量、受保护文件或宿主显式选项），不能直接写进 YAML；诊断与错误
+	// 输出始终脱敏。零值表示未配置。
+	TLSPFXPassword Secret
 }
 
 // LogLevel 是运行日志级别。
@@ -225,6 +258,11 @@ const (
 	envServerAllowedHosts    = EnvVarPrefix + "SERVER_ALLOWED_HOSTS"
 	envServerTrustedProxies  = EnvVarPrefix + "SERVER_TRUSTED_PROXIES"
 	envServerTLSProxyMode    = EnvVarPrefix + "SERVER_TLS_TERMINATING_PROXY"
+	envServerTLSCertFiles    = EnvVarPrefix + "SERVER_TLS_CERT_FILES"
+	envServerTLSKeyFiles     = EnvVarPrefix + "SERVER_TLS_KEY_FILES"
+	envServerTLSCAFile       = EnvVarPrefix + "SERVER_TLS_CA_FILE"
+	envServerTLSPFXFile      = EnvVarPrefix + "SERVER_TLS_PFX_FILE"
+	envServerTLSExpiryDays   = EnvVarPrefix + "SERVER_TLS_EXPIRY_WARNING_DAYS"
 	envServerShutdownTimeout = EnvVarPrefix + "SERVER_SHUTDOWN_TIMEOUT_SECONDS"
 	envLoggingLevel          = EnvVarPrefix + "LOGGING_LEVEL"
 	envLoggingFormat         = EnvVarPrefix + "LOGGING_FORMAT"
@@ -233,6 +271,7 @@ const (
 	envDatabaseWAL           = EnvVarPrefix + "DATABASE_WAL"
 	envDatabaseBusyTimeout   = EnvVarPrefix + "DATABASE_BUSY_TIMEOUT_MS"
 	envSecretsMasterKey      = EnvVarPrefix + "SECRETS_MASTER_KEY"
+	envSecretsTLSPFXPassword = EnvVarPrefix + "SECRETS_TLS_PFX_PASSWORD"
 )
 
 // configFields 是字段元数据的唯一来源。Fields、Diagnostic、环境变量加载和
@@ -245,6 +284,11 @@ var configFields = []FieldInfo{
 	{Field: "server.allowed_hosts", Env: envServerAllowedHosts, Class: ReloadRestartRequired},
 	{Field: "server.trusted_proxies", Env: envServerTrustedProxies, Class: ReloadRestartRequired},
 	{Field: "server.tls_terminating_proxy", Env: envServerTLSProxyMode, Class: ReloadRestartRequired},
+	{Field: "server.tls_cert_files", Env: envServerTLSCertFiles, Class: ReloadRestartRequired},
+	{Field: "server.tls_key_files", Env: envServerTLSKeyFiles, Class: ReloadRestartRequired},
+	{Field: "server.tls_ca_file", Env: envServerTLSCAFile, Class: ReloadRestartRequired},
+	{Field: "server.tls_pfx_file", Env: envServerTLSPFXFile, Class: ReloadRestartRequired},
+	{Field: "server.tls_expiry_warning_days", Env: envServerTLSExpiryDays, Class: ReloadRestartRequired},
 	{Field: "server.shutdown_timeout_seconds", Env: envServerShutdownTimeout, Class: ReloadHotReloadable},
 	{Field: "logging.level", Env: envLoggingLevel, Class: ReloadHotReloadable},
 	{Field: "logging.format", Env: envLoggingFormat, Class: ReloadHotReloadable},
@@ -253,6 +297,7 @@ var configFields = []FieldInfo{
 	{Field: "database.wal", Env: envDatabaseWAL, Class: ReloadRestartRequired},
 	{Field: "database.busy_timeout_ms", Env: envDatabaseBusyTimeout, Class: ReloadRestartRequired},
 	{Field: "secrets.master_key", Env: envSecretsMasterKey, Class: ReloadRestartRequired, Secret: true},
+	{Field: "secrets.tls_pfx_password", Env: envSecretsTLSPFXPassword, Class: ReloadRestartRequired, Secret: true},
 }
 
 // Fields 返回配置字段元数据的副本。字段顺序与诊断输出顺序一致，并且跨版本
@@ -280,6 +325,7 @@ func Default() Config {
 		Server: ServerConfig{
 			ListenAddr:             "127.0.0.1:8080",
 			PublicBaseURL:          "",
+			TLSExpiryWarningDays:   DefaultServerTLSExpiryWarningDays,
 			ShutdownTimeoutSeconds: 10,
 		},
 		Logging: LoggingConfig{
@@ -516,6 +562,94 @@ func trustedProxiesProblem(values []string) string {
 	return ""
 }
 
+// tlsPathProblem 校验证书材料文件路径的文本形状（不访问文件系统）。
+func tlsPathProblem(label, path string) string {
+	if path == "" {
+		return label + "路径不能为空"
+	}
+	if len(path) > 4096 {
+		return label + "路径过长"
+	}
+	for _, character := range path {
+		if character < 0x20 || character == 0x7f {
+			return label + "路径包含控制字符"
+		}
+	}
+	return ""
+}
+
+// tlsFileListProblem 校验证书/私钥文件列表：数量上限、路径形状与重复项。
+func tlsFileListProblem(label string, values []string, max int) string {
+	if len(values) > max {
+		return fmt.Sprintf("%s不能超过 %d 个", label, max)
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, raw := range values {
+		if problem := tlsPathProblem(label, raw); problem != "" {
+			return fmt.Sprintf("%s第 %d 项无效：%s", label, index+1, problem)
+		}
+		if _, duplicated := seen[raw]; duplicated {
+			return fmt.Sprintf("%s第 %d 项重复", label, index+1)
+		}
+		seen[raw] = struct{}{}
+	}
+	return ""
+}
+
+// validateTLSServer 校验本地 TLS 配置的形状与组合。它不读取证书文件，文件内容、
+// 私钥匹配与证书链由 NewServer 调用 TLS 加载器时校验。
+func validateTLSServer(c Config) ConfigErrors {
+	var errs ConfigErrors
+	add := func(kind ConfigErrorKind, field, detail string) {
+		errs = append(errs, configErr(kind, "final", field, 0, detail))
+	}
+
+	pemMode := len(c.Server.TLSCertFiles) > 0 || len(c.Server.TLSKeyFiles) > 0 || c.Server.TLSCAFile != ""
+	pfxMode := c.Server.TLSPFXFile != ""
+	if pemMode && pfxMode {
+		add(ConfigErrorConflict, "server.tls_pfx_file", "PEM 证书/私钥与 PFX/P12 不能同时配置")
+	}
+	if pemMode {
+		if len(c.Server.TLSCertFiles) != len(c.Server.TLSKeyFiles) {
+			add(ConfigErrorConflict, "server.tls_key_files", "证书文件与私钥文件必须一一对应")
+		}
+		if len(c.Server.TLSCertFiles) == 0 {
+			add(ConfigErrorValue, "server.tls_cert_files", "PEM 模式至少需要一个证书与私钥文件对")
+		}
+	}
+	if pfxMode {
+		if c.Server.TLSCAFile != "" {
+			add(ConfigErrorConflict, "server.tls_ca_file", "PFX/P12 模式不能同时使用附加 CA 文件")
+		}
+		if !c.Secrets.TLSPFXPassword.IsSet() || c.Secrets.TLSPFXPassword.Len() == 0 {
+			add(ConfigErrorConflict, "server.tls_pfx_file",
+				"使用 PFX/P12 必须通过 secrets.tls_pfx_password 从受保护来源提供密码")
+		}
+	} else if c.Secrets.TLSPFXPassword.IsSet() {
+		add(ConfigErrorConflict, "secrets.tls_pfx_password", "未配置 server.tls_pfx_file 时不能设置 PFX 密码")
+	}
+	if c.Secrets.TLSPFXPassword.IsSet() && c.Secrets.TLSPFXPassword.Len() > MaxSecretBytes {
+		add(ConfigErrorRange, "secrets.tls_pfx_password",
+			fmt.Sprintf("PFX 密码不能超过 %d 字节", MaxSecretBytes))
+	}
+	if c.Server.TLSExpiryWarningDays < 0 || c.Server.TLSExpiryWarningDays > 365 {
+		add(ConfigErrorRange, "server.tls_expiry_warning_days", "证书到期告警天数必须是 0～365 的整数；0 表示默认 30")
+	}
+	if c.Server.TLSEnabled() {
+		if c.Server.TLSProxyMode {
+			add(ConfigErrorConflict, "server.tls_terminating_proxy",
+				"本地 TLS 证书配置与 TLS 终止代理模式不能同时启用")
+		}
+		if c.Server.PublicBaseURL != "" {
+			parsed, err := url.Parse(c.Server.PublicBaseURL)
+			if err != nil || parsed.Scheme != "https" {
+				add(ConfigErrorConflict, "server.public_base_url", "启用本地 TLS 时公开地址必须使用 https")
+			}
+		}
+	}
+	return errs
+}
+
 // publicBaseURLProblem 校验外部公开地址；空字符串表示尚未配置，允许通过。
 //
 // 公开地址是对外身份的显式来源：必须是 http/https 绝对地址，不能包含用户信息、
@@ -683,6 +817,8 @@ func validateMerged(c Config) ConfigErrors {
 				"启用 TLS 终止代理模式必须配置可信代理"))
 		}
 	}
+
+	errs = append(errs, validateTLSServer(c)...)
 
 	if c.Secrets.MasterKey.IsSet() {
 		if c.Secrets.MasterKey.Len() == 0 {

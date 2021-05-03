@@ -9,6 +9,7 @@ package listener
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -44,6 +45,10 @@ type Options struct {
 	Addresses []netpolicy.ListenAddress
 	// Handler 是请求处理程序；必填。
 	Handler http.Handler
+	// TLSConfig 非 nil 时所有监听地址提供 HTTPS（单向认证）；证书选择与重载由
+	// 注入的 tls.Config.GetCertificate 负责，本包不读取证书文件。nil 表示明文
+	// HTTP；非回环明文是否允许由上层 NewServer 的部署策略决定。
+	TLSConfig *tls.Config
 	// Logger 是运行日志器；nil 时丢弃日志。
 	Logger *slog.Logger
 	// ShutdownTimeout 是关停的墙钟上限；0 使用 DefaultShutdownTimeout。
@@ -147,7 +152,9 @@ func (s *Server) Start(ctx context.Context) error {
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(s.options.Logger.Handler(), slog.LevelWarn),
+		TLSConfig:         s.options.TLSConfig,
 	}
+	useTLS := s.options.TLSConfig != nil
 	addrCopies := make([]net.Addr, 0, len(listeners))
 	for _, listener := range listeners {
 		addrCopies = append(addrCopies, listener.Addr())
@@ -159,7 +166,14 @@ func (s *Server) Start(ctx context.Context) error {
 		s.serveWG.Add(1)
 		go func(listener net.Listener) {
 			defer s.serveWG.Done()
-			serveErr := httpServer.Serve(listener)
+			var serveErr error
+			if useTLS {
+				// ServeTLS 在 TLSConfig 未显式声明时追加 HTTP/2 到 NextProtos；
+				// 证书由 TLSConfig.GetCertificate 动态选择，不在这里读证书文件。
+				serveErr = httpServer.ServeTLS(listener, "", "")
+			} else {
+				serveErr = httpServer.Serve(listener)
+			}
 			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 				// 监听意外结束：记录地址与固定原因码，不记录请求内容。
 				s.options.Logger.Error("HTTP 监听意外结束",
@@ -168,7 +182,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}(listener)
 	}
 	s.state = stateRunning
-	s.options.Logger.Info("HTTP 监听已启动", "listener_count", len(listeners))
+	s.options.Logger.Info("HTTP 监听已启动", "listener_count", len(listeners), "tls", useTLS)
 	return nil
 }
 

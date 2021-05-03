@@ -493,6 +493,11 @@ func TestEnvFieldMetadataStable(t *testing.T) {
 		{Field: "server.allowed_hosts", Env: "LOGIN_SERVER_ALLOWED_HOSTS", Class: ReloadRestartRequired},
 		{Field: "server.trusted_proxies", Env: "LOGIN_SERVER_TRUSTED_PROXIES", Class: ReloadRestartRequired},
 		{Field: "server.tls_terminating_proxy", Env: "LOGIN_SERVER_TLS_TERMINATING_PROXY", Class: ReloadRestartRequired},
+		{Field: "server.tls_cert_files", Env: "LOGIN_SERVER_TLS_CERT_FILES", Class: ReloadRestartRequired},
+		{Field: "server.tls_key_files", Env: "LOGIN_SERVER_TLS_KEY_FILES", Class: ReloadRestartRequired},
+		{Field: "server.tls_ca_file", Env: "LOGIN_SERVER_TLS_CA_FILE", Class: ReloadRestartRequired},
+		{Field: "server.tls_pfx_file", Env: "LOGIN_SERVER_TLS_PFX_FILE", Class: ReloadRestartRequired},
+		{Field: "server.tls_expiry_warning_days", Env: "LOGIN_SERVER_TLS_EXPIRY_WARNING_DAYS", Class: ReloadRestartRequired},
 		{Field: "server.shutdown_timeout_seconds", Env: "LOGIN_SERVER_SHUTDOWN_TIMEOUT_SECONDS", Class: ReloadHotReloadable},
 		{Field: "logging.level", Env: "LOGIN_LOGGING_LEVEL", Class: ReloadHotReloadable},
 		{Field: "logging.format", Env: "LOGIN_LOGGING_FORMAT", Class: ReloadHotReloadable},
@@ -501,6 +506,7 @@ func TestEnvFieldMetadataStable(t *testing.T) {
 		{Field: "database.wal", Env: "LOGIN_DATABASE_WAL", Class: ReloadRestartRequired},
 		{Field: "database.busy_timeout_ms", Env: "LOGIN_DATABASE_BUSY_TIMEOUT_MS", Class: ReloadRestartRequired},
 		{Field: "secrets.master_key", Env: "LOGIN_SECRETS_MASTER_KEY", Class: ReloadRestartRequired, Secret: true},
+		{Field: "secrets.tls_pfx_password", Env: "LOGIN_SECRETS_TLS_PFX_PASSWORD", Class: ReloadRestartRequired, Secret: true},
 	}
 	got := Fields()
 	if !reflect.DeepEqual(got, want) {

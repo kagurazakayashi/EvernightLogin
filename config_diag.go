@@ -41,6 +41,16 @@ func (c Config) fieldValueString(field string) string {
 		return formatStringList(c.Server.TrustedProxies)
 	case "server.tls_terminating_proxy":
 		return strconv.FormatBool(c.Server.TLSProxyMode)
+	case "server.tls_cert_files":
+		return formatStringList(c.Server.TLSCertFiles)
+	case "server.tls_key_files":
+		return formatStringList(c.Server.TLSKeyFiles)
+	case "server.tls_ca_file":
+		return strconv.Quote(c.Server.TLSCAFile)
+	case "server.tls_pfx_file":
+		return strconv.Quote(c.Server.TLSPFXFile)
+	case "server.tls_expiry_warning_days":
+		return strconv.Itoa(c.Server.TLSExpiryWarningDays)
 	case "server.shutdown_timeout_seconds":
 		return strconv.Itoa(c.Server.ShutdownTimeoutSeconds)
 	case "logging.level":
@@ -57,6 +67,8 @@ func (c Config) fieldValueString(field string) string {
 		return strconv.Itoa(c.Database.BusyTimeoutMS)
 	case "secrets.master_key":
 		return c.Secrets.MasterKey.String()
+	case "secrets.tls_pfx_password":
+		return c.Secrets.TLSPFXPassword.String()
 	default:
 		return "[UNKNOWN]"
 	}
@@ -123,6 +135,12 @@ func DiffReload(previous, next Config) ReloadDiff {
 	record("server.allowed_hosts", !slices.Equal(previous.Server.AllowedHosts, next.Server.AllowedHosts))
 	record("server.trusted_proxies", !slices.Equal(previous.Server.TrustedProxies, next.Server.TrustedProxies))
 	record("server.tls_terminating_proxy", previous.Server.TLSProxyMode != next.Server.TLSProxyMode)
+	record("server.tls_cert_files", !slices.Equal(previous.Server.TLSCertFiles, next.Server.TLSCertFiles))
+	record("server.tls_key_files", !slices.Equal(previous.Server.TLSKeyFiles, next.Server.TLSKeyFiles))
+	record("server.tls_ca_file", previous.Server.TLSCAFile != next.Server.TLSCAFile)
+	record("server.tls_pfx_file", previous.Server.TLSPFXFile != next.Server.TLSPFXFile)
+	record("server.tls_expiry_warning_days",
+		previous.Server.TLSExpiryWarningDays != next.Server.TLSExpiryWarningDays)
 	record("server.shutdown_timeout_seconds",
 		previous.Server.ShutdownTimeoutSeconds != next.Server.ShutdownTimeoutSeconds)
 	record("logging.level", previous.Logging.Level != next.Logging.Level)
@@ -132,6 +150,8 @@ func DiffReload(previous, next Config) ReloadDiff {
 	record("database.wal", previous.Database.WAL != next.Database.WAL)
 	record("database.busy_timeout_ms", previous.Database.BusyTimeoutMS != next.Database.BusyTimeoutMS)
 	record("secrets.master_key", !secretsEqual(previous.Secrets.MasterKey, next.Secrets.MasterKey))
+	record("secrets.tls_pfx_password",
+		!secretsEqual(previous.Secrets.TLSPFXPassword, next.Secrets.TLSPFXPassword))
 
 	return diff
 }

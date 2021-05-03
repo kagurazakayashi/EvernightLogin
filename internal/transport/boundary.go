@@ -38,6 +38,10 @@ type BoundaryOptions struct {
 	// PublicBaseURL 是独立配置的公开基础地址；其主机自动加入允许列表。它不随
 	// 请求 Host 或转发头变化，不能作为动态签发身份的来源。
 	PublicBaseURL string
+	// ExpectedScheme 是公开地址期望的外部协议（http/https）；非空时，可信代理
+	// 提供的 Forwarded/X-Forwarded-Proto 必须与它一致，否则 fail-closed。它来自
+	// 显式配置，不由请求推导。
+	ExpectedScheme string
 	// AllowedHosts 是显式允许的 Host（host 或 host:port）。
 	AllowedHosts []string
 	// TrustedProxies 是唯一允许提供 Forwarded/X-Forwarded-* 的直连代理 IP/CIDR；
@@ -57,6 +61,7 @@ type boundary struct {
 	next              http.Handler
 	hosts             netpolicy.HostSet
 	trusted           proxytrust.Trusted
+	expectedScheme    string
 	newRequestID      func() string
 	validateRequestID func(string) error
 	logger            *slog.Logger
@@ -75,6 +80,17 @@ func NewBoundary(options BoundaryOptions) (http.Handler, error) {
 	hosts, err := netpolicy.NewHostSet(options.AllowedHosts)
 	if err != nil {
 		return nil, err
+	}
+	expectedScheme := strings.ToLower(strings.TrimSpace(options.ExpectedScheme))
+	if expectedScheme == "" && options.PublicBaseURL != "" {
+		parsed, err := url.Parse(options.PublicBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("公开基础地址不是合法 URL")
+		}
+		expectedScheme = strings.ToLower(parsed.Scheme)
+	}
+	if expectedScheme != "" && expectedScheme != "http" && expectedScheme != "https" {
+		return nil, fmt.Errorf("期望的公开协议只能是 http 或 https")
 	}
 	if options.PublicBaseURL != "" {
 		parsed, err := url.Parse(options.PublicBaseURL)
@@ -113,6 +129,7 @@ func NewBoundary(options BoundaryOptions) (http.Handler, error) {
 		next:              options.Next,
 		hosts:             hosts,
 		trusted:           trusted,
+		expectedScheme:    expectedScheme,
 		newRequestID:      newRequestID,
 		validateRequestID: validateRequestID,
 		logger:            logger,
@@ -153,6 +170,14 @@ func (b *boundary) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		info = resolved
 	}
 
+	// 可信代理声明的协议必须与显式配置的公开地址协议一致；不一致说明代理链
+	// 配置错误或存在降级，按 fail-closed 拒绝，而不是继续用互相矛盾的边界信息。
+	if info.HasProto && b.expectedScheme != "" && info.Proto != b.expectedScheme {
+		b.reject(tracker, requestID, newProblem(http.StatusBadRequest, "REQ_INVALID",
+			"代理转发协议与公开地址配置不一致"), "forwarded_scheme_mismatch")
+		return
+	}
+
 	effectiveHost := request.Host
 	if info.HasHost {
 		effectiveHost = info.Host
@@ -173,6 +198,9 @@ func (b *boundary) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		ctx = WithClientIP(ctx, info.ClientAddr.String())
 	}
 	cloned := request.Clone(ctx)
+	// 内层只看到经过允许列表校验的有效 Host（可信代理改写时是外部主机），避免
+	// 后续 Host 相关逻辑误用未经校验的原始值。
+	cloned.Host = effectiveHost
 	// 把规范化后的请求编号交给内层，保证错误响应、访问日志与边界使用同一编号。
 	cloned.Header.Set("X-Request-ID", requestID)
 	stripProxyHeaders(cloned.Header)

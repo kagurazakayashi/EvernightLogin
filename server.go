@@ -11,6 +11,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/listener"
 	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/internal/tlscert"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
 )
 
@@ -46,12 +47,54 @@ type ServerOptions struct {
 //     日志使用边界验证过的客户端地址。
 //   - Close 在调用方期限与 Config.Server.ShutdownTimeoutSeconds 的较小值内优雅
 //     关闭，必要时强制关闭连接，并释放全部监听端口。
+//   - 配置了 server.tls_cert_files/tls_key_files 或 server.tls_pfx_file 时所有
+//     监听地址提供 HTTPS 单向认证；ReloadTLS 在完整校验后原子替换证书，失败保留
+//     旧证书；TLSStatus 提供到期状态（不发送通知、不自动续期）。
 //
 // Server 不打开数据库、不创建 Handler、不启动业务协程；外部公开地址、未来的
 // OIDC Issuer 与 WebAuthn RP ID 都必须来自各自独立的显式配置，绝不能由请求
 // Host 或转发头动态推导。
 type Server struct {
-	inner *listener.Server
+	inner  *listener.Server
+	tls    *tlscert.Manager
+	config Config
+}
+
+// TLSCertificateStatus 是单张服务器叶证书的脱敏状态。
+type TLSCertificateStatus struct {
+	// Domains 是证书覆盖的规范化 DNS 名称（含 *.example.com 通配）。
+	Domains []string
+	// NotBefore/NotAfter 是证书有效期边界。
+	NotBefore time.Time
+	NotAfter  time.Time
+	// FingerprintSHA256 是叶证书 DER 的 SHA-256 指纹（小写十六进制）。
+	FingerprintSHA256 string
+	// SerialNumber 是叶证书序列号（十六进制）。
+	SerialNumber string
+	// SelfSigned 表示叶证书自签名；不表示客户端自动信任它。
+	SelfSigned bool
+}
+
+// TLSStatus 是本地 TLS 证书的只读状态，用于诊断、到期监控与未来调度/通知接入。
+// 本步不发送到期通知，也不实现证书自动续期；调用方可按 ExpiringSoon/Expired
+// 决定是否告警或触发 ReloadTLS。
+type TLSStatus struct {
+	// LoadedAt 是当前生效证书的加载时间。
+	LoadedAt time.Time
+	// Certificates 是各证书身份状态。
+	Certificates []TLSCertificateStatus
+	// EarliestNotAfter 是最早到期的证书时间。
+	EarliestNotAfter time.Time
+	// Expired 表示当前时间已晚于最早到期时间。
+	Expired bool
+	// ExpiringSoon 表示已进入 server.tls_expiry_warning_days 告警窗口。
+	ExpiringSoon bool
+	// ReloadFailures 是最近一次成功重载之后连续失败的重载次数。
+	ReloadFailures int
+	// LastReloadAt 是最近一次重载尝试时间；零值表示尚未重载。
+	LastReloadAt time.Time
+	// LastReloadFailed 表示最近一次重载是否失败。
+	LastReloadFailed bool
 }
 
 // 编译期确认 Server 可以作为 Instance 管理的后台组件。
@@ -120,13 +163,26 @@ func NewServer(options ServerOptions) (*Server, error) {
 		addresses = append(addresses, address)
 	}
 
-	// 非回环明文监听只在显式确认的 TLS 终止代理部署模式下允许：必须已声明
-	// https 外部地址并配置可信代理。默认开发监听只允许回环地址。
-	if nonLoopback {
+	tlsEnabled := options.Config.Server.TLSEnabled()
+	var tlsManager *tlscert.Manager
+	if tlsEnabled {
+		manager, tlsErr := newTLSManager(options.Config, options.Logger)
+		if tlsErr != nil {
+			return nil, NewAppError(CodeConfigInvalid, "TLS 证书配置无效", WithCause(tlsErr))
+		}
+		if tlsErr := checkTLSCertificateCoverage(manager, options.Config.Server); tlsErr != nil {
+			return nil, NewAppError(CodeConfigInvalid, "TLS 证书未覆盖配置的公开主机", WithCause(tlsErr))
+		}
+		tlsManager = manager
+	}
+
+	// 非回环监听：本地 TLS 可以直接保护传输；否则必须是显式确认的 TLS 终止代理
+	// 部署模式（https 公开地址 + 可信代理）。默认开发监听只允许回环地址。
+	if nonLoopback && !tlsEnabled {
 		if !options.Config.Server.TLSProxyMode {
 			return nil, NewAppError(CodeConfigInvalid,
-				"非回环明文监听必须显式启用 TLS 终止代理模式",
-				WithCause(fmt.Errorf("请配置 server.tls_terminating_proxy=true，或改为监听本机回环地址")))
+				"非回环明文监听必须显式启用 TLS 终止代理模式或配置本地 TLS 证书",
+				WithCause(fmt.Errorf("请配置 server.tls_terminating_proxy=true 或 TLS 证书，或改为监听本机回环地址")))
 		}
 		if len(options.Config.Server.TrustedProxies) == 0 {
 			return nil, NewAppError(CodeConfigInvalid,
@@ -141,7 +197,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 		}
 	}
 
-	boundary, err := transport.NewBoundary(transport.BoundaryOptions{
+	boundaryOptions := transport.BoundaryOptions{
 		Next:              options.Handler,
 		PublicBaseURL:     publicBaseURL,
 		AllowedHosts:      options.Config.Server.AllowedHosts,
@@ -149,21 +205,96 @@ func NewServer(options ServerOptions) (*Server, error) {
 		NewRequestID:      NewRequestID,
 		ValidateRequestID: ValidateRequestID,
 		Logger:            options.Logger,
-	})
+	}
+	if publicBaseURL != "" {
+		if parsed, parseErr := url.Parse(publicBaseURL); parseErr == nil {
+			// 可信代理声明的协议必须与显式公开地址一致；本地 TLS 也要求 https。
+			boundaryOptions.ExpectedScheme = parsed.Scheme
+		}
+	}
+	boundary, err := transport.NewBoundary(boundaryOptions)
 	if err != nil {
 		return nil, NewAppError(CodeConfigInvalid, "代理信任边界配置无效", WithCause(err))
 	}
 
-	inner, err := listener.New(listener.Options{
+	listenerOptions := listener.Options{
 		Addresses:       addresses,
 		Handler:         boundary,
 		Logger:          options.Logger,
 		ShutdownTimeout: time.Duration(options.Config.Server.ShutdownTimeoutSeconds) * time.Second,
-	})
+	}
+	if tlsManager != nil {
+		listenerOptions.TLSConfig = tlsManager.TLSConfig()
+	}
+	inner, err := listener.New(listenerOptions)
 	if err != nil {
 		return nil, NewAppError(CodeConfigInvalid, "监听器配置无效", WithCause(err))
 	}
-	return &Server{inner: inner}, nil
+	return &Server{inner: inner, tls: tlsManager, config: options.Config}, nil
+}
+
+// newTLSManager 从有效配置构造 TLS 证书管理器。到期告警天数 0 表示使用默认值。
+// PFX 密码来自配置秘密，只在内存中传给加载器，不写入日志或错误。
+func newTLSManager(cfg Config, logger *slog.Logger) (*tlscert.Manager, error) {
+	warningDays := cfg.Server.TLSExpiryWarningDays
+	if warningDays == 0 {
+		warningDays = DefaultServerTLSExpiryWarningDays
+	}
+	return tlscert.New(tlscert.Options{
+		Source: tlscert.Source{
+			CertFiles:   append([]string(nil), cfg.Server.TLSCertFiles...),
+			KeyFiles:    append([]string(nil), cfg.Server.TLSKeyFiles...),
+			CAFile:      cfg.Server.TLSCAFile,
+			PFXFile:     cfg.Server.TLSPFXFile,
+			PFXPassword: cfg.Secrets.TLSPFXPassword.Value(),
+		},
+		ExpiryWarning: time.Duration(warningDays) * 24 * time.Hour,
+		Logger:        logger,
+	})
+}
+
+// checkTLSCertificateCoverage 把显式公开地址与允许 Host 中的主机名同证书 DNS
+// 名称交叉检查：某个配置主机没有被任何证书覆盖时，即使 Host 校验通过，客户端
+// 也会因证书不匹配而握手失败，因此启动阶段就拒绝。IP 地址不在此检查范围（由
+// 证书 IP SAN 与客户端校验负责）。
+func checkTLSCertificateCoverage(manager *tlscert.Manager, cfg ServerConfig) error {
+	return checkTLSCertificateCoverageStatus(manager.Status(), cfg)
+}
+
+// checkTLSCertificateCoverageStatus 用给定的候选状态执行同一套主机覆盖检查；
+// 启动与重载共用它，避免“启动被拒但重载放行”的规则不一致。
+func checkTLSCertificateCoverageStatus(status tlscert.Status, cfg ServerConfig) error {
+	hosts := make([]string, 0, 1+len(cfg.AllowedHosts))
+	if cfg.PublicBaseURL != "" {
+		if parsed, err := url.Parse(cfg.PublicBaseURL); err == nil {
+			if host := parsed.Hostname(); host != "" {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	for _, raw := range cfg.AllowedHosts {
+		parsed, err := netpolicy.ParseRequestHost(raw)
+		if err != nil || parsed.IsIP() {
+			continue
+		}
+		hosts = append(hosts, parsed.Host())
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	for _, host := range hosts {
+		covered := false
+		for _, certificate := range status.Certificates {
+			if certificate.CoversDomain(host) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return fmt.Errorf("证书未覆盖主机 %q", host)
+		}
+	}
+	return nil
 }
 
 // Start 绑定全部配置的地址并开始处理请求。任一地址失败时整体回滚并返回错误；
@@ -191,4 +322,58 @@ func (s *Server) Addrs() []net.Addr {
 		return nil
 	}
 	return s.inner.Addrs()
+}
+
+// TLSEnabled 报告该监听服务是否配置并成功加载了本地 TLS 证书。
+func (s *Server) TLSEnabled() bool {
+	return s != nil && s.tls != nil
+}
+
+// TLSStatus 返回本地 TLS 证书状态；未启用 TLS 时返回 false。状态用于诊断与
+// 到期监控，未来调度/通知可按 ExpiringSoon/Expired 接入，但本步不发送通知。
+func (s *Server) TLSStatus() (TLSStatus, bool) {
+	if s == nil || s.tls == nil {
+		return TLSStatus{}, false
+	}
+	status := s.tls.Status()
+	result := TLSStatus{
+		LoadedAt:         status.LoadedAt,
+		EarliestNotAfter: status.EarliestNotAfter,
+		Expired:          status.Expired,
+		ExpiringSoon:     status.ExpiringSoon,
+		ReloadFailures:   status.ReloadFailures,
+		LastReloadAt:     status.LastReloadAt,
+		LastReloadFailed: status.LastReloadFailed,
+	}
+	result.Certificates = make([]TLSCertificateStatus, len(status.Certificates))
+	for index, certificate := range status.Certificates {
+		result.Certificates[index] = TLSCertificateStatus{
+			Domains:           append([]string(nil), certificate.Domains...),
+			NotBefore:         certificate.NotBefore,
+			NotAfter:          certificate.NotAfter,
+			FingerprintSHA256: certificate.FingerprintSHA256,
+			SerialNumber:      certificate.SerialNumber,
+			SelfSigned:        certificate.SelfSigned,
+		}
+	}
+	return result, true
+}
+
+// ReloadTLS 重新读取证书文件并完整校验，成功后才原子替换生效证书；失败时保留
+// 仍在使用的旧证书并返回 CONFIG_INVALID 错误（内部原因只用于日志/诊断，不写入
+// HTTP 响应）。除证书材料校验外，它还会复验候选证书是否覆盖 public_base_url 与
+// allowed_hosts 中的主机名，与 NewServer 的启动检查一致，避免出现“重载成功但原
+// 主机无法握手”的半更新。它不会中断正在进行的 TLS 握手或 HTTPS 请求。
+func (s *Server) ReloadTLS(ctx context.Context) error {
+	if s == nil || s.tls == nil {
+		return NewAppError(CodeConfigInvalid, "未启用本地 TLS 证书",
+			WithCause(fmt.Errorf("server.tls_cert_files 与 server.tls_pfx_file 都未配置")))
+	}
+	validate := func(candidate tlscert.Status) error {
+		return checkTLSCertificateCoverageStatus(candidate, s.config.Server)
+	}
+	if err := s.tls.ReloadChecked(ctx, validate); err != nil {
+		return NewAppError(CodeConfigInvalid, "TLS 证书重载失败", WithCause(err))
+	}
+	return nil
 }

@@ -57,6 +57,11 @@ type ServerOverrides struct {
 	AllowedHosts           *[]string
 	TrustedProxies         *[]string
 	TLSProxyMode           *bool
+	TLSCertFiles           *[]string
+	TLSKeyFiles            *[]string
+	TLSCAFile              *string
+	TLSPFXFile             *string
+	TLSExpiryWarningDays   *int
 	ShutdownTimeoutSeconds *int
 }
 
@@ -77,7 +82,8 @@ type DatabaseOverrides struct {
 // SecretsOverrides 是 SecretsConfig 的显式覆盖项。MasterKey 由宿主密钥提供者
 // 构造（NewSecret/NewSecretString），属于受保护来源；不要从命令行参数传入。
 type SecretsOverrides struct {
-	MasterKey *Secret
+	MasterKey      *Secret
+	TLSPFXPassword *Secret
 }
 
 // Load 按“内置默认值 < YAML < 环境变量 < 显式代码选项”的顺序合并并校验配置。
@@ -142,34 +148,57 @@ func Load(opts LoadOptions) (Config, error) {
 		layers[i].apply(&cfg)
 	}
 
-	// 秘密单独合并：越靠后的层优先，直接值会覆盖 YAML 中的来源引用。
-	var secretSource *SecretSource
-	var secretValue *Secret
-	for i := range layers {
-		if layers[i].secretSource != nil {
-			secretSource = layers[i].secretSource
-			secretValue = nil
-		}
-		if layers[i].secretValue != nil {
-			secretValue = layers[i].secretValue
-			secretSource = nil
-		}
-	}
-	if secretValue != nil {
-		cfg.Secrets.MasterKey = *secretValue
-	} else if secretSource != nil {
-		secret, err := secretSource.load(lookup)
+	// 秘密单独合并：越靠后的层优先，直接值会覆盖 YAML 中的来源引用。主密钥与
+	// PFX 密码分别合并，避免一个字段的秘密来源覆盖另一个字段。
+	masterSource, masterValue := mergeSecretLayer(layers, func(layer *configOverrides) (*SecretSource, *Secret) {
+		return layer.secretSource, layer.secretValue
+	})
+	pfxSource, pfxValue := mergeSecretLayer(layers, func(layer *configOverrides) (*SecretSource, *Secret) {
+		return layer.secretPFXSource, layer.secretPFXValue
+	})
+	if masterValue != nil {
+		cfg.Secrets.MasterKey = *masterValue
+	} else if masterSource != nil {
+		secret, err := masterSource.load(lookup)
 		if err != nil {
 			return Config{}, ConfigErrors{configErrWrap(ConfigErrorSecretSource, "yaml", "secrets.master_key", 0,
 				"无法从受保护来源读取主密钥", err)}
 		}
 		cfg.Secrets.MasterKey = secret
 	}
+	if pfxValue != nil {
+		cfg.Secrets.TLSPFXPassword = *pfxValue
+	} else if pfxSource != nil {
+		secret, err := pfxSource.load(lookup)
+		if err != nil {
+			return Config{}, ConfigErrors{configErrWrap(ConfigErrorSecretSource, "yaml", "secrets.tls_pfx_password", 0,
+				"无法从受保护来源读取 TLS PFX 密码", err)}
+		}
+		cfg.Secrets.TLSPFXPassword = secret
+	}
 
 	if finalErrs := validateMerged(cfg); len(finalErrs) > 0 {
 		return Config{}, finalErrs
 	}
 	return cfg, nil
+}
+
+// mergeSecretLayer 按层序合并一个秘密字段：越靠后的层优先，直接值覆盖来源引用。
+func mergeSecretLayer(layers []configOverrides, access func(*configOverrides) (*SecretSource, *Secret)) (*SecretSource, *Secret) {
+	var source *SecretSource
+	var value *Secret
+	for index := range layers {
+		layerSource, layerValue := access(&layers[index])
+		if layerSource != nil {
+			source = layerSource
+			value = nil
+		}
+		if layerValue != nil {
+			value = layerValue
+			source = nil
+		}
+	}
+	return source, value
 }
 
 // configOverrides 是单层配置的内部表示；指针字段表示“该层显式设置了此字段”。
@@ -181,6 +210,11 @@ type configOverrides struct {
 	serverAllowedHosts    *[]string
 	serverTrustedProxies  *[]string
 	serverTLSProxyMode    *bool
+	serverTLSCertFiles    *[]string
+	serverTLSKeyFiles     *[]string
+	serverTLSCAFile       *string
+	serverTLSPFXFile      *string
+	serverTLSExpiryDays   *int
 	serverShutdownTimeout *int
 	loggingLevel          *LogLevel
 	loggingFormat         *LogFormat
@@ -190,6 +224,8 @@ type configOverrides struct {
 	databaseBusyTimeout   *int
 	secretSource          *SecretSource
 	secretValue           *Secret
+	secretPFXSource       *SecretSource
+	secretPFXValue        *Secret
 }
 
 // apply 把本层显式设置的值覆盖到配置上；未设置的字段保持原值。切片字段复制后
@@ -215,6 +251,21 @@ func (ov *configOverrides) apply(cfg *Config) {
 	}
 	if ov.serverTLSProxyMode != nil {
 		cfg.Server.TLSProxyMode = *ov.serverTLSProxyMode
+	}
+	if ov.serverTLSCertFiles != nil {
+		cfg.Server.TLSCertFiles = append([]string(nil), (*ov.serverTLSCertFiles)...)
+	}
+	if ov.serverTLSKeyFiles != nil {
+		cfg.Server.TLSKeyFiles = append([]string(nil), (*ov.serverTLSKeyFiles)...)
+	}
+	if ov.serverTLSCAFile != nil {
+		cfg.Server.TLSCAFile = *ov.serverTLSCAFile
+	}
+	if ov.serverTLSPFXFile != nil {
+		cfg.Server.TLSPFXFile = *ov.serverTLSPFXFile
+	}
+	if ov.serverTLSExpiryDays != nil {
+		cfg.Server.TLSExpiryWarningDays = *ov.serverTLSExpiryDays
 	}
 	if ov.serverShutdownTimeout != nil {
 		cfg.Server.ShutdownTimeoutSeconds = *ov.serverShutdownTimeout
@@ -277,6 +328,11 @@ type yamlServer struct {
 	AllowedHosts           *[]string `yaml:"allowed_hosts"`
 	TrustedProxies         *[]string `yaml:"trusted_proxies"`
 	TLSProxyMode           *bool     `yaml:"tls_terminating_proxy"`
+	TLSCertFiles           *[]string `yaml:"tls_cert_files"`
+	TLSKeyFiles            *[]string `yaml:"tls_key_files"`
+	TLSCAFile              *string   `yaml:"tls_ca_file"`
+	TLSPFXFile             *string   `yaml:"tls_pfx_file"`
+	TLSExpiryWarningDays   *int      `yaml:"tls_expiry_warning_days"`
 	ShutdownTimeoutSeconds *int      `yaml:"shutdown_timeout_seconds"`
 }
 
@@ -293,7 +349,14 @@ type yamlDatabase struct {
 }
 
 type yamlSecrets struct {
-	MasterKey *yamlSecretSource `yaml:"master_key"`
+	MasterKey      *yamlSecretSource `yaml:"master_key"`
+	TLSPFXPassword *yamlSecretSource `yaml:"tls_pfx_password"`
+}
+
+// yamlSecretFields 是允许出现的秘密字段名；每个字段的值只能是 env/file 来源映射。
+var yamlSecretFields = map[string]struct{}{
+	"master_key":       {},
+	"tls_pfx_password": {},
 }
 
 type yamlSecretSource struct {
@@ -316,6 +379,9 @@ var (
 			{name: "public_base_url", tag: "!!str"},
 			{name: "path_prefix", tag: "!!str"},
 			{name: "tls_terminating_proxy", tag: "!!bool"},
+			{name: "tls_ca_file", tag: "!!str"},
+			{name: "tls_pfx_file", tag: "!!str"},
+			{name: "tls_expiry_warning_days", tag: "!!int"},
 			{name: "shutdown_timeout_seconds", tag: "!!int"},
 		},
 		"logging": {
@@ -336,6 +402,8 @@ var (
 			"extra_listen_addrs": "!!str",
 			"allowed_hosts":      "!!str",
 			"trusted_proxies":    "!!str",
+			"tls_cert_files":     "!!str",
+			"tls_key_files":      "!!str",
 		},
 	}
 
@@ -522,7 +590,7 @@ func checkYAMLSecrets(section *yaml.Node) ConfigErrors {
 		}
 		seen[name] = key.Line
 
-		if name != "master_key" {
+		if _, known := yamlSecretFields[name]; !known {
 			errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", fieldPath, key.Line,
 				"未定义的秘密字段"))
 			continue
@@ -616,6 +684,11 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.serverAllowedHosts = doc.Server.AllowedHosts
 		ov.serverTrustedProxies = doc.Server.TrustedProxies
 		ov.serverTLSProxyMode = doc.Server.TLSProxyMode
+		ov.serverTLSCertFiles = doc.Server.TLSCertFiles
+		ov.serverTLSKeyFiles = doc.Server.TLSKeyFiles
+		ov.serverTLSCAFile = doc.Server.TLSCAFile
+		ov.serverTLSPFXFile = doc.Server.TLSPFXFile
+		ov.serverTLSExpiryDays = doc.Server.TLSExpiryWarningDays
 		ov.serverShutdownTimeout = doc.Server.ShutdownTimeoutSeconds
 	}
 	if doc.Logging != nil {
@@ -637,36 +710,53 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.databaseWAL = doc.Database.WAL
 		ov.databaseBusyTimeout = doc.Database.BusyTimeoutMS
 	}
-	if doc.Secrets != nil && doc.Secrets.MasterKey != nil {
-		masterKey := doc.Secrets.MasterKey
-		switch {
-		case masterKey.Env != nil && masterKey.File != nil:
-			errs = append(errs, configErr(ConfigErrorConflict, "yaml", "secrets.master_key", 0,
-				"env 与 file 来源只能设置一个"))
-		case masterKey.Env != nil:
-			source, err := ParseSecretSource("env:" + *masterKey.Env)
-			if err != nil {
-				errs = append(errs, configErrWrap(ConfigErrorSecretSource, "yaml", "secrets.master_key", 0,
-					"秘密环境变量来源不合法", err))
+	if doc.Secrets != nil {
+		if doc.Secrets.MasterKey != nil {
+			source, sourceErr := convertYAMLSecretSource("secrets.master_key", doc.Secrets.MasterKey)
+			if sourceErr != nil {
+				errs = append(errs, sourceErr)
 			} else {
-				ov.secretSource = &source
+				ov.secretSource = source
 			}
-		case masterKey.File != nil:
-			source, err := ParseSecretSource("file:" + *masterKey.File)
-			if err != nil {
-				errs = append(errs, configErrWrap(ConfigErrorSecretSource, "yaml", "secrets.master_key", 0,
-					"秘密文件来源不合法", err))
+		}
+		if doc.Secrets.TLSPFXPassword != nil {
+			source, sourceErr := convertYAMLSecretSource("secrets.tls_pfx_password", doc.Secrets.TLSPFXPassword)
+			if sourceErr != nil {
+				errs = append(errs, sourceErr)
 			} else {
-				ov.secretSource = &source
+				ov.secretPFXSource = source
 			}
-		default:
-			errs = append(errs, configErr(ConfigErrorValue, "yaml", "secrets.master_key", 0,
-				"秘密来源必须提供 env 或 file"))
 		}
 	}
 
 	errs = append(errs, validateOverrides(&ov, "yaml")...)
 	return ov, errs
+}
+
+// convertYAMLSecretSource 把 YAML 中的 env/file 来源映射转为 SecretSource。
+func convertYAMLSecretSource(fieldPath string, source *yamlSecretSource) (*SecretSource, *ConfigError) {
+	switch {
+	case source.Env != nil && source.File != nil:
+		return nil, configErr(ConfigErrorConflict, "yaml", fieldPath, 0,
+			"env 与 file 来源只能设置一个")
+	case source.Env != nil:
+		parsed, err := ParseSecretSource("env:" + *source.Env)
+		if err != nil {
+			return nil, configErrWrap(ConfigErrorSecretSource, "yaml", fieldPath, 0,
+				"秘密环境变量来源不合法", err)
+		}
+		return &parsed, nil
+	case source.File != nil:
+		parsed, err := ParseSecretSource("file:" + *source.File)
+		if err != nil {
+			return nil, configErrWrap(ConfigErrorSecretSource, "yaml", fieldPath, 0,
+				"秘密文件来源不合法", err)
+		}
+		return &parsed, nil
+	default:
+		return nil, configErr(ConfigErrorValue, "yaml", fieldPath, 0,
+			"秘密来源必须提供 env 或 file")
+	}
 }
 
 // overridesFromEnv 读取固定名称的环境变量。布尔值只接受 true/false 小写形式，
@@ -714,6 +804,36 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 			errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_terminating_proxy", 0, err.Error()))
 		} else {
 			ov.serverTLSProxyMode = &flag
+		}
+	}
+	if value, ok := lookup(envServerTLSCertFiles); ok {
+		files, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_cert_files", 0, err.Error()))
+		} else {
+			ov.serverTLSCertFiles = &files
+		}
+	}
+	if value, ok := lookup(envServerTLSKeyFiles); ok {
+		files, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_key_files", 0, err.Error()))
+		} else {
+			ov.serverTLSKeyFiles = &files
+		}
+	}
+	if value, ok := lookup(envServerTLSCAFile); ok {
+		ov.serverTLSCAFile = Ptr(value)
+	}
+	if value, ok := lookup(envServerTLSPFXFile); ok {
+		ov.serverTLSPFXFile = Ptr(value)
+	}
+	if value, ok := lookup(envServerTLSExpiryDays); ok {
+		number, err := parseEnvInt(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_expiry_warning_days", 0, err.Error()))
+		} else {
+			ov.serverTLSExpiryDays = &number
 		}
 	}
 	if value, ok := lookup(envServerShutdownTimeout); ok {
@@ -767,6 +887,18 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 			ov.secretValue = &secret
 		}
 	}
+	if value, ok := lookup(envSecretsTLSPFXPassword); ok {
+		if value == "" {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "secrets.tls_pfx_password", 0,
+				"环境变量提供的秘密不能为空"))
+		} else if len(value) > MaxSecretBytes {
+			errs = append(errs, configErr(ConfigErrorRange, "env", "secrets.tls_pfx_password", 0,
+				fmt.Sprintf("环境变量提供的秘密不能超过 %d 字节", MaxSecretBytes)))
+		} else {
+			secret := NewSecretString(value)
+			ov.secretPFXValue = &secret
+		}
+	}
 
 	errs = append(errs, validateOverrides(&ov, "env")...)
 	return ov, errs
@@ -782,7 +914,13 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 		serverAllowedHosts:    options.Server.AllowedHosts,
 		serverTrustedProxies:  options.Server.TrustedProxies,
 		serverTLSProxyMode:    options.Server.TLSProxyMode,
+		serverTLSCertFiles:    options.Server.TLSCertFiles,
+		serverTLSKeyFiles:     options.Server.TLSKeyFiles,
+		serverTLSCAFile:       options.Server.TLSCAFile,
+		serverTLSPFXFile:      options.Server.TLSPFXFile,
+		serverTLSExpiryDays:   options.Server.TLSExpiryWarningDays,
 		serverShutdownTimeout: options.Server.ShutdownTimeoutSeconds,
+		secretPFXValue:        options.Secrets.TLSPFXPassword,
 		loggingLevel:          options.Logging.Level,
 		loggingFormat:         options.Logging.Format,
 		databaseDriver:        options.Database.Driver,
@@ -875,6 +1013,30 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 			add(ConfigErrorValue, "server.trusted_proxies", problem)
 		}
 	}
+	if ov.serverTLSCertFiles != nil {
+		if problem := tlsFileListProblem("证书文件", *ov.serverTLSCertFiles, MaxServerTLSCertificates); problem != "" {
+			add(ConfigErrorValue, "server.tls_cert_files", problem)
+		}
+	}
+	if ov.serverTLSKeyFiles != nil {
+		if problem := tlsFileListProblem("私钥文件", *ov.serverTLSKeyFiles, MaxServerTLSCertificates); problem != "" {
+			add(ConfigErrorValue, "server.tls_key_files", problem)
+		}
+	}
+	if ov.serverTLSCAFile != nil && *ov.serverTLSCAFile != "" {
+		if problem := tlsPathProblem("CA 文件", *ov.serverTLSCAFile); problem != "" {
+			add(ConfigErrorValue, "server.tls_ca_file", problem)
+		}
+	}
+	if ov.serverTLSPFXFile != nil && *ov.serverTLSPFXFile != "" {
+		if problem := tlsPathProblem("PFX/P12 文件", *ov.serverTLSPFXFile); problem != "" {
+			add(ConfigErrorValue, "server.tls_pfx_file", problem)
+		}
+	}
+	if ov.serverTLSExpiryDays != nil && (*ov.serverTLSExpiryDays < 0 || *ov.serverTLSExpiryDays > 365) {
+		add(ConfigErrorRange, "server.tls_expiry_warning_days",
+			"证书到期告警天数必须是 0～365 的整数；0 表示默认 30")
+	}
 	if ov.serverTLSProxyMode != nil && *ov.serverTLSProxyMode && ov.serverTrustedProxies != nil &&
 		len(*ov.serverTrustedProxies) == 0 {
 		// 单层内即可判定的矛盾提前报告；跨层组合在 validateMerged 再检查。
@@ -906,6 +1068,14 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 		} else if ov.secretValue.Len() > MaxSecretBytes {
 			add(ConfigErrorRange, "secrets.master_key",
 				fmt.Sprintf("秘密不能超过 %d 字节", MaxSecretBytes))
+		}
+	}
+	if ov.secretPFXValue != nil {
+		if !ov.secretPFXValue.IsSet() || ov.secretPFXValue.Len() == 0 {
+			add(ConfigErrorValue, "secrets.tls_pfx_password", "PFX 密码不能为空")
+		} else if ov.secretPFXValue.Len() > MaxSecretBytes {
+			add(ConfigErrorRange, "secrets.tls_pfx_password",
+				fmt.Sprintf("PFX 密码不能超过 %d 字节", MaxSecretBytes))
 		}
 	}
 	return errs

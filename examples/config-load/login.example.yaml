@@ -21,7 +21,18 @@ server:
   #   - "10.0.0.0/8"
   # 显式确认明文监听只部署在受信任 TLS 终止反向代理后端；启用后必须配置
   # trusted_proxies 与 https public_base_url，才允许非回环明文监听。
+  # 与下面的本地 TLS 证书配置互斥。
   tls_terminating_proxy: false
+  # 本地 HTTPS 单向认证（可选）：PEM 证书链 + 私钥一一对应，私钥文件必须受限权限；
+  # 也可改用 tls_pfx_file + secrets.tls_pfx_password。
+  # tls_cert_files:
+  #   - "C:/secure/login/server-fullchain.crt"
+  # tls_key_files:
+  #   - "C:/secure/login/server.key"
+  # tls_ca_file: "C:/secure/login/ca-chain.crt"
+  # tls_pfx_file: "C:/secure/login/server.pfx"
+  # 到期告警窗口（天），默认 30；只影响状态报告，不发送通知。
+  tls_expiry_warning_days: 30
   shutdown_timeout_seconds: 10
 logging:
   level: info
@@ -43,3 +54,7 @@ database:
 # secrets:
 #   master_key:
 #     env: LOGIN_MASTER_KEY
+# PFX/P12 密码同样只能来自受保护来源（与 master_key 互不影响）：
+# secrets:
+#   tls_pfx_password:
+#     env: LOGIN_TLS_PFX_PASSWORD
