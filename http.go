@@ -211,6 +211,17 @@ func RequestIDFromContext(ctx context.Context) string {
 	return transport.RequestIDFromContext(ctx)
 }
 
+// ClientServiceIdentityFromContext 返回独立 login.Server 的 mTLS 边界验证并显式
+// 映射后的可信服务身份名称。未启用客户端证书认证、嵌入模式自行监听或匿名连接
+// 时返回空字符串与 false。
+//
+// 该身份来自 TLS 客户端证书的显式“DNS 名称 -> 服务身份”映射，不是用户身份，
+// 不会被当作 root 或自动获得任何业务权限；服务层必须独立授权。它也不能由请求
+// 头、查询参数或请求体声明。
+func ClientServiceIdentityFromContext(ctx context.Context) (string, bool) {
+	return transport.ClientServiceIdentityFromContext(ctx)
+}
+
 // transportErrorCodes 把错误码注册表投影为内部传输层只读结构，避免内部包反向
 // 依赖根包。
 func transportErrorCodes() []transport.ErrorCodeInfo {

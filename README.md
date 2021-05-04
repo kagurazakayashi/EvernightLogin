@@ -2,12 +2,12 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 16）
+## 项目状态（步骤 17）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
-- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）；HTTPS 单向认证 `internal/tlscert`（PEM 证书链/私钥/附加 CA、PKCS#12/PFX 导入、私钥与证书匹配、证书链与用途/有效期校验、按 SNI 选择证书、未知 SNI 拒绝、安全重载与到期状态）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端证书 mTLS（步骤 17）、完整反向代理部署示例、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）；HTTPS 单向认证 `internal/tlscert`（PEM 证书链/私钥/附加 CA、PKCS#12/PFX 导入、私钥与证书匹配、证书链与用途/有效期校验、按 SNI 选择证书、未知 SNI 拒绝、安全重载与到期状态）；可选客户端证书双向认证 mTLS（`disabled`/`required`/`optional` 模式、独立客户端信任 CA、显式“证书 DNS 名称 -> 可信服务身份”映射、可选模式拒绝无效证书降级、脱敏 mTLS 状态诊断与服务身份上下文）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -51,6 +51,9 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 | server.tls_ca_file | LOGIN_SERVER_TLS_CA_FILE | 需重启 |
 | server.tls_pfx_file | LOGIN_SERVER_TLS_PFX_FILE | 需重启 |
 | server.tls_expiry_warning_days | LOGIN_SERVER_TLS_EXPIRY_WARNING_DAYS | 需重启 |
+| server.tls_client_auth | LOGIN_SERVER_TLS_CLIENT_AUTH | 需重启 |
+| server.tls_client_ca_files | LOGIN_SERVER_TLS_CLIENT_CA_FILES | 需重启 |
+| server.tls_client_identities | LOGIN_SERVER_TLS_CLIENT_IDENTITIES | 需重启 |
 | server.shutdown_timeout_seconds | LOGIN_SERVER_SHUTDOWN_TIMEOUT_SECONDS | 可热更新 |
 | logging.level | LOGIN_LOGGING_LEVEL | 可热更新 |
 | logging.format | LOGIN_LOGGING_FORMAT | 可热更新 |
@@ -68,6 +71,7 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 - 未知字段、重复键、类型错误、`null`、超范围值、非法组合（例如公开地址使用 `http` 却监听非回环地址、公开地址路径与 `server.path_prefix` 不一致、启用 TLS 终止代理模式却缺少 https 公开地址或可信代理）都会在加载阶段失败，不产生监听或数据库副作用。
 - 监听主机只接受 IP 字面量、`localhost` 或空（所有接口），不接受任意域名；`server.extra_listen_addrs` 与主地址去重后最多 16 个。列表型环境变量用英文逗号分隔（例如 `127.0.0.1:8081,[::1]:8081`）。
 - TLS 字段组合在加载阶段校验：PEM 证书/私钥必须成对且数量一致（最多 8 对）、PEM 与 PFX 互斥、PFX 必须有受保护来源密码、PFX 不能配附加 CA、未配置 PFX 时不能单独设置 PFX 密码、本地 TLS 与 `tls_terminating_proxy` 互斥、启用本地 TLS 时公开地址必须是 https、到期告警天数范围 0～365（0 表示默认 30 天）。
+- 客户端证书认证（mTLS）字段组合在加载阶段校验：默认 `disabled`，关闭时不能配置客户端信任 CA 或身份映射（避免静默保留未使用的信任材料）；启用后必须同时配置本地 TLS 证书、`server.tls_client_ca_files` 与 `server.tls_client_identities`，客户端信任 CA 文件不能与服务器证书材料共用路径；身份映射的 DNS 名称必须是主机名（不接受 IP/通配符/端口），同一 DNS 名称不能映射到多个服务身份。环境变量中的身份映射写作 `dns-name=service-identity` 逗号分隔列表，例如 `LOGIN_SERVER_TLS_CLIENT_IDENTITIES=backup.internal=backup-agent,monitor.internal=monitor`。
 - YAML 只能写秘密来源引用（`secrets.master_key.file` 或 `secrets.master_key.env`）；秘密值也可来自 `LOGIN_SECRETS_MASTER_KEY` 环境变量或宿主显式选项。错误、日志和 `Diagnostic` 输出都不包含秘密内容。
 - 字段变更是否需要重启由 `login.Fields()` 与 `login.DiffReload` 给出；本步不实现配置后台或自动热更新。
 
@@ -294,7 +298,7 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 
 ## HTTPS 证书加载、多域名证书与安全重载（步骤 16）
 
-在步骤 15 的监听组件上增加服务端 HTTPS 单向认证；证书材料由 `Config.Server` 显式配置，`NewServer` 在构造时完成全部加载与校验，`Start` 后监听地址提供 HTTPS。支持 PEM 证书链 + 私钥、可选附加 CA/中间证书，以及 PKCS#12/PFX 导入。客户端证书认证（mTLS）属于步骤 17，本步不启用。
+在步骤 15 的监听组件上增加服务端 HTTPS 单向认证；证书材料由 `Config.Server` 显式配置，`NewServer` 在构造时完成全部加载与校验，`Start` 后监听地址提供 HTTPS。支持 PEM 证书链 + 私钥、可选附加 CA/中间证书，以及 PKCS#12/PFX 导入。客户端证书认证（mTLS）在步骤 17 单独实现，本步不启用。
 
 - **证书材料与校验**：PEM 模式下 `server.tls_cert_files` 与 `server.tls_key_files` 一一对应（叶证书在前、中间证书依次在后），`server.tls_ca_file` 可追加共享 CA/中间证书；PFX 模式使用 `server.tls_pfx_file`，密码只能通过 `secrets.tls_pfx_password` 从受保护来源（环境变量或受保护文件）提供，不能直接写进 YAML。PFX/P12 解析使用 `software.sslmate.com/src/go-pkcs12 v0.7.4`（SSL.com 维护、纯 Go、BSD 风格许可；只用于解码，编码仅出现在测试）。加载时校验：文件格式与大小、私钥与叶证书公钥匹配、叶证书有效期与服务器认证用途、证书链签发关系与顺序（中间证书必须是 CA）、链内所有证书有效期、DNS SAN 合法且非空。
 - **私钥文件保护**：PEM 私钥与 PFX 文件必须通过受保护文件检查（非 Windows 仅所有者可读写；Windows 受限 ACL）。测试证书仅生成在临时目录并使用受限权限写入，不写入项目树。
@@ -304,7 +308,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **到期状态**：`Server.TLSStatus()` 返回加载时间、各证书 `Domains`/`NotBefore`/`NotAfter`/SHA-256 指纹/序列号/是否自签、最早到期时间、`ExpiringSoon`（`server.tls_expiry_warning_days`，范围 0～365，0 表示默认 30 天）与 `Expired`。本步只提供状态，不发送邮件/Webhook 通知，也不自动续期；后续调度/通知与证书更新流程按该状态接入，不能声称已发送告知。
 - **代理边界联动**：步骤 15 审计备注已修正——内层 Handler 现在收到经过允许列表校验的有效 Host；可信代理声明的 `Forwarded`/`X-Forwarded-Proto` 必须与显式 `server.public_base_url` 协议一致，否则 fail-closed 400。
 - **已验证（Windows amd64，真实 TLS 握手）**：PEM 链（根 CA→中间 CA→叶证书）加载与受信客户端握手、精确域名与通配符 SNI、未知 SNI 拒绝、TLS 1.1 拒绝、无 SNI 默认证书选择、私钥不符/畸形 PEM/非 CA 签发者/链顺序错误/重复证书/过期/未生效/缺 SAN/非法通配符拒绝、附加 CA 文件、PFX 正确与错误密码、同一 CA 重新签发后的安全重载、无效材料重载失败回退旧证书、6 路并发握手期间 8 次重载无失败、到期状态与到期告警窗口、HTTPS 真实监听下健康检查与证书主机名不匹配失败、PFX 端到端启动、非回环监听在本地 TLS 配置下允许（只构造、未真实绑定所有接口）。
-- **尚未接入/未验证**：`cmd/login-server` 仍未装配 `NewServer`；客户端证书 mTLS、SNI 按域名选择不同客户端信任 CA（步骤 17）、OCSP/CRL、证书自动续期、真实 ACME/企业 CA 流程、邮件/Webhook 到期通知、TLS 会话票据策略与 HTTP/2 专项压力测试未实现；未做 race detector、真实反向代理/LB 联调、非 Windows 运行（只编译）。
+- **尚未接入/未验证（步骤 16 当时状态）**：`cmd/login-server` 仍未装配 `NewServer`；客户端证书 mTLS（步骤 17 已实现）、SNI 按域名选择不同客户端信任 CA（未实现）、OCSP/CRL、证书自动续期、真实 ACME/企业 CA 流程、邮件/Webhook 到期通知、TLS 会话票据策略与 HTTP/2 专项压力测试未实现；未做 race detector、真实反向代理/LB 联调、非 Windows 运行（只编译）。
+
+## 客户端证书双向认证与基础设施阶段验收（步骤 17）
+
+在步骤 15～16 的监听、代理边界与服务器 TLS 之上增加可选的客户端证书双向认证（mTLS）；mTLS 默认关闭，基础设施能力仍不包含账户、登录与授权，不是可生产使用的身份系统。
+
+- **三种明确模式**：`server.tls_client_auth` 取 `disabled`（默认，不请求客户端证书）、`required`（必须出示并验证客户端证书）或 `optional`（允许匿名连接，但一旦出示证书必须完整有效且已映射）。实现只使用 Go 的 `RequireAndVerifyClientCert` 与 `VerifyClientCertIfGiven`，不使用 `RequestClientCert`/`RequireAnyClientCert` 这类不验证证书的模式；可选模式下出示错误 CA、过期或未映射证书会直接握手失败，不会降级为已认证或匿名。
+- **独立的客户端信任 CA**：`server.tls_client_ca_files` 是独立的客户端信任锚 PEM 文件列表（最多 8 个），与 `server.tls_ca_file` 服务器证书链完全分开：配置路径不能共用，加载后证书 DER 也不能与服务器证书链重叠（`ReloadTLS` 更换服务器证书时同样复验）。每个信任锚必须是当前有效、具备证书签发能力的 CA 证书；普通叶证书、包含私钥块的文件、重复 CA 与过期 CA 都会被拒绝。客户端证书链只在这组 CA 下验证，不使用服务器 TLS 字段或系统根证书；客户端需要随证书发送完整的中间证书链（由标准库验证），证书有效期与客户端认证用途在握手时校验。信任锚在运行中到期后，新握手会因链验证失败而默认拒绝，直到轮换 CA 并重启。
+- **显式身份映射**：`server.tls_client_identities` 是“客户端叶证书 DNS SAN -> 可信服务身份”的显式映射（最多 32 条，YAML 为 `dns_name`/`service` 对象列表）。客户端证书必须包含某个已映射的 DNS 名称（精确匹配，不区分大小写，忽略结尾根域点），并且服务身份必须是稳定的小写 ASCII 标识符。仅有受信任 CA 签发不足以获准接入：未映射证书即使链有效也握手失败；同一证书命中多个不同服务身份时按歧义拒绝。映射结果通过 `login.ClientServiceIdentityFromContext` 以只读方式提供给 Handler，它不携带 root、系统资格或任何业务权限，不能替代服务层授权。
+- **撤销、信任更新与已建立连接**：第一版不实现 OCSP/CRL 在线撤销。撤销一条客户端身份的方法是移除或修改 `server.tls_client_identities` 映射，轮换信任 CA 则是替换 `server.tls_client_ca_files`；两者都必须重启进程才能生效，`Server.ReloadTLS` 只重载服务器证书，不重载客户端信任配置。已建立的 TLS 连接在握手时完成一次客户端证书验证，运行期不会按请求重新校验；进程重启会关闭已有连接。TLS 1.3 会话恢复连接也不会重新发送客户端证书，但服务端会对会话中保存的已验证证书重新做链有效期与身份映射检查。
+- **脱敏状态诊断**：`Server.TLSStatus().ClientAuth` 返回模式、客户端信任 CA 的主题/有效期/SHA-256 指纹/是否自签，以及生效中的身份映射；`Config.Diagnostic()` 输出 mTLS 模式、信任 CA 路径与映射，秘密仍只显示 `[REDACTED]`/`[UNSET]`。两种输出都不包含私钥、PFX 密码或证书内容。
+- **嵌入式模式边界**：mTLS 只由 `login.NewServer` 的 TLS 监听建立；直接使用 `login.NewHTTPHandler` 并由宿主自行终止 TLS 时，宿主需要提供等价边界，本库不会凭空建立客户端身份。
+- **已验证（Windows amd64，真实 TLS 握手）**：`required` 模式下正确映射证书可完成 HTTPS 请求并在 Handler 中读到映射身份；无证书、错误 CA、过期证书、用途错误（仅服务器认证）、未映射身份、多身份歧义证书全部握手失败；`optional` 模式下无证书匿名成功、映射证书成功、错误 CA/过期/未映射证书失败（不降级）；`disabled` 模式不请求也不接收客户端证书；服务器证书 `ReloadTLS` 轮换后客户端认证策略与身份映射保持不变，运行中直接改写客户端信任 CA 文件不生效；移除身份映射后重启（新实例）旧证书被拒绝；端口在 `Close` 后释放、已建立连接被关闭；YAML 配置加载到 mTLS 监听端到端通过；内部 `internal/tlscert` 用真实回环 TLS 覆盖 TLS 1.2/1.3 全部分支，并验证 TLS 1.3 会话恢复仍执行身份映射复查。基础设施阶段验收记录见 [docs/acceptance/基础设施阶段验收记录.md](docs/acceptance/基础设施阶段验收记录.md)。
+- **尚未接入/未验证**：`cmd/login-server` 仍未装配 `NewServer`；客户端信任热重载、OCSP/CRL、供客户端证书身份使用的服务层授权映射、按 SNI 区分客户端信任 CA、真实企业 CA/ACME 流程、邮件/Webhook 到期通知、TLS 会话票据策略、HTTP/2 专项、race detector、真实反向代理/LB 联调与非 Windows 运行（只编译）仍未实现。
 
 ## 本地检查（Windows）
 
@@ -342,11 +359,12 @@ go run .\cmd\login-server --help
 | internal/netpolicy/ | 监听地址、允许主机与 HTTP Host 的严格解析（内部包） | 是 |
 | internal/proxytrust/ | Forwarded/X-Forwarded-* 可信代理链解析（内部包） | 是 |
 | internal/listener/ | 多地址 HTTP 监听、失败整体回滚与关停释放端口（内部包） | 是 |
-| internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态（内部包） | 是 |
+| internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
 | docs/requirements/ | 功能清单和错误码手册 | 可以 |
 | docs/database/ | 数据库基线说明、表清单与检查记录 | 可以 |
+| docs/acceptance/ | 基础设施阶段（步骤 01～17）验收记录与下一阶段前置条件 | 可以 |
 | database/login.db | 已创建的空业务 SQLite 数据库 | 否，运行数据应本地保存 |
 | database/0001_design_baseline.sql | 建库结构，需在开发阶段审查 | 可以 |
 | tools/ | 可选的 Python 建库、只读检查工具 | 可以 |
@@ -357,9 +375,9 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～16 已完成；继续时按 .ai/ 中的顺序处理步骤 17，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～17 已完成；继续时按 .ai/ 中的顺序处理步骤 18（账户与权限阶段），每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
-5. 完成第 17 步后，提供 MEMORY.md 与必要代码状态，再生成下一部分和更新 AGENTS.md。
+5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 
 `database/login.db` 是启动包提供的设计基线，仅用于步骤 01/06/07 审查；Go 正式迁移已在 SQLite 存储层实现，但尚未对 `database/login.db` 执行，测试与后续初始化应使用独立数据库文件。该库没有 root 初始密码，管理员将在步骤 28 的受控初始化流程创建。
 

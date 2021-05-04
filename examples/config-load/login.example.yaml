@@ -33,6 +33,16 @@ server:
   # tls_pfx_file: "C:/secure/login/server.pfx"
   # 到期告警窗口（天），默认 30；只影响状态报告，不发送通知。
   tls_expiry_warning_days: 30
+  # 可选的客户端证书双向认证（mTLS），默认 disabled。启用后必须同时配置本地 TLS
+  # 证书、独立的客户端信任 CA 与显式身份映射；客户端信任 CA 与服务器证书链分开。
+  # required 要求所有连接出示有效且已映射的客户端证书；optional 允许匿名连接，
+  # 但出示无效证书不会降级。信任更新和撤销需要重启，不提供 OCSP/CRL。
+  # tls_client_auth: "required"
+  # tls_client_ca_files:
+  #   - "C:/secure/login/client-ca.pem"
+  # tls_client_identities:
+  #   - dns_name: "backup.internal"
+  #     service: "backup-agent"
   shutdown_timeout_seconds: 10
 logging:
   level: info

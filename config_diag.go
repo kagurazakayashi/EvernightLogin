@@ -51,6 +51,12 @@ func (c Config) fieldValueString(field string) string {
 		return strconv.Quote(c.Server.TLSPFXFile)
 	case "server.tls_expiry_warning_days":
 		return strconv.Itoa(c.Server.TLSExpiryWarningDays)
+	case "server.tls_client_auth":
+		return strconv.Quote(string(normalizeTLSClientAuthMode(c.Server.TLSClientAuthMode)))
+	case "server.tls_client_ca_files":
+		return formatStringList(c.Server.TLSClientCAFiles)
+	case "server.tls_client_identities":
+		return formatTLSClientIdentities(c.Server.TLSClientIdentities)
 	case "server.shutdown_timeout_seconds":
 		return strconv.Itoa(c.Server.ShutdownTimeoutSeconds)
 	case "logging.level":
@@ -83,6 +89,25 @@ func formatStringList(values []string) string {
 			b.WriteString(", ")
 		}
 		b.WriteString(strconv.Quote(value))
+	}
+	b.WriteString("]")
+	return b.String()
+}
+
+// formatTLSClientIdentities 把客户端证书身份映射格式化为诊断文本。只输出公开的
+// DNS 名称与服务身份，不含任何证书或私钥内容。
+func formatTLSClientIdentities(values []TLSClientIdentity) string {
+	var b strings.Builder
+	b.WriteString("[")
+	for index, identity := range values {
+		if index > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("{")
+		b.WriteString(strconv.Quote(identity.DNSName))
+		b.WriteString(" -> ")
+		b.WriteString(strconv.Quote(identity.Service))
+		b.WriteString("}")
 	}
 	b.WriteString("]")
 	return b.String()
@@ -141,6 +166,12 @@ func DiffReload(previous, next Config) ReloadDiff {
 	record("server.tls_pfx_file", previous.Server.TLSPFXFile != next.Server.TLSPFXFile)
 	record("server.tls_expiry_warning_days",
 		previous.Server.TLSExpiryWarningDays != next.Server.TLSExpiryWarningDays)
+	record("server.tls_client_auth",
+		normalizeTLSClientAuthMode(previous.Server.TLSClientAuthMode) !=
+			normalizeTLSClientAuthMode(next.Server.TLSClientAuthMode))
+	record("server.tls_client_ca_files", !slices.Equal(previous.Server.TLSClientCAFiles, next.Server.TLSClientCAFiles))
+	record("server.tls_client_identities",
+		!slices.Equal(previous.Server.TLSClientIdentities, next.Server.TLSClientIdentities))
 	record("server.shutdown_timeout_seconds",
 		previous.Server.ShutdownTimeoutSeconds != next.Server.ShutdownTimeoutSeconds)
 	record("logging.level", previous.Logging.Level != next.Logging.Level)

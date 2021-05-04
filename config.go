@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -25,7 +26,65 @@ const (
 	MaxServerTLSCertificates = 8
 	// DefaultServerTLSExpiryWarningDays 是证书到期提前告警的默认天数。
 	DefaultServerTLSExpiryWarningDays = 30
+	// MaxServerTLSClientCAFiles 是客户端信任 CA 文件数量上限。
+	MaxServerTLSClientCAFiles = 8
+	// MaxServerTLSClientIdentities 是客户端证书身份映射条目数量上限。
+	MaxServerTLSClientIdentities = 32
+	// MaxServerTLSClientServiceIdentityBytes 是可信服务身份名称长度上限。
+	MaxServerTLSClientServiceIdentityBytes = 64
 )
+
+// TLSClientAuthMode 是本地 TLS 监听的客户端证书认证模式。
+//
+// 零值与 TLSClientAuthDisabled 都表示关闭（安全默认）；启用后必须配置独立的
+// 客户端信任 CA 和显式身份映射，且客户端信任 CA 与服务器证书链必须分开。
+type TLSClientAuthMode string
+
+const (
+	// TLSClientAuthDisabled 表示不请求客户端证书，也不建立服务身份（默认值）。
+	TLSClientAuthDisabled TLSClientAuthMode = "disabled"
+	// TLSClientAuthRequired 表示必须出示并验证客户端证书，且证书身份必须命中
+	// 显式映射，否则握手失败。
+	TLSClientAuthRequired TLSClientAuthMode = "required"
+	// TLSClientAuthOptional 表示允许匿名连接；但一旦客户端出示证书，该证书必须
+	// 通过信任链、用途、有效期与身份映射校验，出示无效证书不会降级为匿名。
+	TLSClientAuthOptional TLSClientAuthMode = "optional"
+)
+
+// Valid 报告客户端证书认证模式是否已定义。空字符串等价于 disabled。
+func (m TLSClientAuthMode) Valid() bool {
+	switch m {
+	case "", TLSClientAuthDisabled, TLSClientAuthRequired, TLSClientAuthOptional:
+		return true
+	default:
+		return false
+	}
+}
+
+// Enabled 报告该模式是否需要请求并验证客户端证书。
+func (m TLSClientAuthMode) Enabled() bool {
+	return m == TLSClientAuthRequired || m == TLSClientAuthOptional
+}
+
+// normalizeTLSClientAuthMode 把空字符串归一为 disabled，便于比较与诊断。
+func normalizeTLSClientAuthMode(mode TLSClientAuthMode) TLSClientAuthMode {
+	if mode == "" {
+		return TLSClientAuthDisabled
+	}
+	return mode
+}
+
+// TLSClientIdentity 是客户端证书身份到可信服务身份的显式映射。客户端证书只
+// 由受信任 CA 签发不足以获准接入：叶证书必须包含这里配置的某个 DNS SAN 才能
+// 建立 TLS 连接。映射不代表 root、系统资格或任何业务权限。
+type TLSClientIdentity struct {
+	// DNSName 是客户端叶证书必须包含的 DNS SAN（精确匹配，不区分大小写、
+	// 不接受 IP、通配符或端口）。
+	DNSName string
+	// Service 是映射到的可信服务身份名称：1～64 字节 ASCII 小写标识符，只允许
+	// a-z、0-9、点、下划线与连字符，首尾必须是字母或数字。
+	Service string
+}
 
 // Config 是 login 的完整有效配置快照。
 //
@@ -101,6 +160,22 @@ type ServerConfig struct {
 	// 默认值 30（与 NewServer 的行为一致，显式 0 不会被当作“无告警”）。只影响
 	// TLSStatus 的 ExpiringSoon 判断，不发送通知、不自动续期；修改后需要重启。
 	TLSExpiryWarningDays int
+	// TLSClientAuthMode 是客户端证书认证模式：disabled（默认）、required 或
+	// optional。启用后必须同时配置本地 TLS 证书、TLSClientCAFiles 与
+	// TLSClientIdentities。可选模式只允许“没有证书”的匿名连接；客户端一旦出示
+	// 证书，就必须通过完整校验与身份映射，绝不会因证书无效而降级为匿名。
+	// 修改后需要重启进程；Server.ReloadTLS 不重载客户端信任配置。
+	TLSClientAuthMode TLSClientAuthMode
+	// TLSClientCAFiles 是客户端信任 CA 的 PEM 文件列表，与服务器证书链完全分开
+	// （配置文件不同、加载后证书不能重叠）。CA 必须是具备签发能力的证书且处于
+	// 有效期内；文件数量最多 MaxServerTLSClientCAFiles 个。客户端证书链只信任
+	// 这里的 CA，不使用服务器 TLS 字段或系统根证书。修改后需要重启进程。
+	TLSClientCAFiles []string
+	// TLSClientIdentities 是客户端证书身份到可信服务身份的显式映射表。客户端
+	// 叶证书必须包含某个映射的 DNS SAN 才能建立连接；仅有受信任 CA 签发的证书
+	// 不等于获准接入，也不因此获得 root 或全部业务权限。最多
+	// MaxServerTLSClientIdentities 条。修改后需要重启进程。
+	TLSClientIdentities []TLSClientIdentity
 	// ShutdownTimeoutSeconds 是安全关闭的墙钟上限，单位秒，默认 10。
 	// 该值在关闭流程读取，因此可以热更新。
 	ShutdownTimeoutSeconds int
@@ -263,6 +338,9 @@ const (
 	envServerTLSCAFile       = EnvVarPrefix + "SERVER_TLS_CA_FILE"
 	envServerTLSPFXFile      = EnvVarPrefix + "SERVER_TLS_PFX_FILE"
 	envServerTLSExpiryDays   = EnvVarPrefix + "SERVER_TLS_EXPIRY_WARNING_DAYS"
+	envServerTLSClientAuth   = EnvVarPrefix + "SERVER_TLS_CLIENT_AUTH"
+	envServerTLSClientCA     = EnvVarPrefix + "SERVER_TLS_CLIENT_CA_FILES"
+	envServerTLSClientMaps   = EnvVarPrefix + "SERVER_TLS_CLIENT_IDENTITIES"
 	envServerShutdownTimeout = EnvVarPrefix + "SERVER_SHUTDOWN_TIMEOUT_SECONDS"
 	envLoggingLevel          = EnvVarPrefix + "LOGGING_LEVEL"
 	envLoggingFormat         = EnvVarPrefix + "LOGGING_FORMAT"
@@ -289,6 +367,9 @@ var configFields = []FieldInfo{
 	{Field: "server.tls_ca_file", Env: envServerTLSCAFile, Class: ReloadRestartRequired},
 	{Field: "server.tls_pfx_file", Env: envServerTLSPFXFile, Class: ReloadRestartRequired},
 	{Field: "server.tls_expiry_warning_days", Env: envServerTLSExpiryDays, Class: ReloadRestartRequired},
+	{Field: "server.tls_client_auth", Env: envServerTLSClientAuth, Class: ReloadRestartRequired},
+	{Field: "server.tls_client_ca_files", Env: envServerTLSClientCA, Class: ReloadRestartRequired},
+	{Field: "server.tls_client_identities", Env: envServerTLSClientMaps, Class: ReloadRestartRequired},
 	{Field: "server.shutdown_timeout_seconds", Env: envServerShutdownTimeout, Class: ReloadHotReloadable},
 	{Field: "logging.level", Env: envLoggingLevel, Class: ReloadHotReloadable},
 	{Field: "logging.format", Env: envLoggingFormat, Class: ReloadHotReloadable},
@@ -326,6 +407,7 @@ func Default() Config {
 			ListenAddr:             "127.0.0.1:8080",
 			PublicBaseURL:          "",
 			TLSExpiryWarningDays:   DefaultServerTLSExpiryWarningDays,
+			TLSClientAuthMode:      TLSClientAuthDisabled,
 			ShutdownTimeoutSeconds: 10,
 		},
 		Logging: LoggingConfig{
@@ -596,6 +678,92 @@ func tlsFileListProblem(label string, values []string, max int) string {
 	return ""
 }
 
+// tlsClientIdentityDNSName 规范化并校验身份映射中的客户端证书 DNS 名称：必须是
+// 合法主机名，不接受 IP、通配符或端口。返回规范名称与非空错误说明。
+func tlsClientIdentityDNSName(raw string) (string, string) {
+	parsed, err := netpolicy.ParseRequestHost(strings.TrimSpace(raw))
+	if err != nil || parsed.IsIP() || parsed.Port() != 0 {
+		return "", "客户端证书身份必须使用合法的 DNS 主机名"
+	}
+	return parsed.Host(), ""
+}
+
+// tlsClientServiceNameProblem 校验可信服务身份名称：1～64 字节 ASCII 小写标识符，
+// 只允许 a-z、0-9、点、下划线与连字符，首尾必须是字母或数字。
+func tlsClientServiceNameProblem(name string) string {
+	if name == "" {
+		return "可信服务身份名称不能为空"
+	}
+	if len(name) > MaxServerTLSClientServiceIdentityBytes {
+		return fmt.Sprintf("可信服务身份名称不能超过 %d 字节", MaxServerTLSClientServiceIdentityBytes)
+	}
+	for index := 0; index < len(name); index++ {
+		character := name[index]
+		switch {
+		case character >= 'a' && character <= 'z':
+		case character >= '0' && character <= '9':
+		case character == '.', character == '_', character == '-':
+		default:
+			return "可信服务身份名称只能包含小写 ASCII 字母、数字、点、下划线与连字符"
+		}
+	}
+	isAlphaNumeric := func(character byte) bool {
+		return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9')
+	}
+	if !isAlphaNumeric(name[0]) || !isAlphaNumeric(name[len(name)-1]) {
+		return "可信服务身份名称必须以字母或数字开头和结尾"
+	}
+	return ""
+}
+
+// tlsClientIdentitiesProblem 校验客户端证书身份映射列表：数量上限、DNS 名称与
+// 服务身份格式、同一 DNS 名称不能映射到多个服务身份。
+func tlsClientIdentitiesProblem(values []TLSClientIdentity) string {
+	if len(values) > MaxServerTLSClientIdentities {
+		return fmt.Sprintf("客户端证书身份映射不能超过 %d 条", MaxServerTLSClientIdentities)
+	}
+	seen := make(map[string]string, len(values))
+	for index, identity := range values {
+		dnsName, problem := tlsClientIdentityDNSName(identity.DNSName)
+		if problem != "" {
+			return fmt.Sprintf("客户端证书身份映射第 %d 项无效：%s", index+1, problem)
+		}
+		service := strings.TrimSpace(identity.Service)
+		if problem := tlsClientServiceNameProblem(service); problem != "" {
+			return fmt.Sprintf("客户端证书身份映射第 %d 项无效：%s", index+1, problem)
+		}
+		if _, duplicated := seen[dnsName]; duplicated {
+			return fmt.Sprintf("客户端证书身份映射第 %d 项重复：DNS 名称 %q 已被映射", index+1, dnsName)
+		}
+		seen[dnsName] = service
+	}
+	return ""
+}
+
+// tlsClientCASharedServerPath 检查客户端信任 CA 文件是否与服务器证书材料使用
+// 同一路径。加载证书时还会按证书内容再做一次重叠检查；这里提前按配置路径拒绝，
+// 让“客户端信任与服务器证书链分开”在配置加载阶段就暴露。
+func tlsClientCASharedServerPath(clientFiles []string, server ServerConfig) string {
+	serverPaths := make([]string, 0, len(server.TLSCertFiles)+len(server.TLSKeyFiles)+2)
+	serverPaths = append(serverPaths, server.TLSCertFiles...)
+	serverPaths = append(serverPaths, server.TLSKeyFiles...)
+	if server.TLSCAFile != "" {
+		serverPaths = append(serverPaths, server.TLSCAFile)
+	}
+	if server.TLSPFXFile != "" {
+		serverPaths = append(serverPaths, server.TLSPFXFile)
+	}
+	for _, clientFile := range clientFiles {
+		cleanedClient := filepath.Clean(clientFile)
+		for _, serverFile := range serverPaths {
+			if cleanedClient == filepath.Clean(serverFile) {
+				return fmt.Sprintf("客户端信任 CA 文件不能与服务器证书材料共用同一路径")
+			}
+		}
+	}
+	return ""
+}
+
 // validateTLSServer 校验本地 TLS 配置的形状与组合。它不读取证书文件，文件内容、
 // 私钥匹配与证书链由 NewServer 调用 TLS 加载器时校验。
 func validateTLSServer(c Config) ConfigErrors {
@@ -645,6 +813,48 @@ func validateTLSServer(c Config) ConfigErrors {
 			if err != nil || parsed.Scheme != "https" {
 				add(ConfigErrorConflict, "server.public_base_url", "启用本地 TLS 时公开地址必须使用 https")
 			}
+		}
+	}
+
+	// 客户端证书认证（mTLS）：默认关闭；关闭时不接受任何客户端信任材料，启用时
+	// 必须具备本地 TLS、独立客户端信任 CA 与显式身份映射，且信任 CA 不与服务器
+	// 证书链共用路径。仅有受信任 CA 签发的证书不等于获准接入。
+	clientAuthMode := normalizeTLSClientAuthMode(c.Server.TLSClientAuthMode)
+	clientAuthValid := c.Server.TLSClientAuthMode.Valid()
+	if !clientAuthValid {
+		add(ConfigErrorValue, "server.tls_client_auth",
+			"客户端证书认证模式必须是 disabled、required 或 optional")
+	}
+	if problem := tlsFileListProblem("客户端信任 CA 文件", c.Server.TLSClientCAFiles, MaxServerTLSClientCAFiles); problem != "" {
+		add(ConfigErrorValue, "server.tls_client_ca_files", problem)
+	}
+	if problem := tlsClientIdentitiesProblem(c.Server.TLSClientIdentities); problem != "" {
+		add(ConfigErrorValue, "server.tls_client_identities", problem)
+	}
+	if clientAuthValid && clientAuthMode.Enabled() {
+		if !c.Server.TLSEnabled() {
+			add(ConfigErrorConflict, "server.tls_client_auth",
+				"启用客户端证书认证必须同时配置本地 TLS 证书")
+		}
+		if len(c.Server.TLSClientCAFiles) == 0 {
+			add(ConfigErrorConflict, "server.tls_client_ca_files",
+				"启用客户端证书认证时必须配置客户端信任 CA 文件")
+		}
+		if len(c.Server.TLSClientIdentities) == 0 {
+			add(ConfigErrorConflict, "server.tls_client_identities",
+				"启用客户端证书认证时必须配置显式身份映射")
+		}
+		if problem := tlsClientCASharedServerPath(c.Server.TLSClientCAFiles, c.Server); problem != "" {
+			add(ConfigErrorConflict, "server.tls_client_ca_files", problem)
+		}
+	} else if clientAuthValid {
+		if len(c.Server.TLSClientCAFiles) > 0 {
+			add(ConfigErrorConflict, "server.tls_client_ca_files",
+				"未启用客户端证书认证时不能配置客户端信任 CA")
+		}
+		if len(c.Server.TLSClientIdentities) > 0 {
+			add(ConfigErrorConflict, "server.tls_client_identities",
+				"未启用客户端证书认证时不能配置客户端证书身份映射")
 		}
 	}
 	return errs

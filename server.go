@@ -48,8 +48,13 @@ type ServerOptions struct {
 //   - Close 在调用方期限与 Config.Server.ShutdownTimeoutSeconds 的较小值内优雅
 //     关闭，必要时强制关闭连接，并释放全部监听端口。
 //   - 配置了 server.tls_cert_files/tls_key_files 或 server.tls_pfx_file 时所有
-//     监听地址提供 HTTPS 单向认证；ReloadTLS 在完整校验后原子替换证书，失败保留
+//     监听地址提供 HTTPS；ReloadTLS 在完整校验后原子替换服务器证书，失败保留
 //     旧证书；TLSStatus 提供到期状态（不发送通知、不自动续期）。
+//   - 配置了 server.tls_client_auth（required/optional）时同时要求客户端证书：
+//     证书必须链到独立的客户端信任 CA、处于有效期、具备客户端认证用途，并且
+//     叶证书 DNS 名称命中显式身份映射；仅有受信任 CA 签发不足以获准接入。可选
+//     模式允许匿名连接，但出示无效证书会直接失败，不会降级为匿名。客户端信任
+//     与身份映射只在进程启动时加载；修改它们需要重启，ReloadTLS 不重载。
 //
 // Server 不打开数据库、不创建 Handler、不启动业务协程；外部公开地址、未来的
 // OIDC Issuer 与 WebAuthn RP ID 都必须来自各自独立的显式配置，绝不能由请求
@@ -75,6 +80,30 @@ type TLSCertificateStatus struct {
 	SelfSigned bool
 }
 
+// TLSClientTrustAnchor 是单个客户端信任 CA 的脱敏状态（公共证书信息，不含私钥）。
+type TLSClientTrustAnchor struct {
+	// Subject 是证书主题的可读文本。
+	Subject string
+	// FingerprintSHA256 是证书 DER 的 SHA-256 指纹（小写十六进制）。
+	FingerprintSHA256 string
+	// NotBefore/NotAfter 是信任 CA 的有效期边界。
+	NotBefore time.Time
+	NotAfter  time.Time
+	// SelfSigned 表示证书主题与签发者相同。
+	SelfSigned bool
+}
+
+// TLSClientAuthStatus 是客户端证书认证的只读状态，用于诊断运行中的 mTLS 配置。
+// 它只包含公开信息：模式、信任 CA 的公共证书摘要与身份映射，不含私钥或密码。
+type TLSClientAuthStatus struct {
+	// Mode 是归一化后的客户端证书认证模式；未启用时为 disabled。
+	Mode TLSClientAuthMode
+	// TrustAnchors 是已加载的客户端信任 CA。
+	TrustAnchors []TLSClientTrustAnchor
+	// Identities 是生效中的“证书 DNS 名称 -> 可信服务身份”映射。
+	Identities []TLSClientIdentity
+}
+
 // TLSStatus 是本地 TLS 证书的只读状态，用于诊断、到期监控与未来调度/通知接入。
 // 本步不发送到期通知，也不实现证书自动续期；调用方可按 ExpiringSoon/Expired
 // 决定是否告警或触发 ReloadTLS。
@@ -95,6 +124,9 @@ type TLSStatus struct {
 	LastReloadAt time.Time
 	// LastReloadFailed 表示最近一次重载是否失败。
 	LastReloadFailed bool
+	// ClientAuth 是客户端证书认证状态；未启用 mTLS 时 Mode 为 disabled。
+	// 客户端信任配置不随 ReloadTLS 变化，撤销与信任更新需要重启进程。
+	ClientAuth TLSClientAuthStatus
 }
 
 // 编译期确认 Server 可以作为 Instance 管理的后台组件。
@@ -168,7 +200,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if tlsEnabled {
 		manager, tlsErr := newTLSManager(options.Config, options.Logger)
 		if tlsErr != nil {
-			return nil, NewAppError(CodeConfigInvalid, "TLS 证书配置无效", WithCause(tlsErr))
+			return nil, NewAppError(CodeConfigInvalid, "TLS 证书或客户端证书信任配置无效", WithCause(tlsErr))
 		}
 		if tlsErr := checkTLSCertificateCoverage(manager, options.Config.Server); tlsErr != nil {
 			return nil, NewAppError(CodeConfigInvalid, "TLS 证书未覆盖配置的公开主机", WithCause(tlsErr))
@@ -206,6 +238,9 @@ func NewServer(options ServerOptions) (*Server, error) {
 		ValidateRequestID: ValidateRequestID,
 		Logger:            options.Logger,
 	}
+	if tlsManager != nil {
+		boundaryOptions.ClientServiceIdentity = tlsManager.ClientServiceIdentity
+	}
 	if publicBaseURL != "" {
 		if parsed, parseErr := url.Parse(publicBaseURL); parseErr == nil {
 			// 可信代理声明的协议必须与显式公开地址一致；本地 TLS 也要求 https。
@@ -234,11 +269,30 @@ func NewServer(options ServerOptions) (*Server, error) {
 }
 
 // newTLSManager 从有效配置构造 TLS 证书管理器。到期告警天数 0 表示使用默认值。
-// PFX 密码来自配置秘密，只在内存中传给加载器，不写入日志或错误。
+// PFX 密码来自配置秘密，只在内存中传给加载器，不写入日志或错误。客户端证书
+// 认证所需的信任 CA 与身份映射一并传入；它们的客户端信任配置在进程生命周期内
+// 不变。
 func newTLSManager(cfg Config, logger *slog.Logger) (*tlscert.Manager, error) {
 	warningDays := cfg.Server.TLSExpiryWarningDays
 	if warningDays == 0 {
 		warningDays = DefaultServerTLSExpiryWarningDays
+	}
+	clientAuth := tlscert.ClientAuthOptions{
+		Mode:       tlscert.ClientAuthDisabled,
+		CAFiles:    append([]string(nil), cfg.Server.TLSClientCAFiles...),
+		Identities: make([]tlscert.ClientIdentity, 0, len(cfg.Server.TLSClientIdentities)),
+	}
+	switch normalizeTLSClientAuthMode(cfg.Server.TLSClientAuthMode) {
+	case TLSClientAuthRequired:
+		clientAuth.Mode = tlscert.ClientAuthRequired
+	case TLSClientAuthOptional:
+		clientAuth.Mode = tlscert.ClientAuthOptional
+	}
+	for _, identity := range cfg.Server.TLSClientIdentities {
+		clientAuth.Identities = append(clientAuth.Identities, tlscert.ClientIdentity{
+			DNSName: identity.DNSName,
+			Service: identity.Service,
+		})
 	}
 	return tlscert.New(tlscert.Options{
 		Source: tlscert.Source{
@@ -248,6 +302,7 @@ func newTLSManager(cfg Config, logger *slog.Logger) (*tlscert.Manager, error) {
 			PFXFile:     cfg.Server.TLSPFXFile,
 			PFXPassword: cfg.Secrets.TLSPFXPassword.Value(),
 		},
+		ClientAuth:    clientAuth,
 		ExpiryWarning: time.Duration(warningDays) * 24 * time.Hour,
 		Logger:        logger,
 	})
@@ -356,6 +411,29 @@ func (s *Server) TLSStatus() (TLSStatus, bool) {
 			SelfSigned:        certificate.SelfSigned,
 		}
 	}
+	result.ClientAuth = TLSClientAuthStatus{
+		Mode:         TLSClientAuthMode(status.ClientAuth.Mode),
+		TrustAnchors: make([]TLSClientTrustAnchor, len(status.ClientAuth.TrustAnchors)),
+		Identities:   make([]TLSClientIdentity, len(status.ClientAuth.Identities)),
+	}
+	if result.ClientAuth.Mode == "" {
+		result.ClientAuth.Mode = TLSClientAuthDisabled
+	}
+	for index, anchor := range status.ClientAuth.TrustAnchors {
+		result.ClientAuth.TrustAnchors[index] = TLSClientTrustAnchor{
+			Subject:           anchor.Subject,
+			FingerprintSHA256: anchor.FingerprintSHA256,
+			NotBefore:         anchor.NotBefore,
+			NotAfter:          anchor.NotAfter,
+			SelfSigned:        anchor.SelfSigned,
+		}
+	}
+	for index, identity := range status.ClientAuth.Identities {
+		result.ClientAuth.Identities[index] = TLSClientIdentity{
+			DNSName: identity.DNSName,
+			Service: identity.Service,
+		}
+	}
 	return result, true
 }
 
@@ -364,6 +442,10 @@ func (s *Server) TLSStatus() (TLSStatus, bool) {
 // HTTP 响应）。除证书材料校验外，它还会复验候选证书是否覆盖 public_base_url 与
 // allowed_hosts 中的主机名，与 NewServer 的启动检查一致，避免出现“重载成功但原
 // 主机无法握手”的半更新。它不会中断正在进行的 TLS 握手或 HTTPS 请求。
+//
+// 本方法只重载服务器证书材料：客户端信任 CA、客户端证书认证模式与身份映射保持
+// 启动时配置不变。撤销客户端身份、轮换客户端信任 CA 或改变 mTLS 策略必须更新
+// 配置并重启进程；重启会关闭已有连接，不提供在线 OCSP/CRL 撤销。
 func (s *Server) ReloadTLS(ctx context.Context) error {
 	if s == nil || s.tls == nil {
 		return NewAppError(CodeConfigInvalid, "未启用本地 TLS 证书",

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"crypto/x509"
 	"fmt"
 	"io"
 	"log/slog"
@@ -51,20 +52,25 @@ type BoundaryOptions struct {
 	NewRequestID func() string
 	// ValidateRequestID 校验外部请求编号；nil 时使用内部保守校验。
 	ValidateRequestID func(string) error
+	// ClientServiceIdentity 把已验证的 TLS 客户端叶证书映射为可信服务身份；nil
+	// 表示本边界不建立服务身份。只有独立 Server 在启用 mTLS 时注入该函数。
+	ClientServiceIdentity func(*x509.Certificate) (string, bool)
 	// Logger 是运行日志器；nil 时丢弃。
 	Logger *slog.Logger
 }
 
 // boundary 包装内层处理程序，先完成代理信任边界校验，再把经过验证的客户端
-// 地址与请求编号放入上下文。构造后只读，可并发使用。
+// 地址、请求编号与（启用 mTLS 时）可信服务身份放入上下文。构造后只读，可并发
+// 使用。
 type boundary struct {
-	next              http.Handler
-	hosts             netpolicy.HostSet
-	trusted           proxytrust.Trusted
-	expectedScheme    string
-	newRequestID      func() string
-	validateRequestID func(string) error
-	logger            *slog.Logger
+	next                  http.Handler
+	hosts                 netpolicy.HostSet
+	trusted               proxytrust.Trusted
+	expectedScheme        string
+	newRequestID          func() string
+	validateRequestID     func(string) error
+	clientServiceIdentity func(*x509.Certificate) (string, bool)
+	logger                *slog.Logger
 }
 
 // NewBoundary 构造代理边界。配置非法时返回错误，由公开包映射为 CONFIG_INVALID。
@@ -126,13 +132,14 @@ func NewBoundary(options BoundaryOptions) (http.Handler, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &boundary{
-		next:              options.Next,
-		hosts:             hosts,
-		trusted:           trusted,
-		expectedScheme:    expectedScheme,
-		newRequestID:      newRequestID,
-		validateRequestID: validateRequestID,
-		logger:            logger,
+		next:                  options.Next,
+		hosts:                 hosts,
+		trusted:               trusted,
+		expectedScheme:        expectedScheme,
+		newRequestID:          newRequestID,
+		validateRequestID:     validateRequestID,
+		clientServiceIdentity: options.ClientServiceIdentity,
+		logger:                logger,
 	}, nil
 }
 
@@ -196,6 +203,13 @@ func (b *boundary) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 	}
 	if info.ClientAddr.IsValid() {
 		ctx = WithClientIP(ctx, info.ClientAddr.String())
+	}
+	// mTLS 已由 TLS 层完成证书链、用途与身份映射校验；这里把已验证叶证书的
+	// 映射结果放进上下文，供业务层做授权判断（不携带任何权限）。
+	if b.clientServiceIdentity != nil && request.TLS != nil && len(request.TLS.PeerCertificates) > 0 {
+		if identity, ok := b.clientServiceIdentity(request.TLS.PeerCertificates[0]); ok {
+			ctx = WithClientServiceIdentity(ctx, identity)
+		}
 	}
 	cloned := request.Clone(ctx)
 	// 内层只看到经过允许列表校验的有效 Host（可信代理改写时是外部主机），避免

@@ -1,5 +1,5 @@
-// Package tlscert 实现服务器 TLS 单向认证所需的证书材料加载、严格校验、按 SNI
-// 选择证书与安全重载。
+// Package tlscert 实现服务器 TLS 证书材料加载、严格校验、按 SNI 选择证书、安全
+// 重载，以及可选的客户端证书双向认证（mTLS）。
 //
 // 设计约束：
 //   - 加载前完成全部校验（文件格式、私钥与证书匹配、证书链组织与签发关系、
@@ -13,9 +13,14 @@
 //     并告警，绝不出现半更新的 TLS 配置。
 //   - 协议与密码套件使用 Go 标准库当前安全默认：TLS 1.2 为最低版本，不设置
 //     自定义 CipherSuites/CurvePreferences，不自行组合算法。
+//   - 客户端证书认证默认关闭；启用后必须显式配置独立的客户端信任 CA 与“证书
+//     DNS 名称 -> 可信服务身份”映射，仅由受信任 CA 签发不足以获准接入（见
+//     clientauth.go）。客户端信任配置在进程启动时加载且不可热重载，信任更新与
+//     撤销需要重启进程。
 //
-// 本包不负责配置解析、文件权限策略之外的主机密钥保护实现、证书签发、WebAuthn
-// （RP ID）或客户端证书认证（步骤 17）；它也不发送到期通知，只提供到期状态。
+// 本包不负责配置解析、证书签发、WebAuthn（RP ID）或 OCSP/CRL 撤销检查；它也不
+// 发送到期通知，只提供到期状态。客户端证书撤销采用“更新显式映射或信任 CA 后
+// 重启”的第一版策略，不声称实现在线撤销。
 package tlscert
 
 import (
@@ -67,6 +72,9 @@ type Source struct {
 // Options 是构造证书管理器的依赖。
 type Options struct {
 	Source Source
+	// ClientAuth 是客户端证书双向认证配置；Mode 为空或 disabled 时不启用 mTLS。
+	// 启用后需要显式信任 CA 与身份映射，并且客户端信任 CA 与服务器证书链分开。
+	ClientAuth ClientAuthOptions
 	// ExpiryWarning 是到期提前告警窗口；0 使用 DefaultExpiryWarning。
 	ExpiryWarning time.Duration
 	// Logger 记录加载与重载结果；nil 时丢弃。日志不写入证书内容或私钥/密码。
@@ -108,15 +116,20 @@ type Status struct {
 	LastReloadAt time.Time
 	// LastReloadFailed 表示最近一次重载是否失败。
 	LastReloadFailed bool
+	// ClientAuth 是客户端证书认证的只读状态；未启用时 Mode 为 disabled、列表为空。
+	// 客户端信任配置不随 Reload 变化，信任更新与撤销需要重启进程。
+	ClientAuth ClientAuthStatus
 }
 
-// Manager 管理一组 TLS 证书身份与 SNI 选择规则，支持并发握手与安全重载。
+// Manager 管理一组 TLS 证书身份与 SNI 选择规则，支持并发握手与安全重载；启用
+// mTLS 时还持有不可变的客户端信任 CA 池与显式身份映射。
 type Manager struct {
 	options    Options
 	now        func() time.Time
 	logger     *slog.Logger
 	current    atomic.Pointer[snapshot]
 	tlsConfig  *tls.Config
+	clientAuth *clientTrust
 	reloadMu   sync.Mutex
 	statusMu   sync.Mutex
 	relFail    int
@@ -136,6 +149,10 @@ type snapshot struct {
 
 // New 校验来源并加载第一代证书，构造证书管理器。任何材料错误都返回错误，且
 // 不返回部分可用的管理器，避免带着无效证书启动 TLS 服务。
+//
+// 启用客户端证书认证时，这里同时完成客户端信任 CA 的加载与校验，并建立“证书
+// DNS 名称 -> 可信服务身份”的显式映射。客户端信任配置在管理器生命周期内不变；
+// 信任更新与撤销必须重启进程。
 func New(options Options) (*Manager, error) {
 	normalized, err := normalizeOptions(options)
 	if err != nil {
@@ -145,11 +162,16 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	clientAuth, err := loadClientTrust(normalized.ClientAuth, normalized.Now(), current.certificates)
+	if err != nil {
+		return nil, err
+	}
 	manager := &Manager{
-		options:   normalized,
-		now:       normalized.Now,
-		logger:    normalized.Logger,
-		tlsConfig: nil,
+		options:    normalized,
+		now:        normalized.Now,
+		logger:     normalized.Logger,
+		tlsConfig:  nil,
+		clientAuth: clientAuth,
 	}
 	manager.current.Store(current)
 	manager.tlsConfig = &tls.Config{
@@ -158,6 +180,7 @@ func New(options Options) (*Manager, error) {
 		MinVersion:     tls.VersionTLS12,
 		GetCertificate: manager.getCertificate,
 	}
+	applyClientAuth(manager.tlsConfig, clientAuth)
 	return manager, nil
 }
 
@@ -233,8 +256,10 @@ func normalizeOptions(options Options) (Options, error) {
 	return options, nil
 }
 
-// TLSConfig 返回可交给 http.Server 的 TLS 配置。返回的配置只包含 SNI 选择函数
-// 与安全最低版本；证书内容通过管理器快照读取，因此重载不需要替换 tls.Config。
+// TLSConfig 返回可交给 http.Server 的 TLS 配置。返回的配置只包含 SNI 选择函数、
+// 安全最低版本与（启用时的）客户端证书认证设置；证书内容通过管理器快照读取，
+// 因此重载不需要替换 tls.Config。客户端信任 CA 与身份映射不可热重载，重载只
+// 替换服务器证书，不改变客户端认证策略。
 func (m *Manager) TLSConfig() *tls.Config {
 	if m == nil {
 		return nil
@@ -250,6 +275,20 @@ func (m *Manager) Status() Status {
 	return m.statusOf(m.current.Load())
 }
 
+// ClientServiceIdentity 返回已通过 TLS 客户端证书验证的叶证书所映射的可信服务
+// 身份。
+//
+// 调用方必须传入 TLS 握手已经验证过的客户端叶证书（例如
+// http.Request.TLS.PeerCertificates[0]）；本方法只做映射查询，不重新验证信任链、
+// 有效期或用途，不能用于未经验证的证书。返回的字符串只是受限的服务身份名称，
+// 不携带 root 或业务权限，服务层仍必须独立授权。
+func (m *Manager) ClientServiceIdentity(certificate *x509.Certificate) (string, bool) {
+	if m == nil || m.clientAuth == nil || certificate == nil {
+		return "", false
+	}
+	return m.clientAuth.identityFor(certificate)
+}
+
 // statusOf 由指定快照生成状态快照；重载校验使用候选快照，不读取仍生效的旧快照。
 func (m *Manager) statusOf(current *snapshot) Status {
 	m.statusMu.Lock()
@@ -259,6 +298,7 @@ func (m *Manager) statusOf(current *snapshot) Status {
 		LastReloadFailed: m.lastFailed,
 	}
 	m.statusMu.Unlock()
+	status.ClientAuth = m.clientAuth.status()
 	if current == nil {
 		return status
 	}
@@ -286,6 +326,9 @@ func (m *Manager) statusOf(current *snapshot) Status {
 
 // Reload 重新读取并完整校验证书材料，成功后原子替换；失败保留旧快照、记录失败
 // 次数并返回错误，调用方应告警但不能因此停止服务。ctx 取消时不替换快照。
+//
+// Reload 只重载服务器证书材料；客户端信任 CA 与身份映射保持启动时的配置不变，
+// 客户端信任更新、撤销与策略变更必须重启进程。
 func (m *Manager) Reload(ctx context.Context) error {
 	return m.ReloadChecked(ctx, nil)
 }
@@ -293,6 +336,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 // ReloadChecked 与 Reload 相同，但在原子替换前调用 validate 校验候选证书状态。
 // validate 返回错误（例如候选证书不覆盖已配置的公开主机）时保留旧证书、记录
 // 失败次数并返回该错误，不会出现“重载成功但新证书无法服务原主机”的半更新。
+// 候选服务器证书与已加载的客户端信任 CA 重叠时同样拒绝，保持两者分开。
 func (m *Manager) ReloadChecked(ctx context.Context, validate func(Status) error) error {
 	if m == nil {
 		return errors.New("TLS 证书管理器为空")
@@ -313,6 +357,12 @@ func (m *Manager) ReloadChecked(ctx context.Context, validate func(Status) error
 	if err != nil {
 		m.recordReloadFailure("tls_reload_failed")
 		return err
+	}
+	if m.clientAuth != nil {
+		if err := validateClientCAAnchors(m.clientAuth.anchors, candidate.certificates); err != nil {
+			m.recordReloadFailure("tls_reload_rejected")
+			return err
+		}
 	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {

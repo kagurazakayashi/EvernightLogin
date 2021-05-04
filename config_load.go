@@ -62,6 +62,9 @@ type ServerOverrides struct {
 	TLSCAFile              *string
 	TLSPFXFile             *string
 	TLSExpiryWarningDays   *int
+	TLSClientAuthMode      *TLSClientAuthMode
+	TLSClientCAFiles       *[]string
+	TLSClientIdentities    *[]TLSClientIdentity
 	ShutdownTimeoutSeconds *int
 }
 
@@ -215,6 +218,9 @@ type configOverrides struct {
 	serverTLSCAFile       *string
 	serverTLSPFXFile      *string
 	serverTLSExpiryDays   *int
+	serverTLSClientAuth   *TLSClientAuthMode
+	serverTLSClientCA     *[]string
+	serverTLSClientMaps   *[]TLSClientIdentity
 	serverShutdownTimeout *int
 	loggingLevel          *LogLevel
 	loggingFormat         *LogFormat
@@ -266,6 +272,15 @@ func (ov *configOverrides) apply(cfg *Config) {
 	}
 	if ov.serverTLSExpiryDays != nil {
 		cfg.Server.TLSExpiryWarningDays = *ov.serverTLSExpiryDays
+	}
+	if ov.serverTLSClientAuth != nil {
+		cfg.Server.TLSClientAuthMode = *ov.serverTLSClientAuth
+	}
+	if ov.serverTLSClientCA != nil {
+		cfg.Server.TLSClientCAFiles = append([]string(nil), (*ov.serverTLSClientCA)...)
+	}
+	if ov.serverTLSClientMaps != nil {
+		cfg.Server.TLSClientIdentities = append([]TLSClientIdentity(nil), (*ov.serverTLSClientMaps)...)
 	}
 	if ov.serverShutdownTimeout != nil {
 		cfg.Server.ShutdownTimeoutSeconds = *ov.serverShutdownTimeout
@@ -321,19 +336,28 @@ type yamlConfig struct {
 }
 
 type yamlServer struct {
-	ListenAddr             *string   `yaml:"listen_addr"`
-	ExtraListenAddrs       *[]string `yaml:"extra_listen_addrs"`
-	PublicBaseURL          *string   `yaml:"public_base_url"`
-	PathPrefix             *string   `yaml:"path_prefix"`
-	AllowedHosts           *[]string `yaml:"allowed_hosts"`
-	TrustedProxies         *[]string `yaml:"trusted_proxies"`
-	TLSProxyMode           *bool     `yaml:"tls_terminating_proxy"`
-	TLSCertFiles           *[]string `yaml:"tls_cert_files"`
-	TLSKeyFiles            *[]string `yaml:"tls_key_files"`
-	TLSCAFile              *string   `yaml:"tls_ca_file"`
-	TLSPFXFile             *string   `yaml:"tls_pfx_file"`
-	TLSExpiryWarningDays   *int      `yaml:"tls_expiry_warning_days"`
-	ShutdownTimeoutSeconds *int      `yaml:"shutdown_timeout_seconds"`
+	ListenAddr             *string                  `yaml:"listen_addr"`
+	ExtraListenAddrs       *[]string                `yaml:"extra_listen_addrs"`
+	PublicBaseURL          *string                  `yaml:"public_base_url"`
+	PathPrefix             *string                  `yaml:"path_prefix"`
+	AllowedHosts           *[]string                `yaml:"allowed_hosts"`
+	TrustedProxies         *[]string                `yaml:"trusted_proxies"`
+	TLSProxyMode           *bool                    `yaml:"tls_terminating_proxy"`
+	TLSCertFiles           *[]string                `yaml:"tls_cert_files"`
+	TLSKeyFiles            *[]string                `yaml:"tls_key_files"`
+	TLSCAFile              *string                  `yaml:"tls_ca_file"`
+	TLSPFXFile             *string                  `yaml:"tls_pfx_file"`
+	TLSExpiryWarningDays   *int                     `yaml:"tls_expiry_warning_days"`
+	TLSClientAuthMode      *string                  `yaml:"tls_client_auth"`
+	TLSClientCAFiles       *[]string                `yaml:"tls_client_ca_files"`
+	TLSClientIdentities    *[]yamlTLSClientIdentity `yaml:"tls_client_identities"`
+	ShutdownTimeoutSeconds *int                     `yaml:"shutdown_timeout_seconds"`
+}
+
+// yamlTLSClientIdentity 是 YAML 中的一条客户端证书身份映射。两个字段都是必填。
+type yamlTLSClientIdentity struct {
+	DNSName *string `yaml:"dns_name"`
+	Service *string `yaml:"service"`
 }
 
 type yamlLogging struct {
@@ -382,6 +406,7 @@ var (
 			{name: "tls_ca_file", tag: "!!str"},
 			{name: "tls_pfx_file", tag: "!!str"},
 			{name: "tls_expiry_warning_days", tag: "!!int"},
+			{name: "tls_client_auth", tag: "!!str"},
 			{name: "shutdown_timeout_seconds", tag: "!!int"},
 		},
 		"logging": {
@@ -399,11 +424,23 @@ var (
 	// yamlSectionListFields 描述字符串列表字段；值是该列表元素允许的 YAML 标签。
 	yamlSectionListFields = map[string]map[string]string{
 		"server": {
-			"extra_listen_addrs": "!!str",
-			"allowed_hosts":      "!!str",
-			"trusted_proxies":    "!!str",
-			"tls_cert_files":     "!!str",
-			"tls_key_files":      "!!str",
+			"extra_listen_addrs":  "!!str",
+			"allowed_hosts":       "!!str",
+			"trusted_proxies":     "!!str",
+			"tls_cert_files":      "!!str",
+			"tls_key_files":       "!!str",
+			"tls_client_ca_files": "!!str",
+		},
+	}
+
+	// yamlSectionObjectListFields 描述“对象列表”字段；每个列表元素必须是映射，且
+	// 只能包含这里声明的字段，所有字段都是必填字符串。
+	yamlSectionObjectListFields = map[string]map[string][]yamlLeafSpec{
+		"server": {
+			"tls_client_identities": {
+				{name: "dns_name", tag: "!!str"},
+				{name: "service", tag: "!!str"},
+			},
 		},
 	}
 
@@ -493,14 +530,14 @@ func checkYAMLStructure(root *yaml.Node) ConfigErrors {
 			errs = append(errs, checkYAMLSecrets(value)...)
 			continue
 		}
-		errs = append(errs, checkYAMLMappedSection(value, name, specs, yamlSectionListFields[name])...)
+		errs = append(errs, checkYAMLMappedSection(value, name, specs, yamlSectionListFields[name], yamlSectionObjectListFields[name])...)
 	}
 	return errs
 }
 
-// checkYAMLMappedSection 检查普通配置段的字段名、重复键、标量类型与字符串列表
-// 类型。
-func checkYAMLMappedSection(section *yaml.Node, prefix string, specs []yamlLeafSpec, listSpecs map[string]string) ConfigErrors {
+// checkYAMLMappedSection 检查普通配置段的字段名、重复键、标量类型、字符串列表
+// 类型与对象列表类型。
+func checkYAMLMappedSection(section *yaml.Node, prefix string, specs []yamlLeafSpec, listSpecs map[string]string, objectListSpecs map[string][]yamlLeafSpec) ConfigErrors {
 	allowed := make(map[string]string, len(specs))
 	for _, spec := range specs {
 		allowed[spec.name] = spec.tag
@@ -545,6 +582,10 @@ func checkYAMLMappedSection(section *yaml.Node, prefix string, specs []yamlLeafS
 			}
 			continue
 		}
+		if itemSpecs, objectKnown := objectListSpecs[name]; objectKnown {
+			errs = append(errs, yamlObjectListProblem(value, fieldPath, itemSpecs)...)
+			continue
+		}
 		errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", fieldPath, key.Line,
 			"未定义的配置字段"))
 	}
@@ -566,6 +607,73 @@ func yamlStringListProblem(node *yaml.Node, itemTag string) *ConfigError {
 		}
 	}
 	return nil
+}
+
+// yamlObjectListProblem 检查对象列表字段：必须是列表，每个元素必须是只包含已声明
+// 字符串字段的映射，且所有声明的字段都必须出现。返回的错误逐项收集。
+func yamlObjectListProblem(node *yaml.Node, fieldPath string, itemSpecs []yamlLeafSpec) ConfigErrors {
+	if node.Kind == yaml.AliasNode {
+		return ConfigErrors{configErr(ConfigErrorType, "yaml", fieldPath, node.Line,
+			"不支持 YAML 别名或锚点")}
+	}
+	if node.Kind != yaml.SequenceNode {
+		return ConfigErrors{configErr(ConfigErrorType, "yaml", fieldPath, node.Line,
+			"字段值必须是对象列表")}
+	}
+	allowed := make(map[string]string, len(itemSpecs))
+	for _, spec := range itemSpecs {
+		allowed[spec.name] = spec.tag
+	}
+	var errs ConfigErrors
+	for index, item := range node.Content {
+		itemPath := fmt.Sprintf("%s[%d]", fieldPath, index)
+		if item.Kind == yaml.AliasNode {
+			errs = append(errs, configErr(ConfigErrorType, "yaml", itemPath, item.Line,
+				"不支持 YAML 别名或锚点"))
+			continue
+		}
+		if item.Kind != yaml.MappingNode {
+			errs = append(errs, configErr(ConfigErrorType, "yaml", itemPath, item.Line,
+				"列表元素必须是映射"))
+			continue
+		}
+		seen := make(map[string]int, len(itemSpecs))
+		for i := 0; i+1 < len(item.Content); i += 2 {
+			key := item.Content[i]
+			value := item.Content[i+1]
+			if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+				errs = append(errs, configErr(ConfigErrorType, "yaml", itemPath, key.Line,
+					"字段名必须是字符串"))
+				continue
+			}
+			name := key.Value
+			itemFieldPath := itemPath + "." + name
+			if firstLine, duplicated := seen[name]; duplicated {
+				errs = append(errs, configErr(ConfigErrorDuplicateKey, "yaml", itemFieldPath, key.Line,
+					fmt.Sprintf("重复字段，首次出现在第 %d 行", firstLine)))
+				continue
+			}
+			seen[name] = key.Line
+			tag, known := allowed[name]
+			if !known {
+				errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", itemFieldPath, key.Line,
+					"未定义的配置字段"))
+				continue
+			}
+			if problem := yamlLeafProblem(value, tag); problem != nil {
+				problem.Source = "yaml"
+				problem.Field = itemFieldPath
+				errs = append(errs, problem)
+			}
+		}
+		for _, spec := range itemSpecs {
+			if _, present := seen[spec.name]; !present {
+				errs = append(errs, configErr(ConfigErrorValue, "yaml", itemPath, item.Line,
+					"列表元素必须提供 "+spec.name+" 字段"))
+			}
+		}
+	}
+	return errs
 }
 
 // checkYAMLSecrets 检查 secrets 段：只允许 master_key，其值必须是仅含 env 或
@@ -689,6 +797,26 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.serverTLSCAFile = doc.Server.TLSCAFile
 		ov.serverTLSPFXFile = doc.Server.TLSPFXFile
 		ov.serverTLSExpiryDays = doc.Server.TLSExpiryWarningDays
+		if doc.Server.TLSClientAuthMode != nil {
+			mode := TLSClientAuthMode(*doc.Server.TLSClientAuthMode)
+			ov.serverTLSClientAuth = &mode
+		}
+		ov.serverTLSClientCA = doc.Server.TLSClientCAFiles
+		if doc.Server.TLSClientIdentities != nil {
+			identities := make([]TLSClientIdentity, 0, len(*doc.Server.TLSClientIdentities))
+			for _, raw := range *doc.Server.TLSClientIdentities {
+				// 结构检查已保证 dns_name 与 service 同时存在且为字符串；这里
+				// 仍做防御性判断，避免解码目标与结构检查口径变化时 panic。
+				if raw.DNSName == nil || raw.Service == nil {
+					continue
+				}
+				identities = append(identities, TLSClientIdentity{
+					DNSName: *raw.DNSName,
+					Service: *raw.Service,
+				})
+			}
+			ov.serverTLSClientMaps = &identities
+		}
 		ov.serverShutdownTimeout = doc.Server.ShutdownTimeoutSeconds
 	}
 	if doc.Logging != nil {
@@ -836,6 +964,31 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 			ov.serverTLSExpiryDays = &number
 		}
 	}
+	if value, ok := lookup(envServerTLSClientAuth); ok {
+		mode := TLSClientAuthMode(value)
+		ov.serverTLSClientAuth = &mode
+	}
+	if value, ok := lookup(envServerTLSClientCA); ok {
+		files, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_client_ca_files", 0, err.Error()))
+		} else {
+			ov.serverTLSClientCA = &files
+		}
+	}
+	if value, ok := lookup(envServerTLSClientMaps); ok {
+		items, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_client_identities", 0, err.Error()))
+		} else {
+			identities, parseErr := parseEnvTLSClientIdentities(items)
+			if parseErr != nil {
+				errs = append(errs, configErr(ConfigErrorValue, "env", "server.tls_client_identities", 0, parseErr.Error()))
+			} else {
+				ov.serverTLSClientMaps = &identities
+			}
+		}
+	}
 	if value, ok := lookup(envServerShutdownTimeout); ok {
 		number, err := parseEnvInt(value)
 		if err != nil {
@@ -919,6 +1072,9 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 		serverTLSCAFile:       options.Server.TLSCAFile,
 		serverTLSPFXFile:      options.Server.TLSPFXFile,
 		serverTLSExpiryDays:   options.Server.TLSExpiryWarningDays,
+		serverTLSClientAuth:   options.Server.TLSClientAuthMode,
+		serverTLSClientCA:     options.Server.TLSClientCAFiles,
+		serverTLSClientMaps:   options.Server.TLSClientIdentities,
 		serverShutdownTimeout: options.Server.ShutdownTimeoutSeconds,
 		secretPFXValue:        options.Secrets.TLSPFXPassword,
 		loggingLevel:          options.Logging.Level,
@@ -949,6 +1105,26 @@ func parseEnvList(value string) ([]string, error) {
 		items = append(items, trimmed)
 	}
 	return items, nil
+}
+
+// parseEnvTLSClientIdentities 解析客户端证书身份映射环境变量：逗号分隔的
+// “dns-name=service-identity” 条目；每项必须有且只有一个等号，两侧都不能为空。
+// DNS 名称与服务身份的完整校验由 validateOverrides 统一完成。
+func parseEnvTLSClientIdentities(items []string) ([]TLSClientIdentity, error) {
+	identities := make([]TLSClientIdentity, 0, len(items))
+	for index, item := range items {
+		if strings.Count(item, "=") != 1 {
+			return nil, fmt.Errorf("第 %d 项必须使用 dns-name=service-identity 形式", index+1)
+		}
+		parts := strings.SplitN(item, "=", 2)
+		dnsName := strings.TrimSpace(parts[0])
+		service := strings.TrimSpace(parts[1])
+		if dnsName == "" || service == "" {
+			return nil, fmt.Errorf("第 %d 项必须同时提供 DNS 名称与服务身份", index+1)
+		}
+		identities = append(identities, TLSClientIdentity{DNSName: dnsName, Service: service})
+	}
+	return identities, nil
 }
 
 // parseEnvBool 只接受小写 true/false，避免 1/0、yes/no 等平台差异。
@@ -1036,6 +1212,20 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 	if ov.serverTLSExpiryDays != nil && (*ov.serverTLSExpiryDays < 0 || *ov.serverTLSExpiryDays > 365) {
 		add(ConfigErrorRange, "server.tls_expiry_warning_days",
 			"证书到期告警天数必须是 0～365 的整数；0 表示默认 30")
+	}
+	if ov.serverTLSClientAuth != nil && !ov.serverTLSClientAuth.Valid() {
+		add(ConfigErrorValue, "server.tls_client_auth",
+			"客户端证书认证模式必须是 disabled、required 或 optional")
+	}
+	if ov.serverTLSClientCA != nil {
+		if problem := tlsFileListProblem("客户端信任 CA 文件", *ov.serverTLSClientCA, MaxServerTLSClientCAFiles); problem != "" {
+			add(ConfigErrorValue, "server.tls_client_ca_files", problem)
+		}
+	}
+	if ov.serverTLSClientMaps != nil {
+		if problem := tlsClientIdentitiesProblem(*ov.serverTLSClientMaps); problem != "" {
+			add(ConfigErrorValue, "server.tls_client_identities", problem)
+		}
 	}
 	if ov.serverTLSProxyMode != nil && *ov.serverTLSProxyMode && ov.serverTrustedProxies != nil &&
 		len(*ov.serverTrustedProxies) == 0 {
