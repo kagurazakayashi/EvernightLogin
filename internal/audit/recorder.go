@@ -222,6 +222,10 @@ type CriticalRequest struct {
 	FailureErrorCode string
 	// FailureReasonCode 是业务失败时记录的受限内部原因码（可选）。
 	FailureReasonCode string
+	// FailureErrorCodeFor 可选：按实际变更错误动态决定失败事件的对外错误码，
+	// 非空时优先于 FailureErrorCode。它应只返回已登记的大写错误码；非法值会
+	// 使失败审计准备失败并触发告警，但不会影响业务错误本身的返回。
+	FailureErrorCodeFor func(err error) string
 }
 
 // Change 是关键变更回调。它在 Store 提供的事务中执行自己的参数化 SQL；返回
@@ -257,6 +261,8 @@ func (r *Recorder) ExecuteCritical(ctx context.Context, request CriticalRequest,
 	failureSpec.ErrorCode = request.FailureErrorCode
 	failureSpec.ReasonCode = request.FailureReasonCode
 	failureSpec.DedupeKey = ""
+	// 用静态模板先校验身份/目标/原因码等公共字段；动态错误码在真实失败发生后
+	// 再计算并重新校验，保证失败审计仍与真实错误类别一致。
 	if _, err := r.prepareEvent(failureSpec, OutcomeFailure, currentTime); err != nil {
 		return err
 	}
@@ -278,6 +284,9 @@ func (r *Recorder) ExecuteCritical(ctx context.Context, request CriticalRequest,
 		return ErrDuplicateEvent
 	}
 	auditFailure := errors.Is(runErr, ErrAuditUnavailable)
+	if request.FailureErrorCodeFor != nil {
+		failureSpec.ErrorCode = request.FailureErrorCodeFor(runErr)
+	}
 	// 即使请求被取消，也要用独立事务补写失败审计：取消属于失败路径，不能因为
 	// 调用方 context 结束而丢失“失败可追踪”的证据。
 	failureEvent, err := r.prepareEvent(failureSpec, OutcomeFailure, r.clockNow())

@@ -2,12 +2,13 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 17）
+## 项目状态（步骤 18）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
 - 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）；HTTPS 单向认证 `internal/tlscert`（PEM 证书链/私钥/附加 CA、PKCS#12/PFX 导入、私钥与证书匹配、证书链与用途/有效期校验、按 SNI 选择证书、未知 SNI 拒绝、安全重载与到期状态）；可选客户端证书双向认证 mTLS（`disabled`/`required`/`optional` 模式、独立客户端信任 CA、显式“证书 DNS 名称 -> 可信服务身份”映射、可选模式拒绝无效证书降级、脱敏 mTLS 状态诊断与服务身份上下文）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户/认证/授权、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 账户领域基础 `internal/account` 与 SQLite 仓储 `internal/account/sqlite`（普通用户创建、按稳定 ID 查询、有限分页检索；用户名显示值/规范化值分离，NFKC 兼容规范化 + Unicode 大小写折叠；保留名、空白、Unicode 与长度规则；资料字段白名单；创建/读取审计与审计失败拒绝；可信本地初始化授权器，生产 HTTP 未接入）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、普通账户创建/查询（已由 `internal/account` 提供基础能力，但尚未接入 HTTP/服务启动）、密码登录与认证、权限、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -323,6 +324,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **已验证（Windows amd64，真实 TLS 握手）**：`required` 模式下正确映射证书可完成 HTTPS 请求并在 Handler 中读到映射身份；无证书、错误 CA、过期证书、用途错误（仅服务器认证）、未映射身份、多身份歧义证书全部握手失败；`optional` 模式下无证书匿名成功、映射证书成功、错误 CA/过期/未映射证书失败（不降级）；`disabled` 模式不请求也不接收客户端证书；服务器证书 `ReloadTLS` 轮换后客户端认证策略与身份映射保持不变，运行中直接改写客户端信任 CA 文件不生效；移除身份映射后重启（新实例）旧证书被拒绝；端口在 `Close` 后释放、已建立连接被关闭；YAML 配置加载到 mTLS 监听端到端通过；内部 `internal/tlscert` 用真实回环 TLS 覆盖 TLS 1.2/1.3 全部分支，并验证 TLS 1.3 会话恢复仍执行身份映射复查。基础设施阶段验收记录见 [docs/acceptance/基础设施阶段验收记录.md](docs/acceptance/基础设施阶段验收记录.md)。
 - **尚未接入/未验证**：`cmd/login-server` 仍未装配 `NewServer`；客户端信任热重载、OCSP/CRL、供客户端证书身份使用的服务层授权映射、按 SNI 区分客户端信任 CA、真实企业 CA/ACME 流程、邮件/Webhook 到期通知、TLS 会话票据策略、HTTP/2 专项、race detector、真实反向代理/LB 联调与非 Windows 运行（只编译）仍未实现。
 
+## 普通账户创建、查询与用户名规则（步骤 18）
+
+新增内部账户领域服务 `internal/account` 与 SQLite 生产仓储 `internal/account/sqlite`：完成普通用户的创建、按稳定 ID 查询和有限分页检索，暂不实现密码登录、公开自主注册或 HTTP 端点。表结构使用既有迁移 0001 的 `users` 表，本步未新增迁移，也未对 `database/login.db` 执行任何操作。
+
+- **稳定 ID 与用户名分离**：用户 ID 由服务用 `crypto/rand` 生成 `usr_` + 128 位随机数，创建后不可变；`username` 保存显示值（NFKC 兼容规范化后保留大小写），`username_normalized` 保存唯一性判定值（NFKC + Unicode 大小写折叠 + NFC）。唯一约束由数据库 `UNIQUE(username_normalized)` 保证，并发重名由事务 + `ON CONFLICT DO NOTHING` 统一映射为 `CONFLICT`，不覆盖已有用户。
+- **用户名规则（稳定契约）**：先做 NFKC 兼容规范化并去掉首尾空白；长度 3～32 个码点；只允许 Unicode 字母、数字与 `.` `_` `-`，首尾必须是字母或数字；拒绝内部空白、控制/格式字符（含零宽与双向控制）、其他符号与表情；大小写折叠后比较保留名（`root`、`admin`、`system`、`管理员`、`客服` 等，见 `account.ReservedUsernames()`）。全角 `Ａlice`、`Straße`/`STRASSE` 等按规范化值判重。
+- **资料白名单**：创建请求只有 `Username`/`Nickname`/`Biography`/`Language`/`Timezone`；没有 `is_root`、`status`、`security_version`、已验证标记等字段。昵称 ≤64 码点、简介 ≤1000 码点（允许换行/制表符），语言使用 BCP 47 子集并默认 `zh-CN`，时区必须是可识别的 IANA 名称并默认 `Asia/Shanghai`。本地初始化创建状态固定为 `active`，`is_root=0`、`security_version=1` 使用默认值。
+- **查询与分页**：`GetUser` 只接受固定格式用户 ID；`ListUsers` 支持 `Limit`（默认 20，最大 100）、`Offset`（最大 1,000,000）、状态过滤与白名单排序（创建/更新时间、规范化用户名、ID）；排序始终追加 `id` 作为稳定次序键，拒绝任意 SQL 列、无上限列表与未知状态。不返回总条数，只用 `HasMore` 表示后续页。
+- **审计与权限默认拒绝**：创建使用 `audit.ExecuteCritical`，用户插入与成功审计在同一事务提交；审计失败回滚且不返回成功，错误映射 `AUDIT_WRITE_FAILED`。按 ID 查询与列表查询也写审计，审计失败时拒绝返回数据。调用者只能通过 `LocalBootstrapCaller`/`SystemCaller` 构造；实际授权模块未就绪，本步只提供 `LocalBootstrapAuthorizer`（显式本地操作者白名单），生产 HTTP/远程调用没有默认放行路径。
+- **错误映射**：使用已登记错误码，不新增码：非法用户名/资料/分页/排序/ID 与用户不存在映射 `REQ_INVALID(400)`，用户名重复映射 `CONFLICT(409)`，未授权 `ACCESS_DENIED(403)`，存储不可用 `DB_UNAVAILABLE(503)`，审计失败 `AUDIT_WRITE_FAILED(503)`，未知错误 `INTERNAL_ERROR(500)`；创建失败时失败审计的错误码按真实失败类别记录（冲突 CONFLICT、存储 DB_UNAVAILABLE、审计 AUDIT_WRITE_FAILED、内部 INTERNAL_ERROR），根包测试核对字面值与注册表一致。
+- **依赖**：Unicode NFKC 规范化与大小写折叠使用 `golang.org/x/text v0.44.0`（Go 1.26 兼容、无额外运行时依赖）；未升级既有 `x/sys`。
+- **已验证（Windows amd64，临时 SQLite）**：正常创建与数据库敏感列默认值、显示/规范化用户名分离、全角/大小写/`ß` 与保留名规则、资料白名单与文本伪装、大小写重名、6 路并发重名仅 1 成功、分页/偏移/排序/状态过滤与非法参数、按 ID 查询与不存在、授权默认拒绝、审计成功/失败（触发器注入）与失败回滚、日志不输出用户名/资料正文；六目标编译与交叉 vet 在 MEMORY 记录。
+- **尚未实现/未验证**：HTTP/服务启动接入、密码登录/注册/邀请、邮箱与电话字段、头像与扩展资料、状态变更与删除（步骤 19）、实际权限模型、用户列表的管理范围隔离、Unicode 同形字/混淆字符骨架检测、用户名保留名国际化扩展、多进程/高并发与非 Windows 运行；race detector 与长期压力测试未做。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -375,7 +390,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～17 已完成；继续时按 .ai/ 中的顺序处理步骤 18（账户与权限阶段），每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～18 已完成；继续时按 .ai/ 中的顺序处理步骤 19（账户状态与删除流程），每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 

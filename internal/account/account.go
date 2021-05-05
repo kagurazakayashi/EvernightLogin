@@ -1,0 +1,554 @@
+// Package account 实现普通账户的创建、按稳定 ID 查询与分页检索，以及用户名
+// 规范化和资料字段白名单。
+//
+// 本包是内部领域包，不直接暴露 HTTP 端点：调用方只能通过显式传入的可信
+// Caller 与 Authorizer 调用服务。授权模块尚未实现，因此本包只提供受限的本地
+// 初始化授权器（LocalBootstrapAuthorizer）；生产 HTTP/远程调用默认没有可用
+// 授权器，必须由后续服务层接入真实授权后才能开放。
+//
+// 安全不变量：
+//   - 用户 ID 由服务生成、创建后不可变；用户名显示值与规范化值分开保存，唯一性
+//     只由规范化值决定（NFKC 兼容规范化 + Unicode 大小写折叠）。
+//   - 创建请求只接受资料白名单字段，没有 is_root、status、security_version、
+//     已验证标记等字段；这些值由服务固定或数据库默认值决定。
+//   - 创建、读取与列表查询都使用可信操作者写安全审计；创建与成功审计在同一事务
+//     提交，审计失败时拒绝创建并回滚，不允许“成功但无记录”。
+//   - 查询只允许有限分页与白名单排序/过滤，不接受任意 SQL 列或无上限列表。
+package account
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"reflect"
+	"sort"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+)
+
+const (
+	// MinUsernameRunes/MaxUsernameRunes 是用户名显示值的字符数范围（按 Unicode
+	// 码点计数，规范化后计算）。
+	MinUsernameRunes = 3
+	MaxUsernameRunes = 32
+	// MaxNicknameRunes 是昵称的字符数上限；昵称可以为空。
+	MaxNicknameRunes = 64
+	// MaxBiographyRunes 是简介的字符数上限；简介可以为空。
+	MaxBiographyRunes = 1000
+	// MaxLanguageBytes 是语言标签长度上限（BCP 47 子集）。
+	MaxLanguageBytes = 35
+	// MaxTimezoneBytes 是 IANA 时区名的长度上限。
+	MaxTimezoneBytes = 64
+	// DefaultLanguage/DefaultTimezone 是创建用户时的资料默认值。
+	DefaultLanguage = "zh-CN"
+	DefaultTimezone = "Asia/Shanghai"
+	// DefaultListLimit/MaxListLimit 是列表查询的默认与最大每页数量。
+	DefaultListLimit = 20
+	MaxListLimit     = 100
+	// MaxListOffset 限制列表偏移量，避免深分页放大数据库开销。
+	MaxListOffset = 1_000_000
+	// userIDPrefix/userIDRandomBytes 定义稳定用户 ID 的格式：usr_ + 128 位随机数。
+	userIDPrefix      = "usr_"
+	userIDRandomBytes = 16
+)
+
+// Status 是账户全局状态，与 users 表 CHECK 约束一致。
+type Status string
+
+const (
+	// StatusPending 表示待验证（保留给未来自助注册流程）。
+	StatusPending Status = "pending"
+	// StatusActive 表示正常可用。本地初始化创建的账户使用该状态。
+	StatusActive Status = "active"
+	// StatusDisabled 表示全局禁用。
+	StatusDisabled Status = "disabled"
+	// StatusPendingDelete 表示已标记待删除，尚未完成删除流程。
+	StatusPendingDelete Status = "pending_delete"
+)
+
+// Valid 报告状态是否为已定义值。
+func (s Status) Valid() bool {
+	switch s {
+	case StatusPending, StatusActive, StatusDisabled, StatusPendingDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+// SortField 是列表查询允许的排序字段白名单。
+type SortField string
+
+const (
+	// SortCreatedAt 按创建时间排序（默认）。
+	SortCreatedAt SortField = "created_at"
+	// SortUpdatedAt 按更新时间排序。
+	SortUpdatedAt SortField = "updated_at"
+	// SortUsername 按规范化用户名排序。
+	SortUsername SortField = "username"
+	// SortID 按用户 ID 排序。
+	SortID SortField = "id"
+)
+
+// Valid 报告排序字段是否在白名单内。
+func (s SortField) Valid() bool {
+	switch s {
+	case SortCreatedAt, SortUpdatedAt, SortUsername, SortID:
+		return true
+	default:
+		return false
+	}
+}
+
+// User 是账户的只读快照。Username 是显示值（保留大小写、已做 NFKC 兼容
+// 规范化），UsernameNormalized 是唯一性判定用的规范化值（大小写折叠）。
+// 结构体不包含 is_root、security_version 等敏感管理字段，避免普通查询接口
+// 顺带泄露系统管理资格。
+type User struct {
+	ID                 string
+	Username           string
+	UsernameNormalized string
+	Nickname           string
+	Biography          string
+	Language           string
+	Timezone           string
+	Status             Status
+	RowVersion         int64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+// CreateRequest 是创建用户的资料白名单。它刻意不包含 status、is_root、
+// security_version、邮箱/电话验证状态等字段；这些值由服务或数据库决定。
+type CreateRequest struct {
+	Username  string
+	Nickname  string
+	Biography string
+	Language  string
+	Timezone  string
+}
+
+// ListRequest 是分页检索参数。零值 Limit 使用默认值 20，零值 Sort 使用
+// SortCreatedAt；Status 为空表示不过滤状态。
+type ListRequest struct {
+	Limit      int
+	Offset     int
+	Status     Status
+	Sort       SortField
+	Descending bool
+}
+
+// ListResult 是分页检索结果。HasMore 表示按当前排序在 Offset+Limit 之后仍有
+// 记录；本包不返回总条数，避免无界 COUNT 开销。
+type ListResult struct {
+	Users   []User
+	HasMore bool
+}
+
+// 领域错误哨兵。调用方用 errors.Is 判断，并可用 CodeOf 映射到根包错误码。
+var (
+	// ErrOptionsInvalid 表示服务构造依赖不合法。
+	ErrOptionsInvalid = errors.New("账户服务选项无效")
+	// ErrInvalidRequest 表示用户名、资料字段、分页/排序或用户 ID 不合法。
+	ErrInvalidRequest = errors.New("账户请求无效")
+	// ErrUsernameTaken 表示规范化用户名已被占用。
+	ErrUsernameTaken = errors.New("用户名已被占用")
+	// ErrUserNotFound 表示按稳定 ID 找不到用户。
+	ErrUserNotFound = errors.New("用户不存在")
+	// ErrAccessDenied 表示可信调用身份未获准执行该操作。
+	ErrAccessDenied = errors.New("未获准执行该操作")
+	// ErrStoreUnavailable 表示账户存储暂时不可用。
+	ErrStoreUnavailable = errors.New("账户存储暂时不可用")
+	// ErrAuditUnavailable 表示安全审计未能可靠写入，操作被拒绝。
+	ErrAuditUnavailable = errors.New("关键操作未能可靠记录")
+)
+
+// ErrorCode 是根包错误码注册表中的稳定字符串值。internal 包不能 import 根包，
+// 因此这里只保存与注册表一致的字面值；根包测试会核对它们确实已登记。
+type ErrorCode string
+
+const (
+	// CodeReqInvalid 对应已登记的 REQ_INVALID（请求内容不符合要求）。
+	CodeReqInvalid ErrorCode = "REQ_INVALID"
+	// CodeConflict 对应已登记的 CONFLICT（唯一值重复等数据冲突）。
+	CodeConflict ErrorCode = "CONFLICT"
+	// CodeAccessDenied 对应已登记的 ACCESS_DENIED。
+	CodeAccessDenied ErrorCode = "ACCESS_DENIED"
+	// CodeDBUnavailable 对应已登记的 DB_UNAVAILABLE。
+	CodeDBUnavailable ErrorCode = "DB_UNAVAILABLE"
+	// CodeAuditWriteFailed 对应已登记的 AUDIT_WRITE_FAILED。
+	CodeAuditWriteFailed ErrorCode = "AUDIT_WRITE_FAILED"
+	// CodeInternalError 对应已登记的 INTERNAL_ERROR。
+	CodeInternalError ErrorCode = "INTERNAL_ERROR"
+)
+
+// CodeOf 把账户领域错误映射到已登记错误码。未知错误一律视为内部错误，避免把
+// 原始错误文本或数据库细节暴露成新的对外码。
+func CodeOf(err error) ErrorCode {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrUserNotFound):
+		return CodeReqInvalid
+	case errors.Is(err, ErrUsernameTaken):
+		return CodeConflict
+	case errors.Is(err, ErrAccessDenied):
+		return CodeAccessDenied
+	case errors.Is(err, ErrStoreUnavailable):
+		return CodeDBUnavailable
+	case errors.Is(err, ErrAuditUnavailable):
+		return CodeAuditWriteFailed
+	default:
+		return CodeInternalError
+	}
+}
+
+// NewUserID 生成稳定用户 ID：usr_ 加 128 位安全随机数的十六进制表示。创建后
+// 不再改变；业务应用不得用用户名作为永久外键。
+func NewUserID(random io.Reader) (string, error) {
+	if random == nil {
+		random = rand.Reader
+	}
+	buffer := make([]byte, userIDRandomBytes)
+	if _, err := io.ReadFull(random, buffer); err != nil {
+		return "", fmt.Errorf("无法生成用户 ID: %w", err)
+	}
+	return userIDPrefix + hex.EncodeToString(buffer), nil
+}
+
+// ValidUserID 报告用户 ID 是否符合本包生成的固定格式。查询前用它拒绝任意
+// 字符串，避免把畸形输入带进 SQL 或错误信息。
+func ValidUserID(id string) bool {
+	if len(id) != len(userIDPrefix)+2*userIDRandomBytes || !strings.HasPrefix(id, userIDPrefix) {
+		return false
+	}
+	_, err := hex.DecodeString(id[len(userIDPrefix):])
+	return err == nil
+}
+
+// reservedUsernames 是不允许普通创建的规范化用户名集合（小写/大小写折叠后）。
+// 该清单是稳定契约的一部分：新增保留名需要同步文档与测试，不能悄悄改变已发布
+// 的保留规则。比较发生在 Unicode 大小写折叠之后，因此 fullwidth 变体也会命中。
+var reservedUsernames = func() map[string]struct{} {
+	values := []string{
+		"root", "admin", "administrator", "superuser", "system", "support",
+		"security", "moderator", "official", "login", "logout", "oauth",
+		"oauth2", "openid", "api", "account", "accounts", "user", "users",
+		"null", "undefined",
+		"管理员", "客服", "系统", "官方", "登录", "支持",
+	}
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[normalizeUsernameKey(value)] = struct{}{}
+	}
+	return set
+}()
+
+// ReservedUsernames 返回保留用户名的规范化副本，用于诊断与文档生成。返回值
+// 已排序，调用方修改不影响内部规则。
+func ReservedUsernames() []string {
+	values := make([]string, 0, len(reservedUsernames))
+	for value := range reservedUsernames {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
+}
+
+// normalizeUsernameKey 对用于保留名比较/唯一性比较的文本执行 NFKC + 大小写
+// 折叠 + NFC。它是用户名规范化的单一口径。
+func normalizeUsernameKey(display string) string {
+	compatibility := norm.NFKC.String(display)
+	folded := cases.Fold().String(compatibility)
+	return norm.NFC.String(folded)
+}
+
+// NormalizeUsername 校验并规范化用户名，返回显示值与唯一性规范化值。
+//
+// 规则（稳定契约）：
+//   - 先做 NFKC 兼容规范化，再去掉首尾 Unicode 空白；长度 3～32 个码点；
+//   - 只允许 Unicode 字母、数字与 `.` `_` `-`，首尾必须是字母或数字；
+//   - 拒绝内部空白、控制字符、格式字符（含零宽/双向控制）与其他符号/表情；
+//   - 规范化值 = NFKC + Unicode 大小写折叠 + NFC；保留名按规范化值比较。
+func NormalizeUsername(raw string) (display string, normalized string, err error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", "", fmt.Errorf("%w: 用户名不能为空", ErrInvalidRequest)
+	}
+	canonical := strings.TrimSpace(norm.NFKC.String(trimmed))
+	if canonical == "" {
+		return "", "", fmt.Errorf("%w: 用户名不能为空", ErrInvalidRequest)
+	}
+	runes := []rune(canonical)
+	if len(runes) < MinUsernameRunes || len(runes) > MaxUsernameRunes {
+		return "", "", fmt.Errorf("%w: 用户名长度必须在 %d～%d 个字符之间",
+			ErrInvalidRequest, MinUsernameRunes, MaxUsernameRunes)
+	}
+	for index, character := range runes {
+		switch {
+		case unicode.IsLetter(character), unicode.IsDigit(character):
+			continue
+		case character == '.', character == '_', character == '-':
+			if index == 0 || index == len(runes)-1 {
+				return "", "", fmt.Errorf("%w: 用户名首尾必须是字母或数字", ErrInvalidRequest)
+			}
+			continue
+		case unicode.IsSpace(character):
+			return "", "", fmt.Errorf("%w: 用户名不能包含空白字符", ErrInvalidRequest)
+		case unicode.IsControl(character), unicode.Is(unicode.Cf, character),
+			unicode.Is(unicode.Zl, character), unicode.Is(unicode.Zp, character):
+			return "", "", fmt.Errorf("%w: 用户名不能包含控制或格式字符", ErrInvalidRequest)
+		default:
+			return "", "", fmt.Errorf("%w: 用户名只能包含字母、数字与 . _ -", ErrInvalidRequest)
+		}
+	}
+	normalized = normalizeUsernameKey(canonical)
+	if _, reserved := reservedUsernames[normalized]; reserved {
+		return "", "", fmt.Errorf("%w: 用户名为保留名称", ErrInvalidRequest)
+	}
+	return canonical, normalized, nil
+}
+
+// normalizeNickname 校验昵称：NFKC 规范化、去首尾空白、最多 MaxNicknameRunes
+// 个码点；允许空格，不允许换行/控制/格式字符。空昵称合法。
+func normalizeNickname(raw string) (string, error) {
+	canonical := strings.TrimSpace(norm.NFKC.String(strings.TrimSpace(raw)))
+	if canonical == "" {
+		return "", nil
+	}
+	if !utf8.ValidString(canonical) {
+		return "", fmt.Errorf("%w: 昵称不是合法 UTF-8", ErrInvalidRequest)
+	}
+	count := 0
+	for _, character := range canonical {
+		count++
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) ||
+			unicode.Is(unicode.Zl, character) || unicode.Is(unicode.Zp, character) {
+			return "", fmt.Errorf("%w: 昵称不能包含控制或格式字符", ErrInvalidRequest)
+		}
+	}
+	if count > MaxNicknameRunes {
+		return "", fmt.Errorf("%w: 昵称不能超过 %d 个字符", ErrInvalidRequest, MaxNicknameRunes)
+	}
+	return canonical, nil
+}
+
+// normalizeBiography 校验简介：NFKC 规范化、去首尾空白、最多 MaxBiographyRunes
+// 个码点；允许换行与制表符，拒绝其他控制/格式字符与 NUL。空简介合法。
+func normalizeBiography(raw string) (string, error) {
+	canonical := strings.TrimSpace(norm.NFKC.String(strings.TrimSpace(raw)))
+	if canonical == "" {
+		return "", nil
+	}
+	if !utf8.ValidString(canonical) {
+		return "", fmt.Errorf("%w: 简介不是合法 UTF-8", ErrInvalidRequest)
+	}
+	count := 0
+	for _, character := range canonical {
+		count++
+		if character == '\n' || character == '\t' {
+			continue
+		}
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) ||
+			unicode.Is(unicode.Zl, character) || unicode.Is(unicode.Zp, character) {
+			return "", fmt.Errorf("%w: 简介包含不允许的控制字符", ErrInvalidRequest)
+		}
+	}
+	if count > MaxBiographyRunes {
+		return "", fmt.Errorf("%w: 简介不能超过 %d 个字符", ErrInvalidRequest, MaxBiographyRunes)
+	}
+	return canonical, nil
+}
+
+// normalizeLanguage 校验 BCP 47 子集语言标签；空值使用默认语言。
+func normalizeLanguage(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return DefaultLanguage, nil
+	}
+	if len(value) > MaxLanguageBytes {
+		return "", fmt.Errorf("%w: 语言标签过长", ErrInvalidRequest)
+	}
+	parts := strings.Split(value, "-")
+	for index, part := range parts {
+		if part == "" || len(part) > 8 {
+			return "", fmt.Errorf("%w: 语言标签格式无效", ErrInvalidRequest)
+		}
+		if index == 0 && (len(part) < 2 || len(part) > 3) {
+			return "", fmt.Errorf("%w: 语言标签格式无效", ErrInvalidRequest)
+		}
+		for _, character := range part {
+			if !(character >= 'a' && character <= 'z') &&
+				!(character >= 'A' && character <= 'Z') &&
+				!(character >= '0' && character <= '9') {
+				return "", fmt.Errorf("%w: 语言标签格式无效", ErrInvalidRequest)
+			}
+		}
+	}
+	return value, nil
+}
+
+// normalizeTimezone 校验 IANA 时区名；空值使用默认时区。它只校验名称可被
+// time.LoadLocation 解析，不保存任意路径或本地化时区缩写。
+func normalizeTimezone(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return DefaultTimezone, nil
+	}
+	if len(value) > MaxTimezoneBytes {
+		return "", fmt.Errorf("%w: 时区名称过长", ErrInvalidRequest)
+	}
+	for _, character := range value {
+		if character <= 0x20 || character == 0x7f || character == '\\' {
+			return "", fmt.Errorf("%w: 时区名称无效", ErrInvalidRequest)
+		}
+	}
+	if _, err := time.LoadLocation(value); err != nil {
+		return "", fmt.Errorf("%w: 时区名称不是可识别的 IANA 时区", ErrInvalidRequest)
+	}
+	return value, nil
+}
+
+// ValidateRequestID 校验可选请求编号（ASCII 字母、数字与 . _ -，长度 1～64），
+// 供服务写入审计事件。空字符串表示没有请求编号。
+func ValidateRequestID(requestID string) error {
+	if requestID == "" {
+		return nil
+	}
+	if len(requestID) > 64 {
+		return fmt.Errorf("%w: 请求编号过长", ErrInvalidRequest)
+	}
+	for index := 0; index < len(requestID); index++ {
+		character := requestID[index]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return fmt.Errorf("%w: 请求编号包含非法字符", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// Action 是可审计的账户操作动作。
+type Action string
+
+const (
+	// ActionCreateUser 创建普通用户。
+	ActionCreateUser Action = "user.create"
+	// ActionGetUser 按稳定 ID 查询用户。
+	ActionGetUser Action = "user.get"
+	// ActionListUsers 分页检索用户。
+	ActionListUsers Action = "user.list"
+)
+
+// Valid 报告动作是否已定义。
+func (a Action) Valid() bool {
+	return a == ActionCreateUser || a == ActionGetUser || a == ActionListUsers
+}
+
+// Caller 是通过可信边界建立的操作者上下文。字段不导出：调用方只能通过
+// LocalBootstrapCaller/SystemCaller 构造，不能从请求参数直接伪造。
+type Caller struct {
+	actor     audit.Actor
+	requestID string
+}
+
+// LocalBootstrapCaller 构造受限本地初始化操作者（audit.ActorLocalAdmin）。
+// operatorID 必须是稳定的本地操作者标识，由宿主在可信环境提供。
+func LocalBootstrapCaller(operatorID string) (Caller, error) {
+	actor := audit.Actor{Type: audit.ActorLocalAdmin, ID: operatorID}
+	if err := actor.Validate(); err != nil {
+		return Caller{}, fmt.Errorf("%w: 本地操作者标识无效", ErrInvalidRequest)
+	}
+	return Caller{actor: actor}, nil
+}
+
+// SystemCaller 构造系统组件操作者（audit.ActorSystem），供未来后台流程使用。
+// 它不会自动获得权限：Authorizer 必须显式允许该系统身份。
+func SystemCaller(componentID string) (Caller, error) {
+	actor := audit.Actor{Type: audit.ActorSystem, ID: componentID}
+	if err := actor.Validate(); err != nil {
+		return Caller{}, fmt.Errorf("%w: 系统操作者标识无效", ErrInvalidRequest)
+	}
+	return Caller{actor: actor}, nil
+}
+
+// WithRequestID 返回带请求编号的调用者副本，用于审计关联。非法编号返回
+// ErrInvalidRequest，不会悄悄丢弃。
+func (c Caller) WithRequestID(requestID string) (Caller, error) {
+	if err := ValidateRequestID(requestID); err != nil {
+		return Caller{}, err
+	}
+	c.requestID = requestID
+	return c, nil
+}
+
+// Authorizer 判定可信调用者是否可执行账户操作。实际授权模块未就绪前，生产
+// 集成必须提供实现；本包只提供 LocalBootstrapAuthorizer 作为受限本地初始化
+// 通道，不提供“默认放行”实现。
+type Authorizer interface {
+	Authorize(ctx context.Context, caller Caller, action Action) error
+}
+
+// LocalBootstrapAuthorizer 只允许显式配置的本地管理员执行账户初始化操作。
+// 系统、普通用户与匿名身份一律拒绝；远程 HTTP 接入时不应使用它。
+type LocalBootstrapAuthorizer struct {
+	operators map[string]struct{}
+}
+
+// NewLocalBootstrapAuthorizer 构造受限本地授权器。operatorIDs 不能为空，每个
+// 标识必须是审计包允许的可见 ASCII 稳定 ID。
+func NewLocalBootstrapAuthorizer(operatorIDs []string) (*LocalBootstrapAuthorizer, error) {
+	if len(operatorIDs) == 0 {
+		return nil, fmt.Errorf("%w: 本地初始化操作者列表不能为空", ErrOptionsInvalid)
+	}
+	operators := make(map[string]struct{}, len(operatorIDs))
+	for _, operatorID := range operatorIDs {
+		actor := audit.Actor{Type: audit.ActorLocalAdmin, ID: operatorID}
+		if err := actor.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: 本地初始化操作者标识无效", ErrOptionsInvalid)
+		}
+		operators[operatorID] = struct{}{}
+	}
+	return &LocalBootstrapAuthorizer{operators: operators}, nil
+}
+
+// Authorize 实现 Authorizer。只有本地管理员且动作已定义时放行。
+func (a *LocalBootstrapAuthorizer) Authorize(_ context.Context, caller Caller, action Action) error {
+	if a == nil || !action.Valid() {
+		return ErrAccessDenied
+	}
+	if caller.actor.Type != audit.ActorLocalAdmin {
+		return ErrAccessDenied
+	}
+	if _, allowed := a.operators[caller.actor.ID]; !allowed {
+		return ErrAccessDenied
+	}
+	return nil
+}
+
+// isNilInterface 检测 nil 接口与 typed nil 指针，避免服务调用时 panic。
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
