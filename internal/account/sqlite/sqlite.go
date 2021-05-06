@@ -26,9 +26,27 @@ id,username,username_normalized,nickname,biography,avatar_ref,language,timezone,
 ) VALUES(?,?,?,?,?,NULL,?,?,?,0,1,1,?,?)
 ON CONFLICT(username_normalized) DO NOTHING`
 
-	selectUserColumns = `id,username,username_normalized,nickname,biography,language,timezone,status,row_version,created_at_ms,updated_at_ms`
+	selectUserColumns = `id,username,username_normalized,nickname,biography,language,timezone,status,row_version,security_version,created_at_ms,updated_at_ms`
 
 	selectUserByIDSQL = `SELECT ` + selectUserColumns + ` FROM users WHERE id=?`
+
+	selectUserStateSQL = `SELECT ` + selectUserColumns + `,is_root FROM users WHERE id=?`
+
+	updateUserStateSQL = `UPDATE users SET status=?, security_version=security_version+?, row_version=row_version+1, updated_at_ms=?
+WHERE id=? AND status=? AND row_version=? AND is_root=0`
+
+	previewDeletionCountsSQL = `SELECT
+(SELECT COUNT(*) FROM app_memberships WHERE user_id=?),
+(SELECT COUNT(*) FROM user_roles WHERE user_id=?),
+(SELECT COUNT(*) FROM group_members WHERE user_id=?),
+(SELECT COUNT(*) FROM one_time_credentials WHERE subject_id=?),
+(SELECT COUNT(*) FROM applications WHERE owner_user_id=?)`
+
+	deleteCredentialsSQL    = `DELETE FROM one_time_credentials WHERE subject_id=?`
+	deleteUserRolesSQL      = `DELETE FROM user_roles WHERE user_id=?`
+	deleteGroupMembersSQL   = `DELETE FROM group_members WHERE user_id=?`
+	deleteAppMembershipsSQL = `DELETE FROM app_memberships WHERE user_id=?`
+	deleteUserSQL           = `DELETE FROM users WHERE id=? AND status='pending_delete' AND row_version=? AND is_root=0`
 )
 
 // Store 是 account.Store 的 SQLite 实现。
@@ -153,6 +171,157 @@ func (s *Store) ListUsers(ctx context.Context, query account.ListQuery) ([]accou
 	return users, hasMore, nil
 }
 
+// GetUserState 返回账户快照与 is_root 受保护标记。
+func (s *Store) GetUserState(ctx context.Context, id string) (account.StateSnapshot, error) {
+	user, isRoot, err := s.queryUserState(ctx, id)
+	if err != nil {
+		return account.StateSnapshot{}, err
+	}
+	return account.StateSnapshot{User: user, IsRoot: isRoot}, nil
+}
+
+// PreviewDeletion 读取删除影响范围快照；不过滤受保护账户（调用方据 IsRoot 拒绝）。
+func (s *Store) PreviewDeletion(ctx context.Context, id string) (account.DeletionPreview, error) {
+	user, isRoot, err := s.queryUserState(ctx, id)
+	if err != nil {
+		return account.DeletionPreview{}, err
+	}
+	rows, err := s.store.QueryContext(ctx, previewDeletionCountsSQL, id, id, id, id, id)
+	if err != nil {
+		return account.DeletionPreview{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	preview := account.DeletionPreview{
+		UserID:          user.ID,
+		Username:        user.Username,
+		Status:          user.Status,
+		RowVersion:      user.RowVersion,
+		SecurityVersion: user.SecurityVersion,
+		IsRoot:          isRoot,
+	}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return account.DeletionPreview{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+		}
+		return account.DeletionPreview{}, account.ErrUserNotFound
+	}
+	if err := rows.Scan(
+		&preview.AppMemberships,
+		&preview.UserRoles,
+		&preview.GroupMemberships,
+		&preview.OneTimeCredentials,
+		&preview.OwnedApplications,
+	); err != nil {
+		return account.DeletionPreview{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	if err := rows.Err(); err != nil {
+		return account.DeletionPreview{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	return preview, nil
+}
+
+// ApplyStateChange 执行带状态与行版本条件的更新。条件不匹配（并发修改、状态变化
+// 或 root 保护）返回 account.ErrStateConflict；调用方在事务内已做业务校验，这里
+// 是最后一道原子防线。
+func (s *Store) ApplyStateChange(ctx context.Context, tx audit.Tx, change account.StateChange) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", account.ErrOptionsInvalid)
+	}
+	bump := 0
+	if change.BumpSecurityVersion {
+		bump = 1
+	}
+	result, err := tx.ExecContext(ctx, updateUserStateSQL,
+		string(change.NewStatus),
+		bump,
+		change.Now.UTC().UnixMilli(),
+		change.UserID,
+		string(change.ExpectedStatus),
+		change.ExpectedRowVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	switch affected {
+	case 1:
+		return nil
+	case 0:
+		return account.ErrStateConflict
+	default:
+		return fmt.Errorf("%w: 状态更新影响行数异常", account.ErrStoreUnavailable)
+	}
+}
+
+// CompleteDeletion 在审计事务中按明确策略清理关联个人数据后删除用户行：
+//   - 一次性凭证、应用成员关系、角色分配、用户组成员关系删除（属于账户个人
+//     数据/关系，删除前计数已写入审计）；
+//   - applications.owner_user_id 由外键 ON DELETE SET NULL 置空，应用记录保留；
+//   - 安全审计历史不删除（无用户外键），保留脱敏快照；未来会话/令牌表尚未实现，
+//     需消费 user.delete.complete 审计事件与禁用/删除请求时的 security_version
+//     递增作为失效依据。
+//
+// 任一步失败整体回滚；最终 users 行条件删除影响 0 行返回 ErrStateConflict。
+func (s *Store) CompleteDeletion(ctx context.Context, tx audit.Tx, request account.CompleteDeletionRequest) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", account.ErrOptionsInvalid)
+	}
+	for _, statement := range []struct {
+		query string
+		arg   string
+	}{
+		{deleteCredentialsSQL, request.UserID},
+		{deleteUserRolesSQL, request.UserID},
+		{deleteGroupMembersSQL, request.UserID},
+		{deleteAppMembershipsSQL, request.UserID},
+	} {
+		if _, err := tx.ExecContext(ctx, statement.query, statement.arg); err != nil {
+			return fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+		}
+	}
+	result, err := tx.ExecContext(ctx, deleteUserSQL, request.UserID, request.ExpectedRowVersion)
+	if err != nil {
+		return fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	if affected == 0 {
+		return account.ErrStateConflict
+	}
+	if affected != 1 {
+		return fmt.Errorf("%w: 删除用户影响行数异常", account.ErrStoreUnavailable)
+	}
+	return nil
+}
+
+// queryUserState 读取一行用户状态快照（含 is_root）。
+func (s *Store) queryUserState(ctx context.Context, id string) (account.User, bool, error) {
+	rows, err := s.store.QueryContext(ctx, selectUserStateSQL, id)
+	if err != nil {
+		return account.User{}, false, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return account.User{}, false, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+		}
+		return account.User{}, false, account.ErrUserNotFound
+	}
+	user, isRoot, err := scanUserState(rows, true)
+	if err != nil {
+		return account.User{}, false, err
+	}
+	if err := rows.Err(); err != nil {
+		return account.User{}, false, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	return user, isRoot, nil
+}
+
 // sortColumn 把排序枚举映射为固定 SQL 列名；未知值返回 false。
 func sortColumn(sort account.SortField) (string, bool) {
 	switch sort {
@@ -172,13 +341,20 @@ func sortColumn(sort account.SortField) (string, bool) {
 // scanUser 读取一行用户快照并做基本一致性检查；状态/时间异常按存储故障处理，
 // 不把损坏数据当作正常用户返回。
 func scanUser(rows *sql.Rows) (account.User, error) {
+	user, _, err := scanUserState(rows, false)
+	return user, err
+}
+
+// scanUserState 读取用户行；withRoot=true 时同一行多读一个 is_root 整数列。
+func scanUserState(rows *sql.Rows, withRoot bool) (account.User, bool, error) {
 	var (
 		user        account.User
 		status      string
 		createdAtMS int64
 		updatedAtMS int64
+		isRoot      int64
 	)
-	if err := rows.Scan(
+	targets := []any{
 		&user.ID,
 		&user.Username,
 		&user.UsernameNormalized,
@@ -188,21 +364,26 @@ func scanUser(rows *sql.Rows) (account.User, error) {
 		&user.Timezone,
 		&status,
 		&user.RowVersion,
+		&user.SecurityVersion,
 		&createdAtMS,
 		&updatedAtMS,
-	); err != nil {
-		return account.User{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	if withRoot {
+		targets = append(targets, &isRoot)
+	}
+	if err := rows.Scan(targets...); err != nil {
+		return account.User{}, false, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
 	}
 	user.Status = account.Status(status)
 	if !user.Status.Valid() {
-		return account.User{}, fmt.Errorf("%w: 用户状态数据无效", account.ErrStoreUnavailable)
+		return account.User{}, false, fmt.Errorf("%w: 用户状态数据无效", account.ErrStoreUnavailable)
 	}
 	if !account.ValidUserID(user.ID) {
-		return account.User{}, fmt.Errorf("%w: 用户 ID 数据格式无效", account.ErrStoreUnavailable)
+		return account.User{}, false, fmt.Errorf("%w: 用户 ID 数据格式无效", account.ErrStoreUnavailable)
 	}
 	user.CreatedAt = timeFromUnixMilli(createdAtMS)
 	user.UpdatedAt = timeFromUnixMilli(updatedAtMS)
-	return user, nil
+	return user, isRoot == 1, nil
 }
 
 // timeFromUnixMilli 把数据库毫秒时间转成 UTC 时间。

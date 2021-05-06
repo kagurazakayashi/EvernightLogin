@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -29,6 +30,40 @@ type Store interface {
 	CreateUser(ctx context.Context, tx audit.Tx, user User) error
 	GetUser(ctx context.Context, id string) (User, error)
 	ListUsers(ctx context.Context, query ListQuery) ([]User, bool, error)
+	// GetUserState 返回账户快照与受保护标记（is_root）。该标记不放进 User，
+	// 避免普通查询接口顺带暴露系统管理资格。
+	GetUserState(ctx context.Context, id string) (StateSnapshot, error)
+	// PreviewDeletion 返回完成删除的影响范围快照。
+	PreviewDeletion(ctx context.Context, id string) (DeletionPreview, error)
+	// ApplyStateChange 在审计事务中执行条件 UPDATE；行版本/状态已被并发修改时
+	// 必须返回 ErrStateConflict，且不得留下部分更新。
+	ApplyStateChange(ctx context.Context, tx audit.Tx, change StateChange) error
+	// CompleteDeletion 在审计事务中清理关联个人数据并删除 users 行；任一步失败
+	// 整体回滚。
+	CompleteDeletion(ctx context.Context, tx audit.Tx, request CompleteDeletionRequest) error
+}
+
+// StateSnapshot 是账户状态操作需要的内部快照；IsRoot 不通过公开 User 暴露。
+type StateSnapshot struct {
+	User   User
+	IsRoot bool
+}
+
+// StateChange 是一次已通过状态机校验的条件状态更新。
+type StateChange struct {
+	UserID              string
+	ExpectedRowVersion  int64
+	ExpectedStatus      Status
+	NewStatus           Status
+	Now                 time.Time
+	BumpSecurityVersion bool
+}
+
+// CompleteDeletionRequest 是完成删除的事务内请求。
+type CompleteDeletionRequest struct {
+	UserID             string
+	ExpectedRowVersion int64
+	Now                time.Time
 }
 
 // ListQuery 是已通过白名单校验的分页查询参数；仓储负责把 SortField 映射为固定
@@ -153,6 +188,7 @@ func (s *Service) CreateUser(ctx context.Context, caller Caller, request CreateR
 		Timezone:           timezone,
 		Status:             StatusActive,
 		RowVersion:         1,
+		SecurityVersion:    1,
 		CreatedAt:          currentTime,
 		UpdatedAt:          currentTime,
 	}
@@ -172,14 +208,14 @@ func (s *Service) CreateUser(ctx context.Context, caller Caller, request CreateR
 		// 失败审计的错误码必须反映真实失败类别：用户名冲突 CONFLICT、存储
 		// DB_UNAVAILABLE、审计 AUDIT_WRITE_FAILED、内部 INTERNAL_ERROR 等。
 		FailureErrorCodeFor: func(err error) string {
-			return string(CodeOf(mapCreateError(err)))
+			return string(CodeOf(mapCriticalError(err)))
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
 		return s.store.CreateUser(txCtx, tx, user)
 	})
 	if err != nil {
-		return User{}, mapCreateError(err)
+		return User{}, mapCriticalError(err)
 	}
 	// 日志不记录用户名、昵称或简介正文，只记录稳定 ID 与结果。
 	s.logger.Info("账户已创建", "user_id", user.ID, "status", string(user.Status))
@@ -231,6 +267,237 @@ func (s *Service) ListUsers(ctx context.Context, caller Caller, request ListRequ
 		return ListResult{}, err
 	}
 	return ListResult{Users: users, HasMore: hasMore}, nil
+}
+
+// DisableUser 全局禁用账户：status -> disabled，row_version 与 security_version
+// 各递增 1。已禁用时幂等成功；待删除账户返回 CONFLICT；root 返回 ACCESS_DENIED。
+func (s *Service) DisableUser(ctx context.Context, caller Caller, request StateCommandRequest) (StateChangeResult, error) {
+	return s.applyStateCommand(ctx, caller, request, CommandDisable)
+}
+
+// EnableUser 启用已禁用账户：status -> active，row_version 递增 1。
+// security_version 不递减：重新启用不会恢复旧会话或旧令牌，未来会话层仍须按
+// 安全版本拒绝旧凭证；已启用时幂等成功；其余状态返回 CONFLICT。
+func (s *Service) EnableUser(ctx context.Context, caller Caller, request StateCommandRequest) (StateChangeResult, error) {
+	return s.applyStateCommand(ctx, caller, request, CommandEnable)
+}
+
+// RequestDeletion 将账户标记为待删除：status -> pending_delete，row_version 与
+// security_version 各递增 1，并写可靠审计事件作为会话失效依据。该阶段保留资料
+// 与应用数据；完成删除由 CompleteDeletion 执行。重复请求幂等成功。
+func (s *Service) RequestDeletion(ctx context.Context, caller Caller, request StateCommandRequest) (StateChangeResult, error) {
+	return s.applyStateCommand(ctx, caller, request, CommandRequestDeletion)
+}
+
+// PreviewDeletion 返回完成删除会影响的应用成员关系、角色、用户组关系、一次性
+// 凭证与名下应用数量，供不可逆删除前确认。它是只读快照，不执行删除。
+func (s *Service) PreviewDeletion(ctx context.Context, caller Caller, id string) (DeletionPreview, error) {
+	if err := s.authorize(ctx, caller, ActionPreviewDeletion); err != nil {
+		return DeletionPreview{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return DeletionPreview{}, err
+	}
+	if !ValidUserID(id) {
+		return DeletionPreview{}, fmt.Errorf("%w: 用户 ID 格式无效", ErrInvalidRequest)
+	}
+	preview, err := s.store.PreviewDeletion(ctx, id)
+	if err != nil {
+		return DeletionPreview{}, err
+	}
+	event := audit.Event{
+		Actor:     caller.actor,
+		Action:    string(ActionPreviewDeletion),
+		Target:    audit.Target{Type: "user", ID: id},
+		Outcome:   audit.OutcomeSuccess,
+		RequestID: caller.requestID,
+	}
+	if err := s.audit.Record(ctx, event); err != nil {
+		return DeletionPreview{}, fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
+	}
+	return preview, nil
+}
+
+// CompleteDeletion 完成“待删除 -> 完成删除”生命周期：在审计事务中清理一次性
+// 凭证、应用成员关系、角色与用户组关系，并删除 users 行；应用记录保留（owner
+// 置空），安全审计历史保留脱敏快照。只有 pending_delete 状态可完成删除，root
+// 永远拒绝；重复完成因用户已不存在而返回 ErrUserNotFound。
+func (s *Service) CompleteDeletion(ctx context.Context, caller Caller, request StateCommandRequest) (DeletionResult, error) {
+	if err := s.authorize(ctx, caller, ActionCompleteDeletion); err != nil {
+		return DeletionResult{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return DeletionResult{}, err
+	}
+	if err := validateStateCommandRequest(request); err != nil {
+		return DeletionResult{}, err
+	}
+	snapshot, err := s.store.GetUserState(ctx, request.UserID)
+	if err != nil {
+		return DeletionResult{}, err
+	}
+	if snapshot.IsRoot {
+		return DeletionResult{}, ErrProtectedUser
+	}
+	if snapshot.User.Status != StatusPendingDelete {
+		return DeletionResult{}, fmt.Errorf("%w: 只有待删除账户可以完成删除", ErrInvalidTransition)
+	}
+	if request.ExpectedRowVersion != snapshot.User.RowVersion {
+		return DeletionResult{}, ErrStateConflict
+	}
+	preview, err := s.store.PreviewDeletion(ctx, request.UserID)
+	if err != nil {
+		return DeletionResult{}, err
+	}
+	if preview.IsRoot {
+		return DeletionResult{}, ErrProtectedUser
+	}
+	now := s.now().UTC().Truncate(time.Millisecond)
+	event := audit.Event{
+		Actor:     caller.actor,
+		Action:    string(ActionCompleteDeletion),
+		Target:    audit.Target{Type: "user", ID: request.UserID},
+		RequestID: caller.requestID,
+		Changes:   deletionChanges(preview),
+	}
+	critical := audit.CriticalRequest{
+		Event:             event,
+		FailureReasonCode: "user.delete.complete_failed",
+		FailureErrorCodeFor: func(err error) string {
+			return string(CodeOf(mapCriticalError(err)))
+		},
+	}
+	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		return s.store.CompleteDeletion(txCtx, tx, CompleteDeletionRequest{
+			UserID:             request.UserID,
+			ExpectedRowVersion: request.ExpectedRowVersion,
+			Now:                now,
+		})
+	})
+	if err != nil {
+		return DeletionResult{}, mapCriticalError(err)
+	}
+	s.logger.Info("账户已完成删除", "user_id", request.UserID)
+	return DeletionResult{Preview: preview, DeletedAt: now}, nil
+}
+
+// applyStateCommand 执行 disable/enable/request_deletion 的公共流程：授权、读取
+// 快照、状态机校验、幂等处理、乐观并发与审计一致提交。
+func (s *Service) applyStateCommand(ctx context.Context, caller Caller, request StateCommandRequest, command UserCommand) (StateChangeResult, error) {
+	if err := s.authorize(ctx, caller, command.action()); err != nil {
+		return StateChangeResult{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return StateChangeResult{}, err
+	}
+	if err := validateStateCommandRequest(request); err != nil {
+		return StateChangeResult{}, err
+	}
+	snapshot, err := s.store.GetUserState(ctx, request.UserID)
+	if err != nil {
+		return StateChangeResult{}, err
+	}
+	if snapshot.IsRoot {
+		return StateChangeResult{}, ErrProtectedUser
+	}
+	nextStatus, changed, err := transitionStatus(snapshot.User.Status, command)
+	if err != nil {
+		return StateChangeResult{}, err
+	}
+	if !changed {
+		// 幂等成功：状态已是目标值，不改版本；仍写成功审计以便追查重复请求。
+		event := audit.Event{
+			Actor:     caller.actor,
+			Action:    string(command.action()),
+			Target:    audit.Target{Type: "user", ID: request.UserID},
+			Outcome:   audit.OutcomeSuccess,
+			RequestID: caller.requestID,
+			Changes: []audit.FieldChange{
+				{Field: "result", After: "unchanged"},
+			},
+		}
+		if err := s.audit.Record(ctx, event); err != nil {
+			return StateChangeResult{}, fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
+		}
+		return StateChangeResult{User: snapshot.User, PreviousStatus: snapshot.User.Status, Changed: false}, nil
+	}
+	if request.ExpectedRowVersion != snapshot.User.RowVersion {
+		return StateChangeResult{}, ErrStateConflict
+	}
+	now := s.now().UTC().Truncate(time.Millisecond)
+	updated := snapshot.User
+	updated.Status = nextStatus
+	updated.RowVersion = snapshot.User.RowVersion + 1
+	updated.UpdatedAt = now
+	securityVersion := snapshot.User.SecurityVersion
+	if command.bumpsSecurityVersion() {
+		securityVersion++
+	}
+	updated.SecurityVersion = securityVersion
+	event := audit.Event{
+		Actor:     caller.actor,
+		Action:    string(command.action()),
+		Target:    audit.Target{Type: "user", ID: request.UserID},
+		RequestID: caller.requestID,
+		Changes: []audit.FieldChange{
+			{Field: "status", Before: string(snapshot.User.Status), After: string(nextStatus)},
+			{Field: "row_version", Before: formatInt64(snapshot.User.RowVersion), After: formatInt64(updated.RowVersion)},
+			{Field: "security_version", Before: formatInt64(snapshot.User.SecurityVersion), After: formatInt64(securityVersion)},
+		},
+	}
+	critical := audit.CriticalRequest{
+		Event:             event,
+		FailureReasonCode: "user.state_change_failed",
+		FailureErrorCodeFor: func(err error) string {
+			return string(CodeOf(mapCriticalError(err)))
+		},
+	}
+	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		return s.store.ApplyStateChange(txCtx, tx, StateChange{
+			UserID:              request.UserID,
+			ExpectedRowVersion:  snapshot.User.RowVersion,
+			ExpectedStatus:      snapshot.User.Status,
+			NewStatus:           nextStatus,
+			Now:                 now,
+			BumpSecurityVersion: command.bumpsSecurityVersion(),
+		})
+	})
+	if err != nil {
+		return StateChangeResult{}, mapCriticalError(err)
+	}
+	s.logger.Info("账户状态已变更", "user_id", request.UserID, "status", string(nextStatus))
+	return StateChangeResult{User: updated, PreviousStatus: snapshot.User.Status, Changed: true}, nil
+}
+
+// validateStateCommandRequest 校验状态命令的 ID 与乐观并发版本。
+func validateStateCommandRequest(request StateCommandRequest) error {
+	if !ValidUserID(request.UserID) {
+		return fmt.Errorf("%w: 用户 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.ExpectedRowVersion <= 0 {
+		return fmt.Errorf("%w: 期望行版本必须大于 0", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// deletionChanges 把删除影响快照转换为审计差异字段（只记录计数，不记录个人资料）。
+func deletionChanges(preview DeletionPreview) []audit.FieldChange {
+	return []audit.FieldChange{
+		{Field: "status", Before: string(preview.Status), After: "deleted"},
+		{Field: "app_memberships", After: formatInt64(int64(preview.AppMemberships))},
+		{Field: "user_roles", After: formatInt64(int64(preview.UserRoles))},
+		{Field: "group_memberships", After: formatInt64(int64(preview.GroupMemberships))},
+		{Field: "one_time_credentials", After: formatInt64(int64(preview.OneTimeCredentials))},
+		{Field: "owned_applications", After: formatInt64(int64(preview.OwnedApplications))},
+	}
+}
+
+// formatInt64 把计数/版本转换为审计差异值文本。
+func formatInt64(value int64) string {
+	return strconv.FormatInt(value, 10)
 }
 
 // authorize 校验可信调用身份与授权结果。任何缺失或未获准的身份一律
@@ -301,7 +568,7 @@ func normalizeListRequest(request ListRequest) (ListQuery, error) {
 
 // mapCreateError 把创建事务错误映射为账户领域错误。审计失败优先判定（即使
 // 业务失败也要求失败审计可写），避免把审计故障伪装成用户冲突。
-func mapCreateError(err error) error {
+func mapCriticalError(err error) error {
 	switch {
 	case err == nil:
 		return nil
@@ -311,6 +578,9 @@ func mapCreateError(err error) error {
 		return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
 	case errors.Is(err, ErrUsernameTaken):
 		return ErrUsernameTaken
+	case errors.Is(err, ErrProtectedUser), errors.Is(err, ErrInvalidTransition),
+		errors.Is(err, ErrStateConflict):
+		return err
 	case errors.Is(err, ErrInvalidRequest):
 		return err
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

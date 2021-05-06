@@ -2,13 +2,13 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 18）
+## 项目状态（步骤 19）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
 - 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）；HTTPS 单向认证 `internal/tlscert`（PEM 证书链/私钥/附加 CA、PKCS#12/PFX 导入、私钥与证书匹配、证书链与用途/有效期校验、按 SNI 选择证书、未知 SNI 拒绝、安全重载与到期状态）；可选客户端证书双向认证 mTLS（`disabled`/`required`/`optional` 模式、独立客户端信任 CA、显式“证书 DNS 名称 -> 可信服务身份”映射、可选模式拒绝无效证书降级、脱敏 mTLS 状态诊断与服务身份上下文）。
-- 账户领域基础 `internal/account` 与 SQLite 仓储 `internal/account/sqlite`（普通用户创建、按稳定 ID 查询、有限分页检索；用户名显示值/规范化值分离，NFKC 兼容规范化 + Unicode 大小写折叠；保留名、空白、Unicode 与长度规则；资料字段白名单；创建/读取审计与审计失败拒绝；可信本地初始化授权器，生产 HTTP 未接入）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、普通账户创建/查询（已由 `internal/account` 提供基础能力，但尚未接入 HTTP/服务启动）、密码登录与认证、权限、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 账户领域基础 `internal/account` 与 SQLite 仓储 `internal/account/sqlite`（普通用户创建、按稳定 ID 查询、有限分页检索；用户名显示值/规范化值分离，NFKC 兼容规范化 + Unicode 大小写折叠；保留名、空白、Unicode 与长度规则；资料字段白名单；创建/读取审计与审计失败拒绝；可信本地初始化授权器，生产 HTTP 未接入）；账户状态变更与删除流程（启用/禁用/待删除/完成删除状态机、row_version 乐观并发、security_version 失效语义、root 保护、删除影响预览与关联数据明确清理策略、关键变更同事务审计）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除的 HTTP 与服务启动接入（`internal/account` 已提供基础能力）、密码登录与认证、权限、OAuth/OIDC、Web 页面、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -336,7 +336,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **错误映射**：使用已登记错误码，不新增码：非法用户名/资料/分页/排序/ID 与用户不存在映射 `REQ_INVALID(400)`，用户名重复映射 `CONFLICT(409)`，未授权 `ACCESS_DENIED(403)`，存储不可用 `DB_UNAVAILABLE(503)`，审计失败 `AUDIT_WRITE_FAILED(503)`，未知错误 `INTERNAL_ERROR(500)`；创建失败时失败审计的错误码按真实失败类别记录（冲突 CONFLICT、存储 DB_UNAVAILABLE、审计 AUDIT_WRITE_FAILED、内部 INTERNAL_ERROR），根包测试核对字面值与注册表一致。
 - **依赖**：Unicode NFKC 规范化与大小写折叠使用 `golang.org/x/text v0.44.0`（Go 1.26 兼容、无额外运行时依赖）；未升级既有 `x/sys`。
 - **已验证（Windows amd64，临时 SQLite）**：正常创建与数据库敏感列默认值、显示/规范化用户名分离、全角/大小写/`ß` 与保留名规则、资料白名单与文本伪装、大小写重名、6 路并发重名仅 1 成功、分页/偏移/排序/状态过滤与非法参数、按 ID 查询与不存在、授权默认拒绝、审计成功/失败（触发器注入）与失败回滚、日志不输出用户名/资料正文；六目标编译与交叉 vet 在 MEMORY 记录。
-- **尚未实现/未验证**：HTTP/服务启动接入、密码登录/注册/邀请、邮箱与电话字段、头像与扩展资料、状态变更与删除（步骤 19）、实际权限模型、用户列表的管理范围隔离、Unicode 同形字/混淆字符骨架检测、用户名保留名国际化扩展、多进程/高并发与非 Windows 运行；race detector 与长期压力测试未做。
+- **尚未实现/未验证**：HTTP/服务启动接入、密码登录/注册/邀请、邮箱与电话字段、头像与扩展资料、应用内成员禁用（全局启用/禁用/删除已在步骤 19 实现，但尚未接 HTTP/服务启动）、实际权限模型、用户列表的管理范围隔离、Unicode 同形字/混淆字符骨架检测、用户名保留名国际化扩展、多进程/高并发与非 Windows 运行；race detector 与长期压力测试未做。
+
+## 账户状态变更、启用禁用与删除流程（步骤 19）
+
+在步骤 18 的账户领域服务上增加全局账户状态生命周期与明确删除流程；继续使用既有 `users` 表（`status`/`row_version`/`security_version` 列），本步未新增迁移。会话、OAuth 令牌等模块尚未实现，本步只定义并写可靠审计事件/security_version 失效契约，不提供假会话接口。
+
+- **状态机**：允许 `pending`/`active` -> `disabled`（禁用）、`disabled` -> `active`（启用）、`pending`/`active`/`disabled` -> `pending_delete`（请求删除）；`pending_delete` 不能再启用或禁用，只能完成删除；`active` 重复启用、`disabled` 重复禁用、`pending_delete` 重复请求删除都按幂等成功处理（`Changed=false`，不改版本，仍写一条成功审计便于追查）。未知命令与非法转换映射 `CONFLICT(409)`。
+- **row_version 与 security_version**：所有实际状态变更要求调用方传入读取到的 `row_version`，SQL 条件更新 `WHERE status=? AND row_version=? AND is_root=0`，并发修改时只有一个生效，其余返回 `CONFLICT`。禁用与请求删除各递增 `security_version`；启用**不递减**安全版本，旧会话/令牌（未来模块）不能因解禁而恢复。完成删除直接移除用户行，`user.delete.request`/`user.delete.complete` 审计事件与安全版本递增是未来会话/令牌模块必须消费的失效依据（目前没有会话表，未实现撤销逻辑）。
+- **受保护账户**：`is_root=1` 的账户不能通过普通管理流程禁用、请求删除或完成删除，返回 `ACCESS_DENIED(403)`；root 唯一约束仍由数据库保证，root 的受控创建与应急流程留给步骤 28，本步不提供任何初始化解禁或用例替身。操作者身份仍要求显式 `Authorizer`（仅 `LocalBootstrapAuthorizer` 受限本地初始化通道），未授权操作者返回 `ACCESS_DENIED`。
+- **删除影响与关联策略**：`PreviewDeletion` 返回应用成员关系、角色分配、用户组关系、一次性凭证与名下应用数量，供不可逆删除前确认。完成删除在一个审计事务中：删除一次性凭证、应用成员关系、角色分配、用户组成员关系与 `users` 行；`applications.owner_user_id` 由外键置空、应用记录保留；安全审计历史保留脱敏快照。**全局账户禁用不修改应用成员关系**，应用内禁用属应用范围策略，两者分开。
+- **一致性与失败回滚**：所有状态变更与完成删除使用 `audit.ExecuteCritical`，变更与成功审计同事务提交；审计失败整体回滚并返回 `AUDIT_WRITE_FAILED`。删除循环任一步失败（例如关联表触发器故障）整体回滚，用户仍为 `pending_delete`，失败审计按真实错误类别记录（DB_UNAVAILABLE 等），不会留下“用户已删但关联残留”或虚假成功。
+- **错误映射**：继续使用已登记码，不新增码：非法 ID/版本/命令 `REQ_INVALID(400)`；非法状态切换与并发冲突 `CONFLICT(409)`；root/未授权 `ACCESS_DENIED(403)`；存储 `DB_UNAVAILABLE(503)`；审计 `AUDIT_WRITE_FAILED(503)`；未知 `INTERNAL_ERROR(500)`。根包测试核对字面值与注册表一致。
+- **已验证（Windows amd64，临时 SQLite）**：禁用/启用/待删除状态与版本递增、重复请求幂等、非法转换、旧 row_version 冲突、4 路并发禁用仅一次生效且安全版本只增一次、root 受保护、删除预览计数、全局禁用不影响应用成员关系、完成删除清理凭证/成员/角色/组并保留应用与审计、owner 置空、重复完成返回不存在、关联删除触发器故障整体回滚且失败审计错误码正确、审计故障时状态变更/预览 fail-closed、未授权操作者拒绝；六目标编译与交叉 vet 在 MEMORY 记录。
+- **尚未实现/未验证**：HTTP/`cmd/login-server` 接入、真实会话/令牌撤销（当前仅有 security_version 与审计事件契约）、密码登录与注册、应用内成员禁用流程、批量导入导出、root 受控初始化（步骤 28）、完整权限模型、删除审批/回收站/保留期限策略；未做 race detector、多进程并发与非 Windows 运行。
 
 ## 本地检查（Windows）
 
@@ -390,7 +403,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～18 已完成；继续时按 .ai/ 中的顺序处理步骤 19（账户状态与删除流程），每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～19 已完成；继续时按 .ai/ 中的顺序处理步骤 20，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 

@@ -124,8 +124,12 @@ type User struct {
 	Timezone           string
 	Status             Status
 	RowVersion         int64
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// SecurityVersion 是会话/令牌失效版本。禁用与删除请求会递增它；启用不会
+	// 递减。未来会话/令牌模块必须拒绝版本低于当前值的凭证（本步未实现这些
+	// 模块，只提供数据和可靠审计事件作为失效契约）。
+	SecurityVersion int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // CreateRequest 是创建用户的资料白名单。它刻意不包含 status、is_root、
@@ -171,6 +175,12 @@ var (
 	ErrStoreUnavailable = errors.New("账户存储暂时不可用")
 	// ErrAuditUnavailable 表示安全审计未能可靠写入，操作被拒绝。
 	ErrAuditUnavailable = errors.New("关键操作未能可靠记录")
+	// ErrProtectedUser 表示目标账户受保护（root 等），普通管理流程不能禁用/删除。
+	ErrProtectedUser = errors.New("受保护账户不能通过普通管理流程变更")
+	// ErrInvalidTransition 表示当前状态不允许该操作（例如已待删除账户解禁）。
+	ErrInvalidTransition = errors.New("当前账户状态不允许该操作")
+	// ErrStateConflict 表示并发修改或行版本不匹配，调用方应重新读取后决定。
+	ErrStateConflict = errors.New("账户状态已被其他操作修改")
 )
 
 // ErrorCode 是根包错误码注册表中的稳定字符串值。internal 包不能 import 根包，
@@ -202,8 +212,10 @@ func CodeOf(err error) ErrorCode {
 		return CodeReqInvalid
 	case errors.Is(err, ErrUsernameTaken):
 		return CodeConflict
-	case errors.Is(err, ErrAccessDenied):
+	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrProtectedUser):
 		return CodeAccessDenied
+	case errors.Is(err, ErrInvalidTransition), errors.Is(err, ErrStateConflict):
+		return CodeConflict
 	case errors.Is(err, ErrStoreUnavailable):
 		return CodeDBUnavailable
 	case errors.Is(err, ErrAuditUnavailable):
@@ -451,11 +463,28 @@ const (
 	ActionGetUser Action = "user.get"
 	// ActionListUsers 分页检索用户。
 	ActionListUsers Action = "user.list"
+	// ActionDisableUser 全局禁用账户。
+	ActionDisableUser Action = "user.disable"
+	// ActionEnableUser 启用已禁用账户。
+	ActionEnableUser Action = "user.enable"
+	// ActionRequestDeletion 标记账户待删除（软删除状态）。
+	ActionRequestDeletion Action = "user.delete.request"
+	// ActionPreviewDeletion 查看删除影响范围。
+	ActionPreviewDeletion Action = "user.delete.preview"
+	// ActionCompleteDeletion 完成删除（硬删除账户与关联个人数据）。
+	ActionCompleteDeletion Action = "user.delete.complete"
 )
 
 // Valid 报告动作是否已定义。
 func (a Action) Valid() bool {
-	return a == ActionCreateUser || a == ActionGetUser || a == ActionListUsers
+	switch a {
+	case ActionCreateUser, ActionGetUser, ActionListUsers,
+		ActionDisableUser, ActionEnableUser, ActionRequestDeletion,
+		ActionPreviewDeletion, ActionCompleteDeletion:
+		return true
+	default:
+		return false
+	}
 }
 
 // Caller 是通过可信边界建立的操作者上下文。字段不导出：调用方只能通过
@@ -537,6 +566,122 @@ func (a *LocalBootstrapAuthorizer) Authorize(_ context.Context, caller Caller, a
 		return ErrAccessDenied
 	}
 	return nil
+}
+
+// UserCommand 是受控的全局账户状态命令。它不包含任意状态赋值：调用方只能
+// 请求 disable/enable/request_deletion，由服务按状态机决定是否合法。
+type UserCommand string
+
+const (
+	// CommandDisable 全局禁用账户（保留应用成员关系与其他数据，仅禁止账户使用）。
+	CommandDisable UserCommand = "disable"
+	// CommandEnable 重新启用已禁用账户；不会恢复旧会话，也不会降低安全版本。
+	CommandEnable UserCommand = "enable"
+	// CommandRequestDeletion 将账户标记为待删除，递增安全版本并使后续状态变更
+	// 只能走向完成删除。
+	CommandRequestDeletion UserCommand = "request_deletion"
+)
+
+// Valid 报告命令是否已定义。
+func (c UserCommand) Valid() bool {
+	return c == CommandDisable || c == CommandEnable || c == CommandRequestDeletion
+}
+
+// action 返回命令对应的审计动作。
+func (c UserCommand) action() Action {
+	switch c {
+	case CommandDisable:
+		return ActionDisableUser
+	case CommandEnable:
+		return ActionEnableUser
+	case CommandRequestDeletion:
+		return ActionRequestDeletion
+	default:
+		return ""
+	}
+}
+
+// bumpsSecurityVersion 报告命令是否必须递增 security_version 以让未来会话/令牌
+// 失效。启用不递增，避免“解禁即恢复旧凭证”的绕过。
+func (c UserCommand) bumpsSecurityVersion() bool {
+	return c == CommandDisable || c == CommandRequestDeletion
+}
+
+// StateCommandRequest 是状态变更请求。ExpectedRowVersion 必须是调用方读取到的
+// 当前 row_version（>0），用于乐观并发；同一状态重复请求按幂等成功处理，不
+// 要求版本匹配。
+type StateCommandRequest struct {
+	UserID             string
+	ExpectedRowVersion int64
+}
+
+// StateChangeResult 是一次状态命令的结果。Changed=false 表示目标已处于请求状态
+// （幂等成功）；此时不会修改 row_version/security_version。
+type StateChangeResult struct {
+	User           User
+	PreviousStatus Status
+	Changed        bool
+}
+
+// DeletionPreview 是完成删除前的影响范围快照。计数是读取时的快照，实际删除在
+// 事务中再次执行；它用于让操作者在不可逆删除前确认影响。
+type DeletionPreview struct {
+	UserID             string
+	Username           string
+	Status             Status
+	RowVersion         int64
+	SecurityVersion    int64
+	IsRoot             bool
+	AppMemberships     int
+	UserRoles          int
+	GroupMemberships   int
+	OneTimeCredentials int
+	OwnedApplications  int
+}
+
+// DeletionResult 是完成删除的结果与删除前影响快照。
+type DeletionResult struct {
+	Preview   DeletionPreview
+	DeletedAt time.Time
+}
+
+// transitionStatus 应用状态机。changed=false 表示幂等无操作；非法转换返回
+// ErrInvalidTransition。
+func transitionStatus(current Status, command UserCommand) (next Status, changed bool, err error) {
+	if !command.Valid() {
+		return current, false, fmt.Errorf("%w: 未知状态命令", ErrInvalidRequest)
+	}
+	switch command {
+	case CommandDisable:
+		switch current {
+		case StatusPending, StatusActive:
+			return StatusDisabled, true, nil
+		case StatusDisabled:
+			return StatusDisabled, false, nil
+		default:
+			return current, false, fmt.Errorf("%w: 待删除账户不能禁用", ErrInvalidTransition)
+		}
+	case CommandEnable:
+		switch current {
+		case StatusDisabled:
+			return StatusActive, true, nil
+		case StatusActive:
+			return StatusActive, false, nil
+		default:
+			return current, false, fmt.Errorf("%w: 只有已禁用账户可以直接启用", ErrInvalidTransition)
+		}
+	case CommandRequestDeletion:
+		switch current {
+		case StatusPending, StatusActive, StatusDisabled:
+			return StatusPendingDelete, true, nil
+		case StatusPendingDelete:
+			return StatusPendingDelete, false, nil
+		default:
+			return current, false, fmt.Errorf("%w: 当前状态不能请求删除", ErrInvalidTransition)
+		}
+	default:
+		return current, false, fmt.Errorf("%w: 未知状态命令", ErrInvalidRequest)
+	}
 }
 
 // isNilInterface 检测 nil 接口与 typed nil 指针，避免服务调用时 panic。
