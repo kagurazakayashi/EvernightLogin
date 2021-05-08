@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 )
 
@@ -66,6 +67,23 @@ type Store interface {
 	// UserEligibleAsOwner 报告用户是否存在且处于 active 状态；负责人变更只允许
 	// 指向仍可用账户，不做任何权限转移。
 	UserEligibleAsOwner(ctx context.Context, userID string) (bool, error)
+
+	// 应用成员持久化：所有方法都必须以 ApplicationID + UserID 为范围，仓储不得
+	// 提供跨应用读取或写入。成员资料只存 profile_json，不写回全局用户资料。
+	GetMembership(ctx context.Context, applicationID, userID string) (Membership, error)
+	ListMemberships(ctx context.Context, query MemberListQuery) ([]Membership, bool, error)
+	// CreateMembership 必须在调用方审计事务中写入成员关系；重复加入返回
+	// ErrMemberExists，不覆盖已有成员资料。
+	CreateMembership(ctx context.Context, tx audit.Tx, membership Membership) error
+	// UpdateMembershipProfile 只更新 profile_json 与 row_version。
+	UpdateMembershipProfile(ctx context.Context, tx audit.Tx, update MemberProfileUpdate) error
+	// ApplyMembershipStatus 以状态与行版本为条件更新应用内成员状态。
+	ApplyMembershipStatus(ctx context.Context, tx audit.Tx, change MemberStatusChange) error
+	// RemoveMembership 以行版本为条件删除成员关系；只影响指定应用，不删除用户。
+	RemoveMembership(ctx context.Context, tx audit.Tx, remove MemberRemove) error
+	// LookupUserStatus 返回全局账户状态与是否存在；加入/启用成员前必须要求
+	// active，删除/停用成员关系时允许清理非 active 账户。
+	LookupUserStatus(ctx context.Context, userID string) (account.Status, bool, error)
 }
 
 // Options 是构造应用服务的显式依赖。
@@ -574,7 +592,9 @@ func mapCriticalError(err error) error {
 	case errors.Is(err, ErrInvalidRequest):
 		return err
 	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrStateConflict),
-		errors.Is(err, ErrInvalidTransition):
+		errors.Is(err, ErrInvalidTransition), errors.Is(err, ErrMemberExists),
+		errors.Is(err, ErrMemberNotFound), errors.Is(err, ErrTargetUserNotFound),
+		errors.Is(err, ErrApplicationInactive), errors.Is(err, ErrUserNotEligible):
 		return err
 	case errors.Is(err, ErrApplicationNotFound), errors.Is(err, ErrStoreUnavailable):
 		return err

@@ -14,6 +14,12 @@
 //     授权器/后续权限模块维护。
 //   - 应用停用写入状态与可靠审计事件；依赖方必须检查应用状态，令牌/会话模块
 //     以后才能消费该失效信号（本步不实现令牌）。
+//   - 应用成员关系与应用专属资料按应用隔离：成员状态只影响指定应用，不能禁用
+//     全局账户或影响其他应用；加入既有账户必须经过可信 Authorizer 的受控调用，
+//     仅知道用户名/邮箱不能认领账户，成员关系不自动授予任何业务功能权限。
+//   - 成员添加/资料更新/启停在审计事务中与成功审计一致提交；成员移除写可靠审计
+//     事件。未来令牌/会话模块必须消费成员移除/停用与应用停用事件，并在每次授权
+//     时读取当前成员状态；本包没有会话/令牌表，不声称撤销全链路已完成。
 //   - 本步不提供应用删除：删除会级联应用 scope、角色/权限关系与成员关系，必须在
 //     后续步骤先定义审计保留、数据移交与受保护应用策略；停用不等于删除。
 package app
@@ -199,6 +205,8 @@ const (
 	CodeReqInvalid       ErrorCode = "REQ_INVALID"
 	CodeConflict         ErrorCode = "CONFLICT"
 	CodeAccessDenied     ErrorCode = "ACCESS_DENIED"
+	CodeClientDisabled   ErrorCode = "CLIENT_DISABLED"
+	CodeUserDisabled     ErrorCode = "USER_DISABLED"
 	CodeDBUnavailable    ErrorCode = "DB_UNAVAILABLE"
 	CodeAuditWriteFailed ErrorCode = "AUDIT_WRITE_FAILED"
 	CodeInternalError    ErrorCode = "INTERNAL_ERROR"
@@ -209,12 +217,20 @@ func CodeOf(err error) ErrorCode {
 	switch {
 	case err == nil:
 		return ""
-	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrApplicationNotFound):
+	case errors.Is(err, ErrInvalidRequest),
+		errors.Is(err, ErrApplicationNotFound),
+		errors.Is(err, ErrMemberNotFound),
+		errors.Is(err, ErrTargetUserNotFound):
 		return CodeReqInvalid
-	case errors.Is(err, ErrStateConflict), errors.Is(err, ErrInvalidTransition):
+	case errors.Is(err, ErrStateConflict), errors.Is(err, ErrInvalidTransition),
+		errors.Is(err, ErrMemberExists):
 		return CodeConflict
 	case errors.Is(err, ErrAccessDenied):
 		return CodeAccessDenied
+	case errors.Is(err, ErrApplicationInactive):
+		return CodeClientDisabled
+	case errors.Is(err, ErrUserNotEligible):
+		return CodeUserDisabled
 	case errors.Is(err, ErrStoreUnavailable):
 		return CodeDBUnavailable
 	case errors.Is(err, ErrAuditUnavailable):
@@ -370,13 +386,24 @@ const (
 	ActionUpdateApplication  Action = "application.update"
 	ActionEnableApplication  Action = "application.enable"
 	ActionDisableApplication Action = "application.disable"
+	// 应用成员动作；全部要求显式 ApplicationID，授权器按应用分配判权。
+	ActionAddApplicationMember           Action = "application.member.add"
+	ActionGetApplicationMember           Action = "application.member.get"
+	ActionListApplicationMembers         Action = "application.member.list"
+	ActionUpdateApplicationMemberProfile Action = "application.member.profile.update"
+	ActionEnableApplicationMember        Action = "application.member.enable"
+	ActionDisableApplicationMember       Action = "application.member.disable"
+	ActionRemoveApplicationMember        Action = "application.member.remove"
 )
 
 // Valid 报告动作是否已定义。
 func (a Action) Valid() bool {
 	switch a {
 	case ActionCreateApplication, ActionGetApplication, ActionListApplications,
-		ActionUpdateApplication, ActionEnableApplication, ActionDisableApplication:
+		ActionUpdateApplication, ActionEnableApplication, ActionDisableApplication,
+		ActionAddApplicationMember, ActionGetApplicationMember, ActionListApplicationMembers,
+		ActionUpdateApplicationMemberProfile, ActionEnableApplicationMember,
+		ActionDisableApplicationMember, ActionRemoveApplicationMember:
 		return true
 	default:
 		return false

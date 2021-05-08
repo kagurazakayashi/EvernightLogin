@@ -2,14 +2,14 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 20）
+## 项目状态（步骤 21）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
 - 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）；HTTPS 单向认证 `internal/tlscert`（PEM 证书链/私钥/附加 CA、PKCS#12/PFX 导入、私钥与证书匹配、证书链与用途/有效期校验、按 SNI 选择证书、未知 SNI 拒绝、安全重载与到期状态）；可选客户端证书双向认证 mTLS（`disabled`/`required`/`optional` 模式、独立客户端信任 CA、显式“证书 DNS 名称 -> 可信服务身份”映射、可选模式拒绝无效证书降级、脱敏 mTLS 状态诊断与服务身份上下文）。
 - 账户领域基础 `internal/account` 与 SQLite 仓储 `internal/account/sqlite`（普通用户创建、按稳定 ID 查询、有限分页检索；用户名显示值/规范化值分离，NFKC 兼容规范化 + Unicode 大小写折叠；保留名、空白、Unicode 与长度规则；资料字段白名单；创建/读取审计与审计失败拒绝；可信本地初始化授权器，生产 HTTP 未接入）；账户状态变更与删除流程（启用/禁用/待删除/完成删除状态机、row_version 乐观并发、security_version 失效语义、root 保护、删除影响预览与关联数据明确清理策略、关键变更同事务审计）。
-- 应用领域基础 `internal/app` 与 SQLite 仓储 `internal/app/sqlite`（应用登记、读取、有限分页、展示资料更新、启停状态；应用 ID 不可变；创建时同一事务写入唯一应用 scope；client_type 只在创建时确定；负责人变更不自动转移管理权限；应用管理员按显式分配仅操作已分配应用；停用写可靠审计事件，依赖方须检查应用状态；删除应用未在本步实现）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除与应用登记/资料/启停的 HTTP 与服务启动接入（`internal/account`/`internal/app` 已提供基础能力）、密码登录与认证、权限、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 应用领域基础 `internal/app` 与 SQLite 仓储 `internal/app/sqlite`（应用登记、读取、有限分页、展示资料更新、启停状态；应用 ID 不可变；创建时同一事务写入唯一应用 scope；client_type 只在创建时确定；负责人变更不自动转移管理权限；应用管理员按显式分配仅操作已分配应用；停用写可靠审计事件，依赖方须检查应用状态；删除应用未在本步实现）；应用成员管理（受控加入既有账户、应用内成员状态启停、按应用隔离的分页/读取、应用专属资料白名单；成员状态与资料只影响指定应用，不修改全局账户或其他应用；成员移除/停用写可靠审计事件，未来会话/令牌模块须消费事件并复查当前状态）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停与应用成员管理的 HTTP 与服务启动接入（`internal/account`/`internal/app` 已提供基础能力）、密码登录与认证、权限、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -363,7 +363,22 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **启停语义**：创建默认 `disabled`，启停通过独立命令变更（`active`/`disabled`），不提供删除；重复启停幂等成功，实际变更要求当前 `row_version` 且条件 UPDATE，冲突映射 `CONFLICT(409)`。停用不会删除应用或作用范围，依赖方必须检查应用状态；本步写入可靠审计事件，令牌/会话模块以后消费该失效信号（当前未实现令牌，不声称撤销完成）。应用删除会级联 scope/角色/成员关系，需要后续步骤先定义审计保留与数据策略，本步明确不提供，停用不等于删除。
 - **一致性与错误**：创建/更新/启停使用 `audit.ExecuteCritical`，业务变更与成功审计同事务；审计失败整体回滚并返回 `AUDIT_WRITE_FAILED`。读取/列表写审计，审计失败拒绝返回数据。错误映射到已登记码：参数/应用不存在 `REQ_INVALID(400)`、状态/并发冲突 `CONFLICT(409)`、未授权 `ACCESS_DENIED(403)`、存储 `DB_UNAVAILABLE(503)`、审计 `AUDIT_WRITE_FAILED(503)`、未知 `INTERNAL_ERROR(500)`；根包测试核对字面值与注册表一致。失败审计错误码按实际错误映射（复用步骤 18 `FailureErrorCodeFor`）。
 - **已验证（Windows amd64，临时 SQLite）**：登记与 scope 一致、scope 写入故障整体回滚与失败审计、字段/URL/图标规则、ID/client_type/scope 不可变、系统更新资料与负责人、应用管理员普通资料更新与改负责人拒绝、新负责人不自动获得管理权限、启停可见性/幂等/旧版本冲突/4 路并发启停仅一次生效、列表分页与排序边界、应用管理员列表/读取范围隔离、无分配用户列表为空、创建权限拒绝、审计故障 fail-closed、错误码映射；六目标编译与交叉 vet 在 MEMORY 记录。
-- **尚未实现/未验证**：应用删除、OAuth 客户端凭证/回调/授权端点、Web 页面、HTTP/`cmd/login-server` 接入、完整权限引擎/app 管理员分配持久化（当前 `StaticAuthorizer` 内存配置）、应用成员管理、负责人转移后的权限迁移策略、审计查询；未做 race detector、多进程并发与非 Windows 运行。
+- **尚未实现/未验证**：应用删除、OAuth 客户端凭证/回调/授权端点、Web 页面、HTTP/`cmd/login-server` 接入、完整权限引擎/app 管理员分配持久化（当前 `StaticAuthorizer` 内存配置）、应用成员管理（步骤 21 已实现基础能力）、负责人转移后的权限迁移策略、审计查询；未做 race detector、多进程并发与非 Windows 运行。
+
+## 应用成员管理与应用内资料隔离（步骤 21）
+
+在步骤 20 的应用领域上增加应用成员关系与应用专属资料：成员增删改查按应用隔离，加入既有账户必须受控授权，应用内禁用/移除不影响全局账户或其他应用。继续使用迁移 0001 的 `app_memberships` 表（`app_id`+`user_id` 唯一键、`status`、`profile_json`、`row_version`），本步未新增迁移，也未操作 `database/login.db`。
+
+- **应用隔离键**：所有成员持久化操作都以 `(application_id,user_id)` 为范围，查询/列表/更新/删除的 SQL 都带应用 ID；应用 ID 与用户 ID 只接受服务生成的固定格式。仓储不提供跨应用读取接口，服务层每个操作先通过 `Authorizer` 按被操作应用判权。
+- **受控加入既有账户**：`AddApplicationMember` 只接受稳定用户 ID（不接受用户名、邮箱或自助加入标记），要求调用者是本地管理员、系统操作者或该应用被显式分配的应用管理员；知道用户名/邮箱不能被用来认领账户。目标应用必须 `active`，目标账户必须存在且 `active`；重复加入返回 `CONFLICT` 且不覆盖已有成员资料。
+- **应用内状态**：成员状态只有 `active`/`disabled`。应用内禁用/启用/移除只改 `app_memberships` 中该应用的一行；不会修改 `users.status` 或同一用户在其他应用中的成员关系。成员状态与全局账户状态共同检查：启用成员与更新应用资料要求应用与账户均 `active`；停用/移除属于安全清理，允许在应用停用或账户非 active 时执行。
+- **应用专属资料**：`profile_json` 只含白名单字段（应用内显示名 ≤64 码点、职位 ≤64、备注 ≤500），单行字段拒绝换行/控制/格式字符，备注允许换行；存储为带版本号的规范 JSON，读取时拒绝未知版本、未知字段、未规范化值与异常 JSON（fail-closed）。资料更新只写该应用行，不写全局账户资料，也不影响其他应用。
+- **并发与事务**：加入使用唯一主键 + `ON CONFLICT DO NOTHING`，重复/并发加入只有一个成功；资料更新、启停、移除使用 `row_version` 条件更新，并发只允许一个生效，其余返回 `CONFLICT`；所有关键变更在 `audit.ExecuteCritical` 事务中与成功审计一致提交，失败审计按真实错误类别映射（如重复加入 `CONFLICT`、存储故障 `DB_UNAVAILABLE`、审计故障 `AUDIT_WRITE_FAILED`）。
+- **审计与失效契约**：审计记录操作者、`app_id_snapshot`、目标用户与动作：`application.member.add`/`get`/`list`/`profile.update`/`enable`/`disable`/`remove`；资料差异只记录字段名并脱敏为 `[REDACTED]`，不写应用内资料正文。成员移除/停用与应用停用事件是未来会话/令牌模块的失效信号，模块还必须在每次授权时读取当前成员状态；当前没有会话/令牌实现，本步不提供假撤销接口，也不声称全链路撤销已完成。
+- **权限边界**：成员关系本身不授予任何业务功能；应用内角色、用户组与权限分配仍待后续步骤，加入应用不等于获得全部业务功能。应用管理员只能管理已显式分配应用的成员。
+- **错误映射**：不新增错误码：非法 ID/分页/资料/版本、应用或成员不存在 `REQ_INVALID(400)`；重复加入、并发冲突 `CONFLICT(409)`；未授权 `ACCESS_DENIED(403)`；应用停用 `CLIENT_DISABLED(403)`；目标账户不可用 `USER_DISABLED(403)`；存储 `DB_UNAVAILABLE(503)`；审计 `AUDIT_WRITE_FAILED(503)`；未知 `INTERNAL_ERROR(500)`。根包测试核对字面值与注册表。
+- **已验证（Windows amd64，临时 SQLite）**：同一用户加入两个应用时应用专属资料与状态互不影响、更新/移除不写全局资料；应用管理员只能操作被分配应用（读取/列表/加入/更新/启停/移除跨应用全部拒绝）、无分配用户与未授权用户拒绝、本地/系统操作者可管理；应用停用后加入/启用/资料更新拒绝而停用/移除允许；全局禁用账户加入/启用/资料更新拒绝而停用/移除允许；重复加入 CONFLICT 且保留首次资料；4 路并发加入/资料更新/移除只有一个成功终态、成功与失败审计数量一致、移除审计保留应用与目标用户；异常 profile_json 读取 fail-closed、审计故障整体回滚、存储故障失败审计错误码正确；六目标编译与交叉 vet 在 MEMORY 记录。
+- **尚未实现/未验证**：应用成员 HTTP/`cmd/login-server` 接入、真实会话/令牌撤销（当前只有审计事件与“授权时复查成员状态”契约）、应用内角色/用户组/权限分配、邀请/注册加入流程、批量成员导入导出、应用删除时成员级联策略、成员状态历史与审计查询；未做 race detector、多进程并发与非 Windows 运行。
 
 ## 本地检查（Windows）
 
@@ -401,6 +416,8 @@ go run .\cmd\login-server --help
 | internal/netpolicy/ | 监听地址、允许主机与 HTTP Host 的严格解析（内部包） | 是 |
 | internal/proxytrust/ | Forwarded/X-Forwarded-* 可信代理链解析（内部包） | 是 |
 | internal/listener/ | 多地址 HTTP 监听、失败整体回滚与关停释放端口（内部包） | 是 |
+| internal/account/ | 普通用户创建/查询/分页、用户名规范化与资料白名单，及账户状态与删除流程（内部包） | 是 |
+| internal/app/ | 应用登记/资料/启停、作用范围一致性，与应用成员管理及应用内资料隔离（内部包） | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
@@ -417,7 +434,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～20 已完成；继续时按 .ai/ 中的顺序处理步骤 21，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～21 已完成；继续时按 .ai/ 中的顺序处理步骤 22，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 

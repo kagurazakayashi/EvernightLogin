@@ -1,8 +1,10 @@
 // Package sqlite 实现 internal/app.Store 的 SQLite 生产仓储。
 //
-// 表结构来自 migrations/0001_identity_and_scope_core.sql 的 applications 与
-// scopes 表；本包不执行迁移。创建应用必须在调用方事务中同时写入 applications
-// 与对应 scopes 行（id=app_id, kind='application'），保证应用与作用范围一致。
+// 表结构来自 migrations/0001_identity_and_scope_core.sql 的 applications、scopes
+// 与 app_memberships 表；本包不执行迁移。创建应用必须在调用方事务中同时写入
+// applications 与对应 scopes 行（id=app_id, kind='application'），保证应用与作用
+// 范围一致；应用成员读写始终以 (app_id,user_id) 为范围，profile_json 只保存应用
+// 专属资料，不写回 users 表。
 package sqlite
 
 import (
