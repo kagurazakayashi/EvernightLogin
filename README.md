@@ -2,14 +2,16 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 22）
+## 项目状态（步骤 23）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
 - 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）；HTTPS 单向认证 `internal/tlscert`（PEM 证书链/私钥/附加 CA、PKCS#12/PFX 导入、私钥与证书匹配、证书链与用途/有效期校验、按 SNI 选择证书、未知 SNI 拒绝、安全重载与到期状态）；可选客户端证书双向认证 mTLS（`disabled`/`required`/`optional` 模式、独立客户端信任 CA、显式“证书 DNS 名称 -> 可信服务身份”映射、可选模式拒绝无效证书降级、脱敏 mTLS 状态诊断与服务身份上下文）。
 - 账户领域基础 `internal/account` 与 SQLite 仓储 `internal/account/sqlite`（普通用户创建、按稳定 ID 查询、有限分页检索；用户名显示值/规范化值分离，NFKC 兼容规范化 + Unicode 大小写折叠；保留名、空白、Unicode 与长度规则；资料字段白名单；创建/读取审计与审计失败拒绝；可信本地初始化授权器，生产 HTTP 未接入）；账户状态变更与删除流程（启用/禁用/待删除/完成删除状态机、row_version 乐观并发、security_version 失效语义、root 保护、删除影响预览与关联数据明确清理策略、关键变更同事务审计）。
 - 应用领域基础 `internal/app` 与 SQLite 仓储 `internal/app/sqlite`（应用登记、读取、有限分页、展示资料更新、启停状态；应用 ID 不可变；创建时同一事务写入唯一应用 scope；client_type 只在创建时确定；负责人变更不自动转移管理权限；应用管理员按显式分配仅操作已分配应用；停用写可靠审计事件，依赖方须检查应用状态；删除应用未在本步实现）；应用成员管理（受控加入既有账户、应用内成员状态启停、按应用隔离的分页/读取、应用专属资料白名单；成员状态与资料只影响指定应用，不修改全局账户或其他应用；成员移除/停用写可靠审计事件，未来会话/令牌模块须消费事件并复查当前状态）。
-- 用户组领域基础 `internal/group` 与 SQLite 仓储 `internal/group/sqlite`（系统范围/应用范围用户组、稳定组 ID 与不可变 group_key、显示名称/说明可修改但 scope 不可转移、组成员批量加入/移除/分页；应用组只允许该应用有效成员，系统组管理与成员变更要求相应资格；批量成员操作上限 12 人、全有或全无；组成员变更加审计事件，角色模块接入后需消费以失效权限；删除组级联删除成员/组角色关联但不删除用户与审计历史；不实现角色分配/嵌套组/HTTP 端点）。- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group` 已提供基础能力）、密码登录与认证、权限、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 用户组领域基础 `internal/group` 与 SQLite 仓储 `internal/group/sqlite`（系统范围/应用范围用户组、稳定组 ID 与不可变 group_key、显示名称/说明可修改但 scope 不可转移、组成员批量加入/移除/分页；应用组只允许该应用有效成员，系统组管理与成员变更要求相应资格；批量成员操作上限 12 人、全有或全无；组成员变更加审计事件，角色模块接入后需消费以失效权限；删除组级联删除成员/组角色关联但不删除用户与审计历史；不实现角色分配/嵌套组/HTTP 端点）。
+- 权限目录基础 `internal/permission` 与 SQLite 仓储 `internal/permission/sqlite`（系统内置/系统自定义/应用独有权限；scope+机器标识唯一定位、同名跨应用隔离；内置权限标识/含义不可改不可删、可按规则启停，root_only 敏感权限仅本地初始化操作者启停；自定义权限名称/说明/限制可改、机器标识不可变；机器可读定义含 key/分组/scope/生效对象/默认启用/敏感/builtin/enabled；被角色引用时拒绝删除；停用是拒绝而非跳过检查；不实现角色分配/授权执行/HTTP）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission` 已提供基础能力）、密码登录与认证、权限、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -394,6 +396,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **已验证（Windows amd64，临时 SQLite）**：组 CRUD 与同 scope 组键唯一、跨 scope 同 key/同名允许、scope/group_key 更新不变；系统组/应用组权限隔离；应用组跨应用成员与停用成员/全局停用账户拒绝；应用停用后拒绝建组与加入但允许移除；批量上限/空列表/重复去重；混合不合格整批回滚；并发重复加入最终仅一条成员；移除幂等与分页；**列表空 ScopeID 默认用法（系统/本地管理员/应用管理员）、范围过滤、分页与 HasMore、无分配用户空列表**；读取组先按可管理范围鉴权再读完整记录；审计故障 fail-closed；删除组级联成员/组角色且不删用户/审计；错误码与根包注册表一致（含 CLIENT_DISABLED/USER_DISABLED）；六目标编译与交叉 vet 在 MEMORY 记录。
 - **尚未实现/未验证**：角色分配、组角色权限、嵌套组（数据库无嵌套结构，本步明确不支持，因而无环路/深度传播问题）、系统/应用权限引擎持久化（`StaticAuthorizer` 内存白名单）、组成员变更触发的真实令牌/会话失效、HTTP/`cmd/login-server` 接入、审计查询；未做 race detector、多进程并发与非 Windows 运行。
 
+## 权限目录（步骤 23）
+
+新增内部权限目录服务 `internal/permission` 与 SQLite 生产仓储 `internal/permission/sqlite`：实现系统内置、系统自定义与应用独有权限的登记、读取、分页、资料更新、启停与受引用保护的删除，不提前实现角色分配或授权执行。继续使用迁移 0001 的 `permissions`/`role_permissions` 表，本步未新增迁移，也未操作 `database/login.db`。
+
+- **定位与隔离**：权限以 `(scope_id, permission_key)` 共同唯一定位；系统 scope 固定 `system`，应用 scope ID 与应用 ID 相同。不同应用可有同名机器标识但互不串用；跨作用范围的读取/更新/启停/删除一律 `ACCESS_DENIED`，应用管理员不会看到系统权限或其他应用权限。
+- **三类权限**：系统内置（scope=system、is_builtin=1，只能由本地/系统操作者登记）、系统自定义（scope=system、is_builtin=0）、应用独有（scope=应用 ID、is_builtin=0）。应用管理员只能登记/管理被分配应用的权限，不能创建系统权限、不能创建 builtin 或 root_only 权限，不能提升系统资格。
+- **内置权限保护**：内置权限的机器标识、名称、说明、限制、root_only 语义不可修改、不可删除；只能启用/停用。`root_only` 敏感权限（内置或系统自定义）只能由受限本地初始化操作者启停，停用是拒绝操作而不是跳过检查。内置权限登记/启停均写可靠审计。
+- **自定义权限**：直白名称、说明、明确限制可修改；`permission_key`、scope、builtin/root_only 不在更新请求中，因此机器标识不可变。机器标识变更必须新增权限并显式迁移引用；本步不提供隐式改名/迁移接口。
+- **机器可读定义**：`Permission.Definition()` 返回 key、分组（机器标识首段）、scope/scope_kind、生效对象（system 或 application:<appID>）、直白名称、说明、明确限制、默认启用值、敏感（root_only）、builtin 与当前 enabled，供前端目录、审计和后续授权模块使用。新建权限默认 enabled=true；登记不代表创建者获得该权限。
+- **字段与命名边界**：机器标识 3～128 字节、2～4 个点号分段、小写字母/数字/下划线且每段字母开头；名称 1～64 码点单行，说明 1～500 码点，限制说明 1～1000 码点；拒绝控制/格式字符与空值。
+- **启停与删除**：启停幂等（重复请求 Changed=false 且仍写成功审计），实际变更写审计事务；停用后依赖方必须把该权限视为拒绝，但本步不执行授权，不能声称已撤销既有角色授权。删除自定义权限前检查 `role_permissions` 引用，有引用返回 `CONFLICT` 并拒绝；删除使用条件事务，避免并发引用被隐式级联删除。内置权限不可删除；审计历史保留。
+- **错误映射**：不新增错误码：参数/不存在/scope 无效 `REQ_INVALID(400)`；机器标识冲突/引用冲突/状态冲突 `CONFLICT(409)`；未授权/内置保护 `ACCESS_DENIED(403)`；应用停用 `CLIENT_DISABLED(403)`；存储 `DB_UNAVAILABLE(503)`；审计 `AUDIT_WRITE_FAILED(503)`；未知 `INTERNAL_ERROR(500)`。
+- **已验证（Windows amd64，临时 SQLite）**：三类权限登记与机器可读定义完整性；同名跨应用/跨 scope 隔离；应用管理员创建系统/内置/root_only 权限拒绝；内置权限更新/删除拒绝、启停幂等、root_only 仅本地操作者；自定义资料更新不改 key/scope；启停状态可见；被角色引用拒绝删除、解除后可删；并发同名创建仅一次成功其余 CONFLICT；列表默认/范围过滤/分页/HasMore/enabled 过滤；读取先鉴权后读；审计故障 fail-closed；错误码与根包注册表一致（含 CLIENT_DISABLED）；六目标编译与交叉 vet 在 MEMORY 记录。
+- **尚未实现/未验证**：角色与 role_permissions 分配 API、授权执行/令牌校验、权限删除后的角色引用迁移工具、权限目录 HTTP/`cmd/login-server` 接入、预设权限目录批量导入、权限定义版本化/变更审批；`StaticAuthorizer` 为内存白名单；未做 race detector、多进程并发与非 Windows 运行。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -448,7 +465,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～22 已完成；继续时按 .ai/ 中的顺序处理步骤 23，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～23 已完成；继续时按 .ai/ 中的顺序处理步骤 24，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 
