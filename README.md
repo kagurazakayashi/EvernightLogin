@@ -2,7 +2,7 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 23）
+## 项目状态（步骤 24）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
@@ -11,7 +11,8 @@ login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立�
 - 应用领域基础 `internal/app` 与 SQLite 仓储 `internal/app/sqlite`（应用登记、读取、有限分页、展示资料更新、启停状态；应用 ID 不可变；创建时同一事务写入唯一应用 scope；client_type 只在创建时确定；负责人变更不自动转移管理权限；应用管理员按显式分配仅操作已分配应用；停用写可靠审计事件，依赖方须检查应用状态；删除应用未在本步实现）；应用成员管理（受控加入既有账户、应用内成员状态启停、按应用隔离的分页/读取、应用专属资料白名单；成员状态与资料只影响指定应用，不修改全局账户或其他应用；成员移除/停用写可靠审计事件，未来会话/令牌模块须消费事件并复查当前状态）。
 - 用户组领域基础 `internal/group` 与 SQLite 仓储 `internal/group/sqlite`（系统范围/应用范围用户组、稳定组 ID 与不可变 group_key、显示名称/说明可修改但 scope 不可转移、组成员批量加入/移除/分页；应用组只允许该应用有效成员，系统组管理与成员变更要求相应资格；批量成员操作上限 12 人、全有或全无；组成员变更加审计事件，角色模块接入后需消费以失效权限；删除组级联删除成员/组角色关联但不删除用户与审计历史；不实现角色分配/嵌套组/HTTP 端点）。
 - 权限目录基础 `internal/permission` 与 SQLite 仓储 `internal/permission/sqlite`（系统内置/系统自定义/应用独有权限；scope+机器标识唯一定位、同名跨应用隔离；内置权限标识/含义不可改不可删、可按规则启停，root_only 敏感权限仅本地初始化操作者启停；自定义权限名称/说明/限制可改、机器标识不可变；机器可读定义含 key/分组/scope/生效对象/默认启用/敏感/builtin/enabled；被角色引用时拒绝删除；停用是拒绝而非跳过检查；不实现角色分配/授权执行/HTTP）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission` 已提供基础能力）、密码登录与认证、权限、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 角色领域基础 `internal/role` 与 SQLite 仓储 `internal/role/sqlite`（系统/应用角色的创建/读取/分页/资料更新/启停/受引用保护的删除；角色机器标识稳定且不能使用 root 语义；角色只组合同范围、启用、非 root_only 权限；角色可分配给可用全局账户或系统组、以及应用有效成员或同应用用户组；重复组合/分配幂等，删除前检查权限/用户/组引用；root 账户不能作为普通角色分配目标；不实现有效权限推导、可转授权限检查或 HTTP 端点）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role` 已提供基础能力）、有效权限推导与授权执行、密码登录与认证、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -409,7 +410,23 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **启停与删除**：启停幂等（重复请求 Changed=false 且仍写成功审计），实际变更写审计事务；停用后依赖方必须把该权限视为拒绝，但本步不执行授权，不能声称已撤销既有角色授权。删除自定义权限前检查 `role_permissions` 引用，有引用返回 `CONFLICT` 并拒绝；删除使用条件事务，避免并发引用被隐式级联删除。内置权限不可删除；审计历史保留。
 - **错误映射**：不新增错误码：参数/不存在/scope 无效 `REQ_INVALID(400)`；机器标识冲突/引用冲突/状态冲突 `CONFLICT(409)`；未授权/内置保护 `ACCESS_DENIED(403)`；应用停用 `CLIENT_DISABLED(403)`；存储 `DB_UNAVAILABLE(503)`；审计 `AUDIT_WRITE_FAILED(503)`；未知 `INTERNAL_ERROR(500)`。
 - **已验证（Windows amd64，临时 SQLite）**：三类权限登记与机器可读定义完整性；同名跨应用/跨 scope 隔离；应用管理员创建系统/内置/root_only 权限拒绝；内置权限更新/删除拒绝、启停幂等、root_only 仅本地操作者；自定义资料更新不改 key/scope；启停状态可见；被角色引用拒绝删除、解除后可删；并发同名创建仅一次成功其余 CONFLICT；列表默认/范围过滤/分页/HasMore/enabled 过滤；读取先鉴权后读；审计故障 fail-closed；错误码与根包注册表一致（含 CLIENT_DISABLED）；六目标编译与交叉 vet 在 MEMORY 记录。
-- **尚未实现/未验证**：角色与 role_permissions 分配 API、授权执行/令牌校验、权限删除后的角色引用迁移工具、权限目录 HTTP/`cmd/login-server` 接入、预设权限目录批量导入、权限定义版本化/变更审批；`StaticAuthorizer` 为内存白名单；未做 race detector、多进程并发与非 Windows 运行。
+- **尚未实现/未验证**：角色与 role_permissions 分配（步骤 24 已实现基础能力，有效权限推导/授权执行仍未实现）、权限删除后的角色引用迁移工具、权限目录 HTTP/`cmd/login-server` 接入、预设权限目录批量导入、权限定义版本化/变更审批；`StaticAuthorizer` 为内存白名单；未做 race detector、多进程并发与非 Windows 运行。
+
+## 角色管理、权限组合与角色分配（步骤 24）
+
+新增内部角色领域服务 `internal/role` 与 SQLite 生产仓储 `internal/role/sqlite`：完成系统/应用角色的增删改查、角色权限组合，以及角色到用户和用户组的分配，不提前实现有效权限推导、授权执行或可转授权限限制。继续使用迁移 0001 的 `roles`/`role_permissions`/`user_roles`/`group_roles` 表，本步未新增迁移，也未操作 `database/login.db`。
+
+- **角色标识与范围**：角色 ID 由 `crypto/rand` 生成 `role_`+128 位随机数；`role_key` 是稳定机器标识（2～64 字节小写字母/数字与 `._-`，必须含字母、首尾为字母数字、同 scope 唯一），创建后不可修改；名称/说明/明确限制可修改，但更新请求不含 scope/role_key。系统 scope 固定 `system`，应用 scope ID 与应用 ID 相同；跨作用范围读取/更新/启停/删除一律 `ACCESS_DENIED`。
+- **root 边界**：角色机器标识的任何分段都不能是 `root`（拒绝 `root`、`root.admin`、`system_root` 等），角色组合拒绝 `root_only` 敏感权限，root 账户不能作为普通角色分配目标，含 root 账户的用户组也不能分配普通角色（分配时检查组成员）。因此普通角色创建/组合/分配不能产生 root 能力。root 的特殊初始化/应急通道仍留后续受控步骤，本步不提供任何 root 用例替身。**残余路径**：若在角色已分配给某用户组之后，再由组模块把 root 账户加入该组，当前 `internal/group` 不知道角色分配，需步骤 25/26 或组模块接入时补充阻止/清理规则；本步不声称已完全封堵所有间接路径。
+- **角色权限组合**：只能加入同一 scope、存在、当前启用且非 root_only 的权限；跨范围返回 `APP_SCOPE_MISMATCH`，停用/不存在返回 `REQ_INVALID`，root_only 返回 `ACCESS_DENIED`。重复组合幂等成功（Changed=false），并发由 `(role_id,permission_id)` 主键保证只有一行；权限在组合后被停用时组合关系保留，后续有效权限计算必须按当前 enabled/角色 enabled 过滤，不能把存在组合当作已授权。
+- **角色分配资格**：系统角色只能分配给 `active` 且非 root 的全局账户，或系统范围用户组；应用角色只能分配给该应用 `active` 成员（应用需启用且 `app_memberships.status='active'`）或同一应用范围的用户组。应用之间、系统与应用之间的角色/组串用返回 `APP_SCOPE_MISMATCH`；非成员返回 `APP_MEMBERSHIP_REQUIRED`；账户不可用 `USER_DISABLED`，应用停用 `CLIENT_DISABLED`，角色停用时拒绝新分配（`CONFLICT`）。
+- **并发、幂等与撤回**：重复/并发分配、重复组合、重复撤回均幂等（Changed=false，仍写成功审计），并发唯一键保证单行；角色启停使用 `WHERE id=? AND enabled=?` 条件更新，并发只有一个实际变更，其余 `CONFLICT`；撤回用于安全清理，即使角色/应用/账户已停用也允许执行，不修改用户/应用/成员状态。
+- **删除与引用**：内置角色标识/含义不可修改、不可删除，只能启停；删除自定义角色前检查 `role_permissions`、`user_roles`、`group_roles` 引用，任一存在返回 `CONFLICT`；删除使用同一事务条件 `NOT EXISTS`，避免并发引用被隐式级联删除。审计历史保留。
+- **审计与失效契约**：创建/资料更新/启停/删除/权限组合/分配/撤回全部走 `audit.ExecuteCritical`，业务变更与成功审计同事务，审计失败整体回滚返回 `AUDIT_WRITE_FAILED`；读取与列表写审计，失败拒绝返回。审计记录操作者、`app_id_snapshot`、角色目标、用户/用户组/权限 ID 与差异；组分配操作者记录在审计事件（`group_roles` 表无 assigned_by 列）。角色/分配变化是有效权限的来源，步骤 25 权限引擎必须每次读取当前角色/权限/分配状态，本步不声称权限失效全链路完成。
+- **临时委派边界（步骤 26 收口）**：本步没有可转授权限与委派范围模型。应用管理员可以在被分配应用内组合任意该应用已启用（非 root_only）的权限成角色，并分配给该应用有效成员（包括自己）；系统范围与 root_only 受保护，但不能据此宣称已实现“只能转授自己持有的能力”。步骤 25 有效权限推导、步骤 26 委派限制必须对角色编辑、赋角色以及后续组员调整统一收紧，本边界已在 MEMORY 记录。
+- **错误映射**：不新增错误码：非法 ID/分页/资料/版本、角色/权限/用户/用户组不存在 `REQ_INVALID(400)`；机器标识冲突/引用冲突/角色停用/并发冲突 `CONFLICT(409)`；未授权/内置保护/root_only/root 保护 `ACCESS_DENIED(403)`；跨作用范围 `APP_SCOPE_MISMATCH(403)`；非应用成员 `APP_MEMBERSHIP_REQUIRED(403)`；应用停用 `CLIENT_DISABLED(403)`；账户不可用 `USER_DISABLED(403)`；存储 `DB_UNAVAILABLE(503)`；审计 `AUDIT_WRITE_FAILED(503)`；未知 `INTERNAL_ERROR(500)`。
+- **已验证（Windows amd64，临时 SQLite）**：角色创建/读取/分页/过滤；同 scope 键唯一与跨 scope 同名允许；root 语义键、非法字段、停用应用、应用内置角色与跨范围创建拒绝；资料更新不改 key/scope，内置角色更新/删除拒绝；启停幂等与状态可见；权限组合同范围成功、重复幂等、跨范围/停用/不存在/root_only 拒绝、移除幂等、权限组合后被停用仍可见 enabled=false；用户分配 active 账户成功、root/停用/待删除/不存在账户拒绝、应用角色非成员/停用成员/停用应用拒绝、重复分配幂等、撤回幂等且停用状态下可清理；用户组分配系统/同应用成功、跨范围与停用应用拒绝、重复/撤回幂等；有权限/用户/组引用删除拒绝、解除后可删、内置保护；缺少授权器不构造、拒绝策略不放行、应用管理员跨范围全部拒绝；4 路并发创建/组合/分配/启停/删除单一终态；审计故障 fail-closed、失败审计错误码与角色目标/操作者记录正确；错误码与根包注册表一致；六目标编译与交叉 vet 在 MEMORY 记录。
+- **尚未实现/未验证**：有效权限推导与 all/any、授权执行/令牌联合校验、可转授权限与委派范围限制（步骤 25/26）、角色权限批量替换接口、数据范围 `data_scope_json`（当前固定 `{}`）、预设角色目录与恢复、成员/组变更自动重算或缓存失效、HTTP/`cmd/login-server` 接入、审计查询；`StaticAuthorizer` 仍是内存白名单；未做 race detector、多进程并发与非 Windows 运行。
 
 ## 本地检查（Windows）
 
@@ -449,6 +466,8 @@ go run .\cmd\login-server --help
 | internal/listener/ | 多地址 HTTP 监听、失败整体回滚与关停释放端口（内部包） | 是 |
 | internal/account/ | 普通用户创建/查询/分页、用户名规范化与资料白名单，及账户状态与删除流程（内部包） | 是 |
 | internal/app/ | 应用登记/资料/启停、作用范围一致性，与应用成员管理及应用内资料隔离（内部包） | 是 |
+| internal/permission/ | 系统内置/系统自定义/应用独有权限目录与启停（内部包） | 是 |
+| internal/role/ | 系统/应用角色、角色权限组合与角色到用户/用户组的分配（内部包） | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
@@ -465,7 +484,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～23 已完成；继续时按 .ai/ 中的顺序处理步骤 24，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～24 已完成；继续时按 .ai/ 中的顺序处理步骤 25，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 
