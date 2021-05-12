@@ -2,7 +2,7 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 24）
+## 项目状态（步骤 25）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
@@ -11,8 +11,9 @@ login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立�
 - 应用领域基础 `internal/app` 与 SQLite 仓储 `internal/app/sqlite`（应用登记、读取、有限分页、展示资料更新、启停状态；应用 ID 不可变；创建时同一事务写入唯一应用 scope；client_type 只在创建时确定；负责人变更不自动转移管理权限；应用管理员按显式分配仅操作已分配应用；停用写可靠审计事件，依赖方须检查应用状态；删除应用未在本步实现）；应用成员管理（受控加入既有账户、应用内成员状态启停、按应用隔离的分页/读取、应用专属资料白名单；成员状态与资料只影响指定应用，不修改全局账户或其他应用；成员移除/停用写可靠审计事件，未来会话/令牌模块须消费事件并复查当前状态）。
 - 用户组领域基础 `internal/group` 与 SQLite 仓储 `internal/group/sqlite`（系统范围/应用范围用户组、稳定组 ID 与不可变 group_key、显示名称/说明可修改但 scope 不可转移、组成员批量加入/移除/分页；应用组只允许该应用有效成员，系统组管理与成员变更要求相应资格；批量成员操作上限 12 人、全有或全无；组成员变更加审计事件，角色模块接入后需消费以失效权限；删除组级联删除成员/组角色关联但不删除用户与审计历史；不实现角色分配/嵌套组/HTTP 端点）。
 - 权限目录基础 `internal/permission` 与 SQLite 仓储 `internal/permission/sqlite`（系统内置/系统自定义/应用独有权限；scope+机器标识唯一定位、同名跨应用隔离；内置权限标识/含义不可改不可删、可按规则启停，root_only 敏感权限仅本地初始化操作者启停；自定义权限名称/说明/限制可改、机器标识不可变；机器可读定义含 key/分组/scope/生效对象/默认启用/敏感/builtin/enabled；被角色引用时拒绝删除；停用是拒绝而非跳过检查；不实现角色分配/授权执行/HTTP）。
+- 有效权限计算引擎 `internal/authz` 与 SQLite 只读快照 `internal/authz/sqlite`（按当前账户/应用成员/直接角色/用户组角色/角色启停/权限启停/root_only 实时计算系统或应用 scope 的有效权限；禁用优先，直接与组来源合并但数据范围取交集；all/any 默认 all、未知权限拒绝；返回权限来源、角色/组/权限启停与排除原因；数据范围契约 all/none/resources/历史未声明并对资源检查 fail-closed；查询他人权限需授权，普通用户只能查自己、应用管理员仅获准应用成员、本地/系统可查普通主体；单个事务快照、无缓存、分页与来源行数有界；不实现 OAuth Token 联合校验与 HTTP）。
 - 角色领域基础 `internal/role` 与 SQLite 仓储 `internal/role/sqlite`（系统/应用角色的创建/读取/分页/资料更新/启停/受引用保护的删除；角色机器标识稳定且不能使用 root 语义；角色只组合同范围、启用、非 root_only 权限；角色可分配给可用全局账户或系统组、以及应用有效成员或同应用用户组；重复组合/分配幂等，删除前检查权限/用户/组引用；root 账户不能作为普通角色分配目标；不实现有效权限推导、可转授权限检查或 HTTP 端点）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role` 已提供基础能力）、有效权限推导与授权执行、密码登录与认证、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role`/`internal/authz` 已提供基础能力）、有效权限推导与授权执行的 HTTP/令牌接入（`internal/authz` 已提供基础引擎）、密码登录与认证、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -428,6 +429,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **已验证（Windows amd64，临时 SQLite）**：角色创建/读取/分页/过滤；同 scope 键唯一与跨 scope 同名允许；root 语义键、非法字段、停用应用、应用内置角色与跨范围创建拒绝；资料更新不改 key/scope，内置角色更新/删除拒绝；启停幂等与状态可见；权限组合同范围成功、重复幂等、跨范围/停用/不存在/root_only 拒绝、移除幂等、权限组合后被停用仍可见 enabled=false；用户分配 active 账户成功、root/停用/待删除/不存在账户拒绝、应用角色非成员/停用成员/停用应用拒绝、重复分配幂等、撤回幂等且停用状态下可清理；用户组分配系统/同应用成功、跨范围与停用应用拒绝、重复/撤回幂等；有权限/用户/组引用删除拒绝、解除后可删、内置保护；缺少授权器不构造、拒绝策略不放行、应用管理员跨范围全部拒绝；4 路并发创建/组合/分配/启停/删除单一终态；审计故障 fail-closed、失败审计错误码与角色目标/操作者记录正确；错误码与根包注册表一致；六目标编译与交叉 vet 在 MEMORY 记录。
 - **尚未实现/未验证**：有效权限推导与 all/any、授权执行/令牌联合校验、可转授权限与委派范围限制（步骤 25/26）、角色权限批量替换接口、数据范围 `data_scope_json`（当前固定 `{}`）、预设角色目录与恢复、成员/组变更自动重算或缓存失效、HTTP/`cmd/login-server` 接入、审计查询；`StaticAuthorizer` 仍是内存白名单；未做 race detector、多进程并发与非 Windows 运行。
 
+## 有效权限计算、数据范围与权限来源查询（步骤 25）
+
+新增内部授权计算引擎 `internal/authz` 与 SQLite 只读快照 `internal/authz/sqlite`：根据当前账户状态、应用与成员状态、直接用户角色、用户组角色、角色与权限启停，实时计算系统/应用 scope 的有效权限，返回来源与数据范围，并提供显式资源检查接口。复用迁移 0001 的 `users`/`applications`/`app_memberships`/`roles`/`role_permissions`/`permissions`/`user_roles`/`group_roles`/`group_members` 表，本步未新增迁移，也未读写 `database/login.db`。
+
+- **计算输入与禁用优先**：计算前读取同一事务快照内的账户、应用、成员、角色、权限与分配。拒绝优先级固定为：账户不存在/非 active → `USER_DISABLED`；root 账户 → `ACCESS_DENIED`（root 不走普通权限推导）；应用不存在 → `REQ_INVALID`、应用非 active → `CLIENT_DISABLED`；应用成员缺失/非 active → `APP_MEMBERSHIP_REQUIRED`；随后才检查权限定义与来源。任一状态不满足即整体拒绝，不因角色/权限存在而放行。
+- **来源合并与生效条件**：直接 `user_roles` 与经 `group_members`/`group_roles` 的组角色合并；来源必须同时满足角色 enabled、权限 enabled、非 root_only、角色 scope 与目标 scope 一致。角色停用或权限停用时来源不计入有效授权；权限被停用即使仍有角色组合也返回 `PERMISSION_DISABLED`；未知权限返回 `PERMISSION_UNKNOWN`。同名权限跨应用隔离（scope+permission_key 唯一定位），系统权限不会出现在应用 scope 计算中。
+- **数据范围契约**：新增严格版本化 `data_scope_json` 契约：`{"v":1,"mode":"all"|"none"|"resources","resources":[...]}`，资源 1～64 个、≤256 字节、去重排序；历史步骤 24 写入的 `"{}"`/空值解释为 `undefined`（功能权限可用，但资源级检查默认拒绝，避免把“未声明”当“全部数据”）；非法 JSON/版本/字段/重复资源按来源排除（fail-closed）。多来源数据范围取交集：none 最严格，undefined 保持未声明，all 不限制，resources 取交集；来源越多不会扩大数据范围。
+- **all/any 与来源说明**：默认 `all`，要求每个权限都满足；`any` 至少一个满足，但请求中出现未知权限仍硬拒绝。每个权限结果带 `Sources`：来源类型（直接/组）、角色 ID/key/名称、组 ID/key/名称、角色/权限启用状态、root_only、分配 data_scope、assigned_by/创建时间、`Included` 与 `ExcludedReason`（role_disabled/permission_disabled/root_only_permission/account_disabled/application_inactive/membership_required/data_scope_invalid）。
+- **查询授权与不泄露**：有效权限与来源查询必须通过 `Authorizer`：普通用户只能查自己；应用管理员只能查自己获准应用内成员（非成员返回 `ACCESS_DENIED`，不借查询探测目标存在性）；本地/系统操作者可查任意普通主体；root 主体在有效权限查询中返回 `ACCESS_DENIED`，来源查询返回 `ErrRootProtected`。缺少 Store/Authorizer 时不构造；拒绝策略不放行；未接 HTTP，不提供匿名管理端点。
+- **资源检查接口**：`CheckResourceAccess` 显式接收权限键与资源标识，先做功能权限检查，再按数据范围交集判断：undefined/none 默认拒绝（`RESOURCE_FORBIDDEN`），all 允许，resources 必须命中显式集合。业务资源归属不能从权限名推断；本步不实现具体业务资源表/所有权查询，数据范围写入口（角色分配 API）也尚未开放，步骤 24 的既有分配全部为 undefined。
+- **一致性与边界**：所有读取在调用方 `Store.Snapshot` 打开的同一数据库事务中完成；不缓存权限结果，角色/权限/成员/应用变更在下次计算立即生效。查询固定次数（无 N+1、无递归；用户组不支持嵌套组），有效权限分页默认 20/最大 100/Offset 上限 100 万，单个权限的候选来源单次最多读取 `MaxSourceRows=512` 行；一旦截断，`Check`/`CheckResourceAccess`/`EffectivePermissions` 一律 fail-closed（`AUTHZ_UNAVAILABLE`，`CheckResult.SourceLimitReached`==true，资源检查拒绝），不会用前 512 个来源的数据范围交集错误放行；单次检查最多 32 个权限。依赖不可用时检查结果默认 `AUTHZ_UNAVAILABLE` 且 `Allowed=false`。
+- **错误映射与兼容**：不新增错误码：参数/未知权限 `REQ_INVALID(400)`；未授权/root 保护 `ACCESS_DENIED(403)`；账户/应用/成员不可用 `USER_DISABLED`/`CLIENT_DISABLED`/`APP_MEMBERSHIP_REQUIRED(403)`；权限停用/未授予/root_only `PERMISSION_DISABLED`/`PERMISSION_REQUIRED`/`ACCESS_DENIED(403)`；资源级拒绝 `RESOURCE_FORBIDDEN(403)`；依赖不可用 `AUTHZ_UNAVAILABLE(503)`；根包测试核对判定码与注册表字面值/HTTP 状态。
+- **已验证（Windows amd64，临时 SQLite）**：直接/组角色合并与来源说明；同 scope 多来源数据范围 all∩resources 交集、资源级命中/未命中、历史 `{}` 功能可用但资源拒绝、非法数据范围来源排除；空集合/未知权限/all/any/重复权限去重/权限数量上限；账户/应用/成员/角色/权限/root 禁用优先与错误码；同名权限跨应用隔离；成员、应用、角色、权限变更立即影响结果（无陈旧缓存）；查询自己/他人/应用管理员跨应用/非成员/本地系统操作员授权边界与不泄露；分页/HasMore/来源分页/非法参数；4 路并发检查与角色启停切换不出现半更新错误；单权限候选来源超过 512 时 Check/资源检查/有效权限查询均拒绝并置 SourceLimitReached；查询授权器并发读写不失效；六目标编译与交叉 vet 在 MEMORY 记录。
+- **尚未实现/未验证**：OAuth/OIDC Token 联合校验（本步只提供将来复用的权限判断）、HTTP/`cmd/login-server` 接入、数据范围写入口与角色分配 data_scope 设置/迁移（当前既有分配 undefined）、业务资源归属表/所有权检查、权限缓存与失效策略（当前无缓存）、拒绝查询的审计事件、查询授权从持久化角色/委派模型加载（当前 `StaticAuthorizer` 内存白名单）、多进程/高并发压力、race detector 与 Linux/macOS 运行；`Authz` 的只读快照使用存储层事务，读取期间可能阻塞并发写事务，性能优化留后续。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -468,6 +484,7 @@ go run .\cmd\login-server --help
 | internal/app/ | 应用登记/资料/启停、作用范围一致性，与应用成员管理及应用内资料隔离（内部包） | 是 |
 | internal/permission/ | 系统内置/系统自定义/应用独有权限目录与启停（内部包） | 是 |
 | internal/role/ | 系统/应用角色、角色权限组合与角色到用户/用户组的分配（内部包） | 是 |
+| internal/authz/ | 有效权限计算、数据范围交集、权限来源与资源检查（内部包） | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
@@ -484,7 +501,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～24 已完成；继续时按 .ai/ 中的顺序处理步骤 25，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～25 已完成；继续时按 .ai/ 中的顺序处理步骤 26，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 
