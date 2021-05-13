@@ -13,6 +13,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 )
 
 // AuditRecorder 是应用服务依赖的安全审计写入契约，生产实现为 *audit.Recorder。
@@ -84,6 +85,10 @@ type Store interface {
 	// LookupUserStatus 返回全局账户状态与是否存在；加入/启用成员前必须要求
 	// active，删除/停用成员关系时允许清理非 active 账户。
 	LookupUserStatus(ctx context.Context, userID string) (account.Status, bool, error)
+	// ListMemberEffectivePermissionIDs 在调用方事务内读取该用户在该应用范围内
+	// 通过直接角色与用户组角色当前会生效的权限 ID（角色/权限启用且非 root_only）。
+	// 加入/重新启用成员会让这些权限恢复生效，写前必须做可转授检查。
+	ListMemberEffectivePermissionIDs(ctx context.Context, tx audit.Tx, applicationID, userID string) ([]string, error)
 }
 
 // Options 是构造应用服务的显式依赖。
@@ -91,6 +96,7 @@ type Options struct {
 	Store      Store
 	Audit      AuditRecorder
 	Authorizer Authorizer
+	Transfers  delegation.Guard
 	Now        func() time.Time
 	Random     io.Reader
 	Logger     *slog.Logger
@@ -102,6 +108,7 @@ type Service struct {
 	store      Store
 	audit      AuditRecorder
 	authorizer Authorizer
+	transfers  delegation.Guard
 	now        func() time.Time
 	random     io.Reader
 	logger     *slog.Logger
@@ -118,6 +125,9 @@ func New(options Options) (*Service, error) {
 	if isNil(options.Authorizer) {
 		return nil, fmt.Errorf("%w: 授权器为空", ErrOptionsInvalid)
 	}
+	if isNil(options.Transfers) {
+		return nil, fmt.Errorf("%w: 可转授权限检查器为空", ErrOptionsInvalid)
+	}
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -131,7 +141,7 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
-		now: now, random: random, logger: logger}, nil
+		transfers: options.Transfers, now: now, random: random, logger: logger}, nil
 }
 
 // CreateApplication 登记应用，并在同一审计事务中创建唯一对应的应用作用范围。
@@ -439,6 +449,8 @@ func (s *Service) buildUpdatedApplication(ctx context.Context, caller Caller, cu
 }
 
 // EnableApplication 启用应用。重复启用幂等成功；停用后的依赖方必须重新检查状态。
+// 启用会恢复该范围内被整体拒绝的有效权限，因此非受信操作者必须通过与赋权相同的
+// 委派检查（权限集合 + 持有目标），无法安全校验时拒绝（仅受信通道可启用）。
 func (s *Service) EnableApplication(ctx context.Context, caller Caller, request StatusRequest) (StatusResult, error) {
 	return s.applyStatus(ctx, caller, request, StatusActive, ActionEnableApplication)
 }
@@ -508,6 +520,15 @@ func (s *Service) applyStatus(ctx context.Context, caller Caller, request Status
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		if target == StatusActive {
+			// 停用应用会让其范围内全部权限整体拒绝；启用等于恢复这些权限，与直接
+			// 赋权等价。与写入同一事务内按“将被恢复的权限集合 + 持有目标”复核
+			// 委派资格；无资格的应用管理员不能通过重新启用应用恢复全应用权限，
+			// 读取或校验失败一律 fail-closed（只有受信通道可无条件启用）。
+			if guardErr := s.transfers.CheckScopeRestoration(txCtx, tx, caller.actor, current.ID); guardErr != nil {
+				return guardErr
+			}
+		}
 		return s.store.ApplyStatus(txCtx, tx, StatusChange{
 			ApplicationID:      current.ID,
 			ExpectedRowVersion: current.RowVersion,
@@ -595,6 +616,9 @@ func mapCriticalError(err error) error {
 		errors.Is(err, ErrInvalidTransition), errors.Is(err, ErrMemberExists),
 		errors.Is(err, ErrMemberNotFound), errors.Is(err, ErrTargetUserNotFound),
 		errors.Is(err, ErrApplicationInactive), errors.Is(err, ErrUserNotEligible):
+		return err
+	case delegation.CodeOf(err) != "":
+		// 委派检查拒绝：保留委派领域错误，由 CodeOf 映射为可诊断错误码。
 		return err
 	case errors.Is(err, ErrApplicationNotFound), errors.Is(err, ErrStoreUnavailable):
 		return err

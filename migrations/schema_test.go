@@ -186,7 +186,7 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration} {
+	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration, delegationMigration} {
 		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
 			t.Fatalf("读取迁移 %s 失败：%v", name, err)
@@ -466,6 +466,70 @@ func TestScheduleMigration(t *testing.T) {
 		if !strings.Contains(sqlText, want) {
 			t.Errorf("0005 缺少结构 %q", want)
 		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
+
+const delegationMigration = "0006_permission_delegations.sql"
+
+// readDelegationMigration 读取 0006 可转授权限委派迁移。
+func readDelegationMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(delegationMigration)
+	if err != nil {
+		t.Fatalf("读取委派资格迁移失败: %v", err)
+	}
+	return string(data)
+}
+
+// TestDelegationMigration 校验步骤 26 的委派资格结构：同一委派者在同一范围对同一
+// 权限只有一条资格，数据范围上限与目标白名单使用带版本 JSON 的默认值，自我/本组
+// 转授默认禁止，资格可过期/可撤回，签发者必须记录可信身份，权限外键使用复合键
+// 保证权限与范围一致；只追加本表与索引。
+func TestDelegationMigration(t *testing.T) {
+	sqlText := readDelegationMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0006 CREATE TABLE 数量 = %d，期望只创建权限委派资格表", count)
+	}
+	definition := tableDefinition(t, sqlText, "permission_delegations")
+	for _, want := range []string{
+		"id TEXT PRIMARY KEY NOT NULL",
+		"delegator_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+		"scope_id TEXT NOT NULL REFERENCES scopes(id) ON DELETE CASCADE",
+		"permission_id TEXT NOT NULL",
+		`max_data_scope_json TEXT NOT NULL DEFAULT '{"v":1,"mode":"all"}'`,
+		`allowed_targets_json TEXT NOT NULL DEFAULT '{"v":1}'`,
+		"allow_self INTEGER NOT NULL DEFAULT 0 CHECK(allow_self IN(0,1))",
+		"expires_at_ms INTEGER",
+		"revoked_at_ms INTEGER",
+		"created_by_type TEXT NOT NULL",
+		"created_by_id TEXT NOT NULL",
+		"created_at_ms INTEGER NOT NULL",
+		"updated_at_ms INTEGER NOT NULL",
+		"UNIQUE(delegator_user_id,scope_id,permission_id)",
+		"FOREIGN KEY(permission_id,scope_id) REFERENCES permissions(id,scope_id) ON DELETE CASCADE",
+	} {
+		if !strings.Contains(definition, want) {
+			t.Errorf("permission_delegations 定义缺少 %q", want)
+		}
+	}
+	for _, want := range []string{
+		"CREATE INDEX idx_permission_delegations_delegator ON permission_delegations(delegator_user_id,scope_id);",
+		"CREATE INDEX idx_permission_delegations_permission ON permission_delegations(permission_id);",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Errorf("0006 缺少结构 %q", want)
+		}
+	}
+	// 委派资格只登记“可转授”，不得出现 enabled/granted 之类的默认放行标记，
+	// 也不得把 allow_self 默认成 1（默认必须封堵自我提权）。
+	if strings.Contains(definition, "enabled") || strings.Contains(definition, "allowed_default") {
+		t.Error("委派资格表不应包含默认放行标记")
+	}
+	if strings.Contains(definition, "allow_self INTEGER NOT NULL DEFAULT 1") {
+		t.Error("allow_self 默认必须为 0")
 	}
 	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
 		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")

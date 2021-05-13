@@ -12,6 +12,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
 	rolesqlite "github.com/kagurazakayashi/EvernightLogin/internal/role/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
@@ -44,6 +45,25 @@ const (
 	testSystemID     = "system-1"
 	testAppTwoAdmin  = "usr_00000000000000000000000000000006"
 )
+
+// allowAllTransfers 是测试用可转授检查器：既有角色/用户组/权限/成员用例只关注
+// 领域语义，委派限制的拒绝与允许由 internal/delegation 的定向测试和集成测试覆盖。
+func allowAllTransfers() delegation.GuardFuncs {
+	return delegation.GuardFuncs{
+		Access: func(context.Context, audit.Tx, audit.Actor, string, []delegation.PermissionRef, []delegation.Target) error {
+			return nil
+		},
+		Assignment: func(context.Context, audit.Tx, audit.Actor, string, []delegation.PermissionRef, delegation.Target) error {
+			return nil
+		},
+		Activation: func(context.Context, audit.Tx, audit.Actor, string, []delegation.PermissionRef, []delegation.Target) error {
+			return nil
+		},
+		Restoration: func(context.Context, audit.Tx, audit.Actor, string) error {
+			return nil
+		},
+	}
+}
 
 type fakeClock struct {
 	mu  sync.Mutex
@@ -105,7 +125,8 @@ func prepareEnv(t *testing.T) *testEnv {
 		t.Fatalf("构造授权器失败: %v", err)
 	}
 	service, err := role.New(role.Options{
-		Store: store, Audit: recorder, Authorizer: authorizer, Now: clock.Now,
+		Store: store, Audit: recorder, Authorizer: authorizer,
+		Transfers: allowAllTransfers(), Now: clock.Now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -704,7 +725,7 @@ func TestRoleAuthorizationDefaultDeny(t *testing.T) {
 	if _, err := role.New(role.Options{Store: env.store, Audit: env.recorder}); !errors.Is(err, role.ErrOptionsInvalid) {
 		t.Fatalf("缺少授权器构造错误 = %v", err)
 	}
-	denyService, err := role.New(role.Options{Store: env.store, Audit: env.recorder, Authorizer: denyAllAuthorizer{}})
+	denyService, err := role.New(role.Options{Store: env.store, Audit: env.recorder, Authorizer: denyAllAuthorizer{}, Transfers: allowAllTransfers()})
 	if err != nil {
 		t.Fatalf("构造拒绝授权服务失败: %v", err)
 	}

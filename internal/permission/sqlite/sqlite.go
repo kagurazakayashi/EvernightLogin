@@ -14,6 +14,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/permission"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
@@ -39,6 +40,21 @@ ON CONFLICT(scope_id,permission_key) DO NOTHING`
 	deletePermissionSQL = `DELETE FROM permissions WHERE id=? AND NOT EXISTS(SELECT 1 FROM role_permissions WHERE permission_id=?)`
 
 	selectSystemScopeSQL = `SELECT 1 FROM scopes WHERE id='system' AND kind='system'`
+
+	// selectPermissionHolderTargetsSQL 读取“权限被启用后会重新获得它”的目标：组合
+	// 该权限的启用角色当前分配的用户与用户组。启用权限等于恢复这些持有路径，必须
+	// 按委派目标限制复核；停用是收缩路径，不需要目标集合。
+	selectPermissionHolderTargetsSQL = `
+SELECT 'user',ur.user_id FROM user_roles ur
+JOIN roles r ON r.id=ur.role_id AND r.scope_id=ur.scope_id
+JOIN role_permissions rp ON rp.role_id=r.id AND rp.scope_id=r.scope_id
+WHERE rp.permission_id=? AND r.enabled=1
+UNION
+SELECT 'group',gr.group_id FROM group_roles gr
+JOIN roles r ON r.id=gr.role_id AND r.scope_id=gr.scope_id
+JOIN role_permissions rp ON rp.role_id=r.id AND rp.scope_id=r.scope_id
+WHERE rp.permission_id=? AND r.enabled=1
+ORDER BY 1,2 LIMIT ?`
 
 	selectApplicationScopeSQL = `SELECT a.status FROM applications a
 JOIN scopes s ON s.id=? AND s.kind='application' AND s.app_id=a.id WHERE a.id=?`
@@ -244,6 +260,36 @@ func (s *Store) SetEnabled(ctx context.Context, tx audit.Tx, id string, enabled 
 		return fmt.Errorf("%w: %w", permission.ErrStoreUnavailable, err)
 	}
 	return checkAffected(result)
+}
+
+// PermissionHolderTargets 在调用方事务内读取“启用该权限后会重新获得它”的用户与
+// 用户组目标（组合该权限的启用角色的当前分配）。超过检查上限返回错误，由调用方
+// fail-closed；查询失败同样不返回部分结果。
+func (s *Store) PermissionHolderTargets(ctx context.Context, tx audit.Tx, permissionID string) ([]delegation.Target, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("%w: 审计事务为空", permission.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, selectPermissionHolderTargetsSQL,
+		permissionID, permissionID, delegation.MaxAffectedTargets+1)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", permission.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	targets := make([]delegation.Target, 0, 8)
+	for rows.Next() {
+		var (
+			kind string
+			id   string
+		)
+		if err := rows.Scan(&kind, &id); err != nil {
+			return nil, fmt.Errorf("%w: %w", permission.ErrStoreUnavailable, err)
+		}
+		targets = append(targets, delegation.Target{Kind: delegation.TargetKind(kind), ID: id})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", permission.ErrStoreUnavailable, err)
+	}
+	return targets, nil
 }
 
 // CountReferences 返回 role_permissions 对权限的引用数量。

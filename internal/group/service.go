@@ -14,6 +14,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 )
 
 // ScopeInfo 是组作用范围数据库快照。
@@ -55,6 +56,9 @@ type Store interface {
 	ValidateMembers(ctx context.Context, scope GroupScope, userIDs []string) (ineligible []string, err error)
 	AddMembers(ctx context.Context, tx audit.Tx, groupID string, scope GroupScope, userIDs []string, now time.Time) (added int, err error)
 	RemoveMembers(ctx context.Context, tx audit.Tx, groupID string, userIDs []string) (removed int, skipped int, err error)
+	// ListGroupRoleEffectivePermissionIDs 在调用方事务内读取用户组通过角色当前
+	// 会生效的权限 ID（角色/权限启用且非 root_only），供加成员前的委派检查。
+	ListGroupRoleEffectivePermissionIDs(ctx context.Context, tx audit.Tx, groupID string) ([]string, error)
 }
 
 // AuditRecorder 是用户组服务依赖的安全审计契约。
@@ -68,6 +72,7 @@ type Options struct {
 	Store      Store
 	Audit      AuditRecorder
 	Authorizer Authorizer
+	Transfers  delegation.Guard
 	Now        func() time.Time
 	Random     io.Reader
 	Logger     *slog.Logger
@@ -78,6 +83,7 @@ type Service struct {
 	store      Store
 	audit      AuditRecorder
 	authorizer Authorizer
+	transfers  delegation.Guard
 	now        func() time.Time
 	random     io.Reader
 	logger     *slog.Logger
@@ -94,6 +100,9 @@ func New(options Options) (*Service, error) {
 	if isNil(options.Authorizer) {
 		return nil, fmt.Errorf("%w: 授权器为空", ErrOptionsInvalid)
 	}
+	if isNil(options.Transfers) {
+		return nil, fmt.Errorf("%w: 可转授权限检查器为空", ErrOptionsInvalid)
+	}
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -107,7 +116,7 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
-		now: now, random: random, logger: logger}, nil
+		transfers: options.Transfers, now: now, random: random, logger: logger}, nil
 }
 
 // CreateGroup 在系统或应用范围创建用户组。应用范围要求应用存在且启用；组机器键
@@ -420,6 +429,20 @@ func (s *Service) AddMembers(ctx context.Context, caller Caller, request MemberB
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		// 与写入同一事务：组可能已配置角色，“先给组配角色、再把人拉进组”是
+		// 间接提权路径，必须逐个目标检查操作者能否转授这些权限。
+		refs, refErr := s.groupTransferRefs(txCtx, tx, groupRecord.ID)
+		if refErr != nil {
+			return refErr
+		}
+		if len(refs) > 0 {
+			for _, userID := range toAdd {
+				if guardErr := s.transfers.CheckAssignment(txCtx, tx, caller.actor, scope.ScopeID, refs,
+					delegation.Target{Kind: delegation.TargetUser, ID: userID}); guardErr != nil {
+					return guardErr
+				}
+			}
+		}
 		_, addErr := s.store.AddMembers(txCtx, tx, groupRecord.ID, groupScope, toAdd, now)
 		return addErr
 	})
@@ -716,6 +739,9 @@ func mapCriticalError(err error) error {
 	case errors.Is(err, ErrGroupKeyTaken), errors.Is(err, ErrStateConflict),
 		errors.Is(err, ErrAccessDenied):
 		return err
+	case delegation.CodeOf(err) != "":
+		// 委派检查拒绝：保留委派领域错误，由 CodeOf 映射为可诊断错误码。
+		return err
 	case errors.Is(err, ErrStoreUnavailable):
 		return err
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -725,6 +751,19 @@ func mapCriticalError(err error) error {
 	default:
 		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
+}
+
+// groupTransferRefs 在调用方事务内把用户组通过角色生效的权限转换为委派检查引用。
+func (s *Service) groupTransferRefs(ctx context.Context, tx audit.Tx, groupID string) ([]delegation.PermissionRef, error) {
+	ids, err := s.store.ListGroupRoleEffectivePermissionIDs(ctx, tx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]delegation.PermissionRef, 0, len(ids))
+	for _, id := range ids {
+		refs = append(refs, delegation.PermissionRef{PermissionID: id})
+	}
+	return refs, nil
 }
 
 // normalizeContext 把 nil ctx 当成 Background。

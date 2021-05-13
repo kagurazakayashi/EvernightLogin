@@ -2,7 +2,7 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 25）
+## 项目状态（步骤 26）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
@@ -12,8 +12,9 @@ login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立�
 - 用户组领域基础 `internal/group` 与 SQLite 仓储 `internal/group/sqlite`（系统范围/应用范围用户组、稳定组 ID 与不可变 group_key、显示名称/说明可修改但 scope 不可转移、组成员批量加入/移除/分页；应用组只允许该应用有效成员，系统组管理与成员变更要求相应资格；批量成员操作上限 12 人、全有或全无；组成员变更加审计事件，角色模块接入后需消费以失效权限；删除组级联删除成员/组角色关联但不删除用户与审计历史；不实现角色分配/嵌套组/HTTP 端点）。
 - 权限目录基础 `internal/permission` 与 SQLite 仓储 `internal/permission/sqlite`（系统内置/系统自定义/应用独有权限；scope+机器标识唯一定位、同名跨应用隔离；内置权限标识/含义不可改不可删、可按规则启停，root_only 敏感权限仅本地初始化操作者启停；自定义权限名称/说明/限制可改、机器标识不可变；机器可读定义含 key/分组/scope/生效对象/默认启用/敏感/builtin/enabled；被角色引用时拒绝删除；停用是拒绝而非跳过检查；不实现角色分配/授权执行/HTTP）。
 - 有效权限计算引擎 `internal/authz` 与 SQLite 只读快照 `internal/authz/sqlite`（按当前账户/应用成员/直接角色/用户组角色/角色启停/权限启停/root_only 实时计算系统或应用 scope 的有效权限；禁用优先，直接与组来源合并但数据范围取交集；all/any 默认 all、未知权限拒绝；返回权限来源、角色/组/权限启停与排除原因；数据范围契约 all/none/resources/历史未声明并对资源检查 fail-closed；查询他人权限需授权，普通用户只能查自己、应用管理员仅获准应用成员、本地/系统可查普通主体；单个事务快照、无缓存、分页与来源行数有界；不实现 OAuth Token 联合校验与 HTTP）。
+- 可转授权限与委派限制 `internal/delegation` 与 SQLite 生产仓储 `internal/delegation/sqlite`（把“可使用权限”与“可转授权限”分开：委派资格由受限本地初始化/系统操作者显式签发并写入迁移 0006，记录作用范围、权限、数据范围上限、目标白名单、是否允许自我/本组转授、有效期与撤回；角色组合权限、角色分配、启用角色、向已配角色的用户组增员、应用成员加入/重新启用、启用权限、启用应用等所有改变有效权限的写入路径统一经 Guard 在同一审计事务内检查，普通管理者只能转授自己当前实际持有且有有效资格的权限，数据范围必须收缩，默认禁止自我与自身所在用户组；启用角色/权限、组合权限进已分配角色与启用应用等间接路径还按实际受影响目标集合复核 allow_self 与目标白名单，启用应用无法安全校验时仅受信通道可通过；持有但不可转授、过期/撤回、目标越界、范围过宽与并发撤回均拒绝并返回可诊断错误码；数据范围收缩尚未完整落地（写入路径仍为未声明范围，非 all 上限一律 fail-closed），不实现审批引擎、再委派、预设角色恢复（步骤 27 必须接入同一 Guard）、数据范围写入口与委派资格 HTTP）。
 - 角色领域基础 `internal/role` 与 SQLite 仓储 `internal/role/sqlite`（系统/应用角色的创建/读取/分页/资料更新/启停/受引用保护的删除；角色机器标识稳定且不能使用 root 语义；角色只组合同范围、启用、非 root_only 权限；角色可分配给可用全局账户或系统组、以及应用有效成员或同应用用户组；重复组合/分配幂等，删除前检查权限/用户/组引用；root 账户不能作为普通角色分配目标；不实现有效权限推导、可转授权限检查或 HTTP 端点）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role`/`internal/authz` 已提供基础能力）、有效权限推导与授权执行的 HTTP/令牌接入（`internal/authz` 已提供基础引擎）、密码登录与认证、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role`/`internal/authz`/`internal/delegation` 已提供基础能力）、有效权限推导与授权执行的 HTTP/令牌接入（`internal/authz` 已提供基础引擎）、密码登录与认证、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。委派资格签发/撤回管理 API、审批引擎、预设角色恢复与数据范围写入口也未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希尚未实现，本步不把密码按可解密形式存储。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -444,6 +445,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **已验证（Windows amd64，临时 SQLite）**：直接/组角色合并与来源说明；同 scope 多来源数据范围 all∩resources 交集、资源级命中/未命中、历史 `{}` 功能可用但资源拒绝、非法数据范围来源排除；空集合/未知权限/all/any/重复权限去重/权限数量上限；账户/应用/成员/角色/权限/root 禁用优先与错误码；同名权限跨应用隔离；成员、应用、角色、权限变更立即影响结果（无陈旧缓存）；查询自己/他人/应用管理员跨应用/非成员/本地系统操作员授权边界与不泄露；分页/HasMore/来源分页/非法参数；4 路并发检查与角色启停切换不出现半更新错误；单权限候选来源超过 512 时 Check/资源检查/有效权限查询均拒绝并置 SourceLimitReached；查询授权器并发读写不失效；六目标编译与交叉 vet 在 MEMORY 记录。
 - **尚未实现/未验证**：OAuth/OIDC Token 联合校验（本步只提供将来复用的权限判断）、HTTP/`cmd/login-server` 接入、数据范围写入口与角色分配 data_scope 设置/迁移（当前既有分配 undefined）、业务资源归属表/所有权检查、权限缓存与失效策略（当前无缓存）、拒绝查询的审计事件、查询授权从持久化角色/委派模型加载（当前 `StaticAuthorizer` 内存白名单）、多进程/高并发压力、race detector 与 Linux/macOS 运行；`Authz` 的只读快照使用存储层事务，读取期间可能阻塞并发写事务，性能优化留后续。
 
+## 可转授权限与委派限制（步骤 26）
+
+新增内部委派域 `internal/delegation` 与 SQLite 生产仓储 `internal/delegation/sqlite`：把“可使用权限”与“可转授权限”分开，封堵角色编辑、角色分配、组成员调整、应用成员恢复、启用角色/权限/应用等间接提权路径。新增迁移 0006 的 `permission_delegations` 委派资格表（两个 JSON 列带 `json_valid` CHECK）；未操作 `database/login.db`。
+
+- **资格与受信签发**：一条委派资格表示受信操作者允许某用户（委派者）在指定 scope 把某权限再转授给其他主体，记录 `max_data_scope_json`（数据范围上限，默认 all）、`allowed_targets_json`（目标白名单，默认不限具体目标）、`allow_self`（默认 0）、`expires_at_ms` 与 `revoked_at_ms`；`(delegator_user_id, scope_id, permission_id)` 唯一，重新签发覆盖原记录并清除撤回标记，前后值写入审计。只有受限本地初始化（`local_admin`）与系统（`system`）可信通道能签发/撤回，普通用户 `ACCESS_DENIED`；签发/撤回/读取均写安全审计，审计不可用整体回滚。资格只登记“可转授”，不改变任何主体的有效权限。
+- **统一检查与同事务**：`Guard` 提供 `CheckPermissionAccess`（角色组合权限，按角色当前分配目标复核）、`CheckAssignment`（角色分配给用户/用户组并校验接收目标）、`CheckPermissionActivation`（启用角色/启用权限，按启用后重新获得权限的目标集合复核）、`CheckScopeRestoration`（启用应用，读取范围内将被恢复的权限与持有目标后复核）；用户组增员与应用成员加入/重新启用复用 `CheckAssignment`。调用方在自己的 `audit.ExecuteCritical` 事务内通过 `audit.Tx.QueryContext` 读取资格、权限定义、操作者当前持有、受影响目标与目标限制，使“检查 + 写入”处于同一一致性边界，避免检查后并发修改放行。角色/组/应用/权限四个服务包的 `Options` 新增必填 `Transfers delegation.Guard`，缺失不可构造、拒绝策略不放行。
+- **持有与转授分离**：检查实际权限组合而不是角色名称/等级：操作者必须当前实际持有该权限（直接用户角色或经用户组角色来源，角色与权限均启用、非 root_only），且存在同 scope/权限的未过期未撤回资格；只有权限但无资格返回 `PERMISSION_REQUIRED`。资格过期/撤回、操作者权限被收回、应用/成员/账户状态变化后立即失效（每次事务内实时读取，无缓存）。
+- **间接提权路径的目标复核**：启用角色会恢复其组合权限、启用权限会恢复角色持有者的权限、把权限组合进角色会把权限扩散给该角色当前分配的用户/用户组、启用应用会恢复该范围内被整体拒绝的权限。这些路径除委派资格外一律按“实际受影响目标集合”复核 `allow_self` 与目标白名单：被委派者不能通过停用后再启用自己（或自己所在用户组）的含权角色/权限自我提权，也不能把权限塞进已分配给白名单外用户的角色；启用应用无法安全校验时 fail-closed，只有受信通道可通过。目标集合超过 `MaxAffectedTargets=4096`、数量超限或数据损坏一律拒绝，不静默缩小校验范围。
+- **数据范围收缩**：转授数据范围必须是资格上限的子集：上限 `all` 可转授 all/none/resources，上限 `resources` 只能转授其子集或 none，上限不得为 undefined，资源级上限不能转授未声明范围；越界返回 `ACCESS_DENIED`。上限与目标白名单使用严格版本化 JSON，未知字段/非法结构 fail-closed。
+- **自我与目标限制**：默认禁止把权限转授给自己或自己所在的用户组（`allow_self=0`，`ACCESS_DENIED`），需要时由受信操作者显式签发；目标白名单非空时接收用户/用户组必须命中，否则 `ACCESS_DENIED`。
+- **错误映射**：不新增注册错误码：非法 ID/分页/资格或权限不存在 `REQ_INVALID(400)`；缺少资格/资格过期/已撤回/已不持有 `PERMISSION_REQUIRED(403)`；自我或本组、目标不在白名单、数据范围过宽、权限不可转授、未获准 `ACCESS_DENIED(403)`；scope 串用 `APP_SCOPE_MISMATCH(403)`；应用停用 `CLIENT_DISABLED`、委派者账户不可用 `USER_DISABLED(403)`；存储 `DB_UNAVAILABLE(503)`；审计 `AUDIT_WRITE_FAILED(503)`；选项无效/未知 `INTERNAL_ERROR(500)`。`CodeOf` 对非本包错误返回空串供调用方继续映射；根包 `delegation_errorcodes_test.go` 核对登记状态、HTTP 状态与字面值。
+- **已验证（Windows amd64，临时 SQLite）**：受信签发/覆盖/校验/撤回/列表与普通用户越权拒绝；允许转授的正向用例；角色组合权限、用户赋角色、用户组赋角色、启用角色、用户组增员、应用成员加入、应用成员重新启用、启用权限、启用应用每条写入路径的越权拒绝（含向自己赋权与目标越界）；被委派者启用自身/自身所在组的含权角色与权限被拒；向白名单外或自身持有者组合权限被拒且不落库；应用启用无资格被拒、有资格且目标合法通过；持有但不可转授、资格过期、资格撤回、数据范围收缩与越界、目标白名单、操作者权限被收回、scope/账户/成员状态变化；并发转授检查与撤回、受 Guard 保护的并发写入与撤回不出现半更新放行；审计故障 fail-closed；迁移 0001～0006 与 0006 结构测试；根包错误码注册表测试保持 46 码不变；六目标编译与定向 vet 在 MEMORY 记录。
+- **尚未实现/未验证（如实声明）**：数据范围收缩未完整落地——`PermissionRef.DataScopeJSON` 虽已透传参与子集校验，但角色分配等写入路径仍固定写入未声明范围（`{}`），非 all 上限的委派资格因此继续 fail-closed、无法实际收缩；迁移 0006 只补 `json_valid` CHECK，不新增数据范围列，待后续步骤实现“按交集落库”。预设角色目录与恢复未实现（步骤 27 实现恢复与变更范围时必须接入同一 Guard 并按受影响目标复核）。审批引擎与需要审批的安全恢复（本步不做通用审批）、再委派（受信通道之外不能再签发资格）、委派资格 HTTP/CLI/管理页面、数据范围写入口、同一自然人“小号”识别（需结合目标白名单）、委派资格与令牌/会话联合校验；未做 race detector、多进程/多实例一致性与非 Windows 运行。
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -485,8 +500,9 @@ go run .\cmd\login-server --help
 | internal/permission/ | 系统内置/系统自定义/应用独有权限目录与启停（内部包） | 是 |
 | internal/role/ | 系统/应用角色、角色权限组合与角色到用户/用户组的分配（内部包） | 是 |
 | internal/authz/ | 有效权限计算、数据范围交集、权限来源与资源检查（内部包） | 是 |
+| internal/delegation/ | 可使用权限与可转授权限分离、委派资格与统一赋权检查（内部包） | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
-| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表与定时计划/尝试历史表） | 是 |
+| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表、定时计划/尝试历史表与权限委派资格表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
 | docs/requirements/ | 功能清单和错误码手册 | 可以 |
 | docs/database/ | 数据库基线说明、表清单与检查记录 | 可以 |
@@ -501,7 +517,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～25 已完成；继续时按 .ai/ 中的顺序处理步骤 26，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～26 已完成；继续时按 .ai/ 中的顺序处理步骤 27，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 )
 
 // ScopeInfo 是权限作用范围数据库快照。
@@ -43,6 +44,9 @@ type Store interface {
 	ListPermissions(ctx context.Context, query ListQuery) ([]Permission, bool, error)
 	UpdatePermission(ctx context.Context, tx audit.Tx, id, name, description, limits string, now time.Time) error
 	SetEnabled(ctx context.Context, tx audit.Tx, id string, enabled bool, now time.Time) error
+	// PermissionHolderTargets 在调用方事务内读取“启用该权限后会重新获得它”的用户
+	// 与用户组目标（组合该权限的启用角色的当前分配），供启用权限前复核委派目标。
+	PermissionHolderTargets(ctx context.Context, tx audit.Tx, permissionID string) ([]delegation.Target, error)
 	// CountReferences 返回 role_permissions 对该权限的引用数量；删除前预检。
 	CountReferences(ctx context.Context, id string) (int, error)
 	// DeletePermission 在同一事务条件删除，并确认没有 role_permissions 引用。
@@ -60,6 +64,7 @@ type Options struct {
 	Store      Store
 	Audit      AuditRecorder
 	Authorizer Authorizer
+	Transfers  delegation.Guard
 	Now        func() time.Time
 	Random     io.Reader
 	Logger     *slog.Logger
@@ -70,6 +75,7 @@ type Service struct {
 	store      Store
 	audit      AuditRecorder
 	authorizer Authorizer
+	transfers  delegation.Guard
 	now        func() time.Time
 	random     io.Reader
 	logger     *slog.Logger
@@ -86,6 +92,9 @@ func New(options Options) (*Service, error) {
 	if isNil(options.Authorizer) {
 		return nil, fmt.Errorf("%w: 授权器为空", ErrOptionsInvalid)
 	}
+	if isNil(options.Transfers) {
+		return nil, fmt.Errorf("%w: 可转授权限检查器为空", ErrOptionsInvalid)
+	}
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -99,7 +108,7 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
-		now: now, random: random, logger: logger}, nil
+		transfers: options.Transfers, now: now, random: random, logger: logger}, nil
 }
 
 // CreatePermission 登记系统内置/系统自定义/应用独有权限。系统内置权限只能创建在
@@ -390,6 +399,19 @@ func (s *Service) setPermissionEnabled(ctx context.Context, caller Caller, id st
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		if target {
+			// 启用权限会让已组合该权限的角色重新生效：与写入同一事务内检查
+			// 操作者是否被允许转授该权限，并按“启用后会重新获得该权限”的用户与
+			// 用户组目标复核自我提权与目标白名单；停用是收缩路径，不额外阻断。
+			targets, targetErr := s.store.PermissionHolderTargets(txCtx, tx, id)
+			if targetErr != nil {
+				return targetErr
+			}
+			if guardErr := s.transfers.CheckPermissionActivation(txCtx, tx, caller.actor, current.ScopeID,
+				[]delegation.PermissionRef{{PermissionID: id}}, targets); guardErr != nil {
+				return guardErr
+			}
+		}
 		return s.store.SetEnabled(txCtx, tx, id, target, now)
 	})
 	if err != nil {
@@ -563,6 +585,9 @@ func mapCriticalError(err error) error {
 		errors.Is(err, ErrStateConflict):
 		return err
 	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrBuiltinProtected):
+		return err
+	case delegation.CodeOf(err) != "":
+		// 委派检查拒绝：保留委派领域错误，由 CodeOf 映射为可诊断错误码。
 		return err
 	case errors.Is(err, ErrApplicationInactive), errors.Is(err, ErrStoreUnavailable):
 		return err

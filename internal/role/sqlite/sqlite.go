@@ -17,6 +17,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
@@ -52,6 +53,14 @@ AND NOT EXISTS(SELECT 1 FROM group_roles WHERE role_id=?)`
 
 	selectSystemScopeSQL = `SELECT 1 FROM scopes WHERE id='system' AND kind='system'`
 
+	// selectRoleAssignmentTargetsSQL 读取角色当前分配的用户与用户组目标。启用角色
+	// 或向角色组合权限时，这些主体会重新获得权限，必须按委派目标限制复核。
+	selectRoleAssignmentTargetsSQL = `
+SELECT 'user',user_id FROM user_roles WHERE role_id=? AND scope_id=?
+UNION
+SELECT 'group',group_id FROM group_roles WHERE role_id=? AND scope_id=?
+ORDER BY 1,2 LIMIT ?`
+
 	selectApplicationScopeSQL = `SELECT a.status FROM applications a
 JOIN scopes s ON s.id=? AND s.kind='application' AND s.app_id=a.id WHERE a.id=?`
 
@@ -65,6 +74,15 @@ ON CONFLICT(role_id,permission_id) DO NOTHING`
 	listRolePermissionsSQL = `SELECT p.id,p.permission_key,p.name,p.scope_id,p.enabled,p.root_only
 FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
 WHERE rp.role_id=? ORDER BY p.permission_key,p.id`
+
+	// listRoleEffectivePermissionIDsSQL 与 internal/authz 的有效权限判定一致：
+	// 权限必须启用且非 root_only。不过滤角色 enabled，因为启用角色前也要检查。
+	listRoleEffectivePermissionIDsSQL = `SELECT rp.permission_id
+FROM role_permissions rp
+JOIN roles r ON r.id=rp.role_id AND r.scope_id=rp.scope_id
+JOIN permissions p ON p.id=rp.permission_id AND p.scope_id=rp.scope_id
+WHERE rp.role_id=? AND p.enabled=1 AND p.root_only=0
+ORDER BY rp.permission_id`
 
 	selectUserForRoleSQL = `SELECT status,is_root FROM users WHERE id=?`
 
@@ -446,6 +464,60 @@ func (s *Store) ListRolePermissions(ctx context.Context, roleID string) ([]role.
 		return nil, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
 	}
 	return summaries, nil
+}
+
+// ListRoleEffectivePermissionIDs 在调用方事务内读取角色组合中当前会生效的权限
+// ID（权限启用且非 root_only）；供委派检查在同一事务内判断可转授范围。
+func (s *Store) ListRoleEffectivePermissionIDs(ctx context.Context, tx audit.Tx, roleID string) ([]string, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("%w: 审计事务为空", role.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, listRoleEffectivePermissionIDsSQL, roleID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0, 8)
+	for rows.Next() {
+		var permissionID string
+		if err := rows.Scan(&permissionID); err != nil {
+			return nil, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+		}
+		ids = append(ids, permissionID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	return ids, nil
+}
+
+// RoleAssignmentTargets 在调用方事务内读取角色当前分配的用户与用户组目标，供启用
+// 角色与组合权限前的委派目标复核使用。超过检查上限返回错误由调用方 fail-closed。
+func (s *Store) RoleAssignmentTargets(ctx context.Context, tx audit.Tx, roleID, scopeID string) ([]delegation.Target, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("%w: 审计事务为空", role.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, selectRoleAssignmentTargetsSQL,
+		roleID, scopeID, roleID, scopeID, delegation.MaxAffectedTargets+1)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	targets := make([]delegation.Target, 0, 8)
+	for rows.Next() {
+		var (
+			kind string
+			id   string
+		)
+		if err := rows.Scan(&kind, &id); err != nil {
+			return nil, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+		}
+		targets = append(targets, delegation.Target{Kind: delegation.TargetKind(kind), ID: id})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	return targets, nil
 }
 
 // GetUserForRole 读取角色分配目标账户状态与 root 标记。

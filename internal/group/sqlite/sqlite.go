@@ -310,6 +310,41 @@ func (s *Store) ExistingMembers(ctx context.Context, groupID string, userIDs []s
 	return existing, nil
 }
 
+// listGroupRoleEffectivePermissionIDsSQL 与 internal/authz 的有效权限判定一致：
+// 角色与权限都必须启用且权限非 root_only。
+const listGroupRoleEffectivePermissionIDsSQL = `SELECT DISTINCT rp.permission_id
+FROM group_roles gr
+JOIN roles r ON r.id=gr.role_id AND r.scope_id=gr.scope_id
+JOIN role_permissions rp ON rp.role_id=r.id
+JOIN permissions p ON p.id=rp.permission_id AND p.scope_id=rp.scope_id
+WHERE gr.group_id=? AND r.enabled=1 AND p.enabled=1 AND p.root_only=0
+ORDER BY rp.permission_id`
+
+// ListGroupRoleEffectivePermissionIDs 在调用方事务内读取用户组通过角色当前会生效
+// 的权限 ID，供“加成员”前在同一事务内做可转授检查。
+func (s *Store) ListGroupRoleEffectivePermissionIDs(ctx context.Context, tx audit.Tx, groupID string) ([]string, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("%w: 审计事务为空", group.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, listGroupRoleEffectivePermissionIDsSQL, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", group.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0, 8)
+	for rows.Next() {
+		var permissionID string
+		if err := rows.Scan(&permissionID); err != nil {
+			return nil, fmt.Errorf("%w: %w", group.ErrStoreUnavailable, err)
+		}
+		ids = append(ids, permissionID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", group.ErrStoreUnavailable, err)
+	}
+	return ids, nil
+}
+
 // ValidateMembers 检查所有目标用户是否合格：系统组要求全局账户 active；应用组
 // 额外要求 app_memberships 为 active 且应用存在。返回不合格用户 ID 列表。
 func (s *Store) ValidateMembers(ctx context.Context, scope group.GroupScope, userIDs []string) ([]string, error) {

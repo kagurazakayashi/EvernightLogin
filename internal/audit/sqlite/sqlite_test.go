@@ -117,7 +117,7 @@ func queryInt(t *testing.T, store *storagesqlite.Store, query string, args ...an
 	return value
 }
 
-// TestMigrationApplied 验证 0001～0003 迁移与审计表结构/索引。
+// TestMigrationApplied 验证 0001～0006 迁移与审计表结构/索引。
 func TestMigrationApplied(t *testing.T) {
 	raw := openTestDatabase(t)
 	rows, err := raw.QueryContext(context.Background(), `SELECT version FROM schema_history ORDER BY version`)
@@ -133,8 +133,8 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 5 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" {
-		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005]", versions)
+	if len(versions) != 6 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" {
+		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006]", versions)
 	}
 	type column struct {
 		kind    string

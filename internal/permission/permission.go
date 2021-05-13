@@ -35,6 +35,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 )
 
 const (
@@ -183,8 +184,11 @@ const (
 	CodeInternalError    ErrorCode = "INTERNAL_ERROR"
 )
 
-// CodeOf 把权限领域错误映射到已登记错误码。
+// CodeOf 把权限目录领域错误映射到已登记错误码；委派检查错误优先映射为稳定错误码。
 func CodeOf(err error) ErrorCode {
+	if code := delegation.CodeOf(err); code != "" {
+		return ErrorCode(code)
+	}
 	switch {
 	case err == nil:
 		return ""

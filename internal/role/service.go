@@ -15,6 +15,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 )
 
 // ScopeInfo 是角色作用范围数据库快照。
@@ -94,6 +95,12 @@ type Store interface {
 	AddRolePermission(ctx context.Context, tx audit.Tx, roleID, permissionID, scopeID string) (bool, error)
 	RemoveRolePermission(ctx context.Context, tx audit.Tx, roleID, permissionID string) (bool, error)
 	ListRolePermissions(ctx context.Context, roleID string) ([]PermissionSummary, error)
+	// ListRoleEffectivePermissionIDs 在调用方事务内读取角色组合中当前会生效的
+	// 权限 ID（权限启用且非 root_only；不过滤角色 enabled，供启用角色前检查）。
+	ListRoleEffectivePermissionIDs(ctx context.Context, tx audit.Tx, roleID string) ([]string, error)
+	// RoleAssignmentTargets 在调用方事务内读取角色当前分配的用户与用户组目标；
+	// 启用角色或向角色组合权限前，必须按这些目标复核委派目标限制。
+	RoleAssignmentTargets(ctx context.Context, tx audit.Tx, roleID, scopeID string) ([]delegation.Target, error)
 
 	// 角色分配目标资格与关联。
 	GetUserForRole(ctx context.Context, userID string) (UserRecord, error)
@@ -115,11 +122,13 @@ type AuditRecorder interface {
 	ExecuteCritical(ctx context.Context, request audit.CriticalRequest, change audit.Change) error
 }
 
-// Options 是角色服务依赖。Authorizer 必填：缺少可信策略时服务不可构造，不放行。
+// Options 是角色服务依赖。Authorizer 与 Transfers 必填：缺少可信策略或可转授
+// 检查时服务不可构造，不放行任何可能改变有效权限的请求。
 type Options struct {
 	Store      Store
 	Audit      AuditRecorder
 	Authorizer Authorizer
+	Transfers  delegation.Guard
 	Now        func() time.Time
 	Random     io.Reader
 	Logger     *slog.Logger
@@ -130,6 +139,7 @@ type Service struct {
 	store      Store
 	audit      AuditRecorder
 	authorizer Authorizer
+	transfers  delegation.Guard
 	now        func() time.Time
 	random     io.Reader
 	logger     *slog.Logger
@@ -146,6 +156,9 @@ func New(options Options) (*Service, error) {
 	if isNil(options.Authorizer) {
 		return nil, fmt.Errorf("%w: 授权器为空", ErrOptionsInvalid)
 	}
+	if isNil(options.Transfers) {
+		return nil, fmt.Errorf("%w: 可转授权限检查器为空", ErrOptionsInvalid)
+	}
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -159,7 +172,7 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
-		now: now, random: random, logger: logger}, nil
+		transfers: options.Transfers, now: now, random: random, logger: logger}, nil
 }
 
 // CreateRole 在指定范围登记角色。系统范围可以创建系统自定义/内置角色（内置只能由
@@ -443,6 +456,22 @@ func (s *Service) setRoleEnabled(ctx context.Context, caller Caller, id string, 
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		if target {
+			// 启用角色会让其权限组合重新生效：必须重新检查可转授范围，并按角色
+			// 当前分配目标（用户与用户组）复核自我提权与目标白名单，防止被委派者
+			// 通过停用后再启用把自己已有的含权角色恢复。
+			refs, refErr := s.roleTransferRefs(txCtx, tx, id)
+			if refErr != nil {
+				return refErr
+			}
+			targets, targetErr := s.store.RoleAssignmentTargets(txCtx, tx, id, current.ScopeID)
+			if targetErr != nil {
+				return targetErr
+			}
+			if guardErr := s.transfers.CheckPermissionActivation(txCtx, tx, caller.actor, current.ScopeID, refs, targets); guardErr != nil {
+				return guardErr
+			}
+		}
 		return s.store.SetRoleEnabled(txCtx, tx, id, current.Enabled, target, now)
 	})
 	if err != nil {
@@ -545,6 +574,18 @@ func (s *Service) AddRolePermission(ctx context.Context, caller Caller, roleID, 
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		// 与写入同一事务：检查操作者是否被允许转授该权限，防止应用管理员把
+		// 本应用任意已启用权限组合进角色（含稍后分配给自己的路径）。角色当前已
+		// 分配的用户/用户组是实际受影响目标，必须按它们复核自我提权与白名单，
+		// 否则可把权限塞进“已分配给白名单外用户”的角色绕过赋角色检查。
+		targets, targetErr := s.store.RoleAssignmentTargets(txCtx, tx, roleID, current.ScopeID)
+		if targetErr != nil {
+			return targetErr
+		}
+		if guardErr := s.transfers.CheckPermissionAccess(txCtx, tx, caller.actor, current.ScopeID,
+			[]delegation.PermissionRef{{PermissionID: permission.PermissionID}}, targets); guardErr != nil {
+			return guardErr
+		}
 		inserted, insertErr := s.store.AddRolePermission(txCtx, tx, roleID, permissionID, current.ScopeID)
 		if insertErr != nil {
 			return insertErr
@@ -690,6 +731,14 @@ func (s *Service) AssignUserRole(ctx context.Context, caller Caller, roleID, use
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		refs, refErr := s.roleTransferRefs(txCtx, tx, roleID)
+		if refErr != nil {
+			return refErr
+		}
+		if guardErr := s.transfers.CheckAssignment(txCtx, tx, caller.actor, current.ScopeID, refs,
+			delegation.Target{Kind: delegation.TargetUser, ID: userID}); guardErr != nil {
+			return guardErr
+		}
 		inserted, insertErr := s.store.AddUserRole(txCtx, tx, assignment)
 		if insertErr != nil {
 			return insertErr
@@ -814,6 +863,14 @@ func (s *Service) AssignGroupRole(ctx context.Context, caller Caller, roleID, gr
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		refs, refErr := s.roleTransferRefs(txCtx, tx, roleID)
+		if refErr != nil {
+			return refErr
+		}
+		if guardErr := s.transfers.CheckAssignment(txCtx, tx, caller.actor, current.ScopeID, refs,
+			delegation.Target{Kind: delegation.TargetGroup, ID: groupID}); guardErr != nil {
+			return guardErr
+		}
 		inserted, insertErr := s.store.AddGroupRole(txCtx, tx, assignment)
 		if insertErr != nil {
 			return insertErr
@@ -1014,6 +1071,10 @@ func mapCriticalError(err error) error {
 		errors.Is(err, ErrUserNotMember), errors.Is(err, ErrUserNotEligible),
 		errors.Is(err, ErrApplicationInactive):
 		return err
+	case delegation.CodeOf(err) != "":
+		// 委派检查拒绝：保留委派领域错误，由 CodeOf 映射为可诊断错误码，
+		// 不能被默认分支误包装成存储不可用。
+		return err
 	case errors.Is(err, ErrStoreUnavailable):
 		return err
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -1023,6 +1084,19 @@ func mapCriticalError(err error) error {
 	default:
 		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
+}
+
+// roleTransferRefs 在调用方事务内把角色当前生效的权限转换为委派检查引用。
+func (s *Service) roleTransferRefs(ctx context.Context, tx audit.Tx, roleID string) ([]delegation.PermissionRef, error) {
+	ids, err := s.store.ListRoleEffectivePermissionIDs(ctx, tx, roleID)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]delegation.PermissionRef, 0, len(ids))
+	for _, id := range ids {
+		refs = append(refs, delegation.PermissionRef{PermissionID: id})
+	}
+	return refs, nil
 }
 
 // normalizeContext 把 nil ctx 当成 Background。

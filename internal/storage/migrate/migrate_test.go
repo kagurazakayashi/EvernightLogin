@@ -182,10 +182,10 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载内嵌迁移失败：%v", err)
 	}
-	if len(migrations) != 5 {
-		t.Fatalf("内嵌迁移数量 = %d，期望 5", len(migrations))
+	if len(migrations) != 6 {
+		t.Fatalf("内嵌迁移数量 = %d，期望 6", len(migrations))
 	}
-	expectedVersions := []string{"0001", "0002", "0003", "0004", "0005"}
+	expectedVersions := []string{"0001", "0002", "0003", "0004", "0005", "0006"}
 	for index, migration := range migrations {
 		if migration.Version != expectedVersions[index] {
 			t.Errorf("第 %d 个迁移版本 = %q，期望 %q", index, migration.Version, expectedVersions[index])

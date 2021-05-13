@@ -7,7 +7,22 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 )
+
+// memberTransferRefs 在调用方事务内把该用户在本应用范围内当前会生效的权限转换
+// 为委派检查引用。
+func (s *Service) memberTransferRefs(ctx context.Context, tx audit.Tx, applicationID, userID string) ([]delegation.PermissionRef, error) {
+	ids, err := s.store.ListMemberEffectivePermissionIDs(ctx, tx, applicationID, userID)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]delegation.PermissionRef, 0, len(ids))
+	for _, id := range ids {
+		refs = append(refs, delegation.PermissionRef{PermissionID: id})
+	}
+	return refs, nil
+}
 
 // 应用成员服务方法。
 //
@@ -80,6 +95,16 @@ func (s *Service) AddApplicationMember(ctx context.Context, caller Caller, reque
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		// 与写入同一事务：该用户可能已有本应用角色分配（角色分配在成员移除后
+		// 保留），重新加入成员会让这些权限恢复生效，必须检查可转授范围。
+		refs, refErr := s.memberTransferRefs(txCtx, tx, application.ID, request.UserID)
+		if refErr != nil {
+			return refErr
+		}
+		if guardErr := s.transfers.CheckAssignment(txCtx, tx, caller.actor, application.ID, refs,
+			delegation.Target{Kind: delegation.TargetUser, ID: request.UserID}); guardErr != nil {
+			return guardErr
+		}
 		return s.store.CreateMembership(txCtx, tx, membership)
 	})
 	if err != nil {
@@ -314,6 +339,17 @@ func (s *Service) applyMemberStatus(ctx context.Context, caller Caller, request 
 		},
 	}
 	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		if target == MembershipActive {
+			// 重新启用成员会恢复既有角色分配的有效权限：同一事务内检查可转授范围。
+			refs, refErr := s.memberTransferRefs(txCtx, tx, application.ID, request.UserID)
+			if refErr != nil {
+				return refErr
+			}
+			if guardErr := s.transfers.CheckAssignment(txCtx, tx, caller.actor, application.ID, refs,
+				delegation.Target{Kind: delegation.TargetUser, ID: request.UserID}); guardErr != nil {
+				return guardErr
+			}
+		}
 		return s.store.ApplyMembershipStatus(txCtx, tx, MemberStatusChange{
 			ApplicationID:      application.ID,
 			UserID:             request.UserID,

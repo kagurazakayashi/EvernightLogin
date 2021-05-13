@@ -41,7 +41,8 @@ func openMigratedStore(t *testing.T) *storagesqlite.Store {
 	return raw
 }
 
-// testAuditTx 是只实现 ExecContext 的审计事务适配器；仓储直接测试不需要写审计。
+// testAuditTx 是只实现 ExecContext/QueryContext 的审计事务适配器；仓储直接测试
+// 不需要写审计。
 type testAuditTx struct {
 	tx *sql.Tx
 }
@@ -50,6 +51,10 @@ func (t testAuditTx) AppendEvent(context.Context, audit.Event) error { return ni
 
 func (t testAuditTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return t.tx.ExecContext(ctx, query, args...)
+}
+
+func (t testAuditTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return t.tx.QueryContext(ctx, query, args...)
 }
 
 // runTx 在真实 SQLite 事务中执行仓储写入，通过 testAuditTx 适配角色仓储契约。

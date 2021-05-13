@@ -13,6 +13,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/permission"
 	permissionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/permission/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
@@ -59,6 +60,25 @@ type testEnv struct {
 	local      permission.Caller
 }
 
+// allowAllTransfers 是测试用可转授检查器：既有角色/用户组/权限/成员用例只关注
+// 领域语义，委派限制的拒绝与允许由 internal/delegation 的定向测试和集成测试覆盖。
+func allowAllTransfers() delegation.GuardFuncs {
+	return delegation.GuardFuncs{
+		Access: func(context.Context, audit.Tx, audit.Actor, string, []delegation.PermissionRef, []delegation.Target) error {
+			return nil
+		},
+		Assignment: func(context.Context, audit.Tx, audit.Actor, string, []delegation.PermissionRef, delegation.Target) error {
+			return nil
+		},
+		Activation: func(context.Context, audit.Tx, audit.Actor, string, []delegation.PermissionRef, []delegation.Target) error {
+			return nil
+		},
+		Restoration: func(context.Context, audit.Tx, audit.Actor, string) error {
+			return nil
+		},
+	}
+}
+
 func prepareEnv(t *testing.T) *testEnv {
 	t.Helper()
 	ctx := context.Background()
@@ -95,7 +115,8 @@ func prepareEnv(t *testing.T) *testEnv {
 		t.Fatalf("构造授权器失败: %v", err)
 	}
 	service, err := permission.New(permission.Options{Store: store, Audit: recorder, Authorizer: authorizer,
-		Now: clock.Now, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Transfers: allowAllTransfers(), Now: clock.Now,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatalf("构造权限服务失败: %v", err)
 	}

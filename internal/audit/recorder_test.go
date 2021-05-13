@@ -75,6 +75,11 @@ func (t *fakeTx) ExecContext(context.Context, string, ...any) (sql.Result, error
 	return fakeResult{}, nil
 }
 
+// QueryContext 实现 Tx；测试替身不提供事务内读取。
+func (t *fakeTx) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, errors.New("测试替身不支持事务内查询")
+}
+
 // fakeResult 是 sql.Result 的最小测试实现。
 type fakeResult struct{}
 

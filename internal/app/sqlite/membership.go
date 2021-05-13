@@ -196,6 +196,47 @@ func (s *Store) RemoveMembership(ctx context.Context, tx audit.Tx, remove app.Me
 	return checkMembershipAffected(result)
 }
 
+// listMemberEffectivePermissionIDsSQL 与 internal/authz 的有效权限判定一致：
+// 直接角色与经用户组的角色合并，角色与权限都启用且权限非 root_only。
+const listMemberEffectivePermissionIDsSQL = `SELECT DISTINCT p.id
+FROM (
+  SELECT ur.role_id,ur.scope_id FROM user_roles ur WHERE ur.user_id=? AND ur.scope_id=?
+  UNION ALL
+  SELECT gr.role_id,gr.scope_id FROM group_members gm
+  JOIN group_roles gr ON gr.group_id=gm.group_id
+  WHERE gm.user_id=? AND gr.scope_id=?
+) chosen
+JOIN roles r ON r.id=chosen.role_id AND r.scope_id=chosen.scope_id
+JOIN role_permissions rp ON rp.role_id=r.id
+JOIN permissions p ON p.id=rp.permission_id AND p.scope_id=chosen.scope_id
+WHERE r.enabled=1 AND p.enabled=1 AND p.root_only=0
+ORDER BY p.id`
+
+// ListMemberEffectivePermissionIDs 在调用方事务内读取用户在该应用范围内当前会
+// 生效的权限 ID，供成员加入/重新启用前做可转授检查。
+func (s *Store) ListMemberEffectivePermissionIDs(ctx context.Context, tx audit.Tx, applicationID, userID string) ([]string, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("%w: 审计事务为空", app.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, listMemberEffectivePermissionIDsSQL, userID, applicationID, userID, applicationID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0, 8)
+	for rows.Next() {
+		var permissionID string
+		if err := rows.Scan(&permissionID); err != nil {
+			return nil, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+		}
+		ids = append(ids, permissionID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	return ids, nil
+}
+
 // LookupUserStatus 读取全局账户状态；不存在时返回 found=false。加入/启用成员前
 // 由服务要求 active，停用/移除允许清理非 active 账户。
 func (s *Store) LookupUserStatus(ctx context.Context, userID string) (account.Status, bool, error) {

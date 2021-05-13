@@ -152,6 +152,11 @@ func (t *transaction) ExecContext(ctx context.Context, query string, args ...any
 	return t.tx.ExecContext(ctx, query, args...)
 }
 
+// QueryContext 实现 audit.Tx，让关键变更在同一事务内读取授权状态。
+func (t *transaction) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return t.tx.QueryContext(ctx, query, args...)
+}
+
 // dedupeExists 判断幂等键是否已存在。
 func (t *transaction) dedupeExists(ctx context.Context, dedupeKey string) (bool, error) {
 	rows, err := t.tx.QueryContext(ctx, dedupeExistsSQL, dedupeKey)
