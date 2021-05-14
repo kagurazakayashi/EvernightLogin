@@ -535,3 +535,41 @@ func TestDelegationMigration(t *testing.T) {
 		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
 	}
 }
+
+const presetMigration = "0007_preset_installations.sql"
+
+// readPresetMigration 读取 0007 预设目录初始化版本迁移。
+func readPresetMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(presetMigration)
+	if err != nil {
+		t.Fatalf("读取预设初始化迁移失败: %v", err)
+	}
+	return string(data)
+}
+
+// TestPresetMigration 校验步骤 27 的初始化版本记录结构：同一作用范围只有一条记录、
+// 作用范围外键级联、版本与时间字段必填；只追加本表与索引，不改变任何授权数据。
+func TestPresetMigration(t *testing.T) {
+	sqlText := readPresetMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0007 CREATE TABLE 数量 = %d，期望只创建初始化版本记录表", count)
+	}
+	definition := tableDefinition(t, sqlText, "preset_installations")
+	for _, want := range []string{
+		"scope_id TEXT PRIMARY KEY NOT NULL REFERENCES scopes(id) ON DELETE CASCADE",
+		"catalog_version TEXT NOT NULL",
+		"applied_at_ms INTEGER NOT NULL",
+		"updated_at_ms INTEGER NOT NULL",
+	} {
+		if !strings.Contains(definition, want) {
+			t.Errorf("preset_installations 定义缺少 %q", want)
+		}
+	}
+	if !strings.Contains(sqlText, "CREATE INDEX idx_preset_installations_version ON preset_installations(catalog_version);") {
+		t.Error("0007 缺少版本索引")
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
