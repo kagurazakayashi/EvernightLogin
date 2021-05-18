@@ -186,7 +186,7 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration, delegationMigration} {
+	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration, delegationMigration, presetMigration, rootInitializationMigration} {
 		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
 			t.Fatalf("读取迁移 %s 失败：%v", name, err)
@@ -571,5 +571,59 @@ func TestPresetMigration(t *testing.T) {
 	}
 	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
 		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
+
+const rootInitializationMigration = "0008_root_initialization.sql"
+
+// readRootInitializationMigration 读取 0008 首次初始化与 root 受限状态迁移。
+func readRootInitializationMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(rootInitializationMigration)
+	if err != nil {
+		t.Fatalf("读取首次初始化迁移失败: %v", err)
+	}
+	return string(data)
+}
+
+// TestRootInitializationMigration 校验步骤 28 的初始化记录结构：单例约束、
+// root 外键禁止删除、受限状态机与验证/完成时间联动，且只追加本表与索引。
+func TestRootInitializationMigration(t *testing.T) {
+	sqlText := readRootInitializationMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0008 CREATE TABLE 数量 = %d，期望只创建初始化状态记录表", count)
+	}
+	definition := tableDefinition(t, sqlText, "root_initializations")
+	for _, want := range []string{
+		"singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1)",
+		"root_user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE RESTRICT",
+		"state TEXT NOT NULL CHECK(state IN('pending_setup','setup_verified','ready'))",
+		"setup_credential_id TEXT REFERENCES one_time_credentials(id) ON DELETE SET NULL",
+		"started_by TEXT NOT NULL",
+		"created_at_ms INTEGER NOT NULL",
+		"updated_at_ms INTEGER NOT NULL",
+		"verified_at_ms INTEGER",
+		"ready_at_ms INTEGER",
+		"state='pending_setup' AND verified_at_ms IS NULL AND ready_at_ms IS NULL",
+		"state='setup_verified' AND verified_at_ms IS NOT NULL AND ready_at_ms IS NULL",
+		"state='ready' AND verified_at_ms IS NOT NULL AND ready_at_ms IS NOT NULL",
+	} {
+		if !strings.Contains(definition, want) {
+			t.Errorf("root_initializations 定义缺少 %q", want)
+		}
+	}
+	if !strings.Contains(sqlText, "CREATE INDEX idx_root_initializations_state ON root_initializations(state);") {
+		t.Error("0008 缺少状态索引")
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+	// 0008 不得创建密码、会话或令牌表：本步没有默认密码，也不提前签发会话。
+	for _, future := range []string{
+		"CREATE TABLE password_credentials", "CREATE TABLE sessions", "CREATE TABLE tokens",
+	} {
+		if strings.Contains(sqlText, future) {
+			t.Errorf("0008 提前创建了后续步骤的表 %q", future)
+		}
 	}
 }

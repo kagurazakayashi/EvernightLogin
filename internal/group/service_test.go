@@ -401,6 +401,38 @@ func TestApplicationGroupEligibility(t *testing.T) {
 	}
 }
 
+// TestAddMembersRejectsRoot 验证 root 账户不能加入任何用户组：否则“组已配置角色
+// 后再加入 root”会给 root 间接分配普通角色，绕开角色分配时的 root 保护。
+func TestAddMembersRejectsRoot(t *testing.T) {
+	env := prepareEnv(t)
+	rootID := "usr_11111111111111111111111111111111"
+	now := env.clock.Now().UnixMilli()
+	if _, err := env.raw.ExecContext(context.Background(),
+		`INSERT INTO users(id,username,username_normalized,nickname,biography,language,timezone,status,is_root,security_version,row_version,created_at_ms,updated_at_ms)
+VALUES(?,?,?,'','','zh-CN','Asia/Shanghai','active',1,1,1,?,?)`,
+		rootID, "root", "root", now, now); err != nil {
+		t.Fatalf("插入 root 测试用户失败: %v", err)
+	}
+	systemGroup := env.createGroup(group.ScopeSystem, "root-guard")
+	if _, err := env.service.AddMembers(context.Background(), env.system,
+		group.MemberBatchRequest{GroupID: systemGroup.ID, UserIDs: []string{rootID}}); !errors.Is(err, group.ErrMemberNotEligible) {
+		t.Fatalf("向用户组加入 root 错误 = %v，期望 ErrMemberNotEligible", err)
+	}
+	if value := env.queryInt(`SELECT COUNT(*) FROM group_members WHERE user_id=?`, rootID); value != 0 {
+		t.Errorf("root 组成员行数 = %d，期望 0", value)
+	}
+	// 拒绝必须留失败审计（普通管理员反复尝试把 root 拉进已配角色的组不能无痕），
+	// 且错误码仍是既有 USER_DISABLED。
+	if code := group.CodeOf(group.ErrMemberNotEligible); code != group.CodeUserDisabled {
+		t.Errorf("成员资格错误码 = %q，期望 USER_DISABLED", code)
+	}
+	if value := env.queryInt(`SELECT COUNT(*) FROM audit_events
+WHERE action=? AND outcome='failure' AND error_code='USER_DISABLED' AND reason_code='member_not_eligible' AND target_id=?`,
+		string(group.ActionAddMembers), systemGroup.ID); value != 1 {
+		t.Errorf("root 组成员拒绝失败审计数 = %d，期望 1", value)
+	}
+}
+
 func TestBatchMemberLimitsAndAtomicity(t *testing.T) {
 	env := prepareEnv(t)
 	systemGroup := env.createGroup(group.ScopeSystem, "batch")

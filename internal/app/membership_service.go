@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -58,7 +59,7 @@ func (s *Service) AddApplicationMember(ctx context.Context, caller Caller, reque
 	if application.Status != StatusActive {
 		return Membership{}, fmt.Errorf("%w: 应用 %s 当前不可加入", ErrApplicationInactive, application.ID)
 	}
-	if err := s.requireActiveUser(ctx, request.UserID); err != nil {
+	if err := s.requireActiveUser(ctx, caller, ActionAddApplicationMember, application.ID, request.UserID); err != nil {
 		return Membership{}, err
 	}
 	profile, err := normalizeMemberProfile(request.Profile)
@@ -202,7 +203,7 @@ func (s *Service) UpdateApplicationMemberProfile(ctx context.Context, caller Cal
 	if request.ExpectedRowVersion != current.RowVersion {
 		return Membership{}, ErrStateConflict
 	}
-	if err := s.requireActiveUser(ctx, request.UserID); err != nil {
+	if err := s.requireActiveUser(ctx, caller, ActionUpdateApplicationMemberProfile, application.ID, request.UserID); err != nil {
 		return Membership{}, err
 	}
 	profile, err := normalizeMemberProfile(request.Profile)
@@ -312,7 +313,7 @@ func (s *Service) applyMemberStatus(ctx context.Context, caller Caller, request 
 		return MemberStatusResult{}, ErrStateConflict
 	}
 	if target == MembershipActive {
-		if err := s.requireActiveUser(ctx, request.UserID); err != nil {
+		if err := s.requireActiveUser(ctx, caller, action, application.ID, request.UserID); err != nil {
 			return MemberStatusResult{}, err
 		}
 	}
@@ -438,20 +439,49 @@ func (s *Service) loadMemberApplication(ctx context.Context, applicationID strin
 	return application, nil
 }
 
-// requireActiveUser 要求目标全局账户存在且为 active；只在加入/启用/资料更新等
-// 恢复或维持应用访问资格的操作前调用。停用/移除用于清理，不要求账户 active。
-func (s *Service) requireActiveUser(ctx context.Context, userID string) error {
-	status, found, err := s.store.LookupUserStatus(ctx, userID)
+// requireActiveUser 要求目标全局账户存在、为 active 且不是 root；只在加入/启用/
+// 资料更新等恢复或维持应用访问资格的操作前调用。停用/移除用于清理，不要求账户
+// active。
+//
+// root 只能通过受保护的本地通道管理，不能成为任何应用成员（与 internal/group
+// 的 root 组成员排除规则一致）：root 目标返回既有 USER_DISABLED 语义并写一条
+// 失败审计，避免普通应用管理员反复尝试给 root 建立成员/业务资格却无痕。
+func (s *Service) requireActiveUser(ctx context.Context, caller Caller, action Action, applicationID, userID string) error {
+	status, isRoot, found, err := s.store.LookupUserState(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return ErrTargetUserNotFound
 	}
+	if isRoot {
+		return s.recordRootMemberRejection(ctx, caller, action, applicationID, userID)
+	}
 	if status != account.StatusActive {
 		return fmt.Errorf("%w: 当前状态为 %s", ErrUserNotEligible, status)
 	}
 	return nil
+}
+
+// recordRootMemberRejection 为“root 不能成为应用成员/业务成员资格”的普通管理
+// 拒绝写失败审计，返回既有 USER_DISABLED 语义（不新增错误码）。审计使用独立
+// 事务，不受请求取消影响；审计失败时把 ErrAuditUnavailable 一并加入错误链。
+func (s *Service) recordRootMemberRejection(ctx context.Context, caller Caller, action Action, applicationID, userID string) error {
+	cause := fmt.Errorf("%w: root 账户不能成为应用成员", ErrUserNotEligible)
+	event := audit.Event{
+		Actor:      caller.actor,
+		AppID:      applicationID,
+		Action:     string(action),
+		Target:     membershipTarget(userID),
+		Outcome:    audit.OutcomeFailure,
+		ErrorCode:  string(CodeUserDisabled),
+		ReasonCode: "root_protected",
+		RequestID:  caller.requestID,
+	}
+	if err := s.audit.RecordFailure(ctx, event); err != nil {
+		return errors.Join(cause, fmt.Errorf("%w: %w", ErrAuditUnavailable, err))
+	}
+	return cause
 }
 
 // recordMemberRead 写成员读取成功审计；失败时拒绝返回数据（fail-closed）。

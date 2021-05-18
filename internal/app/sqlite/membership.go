@@ -34,7 +34,7 @@ WHERE app_id=? AND user_id=? AND status=? AND row_version=?`
 
 	removeMemberSQL = `DELETE FROM app_memberships WHERE app_id=? AND user_id=? AND row_version=?`
 
-	lookupUserStatusSQL = `SELECT status FROM users WHERE id=?`
+	lookupUserStatusSQL = `SELECT status,is_root FROM users WHERE id=?`
 )
 
 // GetMembership 读取指定应用的成员关系；profile_json 必须是当前版本的规范 JSON，
@@ -237,32 +237,35 @@ func (s *Store) ListMemberEffectivePermissionIDs(ctx context.Context, tx audit.T
 	return ids, nil
 }
 
-// LookupUserStatus 读取全局账户状态；不存在时返回 found=false。加入/启用成员前
-// 由服务要求 active，停用/移除允许清理非 active 账户。
-func (s *Store) LookupUserStatus(ctx context.Context, userID string) (account.Status, bool, error) {
+// LookupUserState 读取全局账户状态与 root 标记；不存在时返回 found=false。
+// 加入/启用成员前由服务要求 active 且非 root，停用/移除允许清理非 active 账户。
+func (s *Store) LookupUserState(ctx context.Context, userID string) (account.Status, bool, bool, error) {
 	rows, err := s.store.QueryContext(ctx, lookupUserStatusSQL, userID)
 	if err != nil {
-		return "", false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+		return "", false, false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return "", false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+			return "", false, false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
 		}
-		return "", false, nil
+		return "", false, false, nil
 	}
-	var status string
-	if err := rows.Scan(&status); err != nil {
-		return "", false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	var (
+		status string
+		isRoot int
+	)
+	if err := rows.Scan(&status, &isRoot); err != nil {
+		return "", false, false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
 	}
 	parsed := account.Status(status)
 	if status == "" || !parsed.Valid() {
-		return "", false, fmt.Errorf("%w: 账户状态数据无效", app.ErrStoreUnavailable)
+		return "", false, false, fmt.Errorf("%w: 账户状态数据无效", app.ErrStoreUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return "", false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+		return "", false, false, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
 	}
-	return parsed, true, nil
+	return parsed, isRoot == 1, true, nil
 }
 
 // scanMembership 读取一行成员快照并校验 ID、状态、版本与资料 JSON 一致性。

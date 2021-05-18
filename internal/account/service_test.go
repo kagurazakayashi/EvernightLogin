@@ -676,6 +676,22 @@ func TestInvalidTransitionsAndRootProtection(t *testing.T) {
 	if value := env.queryInt(`SELECT COUNT(*) FROM users WHERE id=? AND is_root=1`, rootID); value != 1 {
 		t.Error("root 账户不应被删除")
 	}
+	// root 保护拒绝必须留失败审计（普通管理员反复尝试禁用/删除 root 不能无痕），
+	// 且错误码仍为 ACCESS_DENIED、root 行状态/版本完全未变。
+	for _, action := range []string{
+		string(account.ActionDisableUser),
+		string(account.ActionRequestDeletion),
+		string(account.ActionCompleteDeletion),
+	} {
+		if value := env.queryInt(`SELECT COUNT(*) FROM audit_events
+WHERE action=? AND outcome='failure' AND error_code='ACCESS_DENIED' AND reason_code='root_protected' AND target_id=?`,
+			action, rootID); value != 1 {
+			t.Errorf("%s root 拒绝失败审计数 = %d，期望 1", action, value)
+		}
+	}
+	if value := env.queryInt(`SELECT COUNT(*) FROM users WHERE id=? AND status='active' AND row_version=1 AND security_version=1`, rootID); value != 1 {
+		t.Error("root 保护拒绝后账户状态/版本发生变化")
+	}
 }
 
 // TestDeletionLifecycleAndAssociationPolicy 验证待删除→完成删除及关联数据处理。

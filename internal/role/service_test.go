@@ -558,6 +558,15 @@ func TestRoleUserAssignmentEligibility(t *testing.T) {
 	if _, err := env.service.AssignUserRole(context.Background(), env.system, systemRole.ID, testUserRoot); !errors.Is(err, role.ErrRootProtected) {
 		t.Fatalf("root 分配角色错误 = %v", err)
 	}
+	// root 分配拒绝必须留失败审计，且不产生角色分配行。
+	if count := env.queryInt(`SELECT COUNT(*) FROM audit_events
+WHERE action=? AND outcome='failure' AND error_code='ACCESS_DENIED' AND reason_code='root_account_protected' AND target_id=?`,
+		string(role.ActionAssignUserRole), testUserRoot); count != 1 {
+		t.Errorf("root 分配拒绝失败审计数 = %d，期望 1", count)
+	}
+	if count := env.queryInt(`SELECT COUNT(*) FROM user_roles WHERE user_id=?`, testUserRoot); count != 0 {
+		t.Errorf("root 不应获得角色分配，行数 = %d", count)
+	}
 	if _, err := env.service.AssignUserRole(context.Background(), env.system, systemRole.ID, "usr_ffffffffffffffffffffffffffffffff"); !errors.Is(err, role.ErrUserNotFound) {
 		t.Fatalf("不存在账户分配错误 = %v", err)
 	}
@@ -1056,6 +1065,12 @@ func TestRoleGroupWithRootCannotReceiveRole(t *testing.T) {
 	}
 	if count := env.queryInt(`SELECT COUNT(*) FROM group_roles WHERE role_id=?`, systemRole.ID); count != 0 {
 		t.Fatalf("拒绝后组角色行数 = %d", count)
+	}
+	// 含 root 组的角色分配拒绝必须留失败审计（普通管理员反复尝试不能无痕）。
+	if count := env.queryInt(`SELECT COUNT(*) FROM audit_events
+WHERE action=? AND outcome='failure' AND error_code='ACCESS_DENIED' AND reason_code='root_group_member_protected' AND target_id=?`,
+		string(role.ActionAssignGroupRole), testGroupSystem); count != 1 {
+		t.Errorf("含 root 组拒绝失败审计数 = %d，期望 1", count)
 	}
 	// 移除 root 组成员后可分配。
 	if _, err := env.raw.ExecContext(context.Background(),

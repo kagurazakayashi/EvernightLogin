@@ -119,6 +119,7 @@ type Store interface {
 // AuditRecorder 是角色服务依赖的审计契约。
 type AuditRecorder interface {
 	Record(ctx context.Context, event audit.Event) error
+	RecordFailure(ctx context.Context, event audit.Event) error
 	ExecuteCritical(ctx context.Context, request audit.CriticalRequest, change audit.Change) error
 }
 
@@ -684,7 +685,8 @@ func (s *Service) AssignUserRole(ctx context.Context, caller Caller, roleID, use
 		return false, err
 	}
 	if user.IsRoot {
-		return false, fmt.Errorf("%w: root 账户不能作为普通角色分配目标", ErrRootProtected)
+		return false, s.recordRootRejection(ctx, caller, ActionAssignUserRole, "user", userID,
+			"root_account_protected", fmt.Errorf("%w: root 账户不能作为普通角色分配目标", ErrRootProtected))
 	}
 	if user.Status != account.StatusActive {
 		return false, fmt.Errorf("%w: 账户当前状态为 %s", ErrUserNotEligible, user.Status)
@@ -835,7 +837,8 @@ func (s *Service) AssignGroupRole(ctx context.Context, caller Caller, roleID, gr
 		return false, err
 	}
 	if hasRoot {
-		return false, fmt.Errorf("%w: 用户组包含 root 账户，不能分配普通角色", ErrRootProtected)
+		return false, s.recordRootRejection(ctx, caller, ActionAssignGroupRole, "group", groupID,
+			"root_group_member_protected", fmt.Errorf("%w: 用户组包含 root 账户，不能分配普通角色", ErrRootProtected))
 	}
 	now := s.now().UTC().Truncate(time.Millisecond)
 	assignment := GroupRoleAssignment{
@@ -1017,6 +1020,26 @@ func (s *Service) getAuthorizedRole(ctx context.Context, caller Caller, action A
 		return Role{}, err
 	}
 	return record, nil
+}
+
+// recordRootRejection 为针对 root 的普通角色操作拒绝写一条失败审计，并返回
+// 既有 ErrRootProtected 包装（错误码与行为保持不变）。审计使用独立事务，不受
+// 请求取消影响；审计失败时把 ErrAuditUnavailable 一并加入错误链，拒绝仍生效。
+func (s *Service) recordRootRejection(ctx context.Context, caller Caller, action Action,
+	targetType, targetID, reason string, cause error) error {
+	event := audit.Event{
+		Actor:      caller.actor,
+		Action:     string(action),
+		Target:     audit.Target{Type: targetType, ID: targetID},
+		Outcome:    audit.OutcomeFailure,
+		ErrorCode:  string(CodeAccessDenied),
+		ReasonCode: reason,
+		RequestID:  caller.requestID,
+	}
+	if err := s.audit.RecordFailure(ctx, event); err != nil {
+		return errors.Join(cause, fmt.Errorf("%w: %w", ErrAuditUnavailable, err))
+	}
+	return cause
 }
 
 // recordRead 写单条读取成功审计；失败时拒绝返回数据。

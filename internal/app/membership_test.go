@@ -355,6 +355,62 @@ func TestApplicationMemberControlledAssociation(t *testing.T) {
 	}
 }
 
+// insertRootUser 直接插入 is_root=1 的 root 账户，用于应用成员 root 保护回归。
+func (e *testEnv) insertRootUser(userID, username string) {
+	e.t.Helper()
+	now := e.clock.Now().UnixMilli()
+	if _, err := e.raw.ExecContext(context.Background(),
+		`INSERT INTO users(id,username,username_normalized,nickname,biography,language,timezone,status,is_root,security_version,row_version,created_at_ms,updated_at_ms)
+VALUES(?,?,?,'','','zh-CN','Asia/Shanghai','active',1,1,1,?,?)`,
+		userID, username, username, now, now); err != nil {
+		e.t.Fatalf("插入 root 测试用户失败: %v", err)
+	}
+}
+
+// TestApplicationMemberRejectsRoot 验证 root 账户不能成为应用成员：root 能力只走
+// 受保护本地通道，普通应用管理员不能通过成员关系给 root 建立业务资格。拒绝保持
+// 既有 USER_DISABLED 语义、不落成员行，并写一条失败审计。
+func TestApplicationMemberRejectsRoot(t *testing.T) {
+	env := prepareEnv(t)
+	application := env.newActiveApp()
+	rootID := "usr_11111111111111111111111111111111"
+	env.insertRootUser(rootID, "root")
+
+	_, err := env.service.AddApplicationMember(context.Background(), env.system, app.AddMemberRequest{
+		ApplicationID: application.ID, UserID: rootID,
+	})
+	if !errors.Is(err, app.ErrUserNotEligible) {
+		t.Fatalf("root 加入应用成员错误 = %v，期望 ErrUserNotEligible", err)
+	}
+	if code := app.CodeOf(err); code != app.CodeUserDisabled {
+		t.Errorf("root 成员拒绝错误码 = %q，期望 USER_DISABLED", code)
+	}
+	if rows := env.memberRowCount(application.ID); rows != 0 {
+		t.Errorf("root 加入后成员行数 = %d，期望 0", rows)
+	}
+	if count := env.queryInt(`SELECT COUNT(*) FROM audit_events
+WHERE action=? AND outcome='failure' AND error_code='USER_DISABLED' AND reason_code='root_protected'`,
+		string(app.ActionAddApplicationMember)); count != 1 {
+		t.Errorf("root 成员拒绝失败审计数 = %d，期望 1", count)
+	}
+	// 重新启用路径同样拒绝 root（若存在遗留成员行也不能恢复为 active）。
+	if _, err := env.raw.ExecContext(context.Background(),
+		`INSERT INTO app_memberships(app_id,user_id,status,profile_json,row_version,created_at_ms,updated_at_ms)
+VALUES(?,?,'disabled','{"v":1}',1,?,?)`,
+		application.ID, rootID, env.clock.Now().UnixMilli(), env.clock.Now().UnixMilli()); err != nil {
+		t.Fatalf("插入遗留 root 成员行失败: %v", err)
+	}
+	if _, err := env.service.EnableApplicationMember(context.Background(), env.system, app.MemberStatusRequest{
+		ApplicationID: application.ID, UserID: rootID, ExpectedRowVersion: 1,
+	}); !errors.Is(err, app.ErrUserNotEligible) {
+		t.Fatalf("root 成员重新启用错误 = %v，期望 ErrUserNotEligible", err)
+	}
+	if rows := env.queryInt(`SELECT COUNT(*) FROM app_memberships WHERE app_id=? AND user_id=? AND status='active'`,
+		application.ID, rootID); rows != 0 {
+		t.Errorf("root 成员被重新启用，活跃行数 = %d", rows)
+	}
+}
+
 // TestApplicationMemberStatusAndRemovalScope 验证应用内启停/移除的隔离与状态检查。
 func TestApplicationMemberStatusAndRemovalScope(t *testing.T) {
 	env := prepareEnv(t)

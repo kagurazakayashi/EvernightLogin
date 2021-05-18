@@ -331,6 +331,23 @@ func NormalizeUsername(raw string) (display string, normalized string, err error
 	return canonical, normalized, nil
 }
 
+// NormalizeNickname 校验并规范化昵称，规则与账户创建时的白名单一致。它供需要
+// 创建受保护内置账户（例如 root 初始资料）的可信初始化流程复用同一口径，避免
+// 复制第二套资料规则。空昵称合法。
+func NormalizeNickname(raw string) (string, error) {
+	return normalizeNickname(raw)
+}
+
+// NormalizeLanguage 校验并规范化 BCP 47 子集语言标签，空值使用默认语言。
+func NormalizeLanguage(raw string) (string, error) {
+	return normalizeLanguage(raw)
+}
+
+// NormalizeTimezone 校验并规范化 IANA 时区名，空值使用默认时区。
+func NormalizeTimezone(raw string) (string, error) {
+	return normalizeTimezone(raw)
+}
+
 // normalizeNickname 校验昵称：NFKC 规范化、去首尾空白、最多 MaxNicknameRunes
 // 个码点；允许空格，不允许换行/控制/格式字符。空昵称合法。
 func normalizeNickname(raw string) (string, error) {

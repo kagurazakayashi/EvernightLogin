@@ -64,6 +64,7 @@ type Store interface {
 // AuditRecorder 是用户组服务依赖的安全审计契约。
 type AuditRecorder interface {
 	Record(ctx context.Context, event audit.Event) error
+	RecordFailure(ctx context.Context, event audit.Event) error
 	ExecuteCritical(ctx context.Context, request audit.CriticalRequest, change audit.Change) error
 }
 
@@ -388,7 +389,12 @@ func (s *Service) AddMembers(ctx context.Context, caller Caller, request MemberB
 		return MemberBatchResult{}, err
 	}
 	if len(ineligible) > 0 {
-		return MemberBatchResult{}, fmt.Errorf("%w: 存在 %d 名不合格成员", ErrMemberNotEligible, len(ineligible))
+		// 成员资格不合格包含 root 账户（root 永不满足普通成员资格）。这是普通
+		// 管理路径拒绝，必须留失败审计，避免反复尝试把 root 拉进已配角色的组
+		// 却完全无痕；错误码与拒绝行为保持既有 ErrMemberNotEligible/USER_DISABLED。
+		return MemberBatchResult{}, s.recordMemberRejection(ctx, caller, groupRecord, ActionAddMembers,
+			CodeUserDisabled, "member_not_eligible",
+			fmt.Errorf("%w: 存在 %d 名不合格成员", ErrMemberNotEligible, len(ineligible)))
 	}
 	existing, err := s.store.ExistingMembers(ctx, groupRecord.ID, userIDs)
 	if err != nil {
@@ -663,6 +669,27 @@ func (s *Service) recordMemberAttempt(ctx context.Context, caller Caller, groupR
 		return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
 	}
 	return nil
+}
+
+// recordMemberRejection 为成员批量变更被拒绝写一条失败审计（不伪造成功审计），
+// 并返回既有拒绝错误。审计使用独立事务，不受请求取消影响；审计失败时把
+// ErrAuditUnavailable 一并加入错误链，拒绝仍生效。
+func (s *Service) recordMemberRejection(ctx context.Context, caller Caller, groupRecord Group,
+	action Action, code ErrorCode, reason string, cause error) error {
+	event := audit.Event{
+		Actor:      caller.actor,
+		AppID:      groupRecord.ApplicationID,
+		Action:     string(action),
+		Target:     audit.Target{Type: "group", ID: groupRecord.ID},
+		Outcome:    audit.OutcomeFailure,
+		ErrorCode:  string(code),
+		ReasonCode: reason,
+		RequestID:  caller.requestID,
+	}
+	if err := s.audit.RecordFailure(ctx, event); err != nil {
+		return errors.Join(cause, fmt.Errorf("%w: %w", ErrAuditUnavailable, err))
+	}
+	return cause
 }
 
 // recordListRead 为组列表写成功读取审计（无单一目标组）。

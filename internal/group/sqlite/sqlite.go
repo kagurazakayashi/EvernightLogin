@@ -376,6 +376,11 @@ func (s *Store) ValidateMembers(ctx context.Context, scope group.GroupScope, use
 }
 
 // activeUsers 返回全局账户 active 的用户集合。
+//
+// 显式排除 is_root=1 的 root 账户：root 的能力不来自普通角色，若允许把 root
+// 加入用户组，就可能借“组已配置角色/随后配置角色”的路径给 root 间接分配普通
+// 角色（或让含 root 的组无法再分配角色）。root 只能通过后续受保护的本地/应急
+// 通道管理，普通用户组成员资格路径一律拒绝（步骤 28 收口）。
 func (s *Store) activeUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
 	placeholders := make([]string, len(userIDs))
 	args := make([]any, 0, len(userIDs))
@@ -384,7 +389,7 @@ func (s *Store) activeUsers(ctx context.Context, userIDs []string) (map[string]s
 		args = append(args, userID)
 	}
 	rows, err := s.store.QueryContext(ctx,
-		`SELECT id FROM users WHERE status='active' AND id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+		`SELECT id FROM users WHERE status='active' AND is_root=0 AND id IN (`+strings.Join(placeholders, ",")+`)`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", group.ErrStoreUnavailable, err)
 	}

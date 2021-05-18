@@ -18,6 +18,7 @@ import (
 // 调用方拒绝操作，不能静默丢弃审计。
 type AuditRecorder interface {
 	Record(ctx context.Context, event audit.Event) error
+	RecordFailure(ctx context.Context, event audit.Event) error
 	ExecuteCritical(ctx context.Context, request audit.CriticalRequest, change audit.Change) error
 }
 
@@ -339,7 +340,7 @@ func (s *Service) CompleteDeletion(ctx context.Context, caller Caller, request S
 		return DeletionResult{}, err
 	}
 	if snapshot.IsRoot {
-		return DeletionResult{}, ErrProtectedUser
+		return DeletionResult{}, s.recordProtectedRejection(ctx, caller, ActionCompleteDeletion, request.UserID, "root_protected")
 	}
 	if snapshot.User.Status != StatusPendingDelete {
 		return DeletionResult{}, fmt.Errorf("%w: 只有待删除账户可以完成删除", ErrInvalidTransition)
@@ -352,7 +353,7 @@ func (s *Service) CompleteDeletion(ctx context.Context, caller Caller, request S
 		return DeletionResult{}, err
 	}
 	if preview.IsRoot {
-		return DeletionResult{}, ErrProtectedUser
+		return DeletionResult{}, s.recordProtectedRejection(ctx, caller, ActionCompleteDeletion, request.UserID, "root_protected")
 	}
 	now := s.now().UTC().Truncate(time.Millisecond)
 	event := audit.Event{
@@ -401,7 +402,7 @@ func (s *Service) applyStateCommand(ctx context.Context, caller Caller, request 
 		return StateChangeResult{}, err
 	}
 	if snapshot.IsRoot {
-		return StateChangeResult{}, ErrProtectedUser
+		return StateChangeResult{}, s.recordProtectedRejection(ctx, caller, command.action(), request.UserID, "root_protected")
 	}
 	nextStatus, changed, err := transitionStatus(snapshot.User.Status, command)
 	if err != nil {
@@ -564,6 +565,29 @@ func normalizeListRequest(request ListRequest) (ListQuery, error) {
 		Sort:       sortField,
 		Descending: request.Descending,
 	}, nil
+}
+
+// recordProtectedRejection 为受保护账户（root）的普通管理拒绝写一条失败审计，
+// 并返回既有 ErrProtectedUser（错误码与行为保持不变）。
+//
+// 审计使用独立事务（RecordFailure），不受业务请求取消影响；安全审计失败时仍
+// 返回拒绝，但把 ErrAuditUnavailable 一并加入错误链（拒绝照旧生效，CodeOf 仍
+// 优先映射 ACCESS_DENIED，审计告警由审计写入器负责），避免“拒绝已发生却完全
+// 无痕”且不掩盖审计故障。
+func (s *Service) recordProtectedRejection(ctx context.Context, caller Caller, action Action, userID, reason string) error {
+	event := audit.Event{
+		Actor:      caller.actor,
+		Action:     string(action),
+		Target:     audit.Target{Type: "user", ID: userID},
+		Outcome:    audit.OutcomeFailure,
+		ErrorCode:  string(CodeAccessDenied),
+		ReasonCode: reason,
+		RequestID:  caller.requestID,
+	}
+	if err := s.audit.RecordFailure(ctx, event); err != nil {
+		return errors.Join(ErrProtectedUser, fmt.Errorf("%w: %w", ErrAuditUnavailable, err))
+	}
+	return ErrProtectedUser
 }
 
 // mapCreateError 把创建事务错误映射为账户领域错误。审计失败优先判定（即使

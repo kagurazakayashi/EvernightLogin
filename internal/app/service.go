@@ -19,6 +19,7 @@ import (
 // AuditRecorder 是应用服务依赖的安全审计写入契约，生产实现为 *audit.Recorder。
 type AuditRecorder interface {
 	Record(ctx context.Context, event audit.Event) error
+	RecordFailure(ctx context.Context, event audit.Event) error
 	ExecuteCritical(ctx context.Context, request audit.CriticalRequest, change audit.Change) error
 }
 
@@ -82,9 +83,10 @@ type Store interface {
 	ApplyMembershipStatus(ctx context.Context, tx audit.Tx, change MemberStatusChange) error
 	// RemoveMembership 以行版本为条件删除成员关系；只影响指定应用，不删除用户。
 	RemoveMembership(ctx context.Context, tx audit.Tx, remove MemberRemove) error
-	// LookupUserStatus 返回全局账户状态与是否存在；加入/启用成员前必须要求
-	// active，删除/停用成员关系时允许清理非 active 账户。
-	LookupUserStatus(ctx context.Context, userID string) (account.Status, bool, error)
+	// LookupUserState 返回全局账户状态、root 标记与是否存在；加入/启用成员前
+	// 必须要求 active 且非 root。root 只能通过受保护本地通道管理，不能成为
+	// 应用成员；删除/停用成员关系时允许清理非 active 账户。
+	LookupUserState(ctx context.Context, userID string) (status account.Status, isRoot bool, found bool, err error)
 	// ListMemberEffectivePermissionIDs 在调用方事务内读取该用户在该应用范围内
 	// 通过直接角色与用户组角色当前会生效的权限 ID（角色/权限启用且非 root_only）。
 	// 加入/重新启用成员会让这些权限恢复生效，写前必须做可转授检查。
