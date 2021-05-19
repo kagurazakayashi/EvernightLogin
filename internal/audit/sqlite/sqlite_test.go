@@ -133,7 +133,7 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 8 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" {
+	if len(versions) != 9 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" {
 		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006 0007 0008]", versions)
 	}
 	type column struct {

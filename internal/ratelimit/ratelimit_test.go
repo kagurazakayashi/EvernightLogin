@@ -237,3 +237,32 @@ func TestBoundKey(t *testing.T) {
 		t.Fatal("超长键未被哈希")
 	}
 }
+
+// TestPeekDoesNotConsume 验证 Peek 只读：反复 Peek 不消耗配额，只有 Allow 计数。
+func TestPeekDoesNotConsume(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)}
+	limiter, err := New(Options{Policy: Policy{Limit: 2, Window: time.Minute}, Now: clock.Now})
+	if err != nil {
+		t.Fatalf("New() 失败: %v", err)
+	}
+	for index := 0; index < 10; index++ {
+		if decision := limiter.Peek("key"); !decision.Allowed {
+			t.Fatalf("第 %d 次 Peek 被拒绝: %+v", index, decision)
+		}
+	}
+	if limiter.Len() != 0 {
+		t.Fatalf("Peek 新增了 %d 个条目，期望 0", limiter.Len())
+	}
+	if decision := limiter.Allow("key"); !decision.Allowed {
+		t.Fatalf("Allow 第 1 次被拒绝: %+v", decision)
+	}
+	if decision := limiter.Allow("key"); !decision.Allowed {
+		t.Fatalf("Allow 第 2 次被拒绝: %+v", decision)
+	}
+	if decision := limiter.Peek("key"); decision.Allowed || decision.Reason != "limit" {
+		t.Fatalf("达到上限后 Peek = %+v，期望拒绝且 Reason=limit", decision)
+	}
+	if decision := limiter.Allow("key"); decision.Allowed {
+		t.Fatalf("超过上限后 Allow 仍允许: %+v", decision)
+	}
+}

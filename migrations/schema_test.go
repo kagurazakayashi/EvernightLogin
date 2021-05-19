@@ -627,3 +627,84 @@ func TestRootInitializationMigration(t *testing.T) {
 		}
 	}
 }
+
+const passwordCredentialMigration = "0009_password_credentials.sql"
+
+// readPasswordCredentialMigration 读取 0009 正式密码凭证迁移。
+func readPasswordCredentialMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(passwordCredentialMigration)
+	if err != nil {
+		t.Fatalf("读取密码凭证迁移失败: %v", err)
+	}
+	return string(data)
+}
+
+// TestPasswordCredentialMigration 校验步骤 29 的密码凭证结构：只保存 Argon2id
+// PHC 编码（含参数/盐/摘要），不出现明文密码列；可选历史有界；邮箱登录标识
+// 以规范化地址为唯一键且必须记录验证时间；不提前创建会话或令牌表。
+func TestPasswordCredentialMigration(t *testing.T) {
+	sqlText := readPasswordCredentialMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 3 {
+		t.Fatalf("0009 CREATE TABLE 数量 = %d，期望三张凭证相关表", count)
+	}
+	credentials := tableDefinition(t, sqlText, "password_credentials")
+	for _, want := range []string{
+		"user_id TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+		"hash_scheme TEXT NOT NULL CHECK(hash_scheme='argon2id')",
+		"hash_version INTEGER NOT NULL CHECK(hash_version=19)",
+		"password_hash TEXT NOT NULL CHECK(length(password_hash) BETWEEN 32 AND 512)",
+		"must_change INTEGER NOT NULL DEFAULT 0 CHECK(must_change IN(0,1))",
+		"changed_at_ms INTEGER NOT NULL",
+	} {
+		if !strings.Contains(credentials, want) {
+			t.Errorf("password_credentials 定义缺少 %q", want)
+		}
+	}
+	// 只保存成熟库生成的 PHC 编码字符串，模块不提供第二份明文或可逆摘要列。
+	for _, forbidden := range []string{"plaintext", "password_plain", "reversible"} {
+		if strings.Contains(credentials, " "+forbidden+" ") {
+			t.Errorf("password_credentials 不应出现 %q 列", forbidden)
+		}
+	}
+	history := tableDefinition(t, sqlText, "password_history")
+	for _, want := range []string{
+		"user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+		"password_hash TEXT NOT NULL CHECK(length(password_hash) BETWEEN 32 AND 512)",
+		"PRIMARY KEY(user_id,password_hash)",
+	} {
+		if !strings.Contains(history, want) {
+			t.Errorf("password_history 定义缺少 %q", want)
+		}
+	}
+	emails := tableDefinition(t, sqlText, "user_emails")
+	for _, want := range []string{
+		"email_normalized TEXT PRIMARY KEY NOT NULL CHECK(length(email_normalized) BETWEEN 3 AND 254)",
+		"user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+		"verified_at_ms INTEGER",
+	} {
+		if !strings.Contains(emails, want) {
+			t.Errorf("user_emails 定义缺少 %q", want)
+		}
+	}
+	if !strings.Contains(sqlText, "CREATE INDEX idx_password_history_user_time ON password_history(user_id,created_at_ms DESC);") {
+		t.Error("0009 缺少密码历史时间索引")
+	}
+	if !strings.Contains(sqlText, "CREATE INDEX idx_user_emails_verified ON user_emails(email_normalized) WHERE verified_at_ms IS NOT NULL;") {
+		t.Error("0009 缺少已验证邮箱索引")
+	}
+	// 非 ASCII 邮箱的大小写折叠由服务层 NormalizeEmail（NFKC + Unicode Fold + NFC）
+	// 负责；SQLite lower() 只处理 ASCII，不能用来承担 Unicode 折叠。
+	if strings.Contains(sqlText, "lower(email_normalized)") {
+		t.Error("0009 不应依赖 SQLite lower() 承担 Unicode 邮箱规范化")
+	}
+	// 会话签发交给后续步骤：本迁移不得提前创建会话/令牌结构。
+	for _, future := range []string{"CREATE TABLE sessions", "CREATE TABLE tokens", "CREATE TABLE refresh_tokens"} {
+		if strings.Contains(sqlText, future) {
+			t.Errorf("0009 提前创建了后续步骤的表 %q", future)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}

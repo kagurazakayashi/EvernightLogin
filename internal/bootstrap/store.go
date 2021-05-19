@@ -68,6 +68,16 @@ type CredentialReissueChange struct {
 	Now time.Time
 }
 
+// RootReadyChange 是「受限配置完成、状态进入 ready」的条件状态更新。它由正式
+// 密码服务（步骤 29）在“正式密码已落库且必需强认证已配置”后调用；初始化包本身
+// 不判断强认证是否满足，也不提供绕过密码/强认证的 ready 快捷入口。
+type RootReadyChange struct {
+	// RootUserID 是 root 账户 ID。
+	RootUserID string
+	// Now 是进入 ready 的时间。
+	Now time.Time
+}
+
 // Store 是首次初始化的持久化契约，由 internal/bootstrap/sqlite 提供生产 SQLite
 // 实现，测试可以使用受控替身（替身只用于故障注入，不是生产旁路）。
 //
@@ -92,4 +102,8 @@ type Store interface {
 	Create(ctx context.Context, tx audit.Tx, root account.User, record Record) error
 	MarkSetupVerified(ctx context.Context, tx audit.Tx, change SetupVerifiedChange) error
 	UpdateSetupCredential(ctx context.Context, tx audit.Tx, change CredentialReissueChange) error
+	// MarkReady 在调用方审计事务中把 setup_verified 条件更新为 ready；状态不是
+	// setup_verified 时返回 ErrSetupStateConflict。它只由正式密码/强认证服务调用，
+	// 不与密码写入拆成两个事务，避免出现“ready 但没有正式密码”的矛盾状态。
+	MarkReady(ctx context.Context, tx audit.Tx, change RootReadyChange) error
 }

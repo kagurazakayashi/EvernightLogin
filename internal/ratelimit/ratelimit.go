@@ -202,6 +202,39 @@ func (l *Limiter) Allow(key string) Decision {
 	return Decision{Allowed: true}
 }
 
+// Peek 判定 key 当前是否允许通过，但与 Allow 不同：它不消耗配额、不新增条目。
+//
+// 用途：认证等昂贵操作希望“成功不计入失败预算”时，可先用 Peek 判断是否已因
+// 失败被限流，真正失败后再调用 Allow 记录一次失败。Peek 只读，容量耗尽时对
+// 新键返回允许（新键尚无失败记录）；真正的容量保护仍由失败计数时的 Allow
+// fail-closed 保证。
+func (l *Limiter) Peek(key string) Decision {
+	if l == nil || !l.policy.Enabled() {
+		return Decision{Allowed: true}
+	}
+	key = boundKey(key)
+	now := l.now().UTC()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if now.Sub(l.lastCleanup) >= l.cleanupInterval {
+		l.cleanupLocked(now)
+	}
+	current, found := l.entries[key]
+	if !found || now.Sub(current.windowStart) >= l.policy.Window {
+		return Decision{Allowed: true}
+	}
+	if current.count >= l.policy.Limit {
+		remaining := current.windowStart.Add(l.policy.Window).Sub(now)
+		if remaining < 0 {
+			remaining = 0
+		}
+		return Decision{Allowed: false, RetryAfter: remaining, Reason: "limit"}
+	}
+	return Decision{Allowed: true}
+}
+
 // Cleanup 立即清理已过窗口的条目并返回清理数量。可用于测试或宿主周期维护；
 // Allow 也会按间隔机会式清理，因此不需要后台 goroutine。
 func (l *Limiter) Cleanup() int {

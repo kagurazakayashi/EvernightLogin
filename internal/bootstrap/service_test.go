@@ -293,11 +293,15 @@ func TestInitializeCreatesSinglePendingRoot(t *testing.T) {
 		result.SetupCredential.Secret.Reveal()); got != 0 {
 		t.Error("凭证明文出现在 verifier_hash 中")
 	}
-	// 本步不允许提前存在密码或会话表/列。
+	// 本步不允许 root 初始化自身写入密码材料，也不提前创建会话表；密码凭证表
+	// 由迁移 0009 建立但初始化必须保持为空（正式密码由步骤 29 的密码服务写入）。
 	if got := env.queryInt(`SELECT COUNT(*) FROM pragma_table_info('users') WHERE name LIKE '%password%'`); got != 0 {
 		t.Error("users 表提前出现密码列")
 	}
-	for _, table := range []string{"password_credentials", "sessions", "refresh_tokens"} {
+	if got := env.queryInt(`SELECT COUNT(*) FROM password_credentials`); got != 0 {
+		t.Errorf("root 初始化写入了密码凭证行数 = %d，期望 0", got)
+	}
+	for _, table := range []string{"sessions", "refresh_tokens"} {
 		if got := env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table); got != 0 {
 			t.Errorf("提前创建了表 %s", table)
 		}

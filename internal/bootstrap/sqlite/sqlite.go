@@ -66,6 +66,14 @@ WHERE singleton=1 AND root_user_id=? AND state='pending_setup' AND COALESCE(setu
 SET setup_credential_id=?,state='pending_setup',verified_at_ms=NULL,ready_at_ms=NULL,updated_at_ms=?
 WHERE singleton=1 AND root_user_id=? AND state IN('pending_setup','setup_verified')
 AND COALESCE(setup_credential_id,'')=?`
+
+	// markReadySQL 把 setup_verified 条件更新为 ready，并强制要求同一事务内已存在
+	// 正式密码凭证：只有受限配置完成、正式密码已落库时才可能转换，防止内部调用者
+	// 在无密码时直接把 root 置为 ready（必需强认证仍由调用方在转换前判定）。
+	markReadySQL = `UPDATE root_initializations
+SET state='ready',ready_at_ms=?,updated_at_ms=?
+WHERE singleton=1 AND root_user_id=? AND state='setup_verified'
+AND EXISTS(SELECT 1 FROM password_credentials WHERE user_id=?)`
 )
 
 // Store 是 bootstrap.Store 的 SQLite 实现。
@@ -313,6 +321,33 @@ func (s *Store) UpdateSetupCredential(ctx context.Context, tx audit.Tx, change b
 		return bootstrap.ErrSetupStateConflict
 	default:
 		return fmt.Errorf("%w: 凭证更新影响行数异常", bootstrap.ErrStoreUnavailable)
+	}
+}
+
+// MarkReady 在审计事务中条件更新 setup_verified -> ready。转换要求当前状态为
+// setup_verified 且同一事务内已存在正式密码凭证；状态被并发修改、仍处于
+// pending_setup 或没有任何正式密码时返回 bootstrap.ErrSetupStateConflict，由调用方
+// 整体回滚。它不判断强认证是否已配置，那是正式密码服务调用前的职责。
+func (s *Store) MarkReady(ctx context.Context, tx audit.Tx, change bootstrap.RootReadyChange) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", bootstrap.ErrOptionsInvalid)
+	}
+	nowMS := change.Now.UTC().UnixMilli()
+	result, err := tx.ExecContext(ctx, markReadySQL, nowMS, nowMS, change.RootUserID, change.RootUserID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", bootstrap.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", bootstrap.ErrStoreUnavailable, err)
+	}
+	switch affected {
+	case 1:
+		return nil
+	case 0:
+		return bootstrap.ErrSetupStateConflict
+	default:
+		return fmt.Errorf("%w: ready 状态更新影响行数异常", bootstrap.ErrStoreUnavailable)
 	}
 }
 
