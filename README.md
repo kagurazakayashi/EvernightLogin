@@ -510,6 +510,51 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **审计退修（2026-11-16，双审计 S1～S5/Q1～Q4）**：新增 Argon2 有界并发槽位与排队超时；强认证改为按高敏感系统权限（含自定义系统角色与 root_only）判定并同时返回强因素绑定/第二因素步骤；失败限制改为“IP/操作失败预算 + 账户渐进延迟 + 账户+来源临时锁定 + IPv6 /64 聚合 + 来源标识扫描阈值 + 锁定条目不淘汰”；普通用户自助改密的当前密码复核接入同一失败限制；`MarkReady` 要求正式密码凭证存在；地址限流改用只读 `Peek` 使成功不计预算；移除 0009 中与 Unicode 折叠口径冲突的 SQLite `lower()` CHECK；新增 `internal/authn/sqlite` 独立仓储测试与工作槽位/来源聚合测试。已知残余风险：账户不存在时 dummy Argon2 校验只能减小而不能完全消除时序差；密码计算排队等待中的 context 取消/超时已原样传播（不再映射为限流或凭据损坏），但认证失败路径在 ctx 已取消时仍可能跳过失败审计（拒绝仍 fail-closed）。
 - **尚未实现/未验证**：会话/Token 签发与撤销（步骤 30，本步只提供认证结果）、MFA/Passkey/恢复代码验证（第二因素步骤）、邮箱注册与验证入口（步骤 33；本步只提供已验证邮箱的登录读取与统一规范化）、用户自助改密的 HTTP 接口与敏感操作再次验证策略（步骤 38/39）、完整 root 应急重置 CLI、密码找回流程；跨进程失败限制共享与分布式限流未实现；未做 race detector、非 Windows 运行与长期压力。
 
+## 测试用本地邮件服务器（额外步骤 extra01）
+
+`internal/testmail` 是**仅供测试**的本地 SMTP 接收服务器，`tools/testmaild` 是只负责装配与运行它的独立工具。它把收到的邮件保存在内存中供测试断言，**不投递、不中继、不连接任何外部邮件服务**，默认只监听 `127.0.0.1` 的随机端口；两个包都不会被 `cmd/login-server` 装配，生产邮件实现必须另行编写。本包不是产品能力，也不替代步骤 32/39 尚未实现的邮件模板、投递与通知逻辑。
+
+支持的最小会话：EHLO/HELO、MAIL FROM、RCPT TO、DATA（含点填充还原）、RSET、NOOP、QUIT，以及可选的 AUTH PLAIN/LOGIN（显式测试凭据）与 STARTTLS（测试自签证书，默认关闭）。**安全提示**：默认不启用 AUTH；`RequireAuth` 在未加密连接上会让测试凭据以明文传输，建议只与 STARTTLS 搭配，且仅用于回环测试，不要复用任何真实密码。
+
+常用限制：`ReadTimeout`（单次读取，默认 30s）、`SessionTimeout`（单连接总时长，默认 5 分钟）、`MaxMessageBytes`（默认 256 KiB，超出返回 552）、`MaxRecipients`（默认 50，超出返回 452）、`MaxConnections`（默认 32，超出直接 421）、`MaxMessages`（默认 500，满时返回 452，`Clear`/`Take` 释放容量）。格式错误返回对应 SMTP 错误码且服务不崩溃；读取超时或会话超时返回 421 并关闭连接。内存占用上限是 `MaxMessageBytes × MaxMessages`（默认约 128 MiB），`MaxConnections` 也会叠加并发缓冲；高负载或长时间测试请调低这些参数。
+
+启动工具（默认回环随机端口，打印实际地址；`-auth` 可重复）：
+
+```bat
+go run .\tools\testmaild
+go run .\tools\testmaild -addr 127.0.0.1:0 -auth tester:test-pass -require-auth
+go run .\tools\testmaild -addr 127.0.0.1:0 -starttls
+```
+
+常用参数还有 `-max-message-bytes`、`-max-recipients`、`-max-connections`、`-max-messages`、`-read-timeout`、`-session-timeout`、`-print-body`；只有显式加 `-allow-non-loopback` 才允许监听非回环地址（`-addr :0` 这类空主机名不会被当作回环，需显式写 `127.0.0.1:0` 或加该开关）。工具在收到消息时打印信封、主题、大小与认证用户摘要（不回显密码），按 Ctrl+C 或 SIGTERM 优雅关闭并释放端口。
+
+在 Go 测试中直接复用（后续邮件发送模块的测试把 SMTP 地址指向 `srv.Addr()`，用 `Wait`/`Messages` 断言）：
+
+```go
+srv, err := testmail.New(testmail.Options{
+    Auth: &testmail.AuthOptions{Users: map[string]string{"tester": "test-pass"}},
+})
+if err != nil { return err }
+if err := srv.Start(); err != nil { return err }
+defer srv.Close()
+
+// 发送代码会把邮件投递到 srv.Addr()；随后等待并断言内容。
+msgs, err := srv.Wait(ctx, testmail.Query{To: "user@example.test"})
+// 信封地址在 msgs[0].EnvelopeFrom/EnvelopeTo；原始字节在 Data，正文在 Body()；
+// 解析后的头部通过 Headers 与 Header()/HeaderValues() 读取（不提供独立的
+// From/To 头部字段，避免与信封地址混淆），Subject/Date 为常用字段的解析结果。
+srv.Clear() // 或 Take 按条件取出
+```
+
+需要 STARTTLS 时用 `testmail.GenerateTestCertificate()` 生成自签证书注入 `Options.TLS`，测试客户端需显式信任该证书或跳过校验；AUTH 测试凭据只写在这里，不来自环境变量或配置文件。该包的"无外发"与"未被生产入口导入"有源码级测试守护（`internal/testmail/isolation_test.go`）。
+
+运行本步测试（Windows amd64 实测）：
+
+```bat
+go test -count=1 -p 1 .\internal\testmail\
+go test -count=1 -p 1 .\tools\testmaild\
+```
+
 ## 本地检查（Windows）
 
 在项目根目录运行：
@@ -555,6 +600,7 @@ go run .\cmd\login-server --help
 | internal/preset/ | 版本化预设角色/用户组/权限目录的幂等初始化、差异预览/再次授权恢复与默认保护（内部包） | 是 |
 | internal/bootstrap/ | 本地受控首次初始化、唯一 root 受限待配置状态、一次性配置凭证、`ready` 条件转换与 root 保护规则（内部包） | 是 |
 | internal/authn/ | 正式密码 Argon2id 哈希/验证与参数升级、密码策略、用户名/已验证邮箱登录、失败限制与认证结果（内部包） | 是 |
+| internal/testmail/ | 仅供测试的本地 SMTP 接收服务器（内存保存、查询/取出/清空、限制、可选 AUTH/STARTTLS）；不得装配进生产路径 | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表、定时计划/尝试历史表、权限委派资格表、预设初始化版本表、root 初始化状态表与密码凭证/已验证邮箱表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
@@ -563,7 +609,7 @@ go run .\cmd\login-server --help
 | docs/acceptance/ | 基础设施阶段（步骤 01～17）验收记录与下一阶段前置条件 | 可以 |
 | database/login.db | 已创建的空业务 SQLite 数据库 | 否，运行数据应本地保存 |
 | database/0001_design_baseline.sql | 建库结构，需在开发阶段审查 | 可以 |
-| tools/ | 可选的 Python 建库、只读检查工具 | 可以 |
+| tools/ | 可选的 Python 建库/只读检查工具，以及只用于测试的本地邮件服务器命令行入口 `tools/testmaild` | 可以 |
 | .gitignore | AI 文件、数据库与秘密排除规则 | 可以 |
 | SHA256SUMS.txt | 启动包文件完整性清单 | 可留作交付记录 |
 
