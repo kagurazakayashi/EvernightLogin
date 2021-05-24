@@ -186,7 +186,7 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration, delegationMigration, presetMigration, rootInitializationMigration} {
+	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration, delegationMigration, presetMigration, rootInitializationMigration, passwordCredentialMigration, sessionMigration} {
 		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
 			t.Fatalf("读取迁移 %s 失败：%v", name, err)
@@ -698,10 +698,85 @@ func TestPasswordCredentialMigration(t *testing.T) {
 	if strings.Contains(sqlText, "lower(email_normalized)") {
 		t.Error("0009 不应依赖 SQLite lower() 承担 Unicode 邮箱规范化")
 	}
-	// 会话签发交给后续步骤：本迁移不得提前创建会话/令牌结构。
+	// 会话签发交给后续步骤：本迁移不得提前创建会话/令牌结构（sessions 表由
+	// 步骤 30 的 0010_sessions.sql 建立）。
 	for _, future := range []string{"CREATE TABLE sessions", "CREATE TABLE tokens", "CREATE TABLE refresh_tokens"} {
 		if strings.Contains(sqlText, future) {
 			t.Errorf("0009 提前创建了后续步骤的表 %q", future)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
+
+const sessionMigration = "0010_sessions.sql"
+
+// readSessionMigration 读取 0010 会话迁移。
+func readSessionMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(sessionMigration)
+	if err != nil {
+		t.Fatalf("读取会话迁移失败: %v", err)
+	}
+	return string(data)
+}
+
+// TestSessionMigration 校验步骤 30 的会话结构：数据库只保存高熵会话秘密与 CSRF
+// 令牌的验证摘要（BLOB 32 字节），不出现秘密明文列；区分普通/受限会话与受限
+// 原因；具备空闲/绝对到期与撤销列；引用账户与应用成员，但不创建 OAuth 令牌表。
+func TestSessionMigration(t *testing.T) {
+	sqlText := readSessionMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0010 CREATE TABLE 数量 = %d，期望只有一张会话表", count)
+	}
+	sessions := tableDefinition(t, sqlText, "sessions")
+	for _, want := range []string{
+		"id TEXT PRIMARY KEY NOT NULL CHECK(length(id)=36)",
+		"user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+		"app_id TEXT REFERENCES applications(id) ON DELETE CASCADE",
+		"kind TEXT NOT NULL CHECK(kind IN('normal','restricted'))",
+		"required_steps_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(required_steps_json))",
+		"security_version INTEGER NOT NULL CHECK(security_version>0)",
+		"secret_digest BLOB NOT NULL CHECK(length(secret_digest)=32)",
+		"csrf_digest BLOB NOT NULL CHECK(length(csrf_digest)=32)",
+		"strong_auth_verified_at_ms INTEGER",
+		"created_at_ms INTEGER NOT NULL",
+		"last_seen_at_ms INTEGER NOT NULL",
+		"idle_expires_at_ms INTEGER NOT NULL",
+		"absolute_expires_at_ms INTEGER NOT NULL",
+		"revoked_at_ms INTEGER",
+		"(kind='normal' AND restricted_reason='') OR (kind='restricted' AND restricted_reason<>'')",
+		"idle_expires_at_ms<=absolute_expires_at_ms",
+	} {
+		if !strings.Contains(sessions, want) {
+			t.Errorf("sessions 定义缺少 %q", want)
+		}
+	}
+	// 只保存验证摘要：不得出现会话秘密/CSRF 令牌/Cookie 原文列。
+	for _, forbidden := range []string{"secret TEXT", "secret_value", "session_secret", "csrf_token TEXT", "cookie_value"} {
+		if strings.Contains(sessions, forbidden) {
+			t.Errorf("sessions 不应出现秘密明文列 %q", forbidden)
+		}
+	}
+	for _, reason := range []string{"'pending_second_factor'", "'pending_password_change'", "'recovery'", "'initialization'"} {
+		if !strings.Contains(sessions, reason) {
+			t.Errorf("restricted_reason 缺少受限原因 %s", reason)
+		}
+	}
+	for _, index := range []string{
+		"CREATE INDEX idx_sessions_user ON sessions(user_id,revoked_at_ms);",
+		"CREATE INDEX idx_sessions_app ON sessions(app_id,revoked_at_ms);",
+		"CREATE INDEX idx_sessions_absolute_expiry ON sessions(absolute_expires_at_ms);",
+	} {
+		if !strings.Contains(sqlText, index) {
+			t.Errorf("0010 缺少索引 %q", index)
+		}
+	}
+	// 会话不是 OAuth 令牌：本迁移不得创建任何令牌表。
+	for _, future := range []string{"CREATE TABLE tokens", "CREATE TABLE refresh_tokens", "CREATE TABLE oauth_grants"} {
+		if strings.Contains(sqlText, future) {
+			t.Errorf("0010 提前创建了 OAuth 令牌表 %q", future)
 		}
 	}
 	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {

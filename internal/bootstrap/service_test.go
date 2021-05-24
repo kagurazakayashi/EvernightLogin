@@ -301,9 +301,16 @@ func TestInitializeCreatesSinglePendingRoot(t *testing.T) {
 	if got := env.queryInt(`SELECT COUNT(*) FROM password_credentials`); got != 0 {
 		t.Errorf("root 初始化写入了密码凭证行数 = %d，期望 0", got)
 	}
-	for _, table := range []string{"sessions", "refresh_tokens"} {
+	// root 初始化不得写入会话行（会话表由后续步骤的迁移建立，例如步骤 30 的
+	// sessions），也不得提前创建令牌表。
+	for _, table := range []string{"refresh_tokens", "oauth_grants"} {
 		if got := env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table); got != 0 {
 			t.Errorf("提前创建了表 %s", table)
+		}
+	}
+	if got := env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'`); got == 1 {
+		if rows := env.queryInt(`SELECT COUNT(*) FROM sessions`); rows != 0 {
+			t.Errorf("root 初始化写入了会话行 = %d，期望 0", rows)
 		}
 	}
 	// 成功审计存在且不含凭证明文。

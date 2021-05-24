@@ -2,7 +2,7 @@
 
 login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
 
-## 项目状态（步骤 29）
+## 项目状态（步骤 30）
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
 - 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
@@ -15,9 +15,10 @@ login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立�
 - 预设目录初始化 `internal/preset` 与 SQLite 生产仓储 `internal/preset/sqlite`（版本化、机器可读的预设目录：系统管理员、用户管理员、客服、审计员、普通用户五个系统角色与默认用户组；应用管理员/应用普通用户按应用创建模板生成，每个应用各自独立；每条权限都有稳定标识、中文名称、能做什么、范围与不能做什么，同一格多个权限逐条登记；不创建任何账户、不做角色分配、没有可分配的 root 角色；初始化幂等且升级不覆盖用户调整；恢复默认必须差异预览 + 服务端确认令牌再次授权 + 同一审计事务，并接入步骤 26 的 delegation.Guard；写入迁移 0007 的初始化版本记录）。
 - 本地受控首次初始化 `internal/bootstrap` 与 SQLite 生产仓储 `internal/bootstrap/sqlite`（唯一 root 只由本机受信 `local_admin` 通道创建；不设默认密码、不保存密码/哈希、不签发会话或令牌；root 创建后处于受限待配置状态，只持有一条一次性、本机、短期配置凭证（用途 `root.setup` 绑定新 root 用户 ID，1 分钟～1 小时，默认 15 分钟，数据库只存摘要）；并发初始化最多一个成功、重复运行与已有 root 一律拒绝并留失败审计；root 行与迁移 0008 的初始化状态记录在同一审计事务中条件插入，失败整体回滚；初始化完成后创建入口关闭，重启只读取数据库不重建默认账户；状态查询与重新签发凭证提供本地可诊断恢复入口；`users` 与 `account`/`role`/`group` 服务层继续拒绝删除、禁用、降格与角色/组路径操作 root）。
 - 正式密码与认证 `internal/authn` 与 SQLite 生产仓储 `internal/authn/sqlite`（使用 `golang.org/x/crypto` 的 Argon2id 生成带算法版本/参数/随机盐的自描述 PHC 哈希，参数有界可升级并在登录成功时条件升级；密码长度、弱密码基线、可选近期历史与“不包含账户信息”策略，不强制无依据的定期改密；支持用户名与配置允许的已验证邮箱登录；统一公开失败提示，用户/地址/操作维度限流与可恢复的渐进延迟/临时锁定，成功认证重置失败状态；root 与高权限系统角色密码正确后仍为受限待第二因素结果，MFA 未实现时绝不当作完整登录、不签发会话或 Token；新增迁移 0009）。
+- 服务端会话 `internal/session` 与 SQLite 生产仓储 `internal/session/sqlite`（把密码认证结果接入会话：高熵会话秘密只返回一次、数据库只存 HMAC-SHA256 验证摘要；普通/受限会话与受限原因分列，受限会话不得访问普通业务或管理接口；空闲/绝对双重到期、登录成功轮换会话 ID 防会话固定、显式续期与退出/批量撤销；每次校验重读账户状态与 `security_version` 及（可选）应用成员状态，账户禁用/改密/成员移除立即失效；Cookie 默认 `__Host-`、Secure、HttpOnly、SameSite=Lax，会话绑定 CSRF 令牌并可直接作为既有 CSRF 中间件的校验器；管理访问额外要求强认证，MFA 未实现前保持拒绝；新增迁移 0010 `sessions`）。
 - 可转授权限与委派限制 `internal/delegation` 与 SQLite 生产仓储 `internal/delegation/sqlite`（把“可使用权限”与“可转授权限”分开：委派资格由受限本地初始化/系统操作者显式签发并写入迁移 0006，记录作用范围、权限、数据范围上限、目标白名单、是否允许自我/本组转授、有效期与撤回；角色组合权限、角色分配、启用角色、向已配角色的用户组增员、应用成员加入/重新启用、启用权限、启用应用等所有改变有效权限的写入路径统一经 Guard 在同一审计事务内检查，普通管理者只能转授自己当前实际持有且有有效资格的权限，数据范围必须收缩，默认禁止自我与自身所在用户组；启用角色/权限、组合权限进已分配角色与启用应用等间接路径还按实际受影响目标集合复核 allow_self 与目标白名单，启用应用无法安全校验时仅受信通道可通过；持有但不可转授、过期/撤回、目标越界、范围过宽与并发撤回均拒绝并返回可诊断错误码；数据范围收缩尚未完整落地（写入路径仍为未声明范围，非 all 上限一律 fail-closed），不实现审批引擎、再委派、数据范围写入口与委派资格 HTTP）。
 - 角色领域基础 `internal/role` 与 SQLite 仓储 `internal/role/sqlite`（系统/应用角色的创建/读取/分页/资料更新/启停/受引用保护的删除；角色机器标识稳定且不能使用 root 语义；角色只组合同范围、启用、非 root_only 权限；角色可分配给可用全局账户或系统组、以及应用有效成员或同应用用户组；重复组合/分配幂等，删除前检查权限/用户/组引用；root 账户不能作为普通角色分配目标；不实现有效权限推导、可转授权限检查或 HTTP 端点）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role`/`internal/authz`/`internal/delegation` 已提供基础能力）、有效权限推导与授权执行的 HTTP/令牌接入（`internal/authz` 已提供基础引擎）、首次初始化入口的 CLI/启动装配（`internal/bootstrap` 已提供受信 Go API，尚无 `cmd/loginctl` 本地命令）、密码认证的会话签发与登录 HTTP 接入（认证能力已由 `internal/authn` 提供，会话由步骤 30 实现）、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。委派资格签发/撤回管理 API、审批引擎、预设目录的 HTTP/CLI 管理入口（`internal/preset` 已提供受信通道初始化/恢复能力）与数据范围写入口也未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希与密码验证已由 `internal/authn` 使用 Argon2id 实现；邮箱注册/验证入口、MFA 与完整认证会话尚未实现。root 的受限配置凭证兑换后可设置正式密码，但 MFA/管理强认证完成前状态保持 `setup_verified`、不会进入 `ready`，也不会签发管理员会话（`ready` 条件转换已由 `internal/bootstrap` 的 `MarkReady` 提供）。
+- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role`/`internal/authz`/`internal/delegation` 已提供基础能力）、有效权限推导与授权执行的 HTTP/令牌接入（`internal/authz` 已提供基础引擎）、首次初始化入口的 CLI/启动装配（`internal/bootstrap` 已提供受信 Go API，尚无 `cmd/loginctl` 本地命令）、密码登录/退出/会话校验的 HTTP 路由接入与启动装配（认证与受限/普通会话能力已由 `internal/authn`/`internal/session` 提供受信 Go API，步骤 30 未暴露 HTTP 路由）、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、审计查询/导出/报告/清理、备份流程仍未实现。委派资格签发/撤回管理 API、审批引擎、预设目录的 HTTP/CLI 管理入口（`internal/preset` 已提供受信通道初始化/恢复能力）与数据范围写入口也未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希与密码验证已由 `internal/authn` 使用 Argon2id 实现；会话签发/校验/续期/撤销与受限会话语义已由 `internal/session` 实现（未暴露 HTTP 路由），MFA/管理强认证与完整管理会话尚未实现。root 的受限配置凭证兑换后可设置正式密码，但 MFA/管理强认证完成前状态保持 `setup_verified`、不会进入 `ready`，也不会签发管理员会话（`ready` 条件转换已由 `internal/bootstrap` 的 `MarkReady` 提供）。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）
@@ -510,6 +511,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **审计退修（2026-11-16，双审计 S1～S5/Q1～Q4）**：新增 Argon2 有界并发槽位与排队超时；强认证改为按高敏感系统权限（含自定义系统角色与 root_only）判定并同时返回强因素绑定/第二因素步骤；失败限制改为“IP/操作失败预算 + 账户渐进延迟 + 账户+来源临时锁定 + IPv6 /64 聚合 + 来源标识扫描阈值 + 锁定条目不淘汰”；普通用户自助改密的当前密码复核接入同一失败限制；`MarkReady` 要求正式密码凭证存在；地址限流改用只读 `Peek` 使成功不计预算；移除 0009 中与 Unicode 折叠口径冲突的 SQLite `lower()` CHECK；新增 `internal/authn/sqlite` 独立仓储测试与工作槽位/来源聚合测试。已知残余风险：账户不存在时 dummy Argon2 校验只能减小而不能完全消除时序差；密码计算排队等待中的 context 取消/超时已原样传播（不再映射为限流或凭据损坏），但认证失败路径在 ctx 已取消时仍可能跳过失败审计（拒绝仍 fail-closed）。
 - **尚未实现/未验证**：会话/Token 签发与撤销（步骤 30，本步只提供认证结果）、MFA/Passkey/恢复代码验证（第二因素步骤）、邮箱注册与验证入口（步骤 33；本步只提供已验证邮箱的登录读取与统一规范化）、用户自助改密的 HTTP 接口与敏感操作再次验证策略（步骤 38/39）、完整 root 应急重置 CLI、密码找回流程；跨进程失败限制共享与分布式限流未实现；未做 race detector、非 Windows 运行与长期压力。
 
+## 服务端会话、登录与退出（步骤 30）
+
+新增内部会话域 `internal/session` 与 SQLite 生产仓储 `internal/session/sqlite`：把步骤 29 的密码认证结果接入服务端会话，形成普通用户密码登录与退出的完整 Go API 闭环（本步不暴露 HTTP 路由，登录/退出/校验/续期/撤销均由宿主或后续 HTTP 步骤调用）；新增迁移 0010 `sessions`。会话不是 OAuth Access Token / ID Token / Refresh Token，OAuth 模块后续另行实现。
+
+- **秘密与存储**：会话秘密由 `crypto/rand` 生成 256 位随机值，只在签发结果中出现一次（`IssuedSession.Secret` 为 `会话ID.秘密` 形式的凭据，`Secret` 类型默认脱敏）；数据库只保存 `internal/secrets.Keyring` 以当前写密钥派生的 HMAC-SHA256 验证摘要（会话秘密与 CSRF 令牌使用不同摘要域），比较使用 `crypto/subtle` 常量时间比较，秘密原文不进入日志、审计、错误或 URL。会话 ID 是 128 位随机值且校验格式，不可预测但本身不是秘密。
+- **普通与受限会话**：只有 `authn.AuthenticateResult.Outcome == complete` 且 `Restricted == false` 且 `RequiredSteps` 为空才签发普通会话；待第二因素、待强制改密只能得到受限会话，`recovery`/`initialization` 受限原因已定义但本步没有签发入口。受限会话可通过 `Validate` 取得身份，但 `AuthorizeBusiness`/`AuthorizeManagement` 一律拒绝。管理访问额外要求 `strong_auth_verified_at_ms` 非空；MFA 未实现，本步没有任何写入该字段的通道，所以普通会话也不能访问管理接口。
+- **签发前重读状态**：签发时重新读取 `users.status`、`users.security_version` 与应用/成员状态，必须为 active 且安全版本与认证结果一致；不一致时统一返回 `AUTH_FAILED`（`ErrAccountNotEligible`）并写失败审计，绝不把认证结果快照当作当前状态。
+- **到期、轮换与撤销**：空闲到期默认 30 分钟、绝对到期默认 12 小时（可配置且有上下界，绝对期限不得小于空闲期限）；续期只延长空闲到期且不越过绝对到期；每次校验/续期重读账户安全版本与（应用绑定会话的）应用/成员状态，禁用、请求删除、改密带来的安全版本递增、成员移除/停用、应用停用都会让既有会话立即失效。登录成功时若请求携带仍有效的旧会话，它在签发事务中被撤销并签发全新 ID 与秘密（会话固定防护）；退出与 `RevokeAllForUser` 写服务端撤销状态，立即生效且不依赖客户端删除 Cookie；签发与撤销成功审计与数据库变更在同一 `audit.ExecuteCritical` 事务提交，审计不可用时拒绝。
+- **Cookie 与 CSRF**：`NewCookie` 默认 `__Host-login_session`（与 `internal/transport` 的 CSRF 默认会话 Cookie 名一致）、Secure、HttpOnly、SameSite=Lax、Path=/、不设 Domain、浏览器会话 Cookie（绝对到期由服务端控制）；`ClearCookie` 以 MaxAge<0 立即失效。会话绑定一次性返还的 CSRF 令牌，`ValidateCSRFToken` 的签名与 `internal/transport` 的 CSRFConfig.ValidateToken / 根包 `CSRFValidator` 一致，可直接接既有 CSRF 中间件；来源（Origin/Referer）允许列表仍由该中间件负责，两者不可互相替代。嵌入式 Go API 可直接传会话秘密，不强制 Cookie；会话秘密只从 Cookie 或 `Authorization: Bearer` 读取，绝不读取查询参数/表单，避免把秘密放进 URL。
+- **审计、错误码与脱敏**：签发、轮换、退出与批量撤销写安全审计（目标为会话或用户稳定 ID、类别/受限原因/安全版本/到期时间与撤销原因），不写秘密、摘要或 CSRF 令牌；运行日志只含会话/用户 ID、类别、原因与到期时间。不新增注册错误码：会话无效与签发不可用映射 `AUTH_FAILED(401)`，受限/强认证要求映射 `ACCESS_DENIED(403)`，非法请求映射 `REQ_INVALID(400)`，存储 `DB_UNAVAILABLE(503)`，审计 `AUDIT_WRITE_FAILED(503)`；根包 `session_errorcodes_test.go` 核对登记状态与 Cookie/CSRF 契约一致，注册表仍 46 码。
+- **已验证（Windows amd64，临时 SQLite）**：真实 `authn.Authenticate` 密码认证 → 会话签发 → 认证请求校验 → 续期 → 退出的闭环；空闲到期与绝对到期边界（续期不能越过绝对到期）；登录轮换会话 ID 且旧秘密失效（防会话固定）；Cookie 安全属性、CSRF 令牌绑定、错误令牌/无会话/URL 携带秘密拒绝、Bearer 读取；受限会话（待第二因素/待改密）业务与管理访问拒绝、普通会话管理访问因缺强认证拒绝；账户禁用、安全版本变化、应用成员停用、应用停用使会话失效；非成员与安全版本不一致拒绝签发；并发续期安全且撤销后并发续期全部失败；批量撤销共享撤销语义；秘密/CSRF 令牌篡改与跨会话拼接拒绝；清理与构造选项边界；日志与审计不含会话秘密；迁移 0001～0010 计数/结构测试与根包错误码/Cookie/CSRF 契约测试。未做 race detector、HTTP 路由级端到端联调、多进程/多实例共享撤销缓存与非 Windows 运行。
+
+- **已知残余风险（2026-11-16 双审计记录）**：应用成员被停用再恢复后，旧应用会话在空闲到期前可重新生效（会话只比对当前应用/成员状态、不记录成员版本；权限仍每次实时复检，且攻击者仍需持有会话秘密），待后续接入应用成员版本或事务性撤销后彻底解决。本步不暴露 HTTP 路由，CSRF/来源规则目前是契约级验证（Cookie 名、令牌绑定与 `ValidateCSRFToken` 契约和既有中间件一致），未做 HTTP 路由级端到端联调；未运行 race detector、多实例共享撤销与非 Windows/长期压力测试。
+- **双审计修复（2026-11-16）**：root 即使收到“完整认证”结果也拒绝签发普通会话（只能受限，MFA 未实现前）、登录轮换时旧会话撤销未生效即 fail-closed 拒绝签发并整体回滚、CSRF 令牌校验复用与 `Validate` 相同的账户状态/安全版本/应用成员检查；补 root、并发轮换、轮换失败与 CSRF 状态回归测试。
+
 ## 测试用本地邮件服务器（额外步骤 extra01）
 
 `internal/testmail` 是**仅供测试**的本地 SMTP 接收服务器，`tools/testmaild` 是只负责装配与运行它的独立工具。它把收到的邮件保存在内存中供测试断言，**不投递、不中继、不连接任何外部邮件服务**，默认只监听 `127.0.0.1` 的随机端口；两个包都不会被 `cmd/login-server` 装配，生产邮件实现必须另行编写。本包不是产品能力，也不替代步骤 32/39 尚未实现的邮件模板、投递与通知逻辑。
@@ -600,9 +616,10 @@ go run .\cmd\login-server --help
 | internal/preset/ | 版本化预设角色/用户组/权限目录的幂等初始化、差异预览/再次授权恢复与默认保护（内部包） | 是 |
 | internal/bootstrap/ | 本地受控首次初始化、唯一 root 受限待配置状态、一次性配置凭证、`ready` 条件转换与 root 保护规则（内部包） | 是 |
 | internal/authn/ | 正式密码 Argon2id 哈希/验证与参数升级、密码策略、用户名/已验证邮箱登录、失败限制与认证结果（内部包） | 是 |
+| internal/session/ | 服务端会话签发/校验/续期/撤销、普通与受限会话、空闲/绝对到期、登录轮换、Cookie 与 CSRF 绑定（内部包） | 是 |
 | internal/testmail/ | 仅供测试的本地 SMTP 接收服务器（内存保存、查询/取出/清空、限制、可选 AUTH/STARTTLS）；不得装配进生产路径 | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
-| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表、定时计划/尝试历史表、权限委派资格表、预设初始化版本表、root 初始化状态表与密码凭证/已验证邮箱表） | 是 |
+| migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表、定时计划/尝试历史表、权限委派资格表、预设初始化版本表、root 初始化状态表、密码凭证/已验证邮箱表与会话表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
 | docs/requirements/ | 功能清单和错误码手册 | 可以 |
 | docs/database/ | 数据库基线说明、表清单与检查记录 | 可以 |
@@ -617,7 +634,7 @@ go run .\cmd\login-server --help
 
 1. 解压到新的目录，不要直接覆盖现有项目。
 2. 使用 IDE 打开目录，让 AI 先读取 AGENTS.md 和 MEMORY.md。
-3. 步骤 01～29 已完成；继续时按 .ai/ 中的顺序处理步骤 30，每次只把一个步骤的完整提示词交给 AI。
+3. 步骤 01～30 已完成；继续时按 .ai/ 中的顺序处理步骤 31，每次只把一个步骤的完整提示词交给 AI。
 4. 每步结束检查修改和实际测试结果，由你自行提交代码。AI 不提交项目成果、不执行任何 git push。
 5. 第一部分（步骤 01～17，基础设施与网络边界）完成后，可用 MEMORY.md 与验收记录复核阶段状态，再继续第二部分。
 

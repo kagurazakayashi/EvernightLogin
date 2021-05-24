@@ -212,6 +212,29 @@
 // 强制要求正式密码凭证存在，强认证未配置前保持 setup_verified，ready 后入口关闭。
 // 密码/哈希/盐不写日志、错误或审计差异；认证成功路径审计不可用时拒绝返回结果。
 //
+// 步骤 30 增加服务端会话 internal/session 与 internal/session/sqlite：把步骤 29
+// 的认证结果接入会话，形成普通用户密码登录与退出的完整 Go API 闭环（本步不暴露
+// HTTP 路由，登录/退出/校验/续期/撤销由宿主或后续 HTTP 步骤调用，新增迁移 0010
+// 的 sessions 表）。会话秘密由 crypto/rand 生成 256 位随机值并只返回一次，数据库
+// 只保存 internal/secrets 派生的 HMAC-SHA256 验证摘要（会话秘密与 CSRF 令牌使用
+// 不同摘要域），比较使用常量时间；秘密不进入日志、审计、错误或 URL。只有
+// authn.AuthenticateResult 为 complete、非受限且无剩余步骤才签发普通会话，待第二
+// 因素/待强制改密只能得到受限会话（recovery/initialization 受限原因已定义但本步
+// 无签发入口），受限会话一律拒绝普通业务与管理访问；管理访问额外要求强认证时间
+// 非空，MFA 未实现前没有任何写入通道，因此普通会话也不能访问管理接口。签发时重
+// 读账户状态与 security_version 以及应用/成员状态，不一致按登录失败拒绝；每次
+// 校验/续期都重读这些状态，账户禁用、改密递增安全版本、成员移除/停用与应用停用
+// 会让既有会话立即失效。空闲到期与绝对到期双约束，续期只能延长空闲到期且不越过
+// 绝对到期；登录成功如携带仍有效的旧会话，会在签发事务中撤销它并签发新 ID 与秘密
+// （会话固定防护），退出与 RevokeAllForUser 写服务端撤销状态并立即生效，签发与撤销
+// 的成功审计与数据库变更同事务提交，审计不可用时拒绝。浏览器 Cookie 默认
+// __Host-login_session（与 internal/transport 的 CSRF 默认会话 Cookie 名一致）、
+// Secure、HttpOnly、SameSite=Lax、Path=/，会话绑定 CSRF 令牌，ValidateCSRFToken
+// 可直接作为既有 CSRF 中间件的校验器（来源/Origin 规则仍由该中间件负责）；嵌入式
+// Go API 不强制 Cookie，会话秘密只从 Cookie 或 Authorization: Bearer 读取，绝不从
+// URL/查询参数读取。会话不是 OAuth Access Token/ID Token/Refresh Token，OAuth 模块
+// 后续另行实现。
+//
 // 已知限制：数据范围收缩尚未完整落地——所有写入路径仍以“未声明”范围透传，迁移 0006
 // 只保证两个 JSON 列合法，非 all 上限的委派资格一律 fail-closed（不放宽、不按最宽范围
 // 解释）；预设初始化与恢复当前只接受受信本地/系统通道（非受信管理者的恢复入口需要
@@ -219,9 +242,10 @@
 // InstallApplicationScope 生成应用模板。本步不实现审批引擎、再委派、数据范围写入口、
 // 预设目录 HTTP/CLI 或委派资格 HTTP。
 //
-// 密码认证的会话签发、自助注册、OAuth/OIDC Token 联合校验与完整授权执行、会话、应用成员/
-// 用户组/权限目录/角色/有效权限 HTTP 接口、OAuth 凭据/回调、Web 页面与备份流程
-// 尚未实现；首次初始化也不提供 CLI 命令或启动装配（cmd/loginctl 尚未建立），兑换后
-// 的受限配置会话持久化绑定与完整 root 应急重置留后续步骤。需要独立进程入口时使用
+// 密码登录/退出/会话校验的 HTTP 路由与启动装配、自助注册、OAuth/OIDC Token 联合校验与完整
+// 授权执行、应用成员/用户组/权限目录/角色/有效权限 HTTP 接口、OAuth 凭据/回调、Web 页面与
+// 备份流程尚未实现；会话能力已由 internal/session 提供受信 Go API，但管理强认证（MFA）未
+// 实现前管理访问保持拒绝。首次初始化也不提供 CLI 命令或启动装配（cmd/loginctl 尚未建立），
+// 兑换后的受限配置会话持久化绑定与完整 root 应急重置留后续步骤。需要独立进程入口时使用
 // cmd/login-server；该入口目前也只提供版本与帮助，不会假装服务已经启动。
 package login

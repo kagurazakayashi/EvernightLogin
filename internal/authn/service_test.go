@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1170,10 +1171,46 @@ func TestLogAndAuditRedaction(t *testing.T) {
 	if strings.Contains(env.logBuffer.String(), wrongPassword) {
 		t.Error("认证失败日志包含密码")
 	}
-	// 不提前创建会话/令牌表。
-	if env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (name LIKE '%session%' OR name LIKE '%token%')`) != 0 {
-		t.Fatal("本步不应创建会话或令牌表")
+	// 步骤 29 不签发会话；令牌表仍不得提前创建（会话表 sessions 由步骤 30 的
+	// 迁移 0010 建立，本断言只针对认证包不产生 Token 结构）。
+	if env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE '%token%'`) != 0 {
+		t.Fatal("本步不应创建令牌表")
 	}
+	// 等价断言：认证包不写会话行，也不依赖步骤 30 的 internal/session（认证成功
+	// 不等于登录，会话签发必须由调用方显式完成）。
+	if got := env.queryInt(`SELECT COUNT(*) FROM sessions`); got != 0 {
+		t.Fatalf("认证流程写入了 %d 条会话行", got)
+	}
+	if importsSessionPackage(t) {
+		t.Error("internal/authn 生产代码不应依赖 internal/session（认证不签发会话）")
+	}
+}
+
+// importsSessionPackage 检查 internal/authn 的生产 Go 文件是否引用 internal/session。
+func importsSessionPackage(t *testing.T) bool {
+	t.Helper()
+	found := false
+	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
+			strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(data), "EvernightLogin/internal/session") {
+			found = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("扫描认证包源码失败: %v", err)
+	}
+	return found
 }
 
 // TestRootReadyTransitionStoreRule 验证 0008 ready 转换的数据库条件：只有
