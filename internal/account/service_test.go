@@ -945,3 +945,86 @@ func TestAuditFailureFailClosed(t *testing.T) {
 		t.Fatalf("恢复后创建失败: %v", err)
 	}
 }
+
+// fakeSessionRevoker 记录账户禁用后的会话撤销调用，可注入错误。
+type fakeSessionRevoker struct {
+	mu    sync.Mutex
+	users []string
+	err   error
+}
+
+// RevokeOnAccountDisabled 实现 account.SessionRevoker。
+func (f *fakeSessionRevoker) RevokeOnAccountDisabled(_ context.Context, userID string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users = append(f.users, userID)
+	if f.err != nil {
+		return 0, f.err
+	}
+	return 2, nil
+}
+
+// TestDisableUserInvokesSessionRevoker 验证禁用账户成功后调用注入的会话撤销契约，
+// 且撤销失败不回滚已提交的禁用（会话层仍按 status 复查拒绝旧会话）。
+func TestDisableUserInvokesSessionRevoker(t *testing.T) {
+	env := prepareEnv(t, "operator-1")
+	user := env.createUser("revoker-target")
+	revoker := &fakeSessionRevoker{}
+	service, err := account.New(account.Options{
+		Store:          env.store,
+		Audit:          env.record,
+		Authorizer:     env.auth,
+		SessionRevoker: revoker,
+		Now:            env.clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("构造带会话撤销的账户服务失败: %v", err)
+	}
+	state, err := service.GetUser(context.Background(), env.caller, user.ID)
+	if err != nil {
+		t.Fatalf("读取用户失败: %v", err)
+	}
+	if _, err := service.DisableUser(context.Background(), env.caller, account.StateCommandRequest{
+		UserID:             user.ID,
+		ExpectedRowVersion: state.RowVersion,
+	}); err != nil {
+		t.Fatalf("禁用用户失败: %v", err)
+	}
+	if len(revoker.users) != 1 || revoker.users[0] != user.ID {
+		t.Fatalf("会话撤销调用 = %v，期望一次 %q", revoker.users, user.ID)
+	}
+	// 撤销失败不影响已提交的禁用结果。
+	user2 := env.createUser("revoker-failing-target")
+	state2, err := service.GetUser(context.Background(), env.caller, user2.ID)
+	if err != nil {
+		t.Fatalf("读取用户失败: %v", err)
+	}
+	failing := &fakeSessionRevoker{err: errors.New("session store unavailable")}
+	failingService, err := account.New(account.Options{
+		Store:          env.store,
+		Audit:          env.record,
+		Authorizer:     env.auth,
+		SessionRevoker: failing,
+		Now:            env.clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("构造失败会话撤销的账户服务失败: %v", err)
+	}
+	result, err := failingService.DisableUser(context.Background(), env.caller, account.StateCommandRequest{
+		UserID:             user2.ID,
+		ExpectedRowVersion: state2.RowVersion,
+	})
+	if err != nil || !result.Changed {
+		t.Fatalf("会话撤销失败时的禁用 = (%+v, %v)，期望禁用成功", result, err)
+	}
+	if len(failing.users) != 1 {
+		t.Fatalf("失败会话撤销调用 = %v", failing.users)
+	}
+	// 未注入撤销契约时行为不变（依赖会话层 status 复查兜底）。
+	if _, err := env.service.DisableUser(context.Background(), env.caller, account.StateCommandRequest{
+		UserID:             env.createUser("no-revoker-target").ID,
+		ExpectedRowVersion: 1,
+	}); err != nil {
+		t.Logf("未注入撤销契约的禁用结果: %v", err)
+	}
+}

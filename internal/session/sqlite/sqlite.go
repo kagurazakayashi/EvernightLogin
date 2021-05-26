@@ -25,7 +25,8 @@ const (
 	// selectSessionColumns 是会话记录的公共选择列表；app_id 用 COALESCE 统一空值。
 	selectSessionColumns = `id,user_id,COALESCE(app_id,''),kind,restricted_reason,required_steps_json,
 security_version,secret_digest,csrf_digest,key_id,strong_auth_verified_at_ms,row_version,
-created_at_ms,last_seen_at_ms,idle_expires_at_ms,absolute_expires_at_ms,revoked_at_ms,revoked_reason`
+created_at_ms,last_seen_at_ms,idle_expires_at_ms,absolute_expires_at_ms,revoked_at_ms,revoked_reason,
+remember_me,client_user_agent,client_address`
 
 	selectSessionByIDSQL = `SELECT ` + selectSessionColumns + ` FROM sessions WHERE id=?`
 
@@ -33,8 +34,9 @@ created_at_ms,last_seen_at_ms,idle_expires_at_ms,absolute_expires_at_ms,revoked_
 	insertSessionSQL = `INSERT INTO sessions(
 id,user_id,app_id,kind,restricted_reason,required_steps_json,security_version,
 secret_digest,csrf_digest,key_id,strong_auth_verified_at_ms,row_version,
-created_at_ms,last_seen_at_ms,idle_expires_at_ms,absolute_expires_at_ms,request_id
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+created_at_ms,last_seen_at_ms,idle_expires_at_ms,absolute_expires_at_ms,request_id,
+remember_me,client_user_agent,client_address
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 	// touchSessionSQL 条件续期：只有未撤销且未到期时才更新最后活动与空闲到期。
 	touchSessionSQL = `UPDATE sessions
@@ -46,10 +48,28 @@ WHERE id=? AND revoked_at_ms IS NULL AND idle_expires_at_ms>? AND absolute_expir
 SET revoked_at_ms=?,revoked_reason=?,row_version=row_version+1
 WHERE id=? AND revoked_at_ms IS NULL`
 
-	// revokeUserSessionsSQL 撤销账户全部活动会话。
+	// revokeUserSessionsSQL 撤销账户全部活动会话（可按应用与保留会话追加条件）。
 	revokeUserSessionsSQL = `UPDATE sessions
 SET revoked_at_ms=?,revoked_reason=?,row_version=row_version+1
-WHERE user_id=? AND revoked_at_ms IS NULL`
+WHERE user_id=? AND revoked_at_ms IS NULL
+AND idle_expires_at_ms>? AND absolute_expires_at_ms>?`
+
+	// revokeOldestSessionsSQL 保留最近活动的 keep 条会话，撤销其余活动会话。
+	// 它使用单条条件 UPDATE 完成“计数 + 淘汰”，在调用方 IMMEDIATE 写事务内原子
+	// 执行，避免并发登录时先查后写造成的超限竞态。
+	revokeOldestSessionsSQL = `UPDATE sessions
+SET revoked_at_ms=?,revoked_reason=?,row_version=row_version+1
+WHERE user_id=? AND revoked_at_ms IS NULL AND idle_expires_at_ms>? AND absolute_expires_at_ms>?
+AND id NOT IN (
+ SELECT id FROM sessions
+ WHERE user_id=? AND revoked_at_ms IS NULL AND idle_expires_at_ms>? AND absolute_expires_at_ms>?
+ ORDER BY last_seen_at_ms DESC, created_at_ms DESC, id DESC LIMIT ?
+)`
+
+	// activeSessionsFilter 是“活动会话”的统一判定条件（未撤销且两道到期都未过）。
+	activeSessionsFilter = `revoked_at_ms IS NULL AND idle_expires_at_ms>? AND absolute_expires_at_ms>?`
+
+	countUserSessionsSQL = `SELECT COUNT(*) FROM sessions WHERE user_id=? AND ` + activeSessionsFilter
 
 	selectUserStateSQL = `SELECT status,security_version,is_root FROM users WHERE id=?`
 
@@ -103,6 +123,9 @@ func (s *Store) Insert(ctx context.Context, tx audit.Tx, record session.Record) 
 		toUnixMilli(record.IdleExpiresAt),
 		toUnixMilli(record.AbsoluteExpiresAt),
 		record.RequestID,
+		boolInt(record.RememberMe),
+		record.ClientUserAgent,
+		record.ClientAddress,
 	)
 	if err != nil {
 		return storeError("写入会话", err)
@@ -179,16 +202,23 @@ func (s *Store) Revoke(ctx context.Context, tx audit.Tx, condition session.Revok
 	return affected > 0, nil
 }
 
-// RevokeUser 撤销账户全部活动会话；返回实际撤销数量。
+// RevokeUser 撤销账户活动会话；AppID 非空时只限该应用，ExceptSessionID 非空时
+// 保留该会话。返回实际撤销数量。所有条件写在同一条 UPDATE 中，避免先查后写。
 func (s *Store) RevokeUser(ctx context.Context, tx audit.Tx, condition session.RevokeUserCondition) (int64, error) {
 	if tx == nil {
 		return 0, fmt.Errorf("%w: 审计事务为空", session.ErrOptionsInvalid)
 	}
-	result, err := tx.ExecContext(ctx, revokeUserSessionsSQL,
-		toUnixMilli(condition.Now),
-		condition.Reason,
-		condition.UserID,
-	)
+	query := revokeUserSessionsSQL
+	args := []any{toUnixMilli(condition.Now), condition.Reason, condition.UserID, toUnixMilli(condition.Now), toUnixMilli(condition.Now)}
+	if condition.AppID != "" {
+		query += ` AND app_id=?`
+		args = append(args, condition.AppID)
+	}
+	if condition.ExceptSessionID != "" {
+		query += ` AND id<>?`
+		args = append(args, condition.ExceptSessionID)
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, storeError("批量撤销会话", err)
 	}
@@ -197,6 +227,103 @@ func (s *Store) RevokeUser(ctx context.Context, tx audit.Tx, condition session.R
 		return 0, storeError("批量撤销会话", err)
 	}
 	return affected, nil
+}
+
+// RevokeOldest 保留最近活动的 Keep 条活动会话，撤销其余活动会话，返回撤销数量。
+// 单条条件 UPDATE 在调用方 IMMEDIATE 写事务内原子执行，供并发登录上限与单设备
+// 策略使用，不存在“先计数后写入”的竞态窗口。
+func (s *Store) RevokeOldest(ctx context.Context, tx audit.Tx, condition session.RevokeOldestCondition) (int64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("%w: 审计事务为空", session.ErrOptionsInvalid)
+	}
+	if condition.Keep < 0 {
+		return 0, fmt.Errorf("%w: 保留会话数量不能为负", session.ErrOptionsInvalid)
+	}
+	nowMS := toUnixMilli(condition.Now)
+	result, err := tx.ExecContext(ctx, revokeOldestSessionsSQL,
+		nowMS,
+		condition.Reason,
+		condition.UserID,
+		nowMS,
+		nowMS,
+		condition.UserID,
+		nowMS,
+		nowMS,
+		condition.Keep,
+	)
+	if err != nil {
+		return 0, storeError("自动淘汰会话", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, storeError("自动淘汰会话", err)
+	}
+	return affected, nil
+}
+
+// CountActiveSessions 在调用方事务内统计账户活动会话数，供登录后数量约束复核。
+func (s *Store) CountActiveSessions(ctx context.Context, tx audit.Tx, userID string, now time.Time) (int64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("%w: 审计事务为空", session.ErrOptionsInvalid)
+	}
+	nowMS := toUnixMilli(now)
+	rows, err := tx.QueryContext(ctx, countUserSessionsSQL, userID, nowMS, nowMS)
+	if err != nil {
+		return 0, storeError("统计活动会话", err)
+	}
+	var total int64
+	if err := scanSingleValue(rows, &total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// ListUserSessions 返回账户活动会话分页与总数；AppID 非空时只限该应用。只读取
+// 活动（未撤销、空闲/绝对到期未过）会话，按最近活动倒序，同一活动时间用创建
+// 时间与会话 ID 稳定排序，保证分页结果确定。
+func (s *Store) ListUserSessions(ctx context.Context, query session.UserSessionQuery) (session.UserSessionPage, error) {
+	nowMS := toUnixMilli(query.Now)
+	countSQL := countUserSessionsSQL
+	countArgs := []any{query.UserID, nowMS, nowMS}
+	listSQL := `SELECT ` + selectSessionColumns + ` FROM sessions
+WHERE user_id=? AND ` + activeSessionsFilter
+	listArgs := []any{query.UserID, nowMS, nowMS}
+	if query.AppID != "" {
+		countSQL += ` AND app_id=?`
+		countArgs = append(countArgs, query.AppID)
+		listSQL += ` AND app_id=?`
+		listArgs = append(listArgs, query.AppID)
+	}
+	listSQL += ` ORDER BY last_seen_at_ms DESC, created_at_ms DESC, id ASC LIMIT ? OFFSET ?`
+	listArgs = append(listArgs, query.PageSize, query.Offset)
+	rows, err := s.store.QueryContext(ctx, countSQL, countArgs...)
+	if err != nil {
+		return session.UserSessionPage{}, storeError("统计活动会话", err)
+	}
+	var total int64
+	if err := scanSingleValue(rows, &total); err != nil {
+		return session.UserSessionPage{}, err
+	}
+	sessionRows, err := s.store.QueryContext(ctx, listSQL, listArgs...)
+	if err != nil {
+		return session.UserSessionPage{}, storeError("读取活动会话", err)
+	}
+	defer sessionRows.Close()
+	records := make([]session.Record, 0, query.PageSize)
+	for sessionRows.Next() {
+		record, ok, scanErr := scanRecordRow(sessionRows)
+		if scanErr != nil {
+			return session.UserSessionPage{}, scanErr
+		}
+		if !ok {
+			break
+		}
+		records = append(records, record)
+	}
+	if err := sessionRows.Err(); err != nil {
+		return session.UserSessionPage{}, storeError("读取活动会话", err)
+	}
+	return session.UserSessionPage{Records: records, Total: total}, nil
 }
 
 // LoadUserState 读取账户状态、安全版本与 root 标记；账户不存在返回 found=false。
@@ -275,6 +402,12 @@ func scanRecord(rows *sql.Rows) (session.Record, bool, error) {
 		}
 		return session.Record{}, false, nil
 	}
+	return scanRecordRow(rows)
+}
+
+// scanRecordRow 扫描当前游标指向的一行会话记录（不负责关闭游标），供单行读取与
+// 列表分页共用同一列顺序。
+func scanRecordRow(rows *sql.Rows) (session.Record, bool, error) {
 	var (
 		record            session.Record
 		appID             string
@@ -288,6 +421,7 @@ func scanRecord(rows *sql.Rows) (session.Record, bool, error) {
 		absoluteExpiresMS int64
 		revokedMS         sql.NullInt64
 		revokeReason      string
+		rememberMe        int
 	)
 	if err := rows.Scan(
 		&record.ID,
@@ -308,10 +442,10 @@ func scanRecord(rows *sql.Rows) (session.Record, bool, error) {
 		&absoluteExpiresMS,
 		&revokedMS,
 		&revokeReason,
+		&rememberMe,
+		&record.ClientUserAgent,
+		&record.ClientAddress,
 	); err != nil {
-		return session.Record{}, false, storeError("读取会话", err)
-	}
-	if err := rows.Err(); err != nil {
 		return session.Record{}, false, storeError("读取会话", err)
 	}
 	record.AppID = appID
@@ -329,6 +463,7 @@ func scanRecord(rows *sql.Rows) (session.Record, bool, error) {
 	record.LastSeenAt = fromUnixMilli(lastSeenMS)
 	record.IdleExpiresAt = fromUnixMilli(idleExpiresMS)
 	record.AbsoluteExpiresAt = fromUnixMilli(absoluteExpiresMS)
+	record.RememberMe = rememberMe == 1
 	if strongAuthMS.Valid {
 		record.StrongAuthAt = fromUnixMilli(strongAuthMS.Int64)
 	}
@@ -337,6 +472,21 @@ func scanRecord(rows *sql.Rows) (session.Record, bool, error) {
 	}
 	record.RevokeReason = revokeReason
 	return record, true, nil
+}
+
+// scanSingleValue 读取单行单列的整数值并关闭游标。
+func scanSingleValue(rows *sql.Rows, value *int64) error {
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return storeError("读取统计结果", err)
+		}
+		return storeError("读取统计结果", fmt.Errorf("没有结果行"))
+	}
+	if err := rows.Scan(value); err != nil {
+		return storeError("读取统计结果", err)
+	}
+	return nil
 }
 
 // encodeSteps 把仍需完成的认证步骤编码为稳定 JSON 数组；不保存任何秘密。
@@ -399,6 +549,14 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+// boolInt 把布尔值写为 0/1 整数列。
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // nullableTime 把零值时间写为 NULL。

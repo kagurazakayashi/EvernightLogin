@@ -235,6 +235,32 @@
 // URL/查询参数读取。会话不是 OAuth Access Token/ID Token/Refresh Token，OAuth 模块
 // 后续另行实现。
 //
+// 步骤 31 在 internal/session 上继续扩展（不新建重复会话体系，新增迁移 0011 追加
+// remember_me、展示用客户端描述列与活动会话索引）：用户可通过 ListSessions 分页查看
+// 本人活动会话（标记当前会话，只返回展示字段，不含秘密/摘要/CSRF 令牌），通过
+// RevokeSession/RevokeAllOwnSessions 指定退出或退出全部（目标不存在/失效/非本人时幂等
+// 无操作，不泄露他人会话存在性），撤销立即生效。管理员通过 AdminRevoke 按授权范围强制
+// 下线：必须出示普通会话并经 ScopeAuthorizer 走既有 internal/authz 的 sessions.revoke
+// 权限与作用范围（NewAuthzAuthorizer 为生产适配器，应用范围追加受保护目标检查），应用
+// 范围只能作用于绑定该应用的会话，root 会话一律拒绝，未接线授权实现时 fail-closed；
+// 客户端不能自称范围。AdminRevoke 先过强认证闸门（MFA 未实现时默认 fail-closed）与
+// 范围级授权、再读取目标，缺授权时对不存在/普通/root 目标统一返回 ACCESS_DENIED，
+// 不产生存在性探测差异。LoginRequest.RememberMe 使用独立的可配置绝对到期（只需落在
+// 5 分钟～30 天合理上下界内，可短于或长于普通绝对期限），续期仍不越过绝对到期。
+// Options.MaxActiveSessions 与
+// Options.DevicePolicy 在登录的同一 IMMEDIATE 审计事务内以单条条件更新原子维护：单设备
+// 策略先撤销此前全部活动会话再签发，最大在线数保留最近活动的前 N-1 条并淘汰其余，自动
+// 淘汰写独立 session.eviction 审计，失败整体回滚。审计动作区分 session.revoke_own、
+// session.admin_revoke、session.eviction 与 session.account_disabled_revoke
+// （RevokeOnAccountDisabled 由账户禁用流程调用，操作者为系统主体；需要宿主在
+// account.Options.SessionRevoker 显式接线，未接线时会话层仍按 users.status 复查拒绝
+// 旧会话但不会主动撤销记录），重复撤销幂等。user_admin 预设角色默认含系统权限
+// sessions.revoke，但数据范围裁剪未完整落地，系统范围强制下线当前只以权限与
+// root/目标保护为闸门，数据范围收缩留后续步骤。设备
+// 列表中的客户端描述仅是参考：UserAgent 由客户端自称、可伪造，Address 来自可信边界，
+// 都不是可信设备身份或地理位置，也不参与授权。所有撤销只联动身份服务当前会话，不宣称
+// OAuth 令牌或第三方业务会话已撤销。
+//
 // 已知限制：数据范围收缩尚未完整落地——所有写入路径仍以“未声明”范围透传，迁移 0006
 // 只保证两个 JSON 列合法，非 all 上限的委派资格一律 fail-closed（不放宽、不按最宽范围
 // 解释）；预设初始化与恢复当前只接受受信本地/系统通道（非受信管理者的恢复入口需要
@@ -245,7 +271,8 @@
 // 密码登录/退出/会话校验的 HTTP 路由与启动装配、自助注册、OAuth/OIDC Token 联合校验与完整
 // 授权执行、应用成员/用户组/权限目录/角色/有效权限 HTTP 接口、OAuth 凭据/回调、Web 页面与
 // 备份流程尚未实现；会话能力已由 internal/session 提供受信 Go API，但管理强认证（MFA）未
-// 实现前管理访问保持拒绝。首次初始化也不提供 CLI 命令或启动装配（cmd/loginctl 尚未建立），
+// 实现前管理访问保持拒绝，设备列表与管理强制下线同样只有 Go API（未暴露 HTTP 路由），
+// 数据范围裁剪也尚未接入强制下线。首次初始化也不提供 CLI 命令或启动装配（cmd/loginctl 尚未建立），
 // 兑换后的受限配置会话持久化绑定与完整 root 应急重置留后续步骤。需要独立进程入口时使用
 // cmd/login-server；该入口目前也只提供版本与帮助，不会假装服务已经启动。
 package login

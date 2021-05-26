@@ -186,7 +186,7 @@ func TestEmbeddedMigrationFilesExist(t *testing.T) {
 		t.Fatalf("内嵌迁移缺少 %s", coreMigration)
 	}
 	// 迁移文件必须是 UTF-8 文本且不以 BOM 开头，避免校验和与执行差异。
-	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration, delegationMigration, presetMigration, rootInitializationMigration, passwordCredentialMigration, sessionMigration} {
+	for _, name := range []string{coreMigration, credentialMigration, auditMigration, taskMigration, scheduleMigration, delegationMigration, presetMigration, rootInitializationMigration, passwordCredentialMigration, sessionMigration, sessionDeviceMigration} {
 		data, err := migrations.SQLite.ReadFile(name)
 		if err != nil {
 			t.Fatalf("读取迁移 %s 失败：%v", name, err)
@@ -777,6 +777,62 @@ func TestSessionMigration(t *testing.T) {
 	for _, future := range []string{"CREATE TABLE tokens", "CREATE TABLE refresh_tokens", "CREATE TABLE oauth_grants"} {
 		if strings.Contains(sqlText, future) {
 			t.Errorf("0010 提前创建了 OAuth 令牌表 %q", future)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}
+
+const sessionDeviceMigration = "0011_session_devices.sql"
+
+// readSessionDeviceMigration 读取 0011 会话设备信息迁移。
+func readSessionDeviceMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(sessionDeviceMigration)
+	if err != nil {
+		t.Fatalf("读取会话设备迁移失败: %v", err)
+	}
+	return string(data)
+}
+
+// TestSessionDeviceMigration 校验步骤 31 的会话设备扩展：只追加记住我标记与
+// 展示用客户端描述列，不追加任何秘密明文列；不新建设备表或令牌表；客户端描述
+// 列有长度上限，活动会话索引覆盖用户与应用两种强制下线/列表路径。
+func TestSessionDeviceMigration(t *testing.T) {
+	sqlText := readSessionDeviceMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 0 {
+		t.Fatalf("0011 CREATE TABLE 数量 = %d，期望不新建表", count)
+	}
+	if count := strings.Count(sqlText, "ALTER TABLE sessions ADD COLUMN "); count != 3 {
+		t.Fatalf("0011 ALTER TABLE ADD COLUMN 数量 = %d，期望三列", count)
+	}
+	for _, want := range []string{
+		"remember_me INTEGER NOT NULL DEFAULT 0 CHECK(remember_me IN(0,1))",
+		"client_user_agent TEXT NOT NULL DEFAULT '' CHECK(length(client_user_agent)<=256)",
+		"client_address TEXT NOT NULL DEFAULT '' CHECK(length(client_address)<=128)",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Errorf("0011 缺少列定义 %q", want)
+		}
+	}
+	// 只保存展示描述：不得出现会话秘密、CSRF 令牌、Cookie、摘要或指纹明文列。
+	for _, forbidden := range []string{"secret", "csrf", "cookie", "fingerprint", "geolocation"} {
+		if strings.Contains(strings.ToLower(sqlText), " "+forbidden+" ") {
+			t.Errorf("0011 不应引入秘密或敏感列 %q", forbidden)
+		}
+	}
+	for _, index := range []string{
+		"CREATE INDEX idx_sessions_user_active ON sessions(user_id,idle_expires_at_ms,absolute_expires_at_ms);",
+		"CREATE INDEX idx_sessions_app_active ON sessions(app_id,idle_expires_at_ms,absolute_expires_at_ms);",
+	} {
+		if !strings.Contains(sqlText, index) {
+			t.Errorf("0011 缺少索引 %q", index)
+		}
+	}
+	for _, future := range []string{"CREATE TABLE tokens", "CREATE TABLE refresh_tokens", "CREATE TABLE devices"} {
+		if strings.Contains(sqlText, future) {
+			t.Errorf("0011 提前创建了后续步骤的表 %q", future)
 		}
 	}
 	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {

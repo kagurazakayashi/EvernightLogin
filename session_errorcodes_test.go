@@ -23,6 +23,8 @@ func TestSessionErrorCodesRegistered(t *testing.T) {
 		{name: "会话无效", err: session.ErrSessionInvalid, wantCode: session.CodeAuthFailed, wantHTTP: http.StatusUnauthorized},
 		{name: "签发账户不可用", err: session.ErrAccountNotEligible, wantCode: session.CodeAuthFailed, wantHTTP: http.StatusUnauthorized},
 		{name: "轮换旧会话失败", err: session.ErrRotationFailed, wantCode: session.CodeAuthFailed, wantHTTP: http.StatusUnauthorized},
+		{name: "并发上限复核失败", err: session.ErrConcurrentLimit, wantCode: session.CodeAuthFailed, wantHTTP: http.StatusUnauthorized},
+		{name: "会话管理无权", err: session.ErrAccessDenied, wantCode: session.CodeAccessDenied, wantHTTP: http.StatusForbidden},
 		{name: "受限会话", err: session.ErrRestrictedSession, wantCode: session.CodeAccessDenied, wantHTTP: http.StatusForbidden},
 		{name: "需要强认证", err: session.ErrStrongAuthRequired, wantCode: session.CodeAccessDenied, wantHTTP: http.StatusForbidden},
 		{name: "非法请求", err: fmt.Errorf("%w: bad", session.ErrInvalidRequest), wantCode: session.CodeReqInvalid, wantHTTP: http.StatusBadRequest},

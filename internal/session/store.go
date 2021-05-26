@@ -34,6 +34,13 @@ type Record struct {
 	RevokedAt         time.Time
 	RevokeReason      string
 	RequestID         string
+	// RememberMe 表示签发时使用了更长的记住我绝对到期（仅展示/排障，不参与
+	// 续期判断）。
+	RememberMe bool
+	// ClientUserAgent/ClientAddress 是展示用客户端描述：UserAgent 由客户端自称、
+	// 可伪造；Address 来自可信边界。两者都不是授权依据。
+	ClientUserAgent string
+	ClientAddress   string
 }
 
 // UserState 是校验时重读的账户状态快照。
@@ -70,22 +77,56 @@ type RevokeCondition struct {
 	Reason string
 }
 
-// RevokeUserCondition 撤销某账户全部活动会话。
+// RevokeUserCondition 撤销某账户全部活动会话，可按应用范围与保留会话过滤。
 type RevokeUserCondition struct {
 	UserID string
 	Now    time.Time
 	Reason string
+	// AppID 非空时只撤销绑定该应用的会话（应用范围管理员强制下线使用）。
+	AppID string
+	// ExceptSessionID 非空时保留该会话不撤销（“退出其他设备”使用）。
+	ExceptSessionID string
+}
+
+// RevokeOldestCondition 保留最近活动的若干会话，撤销其余活动会话。用于“最大在线
+// 数”策略在登录事务内的自动淘汰；Keep 为保留数量（0 表示全部撤销）。
+type RevokeOldestCondition struct {
+	UserID string
+	Now    time.Time
+	Keep   int
+	Reason string
+}
+
+// UserSessionQuery 是设备列表查询条件。只返回未撤销且未到期的活动会话。
+type UserSessionQuery struct {
+	UserID   string
+	AppID    string
+	Now      time.Time
+	Offset   int
+	PageSize int
+}
+
+// UserSessionPage 是设备列表查询结果：Records 是当前页活动会话，Total 是满足
+// 条件的活动会话总数。
+type UserSessionPage struct {
+	Records []Record
+	Total   int64
 }
 
 // Store 是会话持久化契约，由 internal/session/sqlite 提供生产实现。
 //
 // 实现约束：
-//   - Insert/Revoke/RevokeUser 必须使用调用方给出的 audit.Tx，以便与成功审计
-//     在同一事务一致提交；失败时整体回滚，不得返回成功。
+//   - Insert/Revoke/RevokeUser/RevokeOldest 必须使用调用方给出的 audit.Tx，以便
+//     与成功审计在同一事务一致提交；失败时整体回滚，不得返回成功。
 //   - Load 只按不可预测的会话 ID 读取，不提供按秘密、用户名或邮箱读取的接口。
 //   - Touch 使用条件 UPDATE：只有未撤销且未到期时才更新最后活动与空闲到期；
 //     并发续期是安全的（多次续期都成功、以最后一次为准），与撤销竞争时以撤销
 //     优先（撤销之后条件更新影响 0 行）。
+//   - ListUserSessions 只返回未撤销且未到期的活动会话摘要记录，按最近活动倒序
+//     分页；它不得返回会话秘密、CSRF 令牌或摘要原文之外的展示所需字段（摘要在
+//     Record 中仅供服务内部校验，不得进入对外响应）。
+//   - RevokeOldest 在调用方事务内以原子条件更新实现“保留最近 N 条、撤销其余”，
+//     供并发登录上限与单设备策略使用；实现不得拆成“先查后写”的两条独立语句。
 //   - LoadUserState/LoadMembership 是校验时的实时读取，不得返回过期缓存。
 //   - 任何失败都返回可被 errors.Is(err, ErrStoreUnavailable) 识别的安全错误，
 //     不得把原始驱动错误文本暴露给调用方。
@@ -95,6 +136,11 @@ type Store interface {
 	Touch(ctx context.Context, condition TouchCondition) (Record, bool, error)
 	Revoke(ctx context.Context, tx audit.Tx, condition RevokeCondition) (bool, error)
 	RevokeUser(ctx context.Context, tx audit.Tx, condition RevokeUserCondition) (int64, error)
+	RevokeOldest(ctx context.Context, tx audit.Tx, condition RevokeOldestCondition) (int64, error)
+	// CountActiveSessions 在调用方事务内统计账户当前活动会话数，供登录时对数量
+	// 约束做插入后的复核；它必须与 RevokeOldest/RevokeUser/Insert 处于同一事务。
+	CountActiveSessions(ctx context.Context, tx audit.Tx, userID string, now time.Time) (int64, error)
+	ListUserSessions(ctx context.Context, query UserSessionQuery) (UserSessionPage, error)
 	LoadUserState(ctx context.Context, userID string) (UserState, bool, error)
 	LoadMembership(ctx context.Context, appID, userID string) (MembershipState, bool, error)
 	DeleteExpired(ctx context.Context, cutoff time.Time) (int64, error)

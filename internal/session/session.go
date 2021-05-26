@@ -66,6 +66,22 @@ const (
 	MinAbsoluteTimeout = 5 * time.Minute
 	MaxAbsoluteTimeout = 30 * 24 * time.Hour
 
+	// DefaultRememberMeTimeout 是“记住我”登录未指定时的更长绝对到期期限。
+	DefaultRememberMeTimeout = 7 * 24 * time.Hour
+
+	// MaxActiveSessionsLimit 是“最大在线数”可配置上限；0 表示不限制。
+	MaxActiveSessionsLimit = 100
+
+	// DefaultListPageSize/MaxListPageSize 是设备列表分页边界。
+	DefaultListPageSize = 20
+	MaxListPageSize     = 100
+
+	// PermissionSessionsRevoke 是既有权限目录中“强制会话退出”的机器标识；
+	// 管理员强制下线必须经既有授权语义（internal/authz）判定该权限，不能由
+	// 客户端自称范围。系统范围使用系统权限，应用范围使用该应用作用范围内的
+	// 同名应用独有权限。
+	PermissionSessionsRevoke = "sessions.revoke"
+
 	// 摘要域：会话秘密与 CSRF 令牌使用不同域，防止两类摘要互相冒用。HMAC 子
 	// 密钥由 internal/secrets.Keyring.HMACDigest 按域派生，本包不自造密码学。
 	secretDigestDomain = "session-v1"
@@ -77,6 +93,10 @@ const (
 	maxRequestIDBytes = 64
 	// maxAppIDBytes 是应用 ID 长度上限（与迁移 0001 的应用 ID 约定一致）。
 	maxAppIDBytes = 64
+	// maxClientUserAgentBytes/maxClientAddressBytes 是客户端描述列的写入上限，
+	// 与迁移 0011 的列 CHECK 上限一致；超长内容截断而不是拒绝。
+	maxClientUserAgentBytes = 256
+	maxClientAddressBytes   = 128
 )
 
 // Kind 是会话类别。只有 normal 允许访问普通业务；restricted 一律拒绝。
@@ -287,6 +307,100 @@ type LoginRequest struct {
 	ExistingSession string
 	// RequestID 可选，写入审计用于关联查询。
 	RequestID string
+	// RememberMe 表示使用更长的绝对到期（Options.RememberMeTimeout）。它只影响
+	// 本次会话自身的绝对到期，不改变空闲到期，也不会越过服务端配置上限。
+	RememberMe bool
+	// Client 是可选的客户端描述，仅用于设备列表展示；其中 UserAgent 由客户端
+	// 自称，Address 必须来自可信边界。两者都不是授权依据。
+	Client ClientInfo
+}
+
+// ClientInfo 是设备列表展示用的客户端描述。
+//
+// 安全边界：UserAgent 完全由客户端控制、可任意伪造，不能当作可信设备身份、设备
+// 指纹或任何授权/风控依据；Address 是调用方从可信连接边界（或既有可信代理链）
+// 取得的来源地址提示，不是绝对地理位置，也不能用于授权判断。服务端在写入前会
+// 截断并去除控制字符；返回给用户时同样只作参考展示。
+type ClientInfo struct {
+	// UserAgent 是客户端自称的 User-Agent 摘要（已截断）。
+	UserAgent string
+	// Address 是可信边界给出的来源地址提示（已截断）。
+	Address string
+}
+
+// DevicePolicy 是同一账户并发登录的设备策略。
+type DevicePolicy string
+
+const (
+	// DevicePolicyMultiple 是默认多设备策略：允许同一账户在多个设备/会话并存，
+	// 受 Options.MaxActiveSessions 数量约束。
+	DevicePolicyMultiple DevicePolicy = "multiple"
+	// DevicePolicySingle 是单设备策略：每次成功登录都会在同一审计事务中撤销该
+	// 账户此前全部活动会话（撤销原因 replaced_single_device），再签发新会话。
+	DevicePolicySingle DevicePolicy = "single"
+)
+
+// Valid 报告设备策略是否已定义。
+func (p DevicePolicy) Valid() bool {
+	return p == DevicePolicyMultiple || p == DevicePolicySingle
+}
+
+// ListOptions 是设备列表分页参数。Page 从 1 开始；PageSize 为 0 使用默认值。
+type ListOptions struct {
+	Page     int
+	PageSize int
+}
+
+// SessionSummary 是设备列表返回的一条会话摘要。它绝不包含会话秘密、CSRF 令牌、
+// 验证摘要或 Cookie 原文；Client 字段只作展示参考，不是可信设备身份。
+type SessionSummary struct {
+	// ID 是会话公开标识（ses_ 前缀），可用于指定退出。
+	ID string
+	// AppID 是会话绑定的应用上下文；空表示身份服务会话（不限于某个应用）。
+	AppID string
+	// Kind/Reason 是会话类别与受限原因。
+	Kind   Kind
+	Reason Reason
+	// CreatedAt/LastSeenAt/IdleExpiresAt/AbsoluteExpiresAt 是服务端时间线。
+	CreatedAt         time.Time
+	LastSeenAt        time.Time
+	IdleExpiresAt     time.Time
+	AbsoluteExpiresAt time.Time
+	// RememberMe 表示签发时使用了更长的记住我绝对到期。
+	RememberMe bool
+	// Current 表示该条就是调用方当前出示的会话。
+	Current bool
+	// Client 是展示用客户端描述（UserAgent 不可信、Address 无地理含义）。
+	Client ClientInfo
+}
+
+// SessionPage 是设备列表的一页结果。HasMore 表示还有下一页；Total 是当前筛选
+// 条件下活动会话总数（用于分页指示，不含秘密）。
+type SessionPage struct {
+	Sessions []SessionSummary
+	Page     int
+	PageSize int
+	Total    int64
+	HasMore  bool
+}
+
+// AdminRevokeRequest 是管理员强制下线请求。
+//
+// ScopeAppID 为空表示系统范围（依据系统权限会话强制退出）；非空表示仅在该应用
+// 范围强制下线，只能作用于绑定该应用的会话。TargetUserID 与 TargetSessionID
+// 必须且只能给出一个。范围由服务端根据已授权的操作者与目标会话事实判定，绝不
+// 采用客户端自称的额外范围字段。
+type AdminRevokeRequest struct {
+	ScopeAppID      string
+	TargetUserID    string
+	TargetSessionID string
+	RequestID       string
+}
+
+// AdminRevokeResult 是管理员强制下线结果。Revoked 是实际撤销的活动会话数量；
+// 目标不存在、已失效或超出作用范围时按幂等成功返回 0。
+type AdminRevokeResult struct {
+	Revoked int64
 }
 
 // Action 是可审计的会话操作动作。
@@ -295,13 +409,27 @@ type Action string
 const (
 	// ActionSessionIssue 是普通/受限会话签发（含登录轮换）。
 	ActionSessionIssue Action = "session.issue"
-	// ActionSessionRevoke 是退出或管理撤销会话。
+	// ActionSessionRevoke 是退出当前会话。
 	ActionSessionRevoke Action = "session.revoke"
+	// ActionSessionRevokeOwn 是用户指定退出自己的其他会话或退出全部自己的会话。
+	ActionSessionRevokeOwn Action = "session.revoke_own"
+	// ActionSessionAdminRevoke 是管理员按授权范围强制下线。
+	ActionSessionAdminRevoke Action = "session.admin_revoke"
+	// ActionSessionEviction 是并发登录上限或单设备策略触发的自动淘汰。
+	ActionSessionEviction Action = "session.eviction"
+	// ActionSessionAccountDisabledRevoke 是账户禁用流程触发的服务端批量退出。
+	ActionSessionAccountDisabledRevoke Action = "session.account_disabled_revoke"
 )
 
 // Valid 报告动作是否已定义。
 func (a Action) Valid() bool {
-	return a == ActionSessionIssue || a == ActionSessionRevoke
+	switch a {
+	case ActionSessionIssue, ActionSessionRevoke, ActionSessionRevokeOwn,
+		ActionSessionAdminRevoke, ActionSessionEviction, ActionSessionAccountDisabledRevoke:
+		return true
+	default:
+		return false
+	}
 }
 
 // 领域错误哨兵。调用方用 errors.Is 判断，并可用 CodeOf 映射到根包错误码。
@@ -324,6 +452,12 @@ var (
 	// ErrRotationFailed 表示登录时旧会话的撤销未生效（并发撤销/状态竞争），
 	// 为避免在未确认旧会话失效的情况下签发新会话而 fail-closed 拒绝本次登录。
 	ErrRotationFailed = errors.New("无法安全轮换旧会话")
+	// ErrAccessDenied 表示操作者无权执行会话管理操作（越权范围、受保护目标或
+	// 缺少授权实现）。对调用方不说明目标是否存在。
+	ErrAccessDenied = errors.New("无权执行会话管理操作")
+	// ErrConcurrentLimit 表示并发登录数量约束在事务内复核失败；为避免突破上限
+	// 而整体回滚、拒绝签发。
+	ErrConcurrentLimit = errors.New("并发会话数量约束未满足")
 	// ErrStoreUnavailable 表示会话存储暂时不可用。
 	ErrStoreUnavailable = errors.New("会话存储暂时不可用")
 	// ErrAuditUnavailable 表示安全审计未能可靠写入，操作被拒绝。
@@ -360,9 +494,10 @@ func CodeOf(err error) ErrorCode {
 	case errors.Is(err, ErrInvalidRequest):
 		return CodeReqInvalid
 	case errors.Is(err, ErrSessionInvalid), errors.Is(err, ErrAccountNotEligible),
-		errors.Is(err, ErrRotationFailed):
+		errors.Is(err, ErrRotationFailed), errors.Is(err, ErrConcurrentLimit):
 		return CodeAuthFailed
-	case errors.Is(err, ErrRestrictedSession), errors.Is(err, ErrStrongAuthRequired):
+	case errors.Is(err, ErrRestrictedSession), errors.Is(err, ErrStrongAuthRequired),
+		errors.Is(err, ErrAccessDenied):
 		return CodeAccessDenied
 	case errors.Is(err, ErrStoreUnavailable):
 		return CodeDBUnavailable

@@ -85,6 +85,11 @@ type Options struct {
 	Audit AuditRecorder
 	// Authorizer 判定可信调用者权限；必填，没有默认放行实现。
 	Authorizer Authorizer
+	// SessionRevoker 是可选的会话撤销契约，由 internal/session.Service 实现并由
+	// 宿主显式接线。禁用账户成功后调用它撤销该账户的活动会话；未接线时依赖会话
+	// 每次校验重读 users.status 的兜底失效（立即拒绝后续请求），但不会主动缩短
+	// 客户端持有会话秘密的窗口。撤销失败不回滚已提交的账户禁用，只写运行日志。
+	SessionRevoker SessionRevoker
 	// Now 是可注入时钟；nil 使用 time.Now。用户时间统一 UTC 毫秒。
 	Now func() time.Time
 	// Random 是安全随机源；nil 使用 crypto/rand.Reader。用于生成用户 ID。
@@ -93,15 +98,26 @@ type Options struct {
 	Logger *slog.Logger
 }
 
+// SessionRevoker 是账户禁用成功后撤销该账户活动会话的可选契约。
+//
+// 由 internal/session.Service（方法 RevokeOnAccountDisabled）实现，宿主在装配账户
+// 服务时显式注入；它让“禁用账户”主动撤销身份服务当前会话并写独立审计。未注入时
+// 会话层仍会在每次校验时重读 users.status 并拒绝，但不会主动撤销记录。实现失败
+// 不得回滚已提交的账户状态变更。
+type SessionRevoker interface {
+	RevokeOnAccountDisabled(ctx context.Context, userID string) (int64, error)
+}
+
 // Service 是账户领域服务。构造后不可变，可被多个 goroutine 并发使用；它不启动
 // 后台协程、不提供 HTTP 端点，也不缓存用户数据。
 type Service struct {
-	store      Store
-	audit      AuditRecorder
-	authorizer Authorizer
-	now        func() time.Time
-	random     io.Reader
-	logger     *slog.Logger
+	store          Store
+	audit          AuditRecorder
+	authorizer     Authorizer
+	sessionRevoker SessionRevoker
+	now            func() time.Time
+	random         io.Reader
+	logger         *slog.Logger
 }
 
 // New 校验依赖并构造账户服务。缺少 Store/Audit/Authorizer 时返回
@@ -129,12 +145,13 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{
-		store:      options.Store,
-		audit:      options.Audit,
-		authorizer: options.Authorizer,
-		now:        now,
-		random:     random,
-		logger:     logger,
+		store:          options.Store,
+		audit:          options.Audit,
+		authorizer:     options.Authorizer,
+		sessionRevoker: options.SessionRevoker,
+		now:            now,
+		random:         random,
+		logger:         logger,
 	}, nil
 }
 
@@ -470,6 +487,16 @@ func (s *Service) applyStateCommand(ctx context.Context, caller Caller, request 
 		return StateChangeResult{}, mapCriticalError(err)
 	}
 	s.logger.Info("账户状态已变更", "user_id", request.UserID, "status", string(nextStatus))
+	// 禁用成功后主动撤销该账户会话（若宿主接线）。撤销失败不回滚已提交的禁用：
+	// 会话层仍会用 status 复查拒绝旧会话，这里只记录运行日志。
+	if command == CommandDisable && s.sessionRevoker != nil {
+		revoked, revokeErr := s.sessionRevoker.RevokeOnAccountDisabled(context.WithoutCancel(ctx), request.UserID)
+		if revokeErr != nil {
+			s.logger.Warn("账户禁用后的会话撤销失败", "user_id", request.UserID, "error_category", "session_revoke_failed")
+		} else {
+			s.logger.Info("账户禁用后的会话已撤销", "user_id", request.UserID, "revoked", revoked)
+		}
+	}
 	return StateChangeResult{User: updated, PreviousStatus: snapshot.User.Status, Changed: true}, nil
 }
 
