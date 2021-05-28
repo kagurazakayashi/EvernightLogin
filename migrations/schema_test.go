@@ -839,3 +839,69 @@ func TestSessionDeviceMigration(t *testing.T) {
 		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
 	}
 }
+
+const mailDeliveryMigration = "0012_mail_deliveries.sql"
+
+// readMailDeliveryMigration 读取 0012 邮件投递迁移。
+func readMailDeliveryMigration(t *testing.T) string {
+	t.Helper()
+	data, err := migrations.SQLite.ReadFile(mailDeliveryMigration)
+	if err != nil {
+		t.Fatalf("读取邮件投递迁移失败: %v", err)
+	}
+	return string(data)
+}
+
+// TestMailDeliveryMigration 校验步骤 32 的投递记录：幂等键唯一、状态枚举、重试
+// 上限、任务关联、加密载荷 BLOB 且不保存邮件正文/验证码/链接明文；索引覆盖
+// 状态清理与按收件人查询。
+func TestMailDeliveryMigration(t *testing.T) {
+	sqlText := readMailDeliveryMigration(t)
+	if count := strings.Count(sqlText, "CREATE TABLE "); count != 1 {
+		t.Fatalf("0012 CREATE TABLE 数量 = %d，期望只新建 1 张表", count)
+	}
+	for _, want := range []string{
+		"id TEXT PRIMARY KEY NOT NULL",
+		"idempotency_key TEXT NOT NULL UNIQUE",
+		"template_kind TEXT NOT NULL CHECK(template_kind IN('verification','password_reset','security_notice'))",
+		"recipient TEXT NOT NULL",
+		"owner_type TEXT NOT NULL CHECK(owner_type IN('user','system','local_admin'))",
+		"owner_id TEXT NOT NULL",
+		"state TEXT NOT NULL CHECK(state IN('queued','sending','succeeded','failed','cancelled'))",
+		"attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0)",
+		"max_attempts INTEGER NOT NULL DEFAULT 1 CHECK(max_attempts>0)",
+		"task_id TEXT",
+		"last_error_code TEXT",
+		"last_error_kind TEXT",
+		"sealed_payload BLOB NOT NULL",
+		"request_id TEXT",
+		"created_at_ms INTEGER NOT NULL",
+		"updated_at_ms INTEGER NOT NULL",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Errorf("0012 缺少列/约束定义 %q", want)
+		}
+	}
+	// 明文敏感内容不得入库：不保存邮件正文、主题、验证码、链接或凭据列。
+	for _, forbidden := range []string{" body ", " subject ", " text_body ", " html_body ", " code ", " token ", " password ", " plaintext ", " secret "} {
+		if strings.Contains(strings.ToLower(sqlText), forbidden) {
+			t.Errorf("0012 不应引入明文敏感列 %q", forbidden)
+		}
+	}
+	for _, index := range []string{
+		"CREATE INDEX ix_mail_deliveries_state_created_at_ms ON mail_deliveries(state,created_at_ms);",
+		"CREATE INDEX ix_mail_deliveries_recipient ON mail_deliveries(recipient);",
+	} {
+		if !strings.Contains(sqlText, index) {
+			t.Errorf("0012 缺少索引 %q", index)
+		}
+	}
+	for _, future := range []string{"CREATE TABLE notifications", "CREATE TABLE mail_queue", "CREATE TABLE webhooks"} {
+		if strings.Contains(sqlText, future) {
+			t.Errorf("0012 提前创建了后续步骤的表 %q", future)
+		}
+	}
+	if strings.Contains(sqlText, "TIMESTAMP") || strings.Contains(sqlText, "BOOLEAN") {
+		t.Error("迁移不应使用 TIMESTAMP/BOOLEAN 类型")
+	}
+}

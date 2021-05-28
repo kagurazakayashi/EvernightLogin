@@ -540,9 +540,19 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **强认证与范围限制（如实声明）**：管理强制下线要求会话已完成强认证（`CanAccessManagement`）；MFA 未实现，本包没有写入 `strong_auth_verified_at_ms` 的通道，因此默认 fail-closed 拒绝，只有后续管理强认证步骤接线后才放行。`AdminRevoke` 先过强认证闸门与范围级授权、再读取目标，缺强认证/缺授权实现/授权拒绝时对不存在、普通与 root 目标统一返回 `ACCESS_DENIED`，不产生存在性探测差异；应用范围授权适配器读取目标系统权限使用最大页大小，`HasMore` 或来源截断一律拒绝，受保护权限键逐项对照 `internal/preset` 目录。`user_admin` 预设角色默认含系统权限 `sessions.revoke`，但数据范围裁剪尚未完整落地，系统范围强制下线当前只以权限与 root/目标保护为闸门，数据范围收缩仍需后续步骤接入。`RevokeOnAccountDisabled` 需要宿主在 `account.Options.SessionRevoker` 显式接线；未接线时会话层仍按 `users.status` 复查拒绝旧会话，但不会主动撤销记录。
 - **已验证（Windows amd64，临时 SQLite）**：设备列表分页/当前会话标记/本人范围/不返回秘密；本人指定退出、退出其他设备、退出全部与幂等重复退出；应用管理员跨应用/全局会话越界无操作、按用户撤销仅限本应用、系统范围按用户撤销、root 目标拒绝、缺强认证/缺授权实现统一拒绝且无存在性差异；8 路并发登录上限 3 时最终活动会话不超过 3、自动淘汰审计可区分、超限复核返回 `ErrConcurrentLimit` 并回滚；单设备替换旧会话立即失效且仅剩 1 条；记住我绝对期限与普通期限独立可配置、续期封顶绝对到期与选项边界；账户禁用触发退出只统计未过期活动会话并写系统主体审计（含 fake `SessionRevoker` 接线）。迁移计数/结构测试与根包错误码映射同步（注册表仍 46 码）。未做 race detector、HTTP 路由级端到端联调、真实 authz 数据范围裁剪联调与非 Windows 运行。
 
+## 邮件发送、模板与可靠投递（步骤 32）
+
+新增内部邮件域 `internal/mailer` 与 SQLite 投递记录 `internal/mailer/sqlite`，迁移 0012 落地 `mail_deliveries` 表；本步**不接 HTTP 页面、不接 `cmd/login-server` 装配、不默认真实外发**，验收走内部 Go API 与 `internal/testmail` 本地捕获器。
+
+- **可注入发送接口与 SMTP 适配**：`mailer.Sender` 是业务依赖的唯一发送契约；`mailer.SMTPSender` 基于标准库 `net/smtp` 实现 STARTTLS、隐式 TLS 与显式回环明文（仅本地测试捕获器，必须显式 `AllowPlaintextLocal`），认证凭据显式配置，单封总时限与 ctx 取消（取消时主动关闭连接），失败给出稳定代码并区分可重试/不可重试（超时/不可达临时，认证失败/缺 STARTTLS/5xx 永久）。**证书校验不可关闭**：没有 `InsecureSkipVerify` 入口，测试自签证书通过 `TrustedRoots` 注入根证书完成校验。
+- **模板与注入防护**：`TemplateSet` 用 `text/template` 区分邮箱验证、密码找回与敏感操作告知三种用途；数据字段拒绝 CR/LF 与控制字符，链接仅允许 http/https 且不得含凭证，渲染后主题再次做头部安全检查；`Message` 构建拒绝头部注入、主题按 RFC 2047 编码、正文用 base64 + CRLF，地址严格校验（拒绝换行、控制字符、非法域名、地址字面量与超长地址）。
+- **可靠投递**：`DeliveryService` 以幂等键入队（`mail_deliveries.idempotency_key` 唯一约束，重复入队返回既有记录且不重复建任务），模板数据（验证码/一次性链接）经 `internal/secrets` 加密后以 BLOB 落库并绑定投递记录 ID，任务载荷只含记录 ID、不打印正文/秘密；状态为 queued/sending/succeeded/failed/cancelled，永久失败返回 `task.NonRetryable`，可重试失败按任务退避重试；`Retry` 只允许 failed 状态并需要授权（未配置授权器 fail-closed）；审计区分入队/入队失败/成功/失败/计划重试/受控重试。**通知失败不回滚已完成的安全操作**：投递是安全操作之后的独立任务，两者不共享事务。
+- **授权与可靠性边界（审计退修）**：入队/查询/重试都接受可信 `Caller`（`SystemCaller`/`LocalAdminCaller`/`UserCaller`）并可选配置 `Authorizer` 做记录级数据范围检查；未配置授权器时只有受信 system/local_admin 主体放行（普通用户 fail-closed），幂等键只允许同归属主体取回既有记录，禁止跨调用者用幂等键探测或取回他人收件人/状态。受控重试先 CAS `failed→queued` 成功后才入队，入队失败回写 `failed` + `MAIL_QUEUE_FAILED`（不留无主 queued），任务设置 `MutexKey=投递ID` 串行化同一投递；发送成功/失败/取消的终态写入使用剥离取消的 context，保证发送中途取消后不会停在 `sending`。返回给任务层的错误只保留稳定分类/代码，不回传 SMTP 回显（避免 `failure_reason` 出现收件人）。已知限制：主密钥轮换必须保留历史密钥（queued 记录在旧密钥退役后解密失败并按不可重试失败处理，fail-closed）；多实例投递互斥与 `sending` 残留的启动对账尚未实现；`checkURL` 允许 http 仅为本地测试，生产应只生成 https 链接。
+- **语义与边界**：外部邮件系统**不保证恰好一次送达**，本实现是"至少一次 + 幂等键去重"；任务重试可能产生重复邮件，业务不得把发送成功当作唯一性凭据。默认只有显式配置 SMTP 适配与测试收件地址才会真实发送；测试使用 `internal/testmail`，不向真实用户地址群发。
+
 ## 测试用本地邮件服务器（额外步骤 extra01）
 
-`internal/testmail` 是**仅供测试**的本地 SMTP 接收服务器，`tools/testmaild` 是只负责装配与运行它的独立工具。它把收到的邮件保存在内存中供测试断言，**不投递、不中继、不连接任何外部邮件服务**，默认只监听 `127.0.0.1` 的随机端口；两个包都不会被 `cmd/login-server` 装配，生产邮件实现必须另行编写。本包不是产品能力，也不替代步骤 32/39 尚未实现的邮件模板、投递与通知逻辑。
+`internal/testmail` 是**仅供测试**的本地 SMTP 接收服务器，`tools/testmaild` 是只负责装配与运行它的独立工具。它把收到的邮件保存在内存中供测试断言，**不投递、不中继、不连接任何外部邮件服务**，默认只监听 `127.0.0.1` 的随机端口；两个包都不会被 `cmd/login-server` 装配，生产邮件实现必须另行编写。本包不是产品能力，也不替代步骤 32 已实现的通用邮件投递基础设施与步骤 39 的通知业务逻辑。
 
 支持的最小会话：EHLO/HELO、MAIL FROM、RCPT TO、DATA（含点填充还原）、RSET、NOOP、QUIT，以及可选的 AUTH PLAIN/LOGIN（显式测试凭据）与 STARTTLS（测试自签证书，默认关闭）。**安全提示**：默认不启用 AUTH；`RequireAuth` 在未加密连接上会让测试凭据以明文传输，建议只与 STARTTLS 搭配，且仅用于回环测试，不要复用任何真实密码。
 

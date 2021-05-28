@@ -268,6 +268,13 @@
 // InstallApplicationScope 生成应用模板。本步不实现审批引擎、再委派、数据范围写入口、
 // 预设目录 HTTP/CLI 或委派资格 HTTP。
 //
+// internal/mailer 已实现可注入邮件发送接口、首个 SMTP 适配（显式 TLS/认证、
+// 时限与取消、稳定失败分类，不可关闭证书校验）、三类邮件模板（验证/找回/事件
+// 告知，含头部与地址注入防护）以及基于 internal/task 的可靠投递：幂等键去重、
+// SQLite 投递记录、internal/secrets 加密模板数据、受控重试与审计；迁移 0012
+// 落地 mail_deliveries 表。它尚未接入 Instance/HTTP/cmd/login-server 装配，
+// 默认只用本地测试捕获器，不向真实用户外发，也不承诺外部邮件恰好一次送达。
+//
 // 密码登录/退出/会话校验的 HTTP 路由与启动装配、自助注册、OAuth/OIDC Token 联合校验与完整
 // 授权执行、应用成员/用户组/权限目录/角色/有效权限 HTTP 接口、OAuth 凭据/回调、Web 页面与
 // 备份流程尚未实现；会话能力已由 internal/session 提供受信 Go API，但管理强认证（MFA）未
