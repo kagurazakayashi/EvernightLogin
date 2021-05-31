@@ -508,6 +508,10 @@ func TestEnvFieldMetadataStable(t *testing.T) {
 		{Field: "database.path", Env: "LOGIN_DATABASE_PATH", Class: ReloadRestartRequired},
 		{Field: "database.wal", Env: "LOGIN_DATABASE_WAL", Class: ReloadRestartRequired},
 		{Field: "database.busy_timeout_ms", Env: "LOGIN_DATABASE_BUSY_TIMEOUT_MS", Class: ReloadRestartRequired},
+		{Field: "registration.enabled", Env: "LOGIN_REGISTRATION_ENABLED", Class: ReloadRestartRequired},
+		{Field: "registration.require_review", Env: "LOGIN_REGISTRATION_REQUIRE_REVIEW", Class: ReloadRestartRequired},
+		{Field: "registration.require_email_verification", Env: "LOGIN_REGISTRATION_REQUIRE_EMAIL_VERIFICATION", Class: ReloadRestartRequired},
+		{Field: "registration.default_role_ids", Env: "LOGIN_REGISTRATION_DEFAULT_ROLE_IDS", Class: ReloadRestartRequired},
 		{Field: "secrets.master_key", Env: "LOGIN_SECRETS_MASTER_KEY", Class: ReloadRestartRequired, Secret: true},
 		{Field: "secrets.tls_pfx_password", Env: "LOGIN_SECRETS_TLS_PFX_PASSWORD", Class: ReloadRestartRequired, Secret: true},
 	}

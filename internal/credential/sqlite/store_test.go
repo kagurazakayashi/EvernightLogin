@@ -55,8 +55,8 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载迁移失败: %v", err)
 	}
-	if len(migrationSet) != 12 {
-		t.Fatalf("迁移数量 = %d，期望 12", len(migrationSet))
+	if len(migrationSet) != 13 {
+		t.Fatalf("迁移数量 = %d，期望 13", len(migrationSet))
 	}
 	// 第一次只执行到 0001，模拟步骤 08 已部署的数据库。
 	if _, err := store.Migrate(ctx, migrationSet[:1]); err != nil {
@@ -83,7 +83,7 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 12 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" {
+	if len(versions) != 13 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" {
 		t.Fatalf("升级后迁移历史 = %v", versions)
 	}
 }
@@ -112,7 +112,7 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 12 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" {
+	if len(versions) != 13 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" {
 		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012]", versions)
 	}
 

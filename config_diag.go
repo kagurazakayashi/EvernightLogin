@@ -71,6 +71,14 @@ func (c Config) fieldValueString(field string) string {
 		return strconv.FormatBool(c.Database.WAL)
 	case "database.busy_timeout_ms":
 		return strconv.Itoa(c.Database.BusyTimeoutMS)
+	case "registration.enabled":
+		return strconv.FormatBool(c.Registration.Enabled)
+	case "registration.require_review":
+		return strconv.FormatBool(c.Registration.RequireReview)
+	case "registration.require_email_verification":
+		return strconv.FormatBool(c.Registration.RequireEmailVerification)
+	case "registration.default_role_ids":
+		return formatStringList(c.Registration.DefaultRoleIDs)
 	case "secrets.master_key":
 		return c.Secrets.MasterKey.String()
 	case "secrets.tls_pfx_password":

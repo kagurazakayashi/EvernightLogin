@@ -42,10 +42,11 @@ type LoadOptions struct {
 //		},
 //	})
 type Overrides struct {
-	Server   ServerOverrides
-	Logging  LoggingOverrides
-	Database DatabaseOverrides
-	Secrets  SecretsOverrides
+	Server       ServerOverrides
+	Logging      LoggingOverrides
+	Database     DatabaseOverrides
+	Secrets      SecretsOverrides
+	Registration RegistrationOverrides
 }
 
 // ServerOverrides 是 ServerConfig 的显式覆盖项。
@@ -87,6 +88,14 @@ type DatabaseOverrides struct {
 type SecretsOverrides struct {
 	MasterKey      *Secret
 	TLSPFXPassword *Secret
+}
+
+// RegistrationOverrides 是 RegistrationConfig 的显式覆盖项。
+type RegistrationOverrides struct {
+	Enabled                  *bool
+	RequireReview            *bool
+	RequireEmailVerification *bool
+	DefaultRoleIDs           *[]string
 }
 
 // Load 按“内置默认值 < YAML < 环境变量 < 显式代码选项”的顺序合并并校验配置。
@@ -228,6 +237,10 @@ type configOverrides struct {
 	databasePath          *string
 	databaseWAL           *bool
 	databaseBusyTimeout   *int
+	registrationEnabled   *bool
+	registrationReview    *bool
+	registrationEmail     *bool
+	registrationRoles     *[]string
 	secretSource          *SecretSource
 	secretValue           *Secret
 	secretPFXSource       *SecretSource
@@ -303,6 +316,18 @@ func (ov *configOverrides) apply(cfg *Config) {
 	if ov.databaseBusyTimeout != nil {
 		cfg.Database.BusyTimeoutMS = *ov.databaseBusyTimeout
 	}
+	if ov.registrationEnabled != nil {
+		cfg.Registration.Enabled = *ov.registrationEnabled
+	}
+	if ov.registrationReview != nil {
+		cfg.Registration.RequireReview = *ov.registrationReview
+	}
+	if ov.registrationEmail != nil {
+		cfg.Registration.RequireEmailVerification = *ov.registrationEmail
+	}
+	if ov.registrationRoles != nil {
+		cfg.Registration.DefaultRoleIDs = append([]string(nil), (*ov.registrationRoles)...)
+	}
 }
 
 // readConfigFile 读取 YAML 配置文件，并限制文件大小与文件类型。
@@ -329,10 +354,11 @@ func readConfigFile(path string) ([]byte, error) {
 
 // yamlConfig 是 YAML 层的严格解码目标。字段全部使用指针以保留“未设置”信息。
 type yamlConfig struct {
-	Server   *yamlServer   `yaml:"server"`
-	Logging  *yamlLogging  `yaml:"logging"`
-	Database *yamlDatabase `yaml:"database"`
-	Secrets  *yamlSecrets  `yaml:"secrets"`
+	Server       *yamlServer       `yaml:"server"`
+	Logging      *yamlLogging      `yaml:"logging"`
+	Database     *yamlDatabase     `yaml:"database"`
+	Secrets      *yamlSecrets      `yaml:"secrets"`
+	Registration *yamlRegistration `yaml:"registration"`
 }
 
 type yamlServer struct {
@@ -377,6 +403,14 @@ type yamlSecrets struct {
 	TLSPFXPassword *yamlSecretSource `yaml:"tls_pfx_password"`
 }
 
+// yamlRegistration 是 YAML 中的自主注册策略段（步骤 33）。
+type yamlRegistration struct {
+	Enabled                  *bool     `yaml:"enabled"`
+	RequireReview            *bool     `yaml:"require_review"`
+	RequireEmailVerification *bool     `yaml:"require_email_verification"`
+	DefaultRoleIDs           *[]string `yaml:"default_role_ids"`
+}
+
 // yamlSecretFields 是允许出现的秘密字段名；每个字段的值只能是 env/file 来源映射。
 var yamlSecretFields = map[string]struct{}{
 	"master_key":       {},
@@ -395,7 +429,7 @@ type yamlLeafSpec struct {
 }
 
 var (
-	yamlRootKeys = []string{"server", "logging", "database", "secrets"}
+	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration"}
 
 	yamlSectionFields = map[string][]yamlLeafSpec{
 		"server": {
@@ -419,6 +453,11 @@ var (
 			{name: "wal", tag: "!!bool"},
 			{name: "busy_timeout_ms", tag: "!!int"},
 		},
+		"registration": {
+			{name: "enabled", tag: "!!bool"},
+			{name: "require_review", tag: "!!bool"},
+			{name: "require_email_verification", tag: "!!bool"},
+		},
 	}
 
 	// yamlSectionListFields 描述字符串列表字段；值是该列表元素允许的 YAML 标签。
@@ -430,6 +469,9 @@ var (
 			"tls_cert_files":      "!!str",
 			"tls_key_files":       "!!str",
 			"tls_client_ca_files": "!!str",
+		},
+		"registration": {
+			"default_role_ids": "!!str",
 		},
 	}
 
@@ -838,6 +880,12 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.databaseWAL = doc.Database.WAL
 		ov.databaseBusyTimeout = doc.Database.BusyTimeoutMS
 	}
+	if doc.Registration != nil {
+		ov.registrationEnabled = doc.Registration.Enabled
+		ov.registrationReview = doc.Registration.RequireReview
+		ov.registrationEmail = doc.Registration.RequireEmailVerification
+		ov.registrationRoles = doc.Registration.DefaultRoleIDs
+	}
 	if doc.Secrets != nil {
 		if doc.Secrets.MasterKey != nil {
 			source, sourceErr := convertYAMLSecretSource("secrets.master_key", doc.Secrets.MasterKey)
@@ -1028,6 +1076,38 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 			ov.databaseBusyTimeout = &number
 		}
 	}
+	if value, ok := lookup(envRegistrationEnabled); ok {
+		flag, err := parseEnvBool(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "registration.enabled", 0, err.Error()))
+		} else {
+			ov.registrationEnabled = &flag
+		}
+	}
+	if value, ok := lookup(envRegistrationReview); ok {
+		flag, err := parseEnvBool(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "registration.require_review", 0, err.Error()))
+		} else {
+			ov.registrationReview = &flag
+		}
+	}
+	if value, ok := lookup(envRegistrationEmail); ok {
+		flag, err := parseEnvBool(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "registration.require_email_verification", 0, err.Error()))
+		} else {
+			ov.registrationEmail = &flag
+		}
+	}
+	if value, ok := lookup(envRegistrationRoles); ok {
+		items, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "registration.default_role_ids", 0, err.Error()))
+		} else {
+			ov.registrationRoles = &items
+		}
+	}
 	if value, ok := lookup(envSecretsMasterKey); ok {
 		if value == "" {
 			errs = append(errs, configErr(ConfigErrorValue, "env", "secrets.master_key", 0,
@@ -1083,6 +1163,10 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 		databasePath:          options.Database.Path,
 		databaseWAL:           options.Database.WAL,
 		databaseBusyTimeout:   options.Database.BusyTimeoutMS,
+		registrationEnabled:   options.Registration.Enabled,
+		registrationReview:    options.Registration.RequireReview,
+		registrationEmail:     options.Registration.RequireEmailVerification,
+		registrationRoles:     options.Registration.DefaultRoleIDs,
 		secretValue:           options.Secrets.MasterKey,
 	}
 	errs := validateOverrides(&ov, "options")
@@ -1249,6 +1333,11 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 	}
 	if ov.databaseBusyTimeout != nil && (*ov.databaseBusyTimeout < 1 || *ov.databaseBusyTimeout > 600000) {
 		add(ConfigErrorRange, "database.busy_timeout_ms", "锁等待超时必须是 1～600000 毫秒")
+	}
+	if ov.registrationRoles != nil {
+		if problem := registrationDefaultRolesProblem(*ov.registrationRoles); problem != "" {
+			add(ConfigErrorValue, "registration.default_role_ids", problem)
+		}
 	}
 	if ov.secretValue != nil {
 		if !ov.secretValue.IsSet() {

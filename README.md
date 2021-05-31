@@ -73,6 +73,10 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 | database.path | LOGIN_DATABASE_PATH | 需重启 |
 | database.wal | LOGIN_DATABASE_WAL | 需重启 |
 | database.busy_timeout_ms | LOGIN_DATABASE_BUSY_TIMEOUT_MS | 需重启 |
+| registration.enabled | LOGIN_REGISTRATION_ENABLED | 需重启 |
+| registration.require_review | LOGIN_REGISTRATION_REQUIRE_REVIEW | 需重启 |
+| registration.require_email_verification | LOGIN_REGISTRATION_REQUIRE_EMAIL_VERIFICATION | 需重启 |
+| registration.default_role_ids | LOGIN_REGISTRATION_DEFAULT_ROLE_IDS | 需重启 |
 | secrets.master_key | LOGIN_SECRETS_MASTER_KEY | 需重启 |
 | secrets.tls_pfx_password | LOGIN_SECRETS_TLS_PFX_PASSWORD | 需重启 |
 
@@ -549,6 +553,18 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **可靠投递**：`DeliveryService` 以幂等键入队（`mail_deliveries.idempotency_key` 唯一约束，重复入队返回既有记录且不重复建任务），模板数据（验证码/一次性链接）经 `internal/secrets` 加密后以 BLOB 落库并绑定投递记录 ID，任务载荷只含记录 ID、不打印正文/秘密；状态为 queued/sending/succeeded/failed/cancelled，永久失败返回 `task.NonRetryable`，可重试失败按任务退避重试；`Retry` 只允许 failed 状态并需要授权（未配置授权器 fail-closed）；审计区分入队/入队失败/成功/失败/计划重试/受控重试。**通知失败不回滚已完成的安全操作**：投递是安全操作之后的独立任务，两者不共享事务。
 - **授权与可靠性边界（审计退修）**：入队/查询/重试都接受可信 `Caller`（`SystemCaller`/`LocalAdminCaller`/`UserCaller`）并可选配置 `Authorizer` 做记录级数据范围检查；未配置授权器时只有受信 system/local_admin 主体放行（普通用户 fail-closed），幂等键只允许同归属主体取回既有记录，禁止跨调用者用幂等键探测或取回他人收件人/状态。受控重试先 CAS `failed→queued` 成功后才入队，入队失败回写 `failed` + `MAIL_QUEUE_FAILED`（不留无主 queued），任务设置 `MutexKey=投递ID` 串行化同一投递；发送成功/失败/取消的终态写入使用剥离取消的 context，保证发送中途取消后不会停在 `sending`。返回给任务层的错误只保留稳定分类/代码，不回传 SMTP 回显（避免 `failure_reason` 出现收件人）。已知限制：主密钥轮换必须保留历史密钥（queued 记录在旧密钥退役后解密失败并按不可重试失败处理，fail-closed）；多实例投递互斥与 `sending` 残留的启动对账尚未实现；`checkURL` 允许 http 仅为本地测试，生产应只生成 https 链接。
 - **语义与边界**：外部邮件系统**不保证恰好一次送达**，本实现是"至少一次 + 幂等键去重"；任务重试可能产生重复邮件，业务不得把发送成功当作唯一性凭据。默认只有显式配置 SMTP 适配与测试收件地址才会真实发送；测试使用 `internal/testmail`，不向真实用户地址群发。
+
+## 自主注册与邮箱验证（步骤 33）
+
+新增内部注册域 `internal/registration` 与 SQLite 仓储 `internal/registration/sqlite`，迁移 0013 落地 `email_verification_tickets` 表；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不签发会话**，验收走内部 Go API 与真实 `internal/authn`/`internal/credential`/`internal/audit` 依赖。
+
+- **按配置开放**：根配置新增 `registration.enabled`（默认 false，默认拒绝）、`registration.require_review`、`registration.require_email_verification` 与 `registration.default_role_ids`，对应固定环境变量 `LOGIN_REGISTRATION_ENABLED` 等；关闭时注册返回 `AUTH_FAILED`，管理员创建账户走 `internal/account` 不受影响。
+- **字段白名单与输入校验**：`RegisterRequest` 只含用户名、密码、可选邮箱与基础资料；`ParseRegisterJSON` 用严格 JSON 解码拒绝 `is_root`、系统角色、应用成员、`email_verified`、`status` 等未知字段。用户名/昵称/语言/时区复用 `internal/account` 规范化与保留名规则，密码复用 `internal/authn` 的 Argon2id 与密码策略。
+- **邮箱可选**：无邮箱注册在未要求邮箱验证的配置下正常创建 active 账户并可密码登录；提供邮箱时创建未验证 `user_emails` 行并签发一次性验证入口。验证成功前 `verified_at_ms` 为 NULL，因此已验证邮箱登录/恢复能力不会启用，注册结果只表示"验证邮件是否交给发送方"，**不会宣称邮箱已验证**。
+- **一次性验证入口**：令牌使用 `internal/credential` 高熵令牌（用途 `email.verify`、目标用户 ID），只消费一次；迁移 0013 的票据把用户、待验证地址、凭证 ID 与有效期绑定。重发受冷却限制并覆盖票据：先提交新票据、成功后清理旧凭证，替换目标邮箱失败（例如被占用）时旧票据与旧凭证保持原样，**不会误废仍有效的旧链接**；旧链接最终以票据绑定的凭证 ID 不匹配而失效。替换待验证地址会删除旧未验证行、使旧入口失效，并保持 `email_normalized` 唯一性（并发同邮箱只有一个成功）。完成验证在审计事务内条件更新邮箱行并删除票据，条件不满足整体拒绝、不部分修改用户。
+- **防枚举与失败语义**：用户名或邮箱占用统一返回 `CONFLICT`，验证失败统一返回 `CHALLENGE_INVALID`，重发冷却返回 `RATE_LIMITED`；创建、验证入口签发与验证完成均与审计同事务，审计不可用 fail-closed。邮件发送失败只记录 `MAIL_DELIVERY_FAILED` 状态、不回滚账户或票据，可在冷却后重发；验证令牌不写入日志、审计或数据库明文。注意：注册成功与用户名/邮箱冲突在接口层仍是二值结果，HTTP 层暴露前必须让两者在响应形状、状态码与耗时上不可区分，并叠加 IP 限流/验证码/邮件频率限制（本步均未实现）。凭证消费发生在完成邮箱验证的审计事务之外：若邮箱行条件更新或审计失败，已消费的一次性令牌不会恢复，只能重新发送验证入口（fail-closed，不会误报已验证）。
+- **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
+- **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
 ## 测试用本地邮件服务器（额外步骤 extra01）
 

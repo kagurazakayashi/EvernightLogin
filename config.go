@@ -106,6 +106,9 @@ type Config struct {
 	Logging  LoggingConfig
 	Database DatabaseConfig
 	Secrets  SecretsConfig
+	// Registration 是自主注册策略配置（步骤 33）。默认关闭；管理员创建账户
+	// 不依赖该配置。
+	Registration RegistrationConfig
 }
 
 // ServerConfig 是独立服务与嵌入模式共用的监听配置。
@@ -237,6 +240,28 @@ type DatabaseConfig struct {
 	BusyTimeoutMS int
 }
 
+// RegistrationConfig 是自主注册与邮箱验证的策略配置（步骤 33）。它只承载策略，
+// 不包含密码、令牌或邮件凭据；注册是否真正可用还取决于宿主是否装配邮件发送与
+// 验证入口地址。修改后需要重启进程。
+type RegistrationConfig struct {
+	// Enabled 是自主注册总开关，默认 false（默认拒绝）。关闭时管理员通过
+	// internal/account 创建账户的能力不受影响。
+	Enabled bool
+	// RequireReview 为 true 时新注册账户以 pending 状态创建，需人工审核后才能
+	// 正常登录；审核执行由后续步骤实现。
+	RequireReview bool
+	// RequireEmailVerification 为 true 时注册必须提供邮箱并完成验证流程；false
+	// 时邮箱可选，没有邮件能力的部署仍可完成密码注册。
+	RequireEmailVerification bool
+	// DefaultRoleIDs 是通过可信策略分配给新注册账户的默认角色 ID 列表，最多
+	// MaxRegistrationDefaultRoles 个。存储层只会分配存在、已启用且作用域匹配的
+	// 角色，不会自动加入任何应用成员。
+	DefaultRoleIDs []string
+}
+
+// MaxRegistrationDefaultRoles 是默认角色策略允许的最大条数。
+const MaxRegistrationDefaultRoles = 20
+
 // SecretsConfig 保存从受保护来源解析出的秘密。秘密值不会出现在 YAML 中，
 // 只能来自环境变量、受保护文件或宿主显式选项。
 type SecretsConfig struct {
@@ -348,6 +373,10 @@ const (
 	envDatabasePath          = EnvVarPrefix + "DATABASE_PATH"
 	envDatabaseWAL           = EnvVarPrefix + "DATABASE_WAL"
 	envDatabaseBusyTimeout   = EnvVarPrefix + "DATABASE_BUSY_TIMEOUT_MS"
+	envRegistrationEnabled   = EnvVarPrefix + "REGISTRATION_ENABLED"
+	envRegistrationReview    = EnvVarPrefix + "REGISTRATION_REQUIRE_REVIEW"
+	envRegistrationEmail     = EnvVarPrefix + "REGISTRATION_REQUIRE_EMAIL_VERIFICATION"
+	envRegistrationRoles     = EnvVarPrefix + "REGISTRATION_DEFAULT_ROLE_IDS"
 	envSecretsMasterKey      = EnvVarPrefix + "SECRETS_MASTER_KEY"
 	envSecretsTLSPFXPassword = EnvVarPrefix + "SECRETS_TLS_PFX_PASSWORD"
 )
@@ -377,6 +406,10 @@ var configFields = []FieldInfo{
 	{Field: "database.path", Env: envDatabasePath, Class: ReloadRestartRequired},
 	{Field: "database.wal", Env: envDatabaseWAL, Class: ReloadRestartRequired},
 	{Field: "database.busy_timeout_ms", Env: envDatabaseBusyTimeout, Class: ReloadRestartRequired},
+	{Field: "registration.enabled", Env: envRegistrationEnabled, Class: ReloadRestartRequired},
+	{Field: "registration.require_review", Env: envRegistrationReview, Class: ReloadRestartRequired},
+	{Field: "registration.require_email_verification", Env: envRegistrationEmail, Class: ReloadRestartRequired},
+	{Field: "registration.default_role_ids", Env: envRegistrationRoles, Class: ReloadRestartRequired},
 	{Field: "secrets.master_key", Env: envSecretsMasterKey, Class: ReloadRestartRequired, Secret: true},
 	{Field: "secrets.tls_pfx_password", Env: envSecretsTLSPFXPassword, Class: ReloadRestartRequired, Secret: true},
 }
@@ -421,6 +454,12 @@ func Default() Config {
 			BusyTimeoutMS: 5000,
 		},
 		Secrets: SecretsConfig{},
+		Registration: RegistrationConfig{
+			Enabled:                  false,
+			RequireReview:            false,
+			RequireEmailVerification: false,
+			DefaultRoleIDs:           nil,
+		},
 	}
 }
 
@@ -931,6 +970,34 @@ func listenAddrIsLoopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// registrationDefaultRolesProblem 校验默认角色 ID 列表；返回空字符串表示合法。
+func registrationDefaultRolesProblem(roleIDs []string) string {
+	if len(roleIDs) > MaxRegistrationDefaultRoles {
+		return fmt.Sprintf("默认角色数量不能超过 %d 个", MaxRegistrationDefaultRoles)
+	}
+	seen := make(map[string]struct{}, len(roleIDs))
+	for _, raw := range roleIDs {
+		roleID := strings.TrimSpace(raw)
+		if roleID == "" || len(roleID) > 64 {
+			return "默认角色 ID 不能为空且不能超过 64 字节"
+		}
+		for index := 0; index < len(roleID); index++ {
+			character := roleID[index]
+			if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+				(character >= '0' && character <= '9') || character == '_' || character == '-' ||
+				character == '.' {
+				continue
+			}
+			return "默认角色 ID 只能包含字母、数字与 . _ -"
+		}
+		if _, exists := seen[roleID]; exists {
+			return "默认角色 ID 不能重复"
+		}
+		seen[roleID] = struct{}{}
+	}
+	return ""
+}
+
 // validateMerged 校验合并后的完整配置，是 Validate 与 Load 的共同入口。
 func validateMerged(c Config) ConfigErrors {
 	var errs ConfigErrors
@@ -983,6 +1050,9 @@ func validateMerged(c Config) ConfigErrors {
 	if c.Database.BusyTimeoutMS < 1 || c.Database.BusyTimeoutMS > 600000 {
 		errs = append(errs, configErr(ConfigErrorRange, "final", "database.busy_timeout_ms", 0,
 			"锁等待超时必须是 1～600000 毫秒"))
+	}
+	if problem := registrationDefaultRolesProblem(c.Registration.DefaultRoleIDs); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "registration.default_role_ids", 0, problem))
 	}
 
 	// 非法组合：公开地址使用明文 http 时，服务不得监听非回环接口（主地址或额外

@@ -29,10 +29,13 @@ func (k Kind) Valid() bool {
 	return false
 }
 
-// VerificationData 是邮箱验证模板数据。Code 只应出现在这封邮件中。
+// VerificationData 是邮箱验证模板数据。Code 或 VerifyURL 至少有一个非空：
+// Code 用于低熵验证码，VerifyURL 用于一次性验证入口链接。两者都只应出现在这封
+// 邮件中，不得写入日志或普通存储。
 type VerificationData struct {
 	DisplayName string
 	Code        string
+	VerifyURL   string
 	ExpiresIn   string
 	AppName     string
 }
@@ -80,8 +83,10 @@ var builtinTemplates = map[Kind]Template{
 	KindVerification: {
 		Subject: "{{.AppName}} 邮箱验证",
 		Body: "你好 {{.DisplayName}}：\n\n" +
-			"你的 {{.AppName}} 邮箱验证码是：\n\n{{.Code}}\n\n" +
-			"验证码 {{.ExpiresIn}} 内有效，仅可使用一次。不要把验证码告诉任何人。\n\n" +
+			"{{if .VerifyURL}}请打开以下一次性验证入口完成 {{.AppName}} 邮箱验证：\n\n{{.VerifyURL}}\n\n" +
+			"验证入口 {{.ExpiresIn}} 内有效，仅可使用一次。请勿转发给他人。\n\n" +
+			"{{else}}你的 {{.AppName}} 邮箱验证码是：\n\n{{.Code}}\n\n" +
+			"验证码 {{.ExpiresIn}} 内有效，仅可使用一次。不要把验证码告诉任何人。\n\n{{end}}" +
 			"如果这不是你的操作，请忽略本邮件并检查账户安全。\n",
 	},
 	KindPasswordReset: {
@@ -202,8 +207,13 @@ func templateData(request RenderRequest) (any, error) {
 		if err := checkInline("Code", data.Code, 64); err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(data.Code) == "" {
-			return nil, fmt.Errorf("%w: 验证码为空", ErrTemplateInvalid)
+		switch {
+		case strings.TrimSpace(data.VerifyURL) != "":
+			if err := checkURL("VerifyURL", data.VerifyURL); err != nil {
+				return nil, err
+			}
+		case strings.TrimSpace(data.Code) == "":
+			return nil, fmt.Errorf("%w: 验证码与验证入口不能同时为空", ErrTemplateInvalid)
 		}
 		if err := checkInline("ExpiresIn", data.ExpiresIn, 64); err != nil {
 			return nil, err
