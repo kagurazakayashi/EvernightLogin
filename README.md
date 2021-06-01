@@ -566,6 +566,16 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 受控邀请、接受邀请与注册审核（步骤 34）
+
+新增内部入驻域 `internal/onboarding` 与 SQLite 仓储 `internal/onboarding/sqlite`，迁移 0014 落地 `invitations`、`invitation_roles`、`invitation_acceptances`、`registration_reviews` 四张表；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不签发会话**，验收走内部 Go API 与真实 `internal/credential`/`internal/audit`/`internal/delegation` 依赖。
+
+- **邀请模型**：显式记录发起者、目标邮箱（规范化值）或目标用户（二选一）、适用应用、允许的默认角色、到期与使用次数；创建/取消/查询/分页列表均要求可信 `Caller`，用户身份只能读取/取消自己发起的邀请。邀请邮件通过 `internal/mailer` 可靠投递（一次性高熵令牌 + 接受入口），通知状态（pending/sent/failed + 稳定错误码）可查询；发送失败不回滚邀请。
+- **身份绑定与接受校验**：邮箱邀请要求接受账户拥有同一**已验证**邮箱，用户邀请要求接受者就是目标用户；先做无事务身份预检再消费令牌，错误身份不会白耗令牌。知道邀请 ID 不能认领已有用户。接受时按邀请者**当前**状态与权限重新校验：在同一审计事务内对“目标用户在该范围**既有有效权限** ∪ 邀请角色权限”统一调用 `delegation.Guard.CheckAssignment`，零角色邀请同样经过 Guard，因此不能借重新启用停用成员恢复其保留角色权限；邀请者失去权限、应用停用、邀请取消/过期/次数用尽都会拒绝。使用次数条件原子扣减（当前仅单次邀请，首次接受即置 accepted），`(invitation_id,user_id)` 主键拒绝重复接受；角色存在/启用/作用域在事务内校验，**已持有同一角色按幂等成功**（已有用户受邀不会因已持角色失败）；接受可创建新账户（字段白名单 + Argon2id + 目标邮箱绑定）或给已有账户加入应用成员并分配角色，失败整体回滚。
+- **注册审核**：`ListPendingReviews`/`GetReview`/`ApproveRegistration`/`RejectRegistration` 只处理 `users.status='pending'`；批准在同一审计事务内把账户改为 active，可选加入应用成员/分配角色，并对“目标既有权限 ∪ 新角色权限”调用 `delegation.Guard.CheckAssignment`（审核者为操作者）；拒绝改为 disabled 并记录理由；并发审批以条件状态更新保证只有一个成功，其余返回 `CONFLICT`。审核需要管理强认证：`ManagementAuthorizer` 未接线时普通用户一律拒绝（`REAUTH_REQUIRED`），只有受信 system/local_admin 通道可按既有边界执行；实现 `ScopedManagementAuthorizer` 可按应用/角色限定范围，未实现该扩展时普通用户不能通过审核授予 system 作用域角色；申请人不能批准自己。结果通知经 `internal/mailer` 发送并记录可查询的通知状态。
+- **通知与审计**：通知状态 `pending/sent/failed` 中 **sent 表示已成功交给可靠投递服务（入队成功）**，不代表外部邮件已送达；通知只发送到**已验证邮箱**（未验证地址不作为收件目标），发送失败不回滚邀请/审核主事务。审计动作区分 `invitation.create`/`invitation.cancel`/`invitation.accept`（含目标用户 ID）/`registration.approve`/`registration.reject`，失败审计记录稳定错误码，令牌与邮件正文不入库/日志。
+- **已知限制**：邀请令牌是一次性凭证，当前一次邀请只允许一次接受（多次使用需按接收者分别签发，留后续步骤；服务对 `MaxUses>1` 明确拒绝）；令牌在**授权事务之前**消费，若接受在事务内因邀请者撤权、应用停用、邀请取消/过期等失败，令牌不会恢复，邀请者需重新签发（数据库侧账户/成员/角色/接受记录会整体回滚，不会部分修改；先消费可防止重放与暴力尝试）；过期邀请不会主动落库为 expired（接受时按时间拒绝，清理/状态更新任务未实现）；邀请创建授权由宿主注入 `InviteAuthorizer`（未接线时普通用户 fail-closed）；邀请/审核的 HTTP 路由、启动装配、过期记录清理任务、邀请邮件重发、审核通知重发与多级审批引擎尚未实现。
+
 ## 测试用本地邮件服务器（额外步骤 extra01）
 
 `internal/testmail` 是**仅供测试**的本地 SMTP 接收服务器，`tools/testmaild` 是只负责装配与运行它的独立工具。它把收到的邮件保存在内存中供测试断言，**不投递、不中继、不连接任何外部邮件服务**，默认只监听 `127.0.0.1` 的随机端口；两个包都不会被 `cmd/login-server` 装配，生产邮件实现必须另行编写。本包不是产品能力，也不替代步骤 32 已实现的通用邮件投递基础设施与步骤 39 的通知业务逻辑。
