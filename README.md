@@ -566,6 +566,17 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 用户自助资料修改与管理员修改（步骤 35）
+
+新增内部资料域 `internal/profile` 与 SQLite 仓储 `internal/profile/sqlite`，迁移 0015 为 `users` 追加 `phone`、`phone_verified_at_ms`、`username_changed_at_ms`；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不签发会话**，验收走内部 Go API。
+
+- **字段白名单与版本冲突**：只允许昵称、简介、语言、时区与可选电话；`ParseProfileJSON` 严格拒绝 `is_root`、`password`、`email_verified`、`mfa`、`roles`、`status`、`username` 等额外字段。更新使用 `expected row_version` 条件 UPDATE，并发冲突返回 `CONFLICT`，不部分修改；成功与审计同事务。
+- **自助与管理员范围**：先判权后读目标，无权调用者对存在/不存在目标统一 `ACCESS_DENIED`；`UpdateSelf` 只允许本人（普通用户 `Caller`）；`UpdateUser` 默认只允许本人与受信 system/local_admin，普通用户修改他人 fail-closed；宿主可通过 `Authorizer` 注入按权限/范围的管理授权（不接强认证前不默认放行）。
+- **受控更名**：复用 `account.NormalizeUsernameWithReserved` 的 NFKC/大小写折叠规则，稳定用户 ID 不变；`Policy` 采用显式三态逐字段合并安全默认（冷却默认 24 小时、`RequireReauth` 默认 true，只配置其中一个字段不会静默关闭另一个保护），未注入 `ReauthVerifier` 时普通用户 fail-closed（受信 system/local_admin 通道不受回调限制）；保留名默认沿用 `account` 清单，`Policy.ReservedNames` 可追加自定义保留名、`DisableReservedNames` 为显式受控关闭；root 目标更名被拒绝；更名受唯一性与 row_version 条件约束，并发 1 成功 1 `CONFLICT`；审计记录新旧用户名、操作者与稳定用户 ID。
+- **电话**：`NormalizePhone` 支持受支持国家/地区区号（默认 CN，可配置 ISO 3166-1 alpha-2）与 `+`/`00` 国际前缀，统一保存 E.164；`phone_verified_at_ms` 本步从不写入，`PhoneVerified` 恒为 false，电话**不参与登录、找回或任何身份验证**；改电话时同事务清空该验证列，审计只记录 `[REDACTED]`。
+- **审计与隔离**：简介允许换行/1000 码点，但审计只记录 `[REDACTED]` 长度摘要，避免控制字符导致误映射为存储故障；审计事件无效映射 INTERNAL_ERROR 而非 DB_UNAVAILABLE。全局资料只写 `users` 表，不写 `app_memberships.profile_json`；应用专属昵称由 `internal/app` 维护，两者互不覆盖。
+- **已知限制**：`Policy` 目前通过 `profile.Options` 注入（尚未新增根配置 YAML/环境变量节，启动装配留给后续）；更名**不递增 `security_version`**（决策：会话绑定稳定用户 ID，更名不是凭据变更，旧会话继续有效属预期；如未来要求更名强制下线需单独策略）；HTTP 路由、个人资料页面、电话验证流程与 `cmd/login-server` 装配未实现。
+
 ## 受控邀请、接受邀请与注册审核（步骤 34）
 
 新增内部入驻域 `internal/onboarding` 与 SQLite 仓储 `internal/onboarding/sqlite`，迁移 0014 落地 `invitations`、`invitation_roles`、`invitation_acceptances`、`registration_reviews` 四张表；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不签发会话**，验收走内部 Go API 与真实 `internal/credential`/`internal/audit`/`internal/delegation` 依赖。

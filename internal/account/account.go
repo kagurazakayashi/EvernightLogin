@@ -285,14 +285,22 @@ func normalizeUsernameKey(display string) string {
 	return norm.NFC.String(folded)
 }
 
-// NormalizeUsername 校验并规范化用户名，返回显示值与唯一性规范化值。
-//
-// 规则（稳定契约）：
-//   - 先做 NFKC 兼容规范化，再去掉首尾 Unicode 空白；长度 3～32 个码点；
-//   - 只允许 Unicode 字母、数字与 `.` `_` `-`，首尾必须是字母或数字；
-//   - 拒绝内部空白、控制字符、格式字符（含零宽/双向控制）与其他符号/表情；
-//   - 规范化值 = NFKC + Unicode 大小写折叠 + NFC；保留名按规范化值比较。
+// NormalizeUsername 校验并规范化用户名，保留名使用本包默认清单。
 func NormalizeUsername(raw string) (display string, normalized string, err error) {
+	return NormalizeUsernameWithReserved(raw, nil)
+}
+
+// NormalizeUsernameWithReserved 是 NormalizeUsername 的可配置保留名版本：
+// reserved 为 nil 时沿用本包默认保留名；非 nil 时按给定规范化保留名集合校验
+// （空切片表示显式不检查保留名，调用方必须确认这是受控配置）。
+func NormalizeUsernameWithReserved(raw string, reserved []string) (display string, normalized string, err error) {
+	reservedSet := reservedUsernames
+	if reserved != nil {
+		reservedSet = make(map[string]struct{}, len(reserved))
+		for _, value := range reserved {
+			reservedSet[normalizeUsernameKey(value)] = struct{}{}
+		}
+	}
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", "", fmt.Errorf("%w: 用户名不能为空", ErrInvalidRequest)
@@ -325,7 +333,7 @@ func NormalizeUsername(raw string) (display string, normalized string, err error
 		}
 	}
 	normalized = normalizeUsernameKey(canonical)
-	if _, reserved := reservedUsernames[normalized]; reserved {
+	if _, reserved := reservedSet[normalized]; reserved {
 		return "", "", fmt.Errorf("%w: 用户名为保留名称", ErrInvalidRequest)
 	}
 	return canonical, normalized, nil

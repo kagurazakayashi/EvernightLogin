@@ -291,6 +291,25 @@
 // 不装配到 cmd/login-server（registration.* 配置当前仅被 Config/Load 校验，尚无启动
 // 装配消费者）。
 //
+// internal/profile 已实现用户自助资料修改与获授权管理员修改（步骤 35）：迁移 0015 为
+// users 追加 phone/phone_verified_at_ms/username_changed_at_ms；字段白名单只含昵称/
+// 简介/语言/时区/可选电话，ParseProfileJSON 严格拒绝 is_root/password/email_verified/
+// mfa/roles/status/username 等额外字段；更新用 expected row_version 条件写入，并发冲突
+// 返回 CONFLICT 且不部分修改；先判权后读目标，无权调用者对存在/不存在目标统一
+// ACCESS_DENIED；本人可改本人非敏感资料，管理员修改他人必须注入 Authorizer
+// （未接线时普通用户 fail-closed，system/local_admin 受信通道除外）；受控更名复用
+// account.NormalizeUsernameWithReserved、稳定 ID 不变，Policy 以显式三态逐字段合并
+// 默认值（冷却默认 24 小时、RequireReauth 默认 true，只配一个字段不会关闭另一个保护；
+// 保留名默认沿用 account 清单，ReservedNames 可追加、DisableReservedNames 为显式关闭）
+// 未注入 ReauthVerifier 时用户更名拒绝；root 目标更名被拒绝；更名唯一性与版本冲突明确
+// 返回；简介允许换行/1000 码点但审计只记 [REDACTED] 长度摘要，审计事件无效映射为
+// INTERNAL_ERROR；电话统一 E.164、phone_verified_at_ms 从不写入且改电话时清空，
+// PhoneVerified 恒 false，电话不参与登录/找回/身份验证；全局资料只写 users，不覆盖
+// app_memberships.profile_json。决策：更名不递增 security_version（会话绑定稳定用户 ID，
+// 更名不是凭据变更，旧会话继续有效属预期；如需更名强制下线应另立策略）。已知限制：
+// Policy 目前经 profile.Options 注入，尚未新增根配置节与启动装配；HTTP 路由、资料页面、
+// 电话验证流程未实现；不签发会话。
+//
 // internal/onboarding 已实现受控邀请、接受邀请与注册审核（步骤 34）：迁移 0014 落地
 // invitations/invitation_roles/invitation_acceptances/registration_reviews；邀请明确
 // 发起者、目标邮箱或目标用户、适用应用、允许角色、到期与使用次数，通知经 internal/mailer
