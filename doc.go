@@ -291,6 +291,20 @@
 // 不装配到 cmd/login-server（registration.* 配置当前仅被 Config/Load 校验，尚无启动
 // 装配消费者）。
 //
+// internal/emailchange 已实现已验证邮箱的受控变更（步骤 36）：迁移 0016 落地
+// email_change_requests（每用户至多一条 pending 部分唯一索引）；申请只允许本人发起且
+// 必须通过宿主注入的 ReauthVerifier（未接线/失败一律 REAUTH_REQUIRED，不能用新地址自证），
+// 绑定用户、旧已验证邮箱（无旧邮箱=首次添加）与规范化新邮箱，验证成功前旧邮箱行与验证
+// 状态保持不变；新申请在同一审计事务内取消旧 pending 申请；一次性高熵令牌（用途
+// email.change.verify、目标申请 ID）发送到新地址，Verify 消费令牌后在审计事务内校验
+// pending/未过期/旧邮箱版本/新邮箱唯一性，通过后删除旧已验证行、写入新已验证行、标记
+// completed 并失效其他请求，失败整体回滚；重复点击/过期/取消/占用分别明确返回。切换
+// 成功向旧已验证邮箱发送不含令牌/链接的安全告知（投递失败不回滚切换，状态可追踪）；
+// 验证邮件失败仅记录状态。已知限制：HTTP 路由/启动装配、通知与验证重发、过期申请清理
+// 未实现；令牌在审计事务前消费，事务失败会为同一 pending 申请补偿签发新令牌（通过
+// VerifyResult 返回，宿主需重投递且不得落日志）；禁用/非 active 账户、旧邮箱版本变化、
+// 新邮箱被占用均拒绝切换；不解除 MFA、不签发会话。
+//
 // internal/profile 已实现用户自助资料修改与获授权管理员修改（步骤 35）：迁移 0015 为
 // users 追加 phone/phone_verified_at_ms/username_changed_at_ms；字段白名单只含昵称/
 // 简介/语言/时区/可选电话，ParseProfileJSON 严格拒绝 is_root/password/email_verified/

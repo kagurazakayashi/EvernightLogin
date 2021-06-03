@@ -566,6 +566,16 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 已验证邮箱变更（申请、验证新地址与切换，步骤 36）
+
+新增内部邮箱变更域 `internal/emailchange` 与 SQLite 仓储 `internal/emailchange/sqlite`，迁移 0016 落地 `email_change_requests` 表（每用户至多一条 pending 部分唯一索引）；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不签发会话**，验收走内部 Go API。
+
+- **申请与身份验证**：`RequestChange` 只允许已认证用户本人发起，并必须通过宿主注入的 `ReauthVerifier`（近期身份验证）；未接线或验证失败一律返回 `REAUTH_REQUIRED`，不接受“新邮箱自证”接管。申请绑定用户、旧已验证邮箱（无旧邮箱时为空 = 首次添加流程）与规范化新邮箱；新地址验证成功前旧 `user_emails` 行与 `verified_at_ms` 保持不变。新申请会在同一审计事务内取消旧 pending 申请（旧令牌即使仍活动也无法切换）。新邮箱已占用时自助接口返回通用请求错误（不在 HTTP 前暴露他人邮箱是否存在；HTTP 接线前仍需统一响应形状并叠加限流）。
+- **验证与切换**：一次性高熵令牌（用途 `email.change.verify`、目标为申请 ID）通过邮件发送到**新地址**；`Verify` 先消费令牌，再在审计事务内校验账户状态（`active`/`pending`，禁用账户拒绝）、pending/未过期/旧邮箱版本仍匹配/新邮箱未被其他用户占用，通过后删除旧已验证行（并清理同用户同地址未验证行）、写入新已验证行并标记 completed；任一失败整体回滚。**令牌补偿**：事务失败时服务在同一 pending 申请上重新签发凭证并把新凭证 ID/令牌/入口地址返回给本次调用方（宿主应立即重投递，且不得写入日志/审计/库），避免用户白烧链接。重复点击、过期、取消、新邮箱被占用分别返回统一失效/`CHALLENGE_INVALID`/`CONFLICT`。
+- **旧邮箱告知**：切换成功后按策略向旧已验证邮箱发送安全告知（`internal/mailer` 安全告知模板，只含事件/时间/支持入口，不含令牌或校验链接）；投递失败不回滚已完成切换，只记录可查询的 `notify_state`/稳定错误码。验证邮件发送失败同样只记录 `verify_state=failed` 与错误码，申请仍可重发/取消。
+- **边界**：首次添加（用户无已验证邮箱）同样要求近期身份验证；无可信身份时拒绝普通自助修改并留给恢复流程；本步不解除/绕过 MFA，不提供管理员改他人邮箱的通道。审计目标使用稳定用户 ID，邮箱只记录脱敏值，令牌不入库/日志。
+- **已知限制**：HTTP 路由、页面、`cmd/login-server` 装配未实现；通知与验证邮件重发/过期申请清理任务未实现；验证令牌在审计事务之前消费，事务失败时返回补偿令牌（旧链接已失效，需宿主重投递）；事务切换内已检查账户状态与旧邮箱版本，但更名/邮箱变更不会自动撤销既有会话（本步未递增 `security_version`）；旧邮箱告知通过可靠投递入队，`sent` 表示入队成功而非外部送达；未做 race/非 Windows/真实外发。
+
 ## 用户自助资料修改与管理员修改（步骤 35）
 
 新增内部资料域 `internal/profile` 与 SQLite 仓储 `internal/profile/sqlite`，迁移 0015 为 `users` 追加 `phone`、`phone_verified_at_ms`、`username_changed_at_ms`；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不签发会话**，验收走内部 Go API。
