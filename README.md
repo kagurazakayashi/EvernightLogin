@@ -566,6 +566,19 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 头像上传、受控存储与网络头像处理（步骤 37）
+
+新增内部头像域 `internal/avatar` 与 SQLite 仓储 `internal/avatar/sqlite`，迁移 0017 落地 `avatars` 表（每用户一个头像、受控存储相对键唯一、内容摘要）；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不做通用文件管理**，验收走内部 Go API，展示时由宿主用 `Content.SetResponseHeaders` 写响应头。
+
+- **上传校验与重编码**：单次原始字节上限 2 MiB、单边 8～1024 像素、总像素上限 1024×1024；用 `image.DecodeConfig` 先读真实尺寸再解码，避免超小字节超大尺寸的解压膨胀；只接受 PNG/JPEG/GIF，**SVG 等主动内容默认拒绝**（声明为 `image/svg+xml` 直接拒绝，SVG 字节伪装成图片也会在解码阶段失败）；声明类型必须与真实字节一致；保存的内容是重编码结果（PNG 保持 PNG、JPEG 质量 90 重编码、GIF 只取首帧转静态 PNG），原始字节、EXIF/文本块与动画扩展块不会落盘。
+- **受控存储**：目录由宿主显式指定并在构造时校验（拒绝符号链接/普通文件路径），文件名与 `ab/32位十六进制.png` 存储键全部由服务端 128 位随机数生成，`O_EXCL` 创建不覆盖；读取前校验键格式、路径未逃逸目录、文件大小与 SHA-256 摘要，文件被替换/篡改时 fail-closed；不向调用者返回存储键或本机路径。
+- **引用更新与失败补偿**：新文件先写入，再在审计事务内条件更新 `users.avatar_ref`、替换 `avatars` 行（行版本冲突返回 `CONFLICT`）；数据库/审计失败会补偿删除刚写入的新文件，旧引用保持不变；事务提交后才删除旧文件，旧文件删除失败不影响已成立的替换，由 `CollectGarbage` 只清理“目录内合法存储键、数据库不再引用且修改时间早于安全窗口（默认 10 分钟，`Options.GCSafetyWindow` 可调，允许范围 30 秒～24 小时）”的文件（不触碰其他文件）。安全窗口避免与新文件落盘、数据库引用事务尚未提交的窗口竞态：在途新文件不会被误删，窗口过后仍未被引用才视为孤儿。
+- **网络头像（受控抓取）**：默认仅允许 https 默认端口、无 URL 凭证、主机名可白名单；DNS 解析结果的每个地址都会校验，**拒绝环回/私有/链路本地/CGNAT/组播/保留与文档网段**，并直接连接校验过的 IP 避免 DNS 重绑定；每次重定向重新校验且限制次数（默认 3），总时限（默认 10 秒）与响应字节上限受控，关闭自动解压防止压缩炸弹；抓取到的字节走与上传完全相同的重编码流程。默认生产策略拒绝本地/明文目标；测试使用本包明确命名的 `TestOnlyAllowLocalAddresses` 开关访问本地 httptest 服务，生产/预生产不得启用。
+- **授权与审计**：默认只允许本人与受信 system/local_admin 读写；跨用户展示必须先由宿主注入 `Authorizer`（未接线 fail-closed），先判权后读目标避免泄露存在性；上传/替换/清除/抓取都在安全审计中记录稳定用户 ID、头像 ID、媒体类型/大小/尺寸/来源类型（网络只记录已校验主机名，不记录完整 URL/查询串/令牌），失败审计记录稳定错误码。
+- **错误码**：只复用根包已登记错误码（不新增）：参数/图片/远端内容问题 `REQ_INVALID`，非允许网络目标 `RESOURCE_FORBIDDEN`，越权 `ACCESS_DENIED`，版本冲突 `CONFLICT`，记录/文件存储不可用 `DB_UNAVAILABLE`（内部原因码区分），审计不可用 `AUDIT_WRITE_FAILED`。
+- **已知限制**：HTTP 路由、页面、`cmd/login-server` 装配与 `users.avatar_ref` 外键约束未实现；`Policy`/`Network`/`GCSafetyWindow` 通过 Go `Options` 注入（未新增根配置 YAML/环境变量节）；头像更新会使 `users.row_version` 递增，客户端需重新读取；EXIF 方向不应用、不做裁剪/缩放；GIF 一律转为静态 PNG；文件存储不可用复用 `DB_UNAVAILABLE` 对外码；GC 安全窗口按单实例受控目录设计（多实例写入由窗口兜底，严格跨实例互斥未实现）；未做 race/非 Windows/真实外网抓取验证。
+- **需在 HTTP/装配阶段收口的已知限制**（本步记录、不修复）：`NetworkPolicy.TestOnlyAllowLocalAddresses` 是**导出的生产配置字段**，目前仅靠 GoDoc 约束不得启用，HTTP/装配接线前应改为构造校验、独立测试构建标签或等价隔离，防止生产误启用；默认授权口径（未注入 `Authorizer`）只校验身份 ID，**不检查账户状态**，禁用/待审核用户若宿主仍传递 `Caller` 仍可修改自己头像，HTTP/装配接线时必须由宿主的会话/状态校验或注入的 `Authorizer` fail-closed 补齐。
+
 ## 已验证邮箱变更（申请、验证新地址与切换，步骤 36）
 
 新增内部邮箱变更域 `internal/emailchange` 与 SQLite 仓储 `internal/emailchange/sqlite`，迁移 0016 落地 `email_change_requests` 表（每用户至多一条 pending 部分唯一索引）；本步**不暴露 HTTP 路由、不接 `cmd/login-server` 装配、不签发会话**，验收走内部 Go API。
