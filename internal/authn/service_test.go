@@ -204,7 +204,7 @@ func newTestEnv(t *testing.T) *testEnv {
 // 等场景，不影响已构造的主服务。
 func (e *testEnv) newService(mutate func(*authn.Options)) *authn.Service {
 	e.t.Helper()
-	options := authn.Options{
+	options := authn.Options{AllowLegacyWithoutSensitive: true,
 		Store:              e.store,
 		Audit:              e.recorder,
 		RootInitialization: e.bootstrapDB,
@@ -1019,13 +1019,13 @@ func TestRateLimitDimensions(t *testing.T) {
 func TestNewOptionValidation(t *testing.T) {
 	env := newTestEnv(t)
 	valid := func() authn.Options {
-		return authn.Options{
+		return authn.Options{AllowLegacyWithoutSensitive: true,
 			Store:              env.store,
 			Audit:              env.recorder,
 			RootInitialization: env.bootstrapDB,
 		}
 	}
-	if _, err := authn.New(authn.Options{}); !errors.Is(err, authn.ErrOptionsInvalid) {
+	if _, err := authn.New(authn.Options{AllowLegacyWithoutSensitive: true}); !errors.Is(err, authn.ErrOptionsInvalid) {
 		t.Fatalf("空选项错误 = %v，期望 ErrOptionsInvalid", err)
 	}
 	badStore := valid()

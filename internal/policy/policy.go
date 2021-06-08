@@ -256,6 +256,10 @@ type Decision struct {
 	PermissionKey string
 	RootOnly      bool
 	AuditRequired bool
+	// RequiredStrength 与 MaxAuthAgeSeconds 是评估时使用的策略要求值，供再次认证
+	// 执行器决定挑战强度与新鲜度；它们不是新的可配置字段。
+	RequiredStrength  Strength
+	MaxAuthAgeSeconds int64
 	// ReasonCode 是内部诊断原因码（不直接作为公开错误码）。
 	ReasonCode string
 }

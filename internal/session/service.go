@@ -21,6 +21,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 )
 
@@ -83,6 +84,13 @@ type Options struct {
 	// Authorizer 判定管理员能否在给定范围强制下线；nil 时管理强制下线一律拒绝
 	// （fail-closed）。用户本人退出自己的会话不依赖它。
 	Authorizer ScopeAuthorizer
+	// Sensitive 是敏感操作收敛入口（步骤 39）。默认 nil 时管理访问由既有强认证
+	// 闸门 fail-closed（MFA 未实现前始终拒绝）；显式 AllowLegacyWithoutSensitive
+	// 才允许仅靠旧闸门。接线后管理访问额外经敏感策略判定，要求强认证而未实现时
+	// 继续拒绝，不放宽。
+	Sensitive SensitiveRunner
+	// AllowLegacyWithoutSensitive 显式允许未接线敏感策略时仅使用旧强认证闸门。
+	AllowLegacyWithoutSensitive bool
 	// CookieName 是浏览器会话 Cookie 名；空使用 DefaultCookieName。CSRF 中间件
 	// 必须使用同一名字，否则无法识别 Cookie 会话请求。
 	CookieName string
@@ -109,6 +117,8 @@ type Service struct {
 	maxActive       int
 	devicePolicy    DevicePolicy
 	authorizer      ScopeAuthorizer
+	sensitive       SensitiveRunner
+	allowLegacy     bool
 	cookieName      string
 	cookiePolicy    CookiePolicy
 	logger          *slog.Logger
@@ -211,6 +221,8 @@ func New(store Store, options Options) (*Service, error) {
 		maxActive:       options.MaxActiveSessions,
 		devicePolicy:    devicePolicy,
 		authorizer:      options.Authorizer,
+		sensitive:       options.Sensitive,
+		allowLegacy:     options.AllowLegacyWithoutSensitive,
 		cookieName:      cookieName,
 		cookiePolicy:    cookiePolicy,
 		logger:          logger,
@@ -902,7 +914,7 @@ func (s *Service) RevokeAllOwnSessions(ctx context.Context, secret string, keepC
 // 审计动作固定为 session.admin_revoke 并记录真实操作者（管理员用户）；审计不可用
 // 时整体回滚拒绝。本方法不宣称已撤销 OAuth 令牌或第三方业务会话，只联动身份
 // 服务的当前会话。
-func (s *Service) AdminRevoke(ctx context.Context, adminSecret string, request AdminRevokeRequest) (AdminRevokeResult, error) {
+func (s *Service) AdminRevoke(ctx context.Context, adminSecret string, request AdminRevokeRequest) (result AdminRevokeResult, returnErr error) {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return AdminRevokeResult{}, err
@@ -934,6 +946,41 @@ func (s *Service) AdminRevoke(ctx context.Context, adminSecret string, request A
 	// 强认证步骤接入后才会放行。先过闸门再做任何目标读取，避免存在性探测。
 	if !admin.CanAccessManagement() {
 		return AdminRevokeResult{}, s.denyAdminRevoke(ctx, admin, scopeAppID, targetUserID, targetSessionID, request.RequestID, "strong_auth_required")
+	}
+	if s.sensitive == nil && !s.allowLegacy {
+		// 未装配敏感策略时默认拒绝管理操作，不静默跳过步骤 38 策略。
+		return AdminRevokeResult{}, s.denyAdminRevoke(ctx, admin, scopeAppID, targetUserID, targetSessionID, request.RequestID, "sensitive_guard_missing")
+	}
+	var sensitiveResult reauth.Result
+	if s.sensitive != nil {
+		// 管理访问的敏感策略要求强认证；MFA 未实现时策略层同样 fail-closed，
+		// 不因接线而放宽既有强认证要求。
+		guardCaller, callerErr := reauth.CallerFromActor(audit.Actor{Type: audit.ActorUser, ID: admin.UserID})
+		if callerErr != nil {
+			return AdminRevokeResult{}, s.denyAdminRevoke(ctx, admin, scopeAppID, targetUserID, targetSessionID, request.RequestID, "sensitive_guard_denied")
+		}
+		targetType, targetID := "user", targetUserID
+		if targetSessionID != "" {
+			targetType, targetID = "session", targetSessionID
+		}
+		guarded, guardErr := s.sensitive.Authorize(ctx, guardCaller, reauth.Request{
+			ScopeID: "system", OperationID: "session.management.access",
+			TargetType: targetType, TargetID: targetID,
+			Params:      map[string]string{"scope_app_id": scopeAppID},
+			Description: "管理强制下线", RequestID: request.RequestID,
+		})
+		if guardErr != nil {
+			return AdminRevokeResult{}, s.denyAdminRevoke(ctx, admin, scopeAppID, targetUserID, targetSessionID, request.RequestID, "sensitive_guard_denied")
+		}
+		sensitiveResult = guarded
+		defer func() {
+			if returnErr == nil && s.sensitive != nil {
+				// 告知失败只记录日志，不回滚已经完成的强制下线。
+				if notifyErr := s.sensitive.NotifyOutcome(ctx, sensitiveResult, reauth.OutcomeSuccess); notifyErr != nil {
+					s.logger.Warn("管理强制下线安全告知未完成", "error", notifyErr)
+				}
+			}
+		}()
 	}
 	if s.authorizer == nil {
 		// 没有授权实现时 fail-closed：绝不把“未接线”当成管理员已获授权。

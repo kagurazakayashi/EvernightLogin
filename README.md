@@ -566,11 +566,25 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 再次认证、认证强度与敏感操作安全告知（步骤 39）
+
+新增内部再次认证包 `internal/reauth` 与 SQLite 仓储 `internal/reauth/sqlite`，迁移 0019 落地 `reauth_challenges`、`reauth_approvals`、`security_notifications`；把步骤 38 的敏感操作目录接成「执行前校验 + 执行后告知」闭环。本步**不实现 MFA/Passkey、不做页面、不暴露 HTTP 路由**，验收走可信内部 Go API 与真实本地依赖。
+
+- **执行前收敛入口**：`OperationRunner.Authorize`（`*Service`）按当前作用域有效策略评估近期认证事实（验证时间、实际强度、是否完整认证、是否已确认）；不满足时只有**绑定调用者 + 作用域 + 稳定操作 ID + 目标 + 服务端计算的参数摘要**的短时一次性批准才能继续。批准令牌只存 SHA-256 摘要、明文只返回一次，消费是审计事务内条件更新：换对象、换参数、重复使用、过期一律拒绝。
+- **挑战与批准**：`BeginChallenge` 为需要再次认证的操作创建有界尝试次数的挑战；`VerifyChallenge` 通过注入的 `PasswordVerifier` 真实验证密码（生产适配 `authn.ReauthPasswordVerifier` 复用正式密码校验、失败限流与审计），成功后产生一次性批准。挑战不是批准；密码失败递增尝试次数并写失败审计。
+- **强度与完整性**：只有真实完成且可验证的方式计入，不同方法不机械相加；当前只有密码方式可用（MFA/Passkey 未实现），要求 `strong` 的操作在挑战与执行前都 fail-closed 为 `MFA_REQUIRED`，不降级为密码；高权限（root 专属）操作还要求完整认证（无待完成第二因素/改密步骤），管理强认证未满足时继续拒绝。
+- **执行后告知**：策略要求告知时向**已验证邮箱**渲染 `internal/mailer` 安全告知模板并发送；无已验证邮箱、未配置发送器、投递失败、失败告知限频分别记录 `state`/原因码，**不回滚已经成功的业务变更**，也不把通知当认证。失败高风险告知按用户+操作在窗口内限频（能力与测试在 `internal/reauth`，但**业务模块的失败路径尚未调用**，仅成功路径已接线，见已知限制）。测试使用 `internal/testmail` 本地捕获器，不真实外发。
+- **策略变化即时生效**：每次执行前实时读取步骤 38 有效策略，root 修改覆盖值（例如收紧认证新鲜度）后下一次判定立即按新值执行；恢复默认同样生效。
+- **接入范围（已接线）**：`internal/profile` 受控更名（`profile.username.change`）；`internal/emailchange` 申请变更（`email.change.request`）与令牌确认切换（`email.change.verify`，令牌持有者是操作主体，成功后在目录策略要求时发送告知）；`internal/role` 用户/组赋角色（`permission.role.assign`）、组合/移除权限（`role.permission.change`，绑定增/删方向+权限 ID）、启用/停用角色（`role.state.change`）；`internal/group` 批量加/移除成员（`group.member.change`，绑定方向+规范化成员集合摘要）；`internal/session` 管理强制下线（`session.management.access`，仍先过既有 `CanAccessManagement` 强认证闸门）；`internal/authn.SetPassword` 设置/修改密码（用户自助 `password.change`、管理/系统通道 `password.admin_reset`）。所有绑定参数由服务端从业务字段计算（目标/范围/方向/集合/关键参数），不接受客户端自述摘要。执行前判定失败一律 fail-closed，成功路径调用 `NotifyOutcome`。既有 `delegation.Guard`、`ReauthVerifier`、强认证闸门保留且不被替代。`internal/authn` 另提供生产 `ReauthPasswordVerifier`（真实 Argon2id 密码校验/限流/审计，返回已完成与完整认证标记）作为再次认证唯一可信密码来源；密码找回/改密流程（步骤 45）本步不实现。
+- **fail-closed 与过渡开关**：敏感操作的 `Options.Sensitive` 默认未注入时**直接拒绝**（不静默跳过步骤 38 策略）；只有显式 `Options.AllowLegacyWithoutSensitive`（默认 false，仅供旧装配/测试过渡）才回退既有保守闸门。生产装配必须注入 `OperationRunner`；未装配不会放行。
+- **错误码**：只复用既有 46 码：参数 `REQ_INVALID`，密码失败 `AUTH_FAILED`，批准无效/过期/重放 `TOKEN_INVALID`，越权 `ACCESS_DENIED`，再次验证/确认 `REAUTH_REQUIRED`，未实现强认证 `MFA_REQUIRED`，挑战无效/过期/尝试用尽 `CHALLENGE_INVALID`，限流 `RATE_LIMITED`，策略不可用 `AUTHZ_UNAVAILABLE`，存储 `DB_UNAVAILABLE`，审计 `AUDIT_WRITE_FAILED`，告知失败 `MAIL_DELIVERY_FAILED`。
+- **已知限制**：MFA/Passkey、HTTP 路由/页面/CLI 装配未实现；请求/批准/告知通过 Go API 与宿主装配验证；失败高风险告知已实现且有限频测试，但业务模块的失败路径尚未调用；`authn.SetRootPassword`（root 正式密码设置）尚未接入敏感策略（待 CLI/受控装配步骤按 `authn.root_password.setup` 收口）；`OperationRunner` 与 `PasswordVerifier` 需宿主装配，未装配时再次认证拒绝、模块保持既有保守闸门（不因未接线而放行）；未完成任务清理（过期挑战/批准）后台任务；失败告知限频为单实例进程内状态；`Authorize` 读取策略不含作用域级读取授权（策略包已记录）；未验证 race/非 Windows。
+
 ## 敏感操作策略目录、root 策略配置与恢复默认（步骤 38）
 
 新增内部敏感策略包 `internal/policy` 与 SQLite 仓储 `internal/policy/sqlite`，迁移 0018 落地 `sensitive_policy_scopes`（每个作用域的策略版本）与 `sensitive_operation_policies`（只保存偏离默认值的覆盖行与应用声明，不复制系统默认目录）；本步**只做目录/策略配置层，不执行敏感操作、不暴露 HTTP 路由、不接 `cmd/login-server`**，执行器与页面留步骤 39 及后续，验收走可信内部 Go API 与测试。
 
-- **稳定操作目录**：系统内置 24 个稳定操作标识，覆盖密码修改/管理员重置、MFA/Passkey/恢复代码、邮箱变更、受控更名、角色与权限调整、应用凭证轮换、敏感数据导出、备份导出/恢复、审计清理、root 恢复、客服恢复审批、会话管理强认证、「修改敏感策略」本身，以及 onboarding 的邀请创建/注册审核与 authn 的 root 设置正式密码等专门操作；每条含中文名称、直白说明、默认策略、基础权限标识、是否 root 专属、是否不可取消敏感与业务是否已实现。默认策略保守：高风险/root 专属操作默认要求强认证，MFA/Passkey 未实现前这些要求 fail-closed。
+- **稳定操作目录**：系统内置 28 个稳定操作标识，覆盖密码修改/管理员重置、MFA/Passkey/恢复代码、邮箱变更、受控更名、角色与权限调整、应用凭证轮换、敏感数据导出、备份导出/恢复、审计清理、root 恢复、客服恢复审批、会话管理强认证、「修改敏感策略」本身，以及 onboarding 邀请创建/注册审核、authn root 设置正式密码、邮箱变更确认、角色组合权限/角色启停、组成员变更等专门操作；每条含中文名称、直白说明、默认策略、基础权限标识、是否 root 专属、是否不可取消敏感与业务是否已实现。默认策略保守：高风险/root 专属操作默认要求强认证，MFA/Passkey 未实现前这些要求 fail-closed。
 - **默认与覆盖合并**：数据库只保存偏离默认值的覆盖行；读取有效策略时由目录默认值逐字段合并覆盖行，恢复默认即删除覆盖行，因此目录升级不会重写用户配置、也不会把配置误当默认值。支持读取有效策略、相对默认值的字段差异、逐项恢复与整体恢复（整体恢复只删除 override，保留应用声明操作；无覆盖时幂等成功、不递增版本、不伪造审计）。
 - **版本与并发**：每个作用域（system 与各应用）独立策略版本，只有真实变更才递增；修改/恢复必须携带期望版本并在同一审计事务内条件递增，过期版本返回 `CONFLICT`，两个服务实例并发只有一成功。
 - **root 与变更保护**：系统和应用策略只能由**真实 root 账户**修改（受信 system/local_admin 也不能自称 root），且必须通过宿主注入的 `ReauthVerifier`；未接线/验证失败 fail-closed 返回 `REAUTH_REQUIRED`。普通管理员、应用管理员与普通用户一律拒绝。修改与恢复默认均在同一审计事务写成功/失败审计（稳定用户 ID、操作 ID、来源、字段差异），审计失败整体回滚。

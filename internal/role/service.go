@@ -130,20 +130,29 @@ type Options struct {
 	Audit      AuditRecorder
 	Authorizer Authorizer
 	Transfers  delegation.Guard
-	Now        func() time.Time
-	Random     io.Reader
-	Logger     *slog.Logger
+	// Sensitive 是敏感操作收敛入口（步骤 39）。默认 nil 时敏感角色/权限变更直接
+	// 拒绝（fail-closed）；只有显式 AllowLegacyWithoutSensitive（仅供旧装配/测试
+	// 过渡）才回退到既有 Authorizer/委派 Guard 保守校验。接线后还须先通过敏感策略的
+	// 近期认证与确认判定。
+	Sensitive SensitiveRunner
+	// AllowLegacyWithoutSensitive 显式允许未接线敏感策略时沿用旧保守校验。
+	AllowLegacyWithoutSensitive bool
+	Now                         func() time.Time
+	Random                      io.Reader
+	Logger                      *slog.Logger
 }
 
 // Service 是角色领域服务；构造后不可变，可并发使用。
 type Service struct {
-	store      Store
-	audit      AuditRecorder
-	authorizer Authorizer
-	transfers  delegation.Guard
-	now        func() time.Time
-	random     io.Reader
-	logger     *slog.Logger
+	store       Store
+	audit       AuditRecorder
+	authorizer  Authorizer
+	transfers   delegation.Guard
+	sensitive   SensitiveRunner
+	allowLegacy bool
+	now         func() time.Time
+	random      io.Reader
+	logger      *slog.Logger
 }
 
 // New 校验依赖并构造角色服务；任意必填依赖为空返回 ErrOptionsInvalid。
@@ -173,7 +182,9 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
-		transfers: options.Transfers, now: now, random: random, logger: logger}, nil
+		transfers: options.Transfers, sensitive: options.Sensitive,
+		allowLegacy: options.AllowLegacyWithoutSensitive,
+		now:         now, random: random, logger: logger}, nil
 }
 
 // CreateRole 在指定范围登记角色。系统范围可以创建系统自定义/内置角色（内置只能由
@@ -436,6 +447,11 @@ func (s *Service) setRoleEnabled(ctx context.Context, caller Caller, id string, 
 		}
 		return current, false, nil
 	}
+	sensitiveState, guardErr := s.authorizeSensitive(ctx, caller, "role.state.change",
+		"role", id, map[string]string{"enabled": formatBool(target)})
+	if guardErr != nil {
+		return Role{}, false, guardErr
+	}
 	now := s.now().UTC().Truncate(time.Millisecond)
 	updated := current
 	updated.Enabled = target
@@ -479,6 +495,7 @@ func (s *Service) setRoleEnabled(ctx context.Context, caller Caller, id string, 
 		return Role{}, false, mapCriticalError(err)
 	}
 	s.logger.Info("角色状态已变更", "role_id", id, "enabled", target)
+	s.notifySensitive(ctx, sensitiveState)
 	return updated, true, nil
 }
 
@@ -555,6 +572,11 @@ func (s *Service) AddRolePermission(ctx context.Context, caller Caller, roleID, 
 	if permission.RootOnly {
 		return false, ErrRootOnlyPermission
 	}
+	sensitivePermission, guardErr := s.authorizeSensitive(ctx, caller, "role.permission.change",
+		"role", roleID, map[string]string{"direction": "add", "permission_id": permissionID})
+	if guardErr != nil {
+		return false, guardErr
+	}
 	changed := false
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
@@ -601,6 +623,7 @@ func (s *Service) AddRolePermission(ctx context.Context, caller Caller, roleID, 
 		s.logger.Info("权限已在角色中，组合未变化", "role_id", roleID, "permission_id", permissionID)
 	} else {
 		s.logger.Info("权限已加入角色", "role_id", roleID, "permission_id", permissionID)
+		s.notifySensitive(ctx, sensitivePermission)
 	}
 	return changed, nil
 }
@@ -616,6 +639,11 @@ func (s *Service) RemoveRolePermission(ctx context.Context, caller Caller, roleI
 	permissionID = strings.TrimSpace(permissionID)
 	if !validPermissionID(permissionID) {
 		return false, fmt.Errorf("%w: 权限 ID 格式无效", ErrInvalidRequest)
+	}
+	sensitiveRemovePermission, guardErr := s.authorizeSensitive(ctx, caller, "role.permission.change",
+		"role", roleID, map[string]string{"direction": "remove", "permission_id": permissionID})
+	if guardErr != nil {
+		return false, guardErr
 	}
 	changed := false
 	critical := audit.CriticalRequest{
@@ -645,6 +673,9 @@ func (s *Service) RemoveRolePermission(ctx context.Context, caller Caller, roleI
 	})
 	if err != nil {
 		return false, mapCriticalError(err)
+	}
+	if changed {
+		s.notifySensitive(ctx, sensitiveRemovePermission)
 	}
 	return changed, nil
 }
@@ -707,6 +738,11 @@ func (s *Service) AssignUserRole(ctx context.Context, caller Caller, roleID, use
 			return false, fmt.Errorf("%w: 目标用户不是应用 %s 的有效成员", ErrUserNotMember, current.ApplicationID)
 		}
 	}
+	sensitiveResult, guardErr := s.authorizeSensitive(ctx, caller, "permission.role.assign",
+		"user", userID, map[string]string{"direction": "assign", "role_id": roleID})
+	if guardErr != nil {
+		return false, guardErr
+	}
 	now := s.now().UTC().Truncate(time.Millisecond)
 	assignment := UserRoleAssignment{
 		UserID: userID, RoleID: roleID, ScopeID: current.ScopeID,
@@ -753,6 +789,7 @@ func (s *Service) AssignUserRole(ctx context.Context, caller Caller, roleID, use
 	}
 	if changed {
 		s.logger.Info("角色已分配给用户", "role_id", roleID, "user_id", userID)
+		s.notifySensitive(ctx, sensitiveResult)
 	}
 	return changed, nil
 }
@@ -840,6 +877,11 @@ func (s *Service) AssignGroupRole(ctx context.Context, caller Caller, roleID, gr
 		return false, s.recordRootRejection(ctx, caller, ActionAssignGroupRole, "group", groupID,
 			"root_group_member_protected", fmt.Errorf("%w: 用户组包含 root 账户，不能分配普通角色", ErrRootProtected))
 	}
+	sensitiveGroup, guardErr := s.authorizeSensitive(ctx, caller, "permission.role.assign",
+		"group", groupID, map[string]string{"direction": "assign", "role_id": roleID})
+	if guardErr != nil {
+		return false, guardErr
+	}
 	now := s.now().UTC().Truncate(time.Millisecond)
 	assignment := GroupRoleAssignment{
 		GroupID: groupID, RoleID: roleID, ScopeID: current.ScopeID,
@@ -886,6 +928,7 @@ func (s *Service) AssignGroupRole(ctx context.Context, caller Caller, roleID, gr
 	}
 	if changed {
 		s.logger.Info("角色已分配给用户组", "role_id", roleID, "group_id", groupID)
+		s.notifySensitive(ctx, sensitiveGroup)
 	}
 	return changed, nil
 }

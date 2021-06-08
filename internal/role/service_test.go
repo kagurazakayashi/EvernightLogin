@@ -89,7 +89,7 @@ type testEnv struct {
 	local      role.Caller
 }
 
-func prepareEnv(t *testing.T) *testEnv {
+func prepareEnv(t *testing.T, mutations ...func(*role.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "role.sqlite")))
@@ -124,11 +124,15 @@ func prepareEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("构造授权器失败: %v", err)
 	}
-	service, err := role.New(role.Options{
+	options := role.Options{AllowLegacyWithoutSensitive: true,
 		Store: store, Audit: recorder, Authorizer: authorizer,
 		Transfers: allowAllTransfers(), Now: clock.Now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
+	}
+	for _, mutation := range mutations {
+		mutation(&options)
+	}
+	service, err := role.New(options)
 	if err != nil {
 		t.Fatalf("构造角色服务失败: %v", err)
 	}
@@ -725,16 +729,16 @@ func (denyAllAuthorizer) ManageableScopes(context.Context, role.Caller) (bool, [
 func TestRoleAuthorizationDefaultDeny(t *testing.T) {
 	env := prepareEnv(t)
 	// 构造时缺少依赖直接失败。
-	if _, err := role.New(role.Options{Audit: env.recorder, Authorizer: env.authorizer}); !errors.Is(err, role.ErrOptionsInvalid) {
+	if _, err := role.New(role.Options{AllowLegacyWithoutSensitive: true, Audit: env.recorder, Authorizer: env.authorizer}); !errors.Is(err, role.ErrOptionsInvalid) {
 		t.Fatalf("缺少 Store 构造错误 = %v", err)
 	}
-	if _, err := role.New(role.Options{Store: env.store, Authorizer: env.authorizer}); !errors.Is(err, role.ErrOptionsInvalid) {
+	if _, err := role.New(role.Options{AllowLegacyWithoutSensitive: true, Store: env.store, Authorizer: env.authorizer}); !errors.Is(err, role.ErrOptionsInvalid) {
 		t.Fatalf("缺少审计构造错误 = %v", err)
 	}
-	if _, err := role.New(role.Options{Store: env.store, Audit: env.recorder}); !errors.Is(err, role.ErrOptionsInvalid) {
+	if _, err := role.New(role.Options{AllowLegacyWithoutSensitive: true, Store: env.store, Audit: env.recorder}); !errors.Is(err, role.ErrOptionsInvalid) {
 		t.Fatalf("缺少授权器构造错误 = %v", err)
 	}
-	denyService, err := role.New(role.Options{Store: env.store, Audit: env.recorder, Authorizer: denyAllAuthorizer{}, Transfers: allowAllTransfers()})
+	denyService, err := role.New(role.Options{AllowLegacyWithoutSensitive: true, Store: env.store, Audit: env.recorder, Authorizer: denyAllAuthorizer{}, Transfers: allowAllTransfers()})
 	if err != nil {
 		t.Fatalf("构造拒绝授权服务失败: %v", err)
 	}

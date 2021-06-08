@@ -7,11 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 )
 
 // AuditRecorder 是安全审计写入契约；实现必须 fail-closed。
@@ -31,6 +33,13 @@ type Options struct {
 	// ReauthVerifier 是更名再次验证契约；RequireReauth 且普通用户更名时未注入
 	// 一律拒绝。
 	ReauthVerifier ReauthVerifier
+	// Sensitive 是敏感操作收敛入口（步骤 39 再次认证与告知）。默认 nil 时受控更名
+	// 直接拒绝（fail-closed）；仅显式 AllowLegacyWithoutSensitive 才回退既有再次验证
+	// 闸门。接线后还必须在执行前通过敏感策略。
+	Sensitive reauth.OperationRunner
+	// AllowLegacyWithoutSensitive 显式允许未接线敏感策略时沿用既有再次验证闸门
+	// （仅供旧装配/测试过渡，默认 false；生产应注入 Sensitive）。
+	AllowLegacyWithoutSensitive bool
 	// Policy 是更名/电话策略；零值使用 DefaultPolicy。
 	Policy Policy
 	Now    func() time.Time
@@ -39,8 +48,9 @@ type Options struct {
 
 // Service 是资料领域服务。构造后不可变，不启动协程、不发会话。
 type Service struct {
-	opts   Options
-	policy resolvedPolicy
+	opts        Options
+	policy      resolvedPolicy
+	allowLegacy bool
 }
 
 // New 校验依赖并构造服务。Policy 逐字段合并安全默认值（再次验证默认开启）。
@@ -61,7 +71,8 @@ func New(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Service{opts: options, policy: resolved}, nil
+	return &Service{opts: options, policy: resolved,
+		allowLegacy: options.AllowLegacyWithoutSensitive}, nil
 }
 
 // GetProfile 读取目标资料：本人或受信管理通道；未注入 Authorizer 时其他用户一律
@@ -244,6 +255,29 @@ func (s *Service) ChangeUsername(ctx context.Context, caller Caller, request Cha
 			return UserProfile{}, ErrRenameReauthRequired
 		}
 	}
+	var sensitiveResult reauth.Result
+	if s.opts.Sensitive == nil && !s.allowLegacy {
+		// 敏感操作未装配策略时默认拒绝，不静默跳过步骤 38 策略。
+		return UserProfile{}, ErrRenameReauthRequired
+	}
+	if s.opts.Sensitive != nil {
+		quickCaller, callerErr := reauth.CallerFromActor(caller.actor)
+		if callerErr != nil {
+			return UserProfile{}, ErrAccessDenied
+		}
+		sensitiveResult, err = s.opts.Sensitive.Authorize(ctx, quickCaller, reauth.Request{
+			ScopeID: "system", OperationID: "profile.username.change",
+			TargetType: "user", TargetID: request.TargetUserID,
+			Params: map[string]string{
+				"new_username":         username,
+				"expected_row_version": strconv.FormatInt(request.ExpectedRowVersion, 10),
+			},
+			Description: "修改用户名", RequestID: request.RequestID,
+		})
+		if err != nil {
+			return UserProfile{}, mapSensitiveError(err)
+		}
+	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
 			Actor:     caller.actor,
@@ -283,7 +317,32 @@ func (s *Service) ChangeUsername(ctx context.Context, caller Caller, request Cha
 	if !changed {
 		return UserProfile{}, ErrVersionConflict
 	}
+	if s.opts.Sensitive != nil {
+		// 告知失败不回滚已成功的更名；只记录状态与原因。
+		if notifyErr := s.opts.Sensitive.NotifyOutcome(ctx, sensitiveResult, reauth.OutcomeSuccess); notifyErr != nil {
+			s.opts.Logger.Warn("更名安全告知未完成", "error", notifyErr)
+		}
+	}
 	return s.readAfterWrite(ctx, request.TargetUserID)
+}
+
+// mapSensitiveError 把再次认证错误映射为资料领域既有错误，保持既有 API 语义。
+func mapSensitiveError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, reauth.ErrAccessDenied):
+		return ErrAccessDenied
+	case errors.Is(err, reauth.ErrReauthRequired), errors.Is(err, reauth.ErrConfirmationRequired),
+		errors.Is(err, reauth.ErrMFARequired), errors.Is(err, reauth.ErrAuthenticationFailed),
+		errors.Is(err, reauth.ErrChallengeInvalid), errors.Is(err, reauth.ErrChallengeExpired),
+		errors.Is(err, reauth.ErrAttemptsExceeded), errors.Is(err, reauth.ErrApprovalInvalid),
+		errors.Is(err, reauth.ErrApprovalExpired), errors.Is(err, reauth.ErrApprovalConsumed),
+		errors.Is(err, reauth.ErrRateLimited):
+		return ErrRenameReauthRequired
+	default:
+		return ErrStoreUnavailable
+	}
 }
 
 // authorize 使用注入 Authorizer 或默认口径判定读写权限。

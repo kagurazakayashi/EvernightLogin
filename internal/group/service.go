@@ -74,20 +74,29 @@ type Options struct {
 	Audit      AuditRecorder
 	Authorizer Authorizer
 	Transfers  delegation.Guard
-	Now        func() time.Time
-	Random     io.Reader
-	Logger     *slog.Logger
+	// Sensitive 是敏感操作收敛入口（步骤 39）。默认 nil 时敏感成员变更直接拒绝
+	// （fail-closed）；只有显式 AllowLegacyWithoutSensitive（仅供旧装配/测试过渡）
+	// 才回退到既有 Authorizer/委派 Guard 保守校验。
+	Sensitive SensitiveRunner
+	// AllowLegacyWithoutSensitive 显式允许未接线敏感策略时沿用旧保守校验。
+	// 默认 false；生产装配应注入 Sensitive。
+	AllowLegacyWithoutSensitive bool
+	Now                         func() time.Time
+	Random                      io.Reader
+	Logger                      *slog.Logger
 }
 
 // Service 是用户组领域服务；构造后不可变，可并发使用。
 type Service struct {
-	store      Store
-	audit      AuditRecorder
-	authorizer Authorizer
-	transfers  delegation.Guard
-	now        func() time.Time
-	random     io.Reader
-	logger     *slog.Logger
+	store       Store
+	audit       AuditRecorder
+	authorizer  Authorizer
+	transfers   delegation.Guard
+	sensitive   SensitiveRunner
+	allowLegacy bool
+	now         func() time.Time
+	random      io.Reader
+	logger      *slog.Logger
 }
 
 // New 校验依赖并构造服务。
@@ -117,7 +126,9 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
-		transfers: options.Transfers, now: now, random: random, logger: logger}, nil
+		transfers: options.Transfers, sensitive: options.Sensitive,
+		allowLegacy: options.AllowLegacyWithoutSensitive,
+		now:         now, random: random, logger: logger}, nil
 }
 
 // CreateGroup 在系统或应用范围创建用户组。应用范围要求应用存在且启用；组机器键
@@ -427,6 +438,15 @@ func (s *Service) AddMembers(ctx context.Context, caller Caller, request MemberB
 		RequestID: caller.requestID,
 		Changes:   memberBatchChanges(toAdd, "added", len(toAdd), skipped),
 	}
+	membersDigest, digestErr := memberSetDigest(toAdd)
+	if digestErr != nil {
+		return MemberBatchResult{}, digestErr
+	}
+	sensitiveResult, guardErr := s.authorizeSensitive(ctx, caller, "group.member.change",
+		"group", groupRecord.ID, map[string]string{"direction": "add", "members": membersDigest})
+	if guardErr != nil {
+		return MemberBatchResult{}, guardErr
+	}
 	critical := audit.CriticalRequest{
 		Event:             event,
 		FailureReasonCode: "group.member.add_failed",
@@ -456,6 +476,7 @@ func (s *Service) AddMembers(ctx context.Context, caller Caller, request MemberB
 		return MemberBatchResult{}, mapCriticalError(err)
 	}
 	s.logger.Info("组成员已加入", "group_id", groupRecord.ID, "added", len(toAdd), "skipped", skipped)
+	s.notifySensitive(ctx, sensitiveResult)
 	return MemberBatchResult{Added: len(toAdd), Skipped: skipped}, nil
 }
 
@@ -492,6 +513,15 @@ func (s *Service) RemoveMembers(ctx context.Context, caller Caller, request Memb
 		}
 		return MemberBatchResult{Skipped: skipped}, nil
 	}
+	membersDigest, digestErr := memberSetDigest(toRemove)
+	if digestErr != nil {
+		return MemberBatchResult{}, digestErr
+	}
+	sensitiveRemove, guardErr := s.authorizeSensitive(ctx, caller, "group.member.change",
+		"group", groupRecord.ID, map[string]string{"direction": "remove", "members": membersDigest})
+	if guardErr != nil {
+		return MemberBatchResult{}, guardErr
+	}
 	event := audit.Event{
 		Actor:     caller.actor,
 		AppID:     groupRecord.ApplicationID,
@@ -517,6 +547,7 @@ func (s *Service) RemoveMembers(ctx context.Context, caller Caller, request Memb
 		return MemberBatchResult{}, mapCriticalError(err)
 	}
 	s.logger.Info("组成员已移除", "group_id", groupRecord.ID, "removed", removed, "skipped", skipped+raceSkipped)
+	s.notifySensitive(ctx, sensitiveRemove)
 	return MemberBatchResult{Removed: removed, Skipped: skipped + raceSkipped}, nil
 }
 

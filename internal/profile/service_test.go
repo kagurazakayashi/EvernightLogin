@@ -65,7 +65,7 @@ func newTestEnv(t *testing.T, mutate func(*profile.Options)) *testEnv {
 		t.Fatalf("资料存储: %v", err)
 	}
 	env := &testEnv{t: t, ctx: ctx, storage: storage, store: store, recorder: recorder, now: testStart}
-	options := profile.Options{
+	options := profile.Options{AllowLegacyWithoutSensitive: true,
 		Store: store, Audit: recorder,
 		Policy: profile.DefaultPolicy(),
 		Now:    func() time.Time { return env.now },
@@ -438,7 +438,7 @@ func TestReservedNamesPolicy(t *testing.T) {
 		t.Fatal("默认保留名应被拒绝")
 	}
 	custom, userID2 := base()
-	customService, err := profile.New(profile.Options{
+	customService, err := profile.New(profile.Options{AllowLegacyWithoutSensitive: true,
 		Store: custom.serviceStore(), Audit: custom.auditForTest(), ReauthVerifier: profile.ReauthVerifierFunc(func(context.Context, profile.Caller, string) error { return nil }),
 		Policy: profile.Policy{ReservedNames: []string{"customname"}},
 		Now:    func() time.Time { return custom.now },
@@ -451,7 +451,7 @@ func TestReservedNamesPolicy(t *testing.T) {
 		t.Fatal("配置追加的保留名应被拒绝")
 	}
 	disabled, userID3 := base()
-	disabledService, err := profile.New(profile.Options{
+	disabledService, err := profile.New(profile.Options{AllowLegacyWithoutSensitive: true,
 		Store: disabled.serviceStore(), Audit: disabled.auditForTest(),
 		ReauthVerifier: profile.ReauthVerifierFunc(func(context.Context, profile.Caller, string) error { return nil }),
 		Policy:         profile.Policy{DisableReservedNames: true},
@@ -592,7 +592,7 @@ func TestAuditInvalidEventMapsToInternal(t *testing.T) {
 	env := newTestEnv(t, nil)
 	const userID = "usr_00000000000000000000000000000017"
 	env.seedUser(t, userID, "auditerr")
-	service, err := profile.New(profile.Options{Store: env.serviceStore(), Audit: fakeInvalidAudit{},
+	service, err := profile.New(profile.Options{AllowLegacyWithoutSensitive: true, Store: env.serviceStore(), Audit: fakeInvalidAudit{},
 		Policy: profile.DefaultPolicy(), Now: func() time.Time { return env.now }})
 	if err != nil {
 		t.Fatalf("构造服务: %v", err)

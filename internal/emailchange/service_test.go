@@ -69,7 +69,7 @@ type testEnv struct {
 	now     time.Time
 }
 
-func newTestEnv(t *testing.T, withReauth bool) *testEnv {
+func newTestEnv(t *testing.T, withReauth bool, mutations ...func(*emailchange.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "emailchange-test.db")
@@ -112,7 +112,7 @@ func newTestEnv(t *testing.T, withReauth bool) *testEnv {
 	if err != nil {
 		t.Fatalf("变更存储: %v", err)
 	}
-	options := emailchange.Options{
+	options := emailchange.Options{AllowLegacyWithoutSensitive: true,
 		Store: store, Audit: recorder, Credentials: credentialService, Mailer: env.mail,
 		VerificationURLBase: "https://login.example.test/email-change",
 		SupportURL:          "https://login.example.test/support",
@@ -122,6 +122,9 @@ func newTestEnv(t *testing.T, withReauth bool) *testEnv {
 	}
 	if withReauth {
 		options.ReauthVerifier = emailchange.ReauthVerifierFunc(func(context.Context, emailchange.Caller, string) error { return nil })
+	}
+	for _, mutation := range mutations {
+		mutation(&options)
 	}
 	service, err := emailchange.New(options)
 	if err != nil {

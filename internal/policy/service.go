@@ -18,6 +18,9 @@ import (
 // DefaultPolicyVersion 是没有变更记录时的作用域策略版本。
 const DefaultPolicyVersion int64 = 0
 
+// maxVerificationClockSkew 是验证时间允许的未来时钟偏差；超过则视为异常事实。
+const maxVerificationClockSkew = time.Minute
+
 // OperationPolicyChange 是“修改敏感策略”这一操作自身的稳定标识；策略修改必须
 // 通过宿主再次验证，即使 root 取消其他操作的敏感标记也不能跳过该保护。
 const OperationPolicyChange = "security.policy.change"
@@ -473,6 +476,8 @@ func (s *Service) Evaluate(ctx context.Context, caller Caller, request EvaluateR
 		PermissionKey:        operation.PermissionKey,
 		RootOnly:             operation.RootOnly,
 		AuditRequired:        true,
+		RequiredStrength:     operation.Effective.Strength,
+		MaxAuthAgeSeconds:    operation.Effective.MaxAuthAgeSeconds,
 	}
 	if !operation.Effective.Sensitive {
 		// 取消敏感标记不取消基础权限/root 限制/审计；这里只表示没有额外策略要求。
@@ -490,10 +495,14 @@ func (s *Service) Evaluate(ctx context.Context, caller Caller, request EvaluateR
 			return decision, ErrReauthRequired
 		}
 		age := now.Sub(request.Verification.VerifiedAt)
-		if age < 0 {
-			// 未来时间戳视为时钟异常/伪造事实，fail-closed 不当作新鲜验证。
+		if age < -maxVerificationClockSkew {
+			// 明显未来时间戳视为时钟异常/伪造事实，fail-closed 不当作新鲜验证。
 			decision.ReasonCode = "reauth_in_future"
 			return decision, ErrReauthRequired
+		}
+		if age < 0 {
+			// 毫秒截断/时钟抖动造成的极小负值按“刚刚验证”处理，避免正常路径误报。
+			age = 0
 		}
 		if operation.Effective.MaxAuthAgeSeconds > 0 &&
 			age > time.Duration(operation.Effective.MaxAuthAgeSeconds)*time.Second {

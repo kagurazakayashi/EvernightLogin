@@ -19,7 +19,7 @@ import (
 // newServiceWith 用同一测试环境依赖构造自定义选项的会话服务。
 func (e *testEnv) newServiceWith(apply func(*session.Options)) *session.Service {
 	e.t.Helper()
-	options := session.Options{
+	options := session.Options{AllowLegacyWithoutSensitive: true,
 		Store:           e.sessionStore,
 		Audit:           e.audit,
 		Keyring:         e.keyring,
@@ -636,7 +636,7 @@ func TestRememberMeTimeout(t *testing.T) {
 	if got := longRemembered.Session.AbsoluteExpiresAt.Sub(env.clock.Now()); got != session.DefaultRememberMeTimeout {
 		t.Errorf("默认记住我期限 = %s，期望 %s", got, session.DefaultRememberMeTimeout)
 	}
-	if _, err := session.New(env.sessionStore, session.Options{
+	if _, err := session.New(env.sessionStore, session.Options{AllowLegacyWithoutSensitive: true,
 		Store:             env.sessionStore,
 		Audit:             env.audit,
 		Keyring:           env.keyring,
@@ -645,7 +645,7 @@ func TestRememberMeTimeout(t *testing.T) {
 	}); !errors.Is(err, session.ErrOptionsInvalid) {
 		t.Errorf("记住我期限过短构造错误 = %v，期望 ErrOptionsInvalid", err)
 	}
-	if _, err := session.New(env.sessionStore, session.Options{
+	if _, err := session.New(env.sessionStore, session.Options{AllowLegacyWithoutSensitive: true,
 		Store:             env.sessionStore,
 		Audit:             env.audit,
 		Keyring:           env.keyring,
@@ -854,7 +854,7 @@ func TestLoginQuotaRecheckRejectsOverLimit(t *testing.T) {
 	userID := "usr_00000000000000000000000000000052"
 	env.insertUser(userID, "quotarecheck", account.StatusActive, 1)
 	wrapped := &quotaBypassStore{Store: env.sessionStore, count: 99}
-	service, err := session.New(wrapped, session.Options{
+	service, err := session.New(wrapped, session.Options{AllowLegacyWithoutSensitive: true,
 		Store:             wrapped,
 		Audit:             env.audit,
 		Keyring:           env.keyring,

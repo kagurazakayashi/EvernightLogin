@@ -32,6 +32,13 @@ type Options struct {
 	Credentials *credential.Service
 	// ReauthVerifier 是近期身份验证契约；nil 时普通用户变更一律拒绝。
 	ReauthVerifier ReauthVerifier
+	// Sensitive 是敏感操作收敛入口（步骤 39）。默认 nil 时敏感邮箱变更直接拒绝
+	// （fail-closed）；仅显式 AllowLegacyWithoutSensitive 才回退既有近期身份验证闸门。
+	// 接线后还必须在执行前通过敏感策略并在成功后发送安全告知。
+	Sensitive SensitiveRunner
+	// AllowLegacyWithoutSensitive 显式允许未接线敏感策略时沿用旧近期身份验证闸门
+	// （仅供旧装配/测试过渡，默认 false；生产应注入 Sensitive）。
+	AllowLegacyWithoutSensitive bool
 	// Mailer 是邮件发送接口；nil 表示无法发送（申请状态记录为 failed，验证入口由
 	// 宿主以受控渠道传递）。
 	Mailer              EmailSender
@@ -46,7 +53,8 @@ type Options struct {
 
 // Service 是邮箱变更服务。构造后不可变，不启动协程、不发会话。
 type Service struct {
-	opts Options
+	opts        Options
+	allowLegacy bool
 }
 
 // New 校验依赖并构造服务。
@@ -91,7 +99,7 @@ func New(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Service{opts: options}, nil
+	return &Service{opts: options, allowLegacy: options.AllowLegacyWithoutSensitive}, nil
 }
 
 // RequestChange 发起邮箱变更（或首次添加）申请。
@@ -132,6 +140,11 @@ func (s *Service) RequestChange(ctx context.Context, caller Caller, newEmail, re
 		// 不在自助接口暴露他人邮箱是否存在：返回通用请求错误（HTTP 层还需统一
 		// 响应形状并叠加限流）。
 		return RequestResult{}, fmt.Errorf("%w: 无法使用该邮箱", ErrInvalidRequest)
+	}
+	sensitiveResult, guardErr := s.authorizeSensitive(ctx, caller, "email.change.request",
+		"user", userID, map[string]string{"new_email": newNormalized, "request_id": requestIDLog})
+	if guardErr != nil {
+		return RequestResult{}, guardErr
 	}
 	now := s.now()
 	requestID, err := newRequestID(s.opts.Random)
@@ -201,6 +214,7 @@ func (s *Service) RequestChange(ctx context.Context, caller Caller, newEmail, re
 		return RequestResult{}, ErrStoreUnavailable
 	}
 	result.Request = request
+	s.notifySensitive(ctx, sensitiveResult)
 	return result, nil
 }
 
@@ -233,6 +247,15 @@ func (s *Service) Verify(ctx context.Context, request VerifyRequest) (VerifyResu
 	if preloadFound {
 		auditActor = audit.Actor{Type: audit.ActorUser, ID: preload.UserID}
 		auditTarget = audit.Target{Type: "user", ID: preload.UserID}
+	}
+	var sensitiveVerify reauthVerifyResult
+	if preloadFound {
+		// 令牌本身是持有证明，但切换仍是敏感操作：执行前按策略判定并绑定申请 ID。
+		verifiedGuard, guardErr := s.authorizeSensitiveVerify(ctx, preload.UserID, request.RequestID)
+		if guardErr != nil {
+			return VerifyResult{}, guardErr
+		}
+		sensitiveVerify = verifiedGuard
 	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
@@ -291,6 +314,7 @@ func (s *Service) Verify(ctx context.Context, request VerifyRequest) (VerifyResu
 	if !switched {
 		return VerifyResult{}, ErrRequestNotFound
 	}
+	s.notifySensitiveVerify(ctx, sensitiveVerify)
 	// 向旧已验证邮箱发送安全告知（不含令牌/链接）；投递失败不回滚已完成切换。
 	if result.OldEmail != "" && s.opts.Mailer != nil {
 		noticeErr := s.opts.Mailer.SendSecurityNotice(ctx, SecurityNoticeEmail{

@@ -108,7 +108,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("构造会话存储失败: %v", err)
 	}
-	sessionService, err := session.New(sessionStore, session.Options{
+	sessionService, err := session.New(sessionStore, session.Options{AllowLegacyWithoutSensitive: true,
 		Store:           sessionStore,
 		Audit:           recorder,
 		Keyring:         keyring,
@@ -156,7 +156,7 @@ func newTestEnv(t *testing.T) *testEnv {
 // newSessionService 用同一测试环境依赖构造会话服务（用于注入测试用存储装饰器）。
 func (e *testEnv) newSessionService(store session.Store) *session.Service {
 	e.t.Helper()
-	service, err := session.New(store, session.Options{
+	service, err := session.New(store, session.Options{AllowLegacyWithoutSensitive: true,
 		Store:           store,
 		Audit:           e.audit,
 		Keyring:         e.keyring,
@@ -1092,7 +1092,7 @@ func TestNewRejectsInvalidOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造存储失败: %v", err)
 	}
-	valid := session.Options{Store: store, Audit: env.audit, Keyring: keyring, Now: env.clock.Now}
+	valid := session.Options{AllowLegacyWithoutSensitive: true, Store: store, Audit: env.audit, Keyring: keyring, Now: env.clock.Now}
 	if _, err := session.New(nil, valid); !errors.Is(err, session.ErrOptionsInvalid) {
 		t.Errorf("空存储构造错误 = %v，期望 ErrOptionsInvalid", err)
 	}

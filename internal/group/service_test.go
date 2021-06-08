@@ -75,7 +75,7 @@ func allowAllTransfers() delegation.GuardFuncs {
 	}
 }
 
-func prepareEnv(t *testing.T) *testEnv {
+func prepareEnv(t *testing.T, mutations ...func(*group.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "group.sqlite")))
@@ -110,9 +110,14 @@ func prepareEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("构造授权器失败: %v", err)
 	}
-	service, err := group.New(group.Options{Store: store, Audit: recorder, Authorizer: authorizer,
+	options := group.Options{AllowLegacyWithoutSensitive: true, Store: store, Audit: recorder, Authorizer: authorizer,
 		Transfers: allowAllTransfers(), Now: clock.Now,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for _, mutation := range mutations {
+		mutation(&options)
+	}
+	service, err := group.New(options)
+
 	if err != nil {
 		t.Fatalf("构造用户组服务失败: %v", err)
 	}
@@ -582,7 +587,7 @@ VALUES('role_group_test','system','role_group_test','测试角色','','',0,1,?,?
 }
 
 func TestValidationAndAuthorization(t *testing.T) {
-	if _, err := group.New(group.Options{}); !errors.Is(err, group.ErrOptionsInvalid) {
+	if _, err := group.New(group.Options{AllowLegacyWithoutSensitive: true}); !errors.Is(err, group.ErrOptionsInvalid) {
 		t.Fatalf("空依赖构造错误 = %v", err)
 	}
 	env := prepareEnv(t)

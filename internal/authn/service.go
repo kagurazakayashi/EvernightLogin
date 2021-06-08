@@ -108,6 +108,12 @@ type Options struct {
 	Now func() time.Time
 	// Random 是安全随机源；nil 使用 crypto/rand.Reader。用于生成盐与 dummy 哈希。
 	Random io.Reader
+	// Sensitive 是敏感操作收敛入口（步骤 39）；默认 nil 时设置密码直接拒绝
+	// （fail-closed）。密码修改属敏感操作，必须经步骤 38 策略判定再执行。
+	Sensitive SensitiveRunner
+	// AllowLegacyWithoutSensitive 显式允许未接线敏感策略时仅用当前密码复核
+	// （仅供旧装配/测试过渡，默认 false）。
+	AllowLegacyWithoutSensitive bool
 	// Logger 是运行日志器；nil 使用丢弃输出。日志不记录密码/哈希/盐/标识明文。
 	Logger *slog.Logger
 	// Sleep 是渐进延迟注入点；nil 使用带 context 的 time.Sleep。测试可注入记录器
@@ -132,6 +138,8 @@ type Service struct {
 	operationLimiter *ratelimit.Limiter
 
 	emailLoginEnabled bool
+	sensitive         SensitiveRunner
+	allowLegacy       bool
 	now               func() time.Time
 	random            io.Reader
 	logger            *slog.Logger
@@ -232,6 +240,8 @@ func New(options Options) (*Service, error) {
 		locks:             newFailureTracker(failurePolicy, now),
 		sweep:             newSweepGuard(failurePolicy, now),
 		emailLoginEnabled: options.EmailLoginEnabled,
+		sensitive:         options.Sensitive,
+		allowLegacy:       options.AllowLegacyWithoutSensitive,
 		now:               now,
 		random:            random,
 		logger:            logger,
@@ -544,6 +554,10 @@ func (s *Service) SetPassword(ctx context.Context, caller Caller, request SetPas
 				user.UserID, reasonPasswordReused, CodeOf(err), err)
 		}
 	}
+	sensitiveResult, guardErr := s.authorizeSensitive(ctx, caller, user.UserID, request.RequestID)
+	if guardErr != nil {
+		return SetPasswordResult{}, guardErr
+	}
 	newHash, err := s.hashPassword(ctx, request.NewPassword)
 	if err != nil {
 		if contextFailure(err) {
@@ -599,6 +613,7 @@ func (s *Service) SetPassword(ctx context.Context, caller Caller, request SetPas
 		"argon2_params", s.params.String(),
 		"security_version", changeResult.SecurityVersion,
 	)
+	s.notifySensitive(ctx, sensitiveResult)
 	return SetPasswordResult{
 		UserID:            user.UserID,
 		SecurityVersion:   changeResult.SecurityVersion,
