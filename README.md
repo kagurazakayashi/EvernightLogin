@@ -566,6 +566,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 两步验证公共流程与邮件第二步验证（步骤 40）
+
+新增内部 MFA 状态机 `internal/mfa` 与 SQLite 仓储 `internal/mfa/sqlite`，迁移 0020 落地 `mfa_factors`（活动因素）与 `mfa_challenges`（统一挑战：用户、登录尝试摘要、用途、因素、验证码凭证、重发代数、状态机与有效期）；本步**不实现 TOTP/Passkey/FIDO2，不做页面与 HTTP 路由**，验收走可信内部 Go API。
+
+- **统一状态机**：挑战只有 `pending` 一个起点，只能条件迁移为 `verified`/`failed`/`expired`/`cancelled`；迁移必须同时匹配尝试摘要、重发代数与未过期，并发消费与重放只有一方成功。挑战绑定用户、当前登录尝试（客户端持有的一次性尝试令牌只存摘要）、用途（登录/因素新增）与因素类型；验证码错误计数达到上限时挑战迁移为 `failed`。挑战还记录第一步的作用域/记住我/客户端描述与**受限会话 ID**，Verify 必须使用同一受限会话（同用户、同应用作用域、受限原因=待第二因素）完成，其他受限会话不能完成本挑战。
+- **邮件第二步**：验证码复用 `internal/credential` 的受密钥保护低熵验证码（库中只存 HMAC 摘要、有尝试上限、有效期、原子消费；重发用 ReplaceActive 使旧码立即失效），只发送到**已验证邮箱**；`internal/mailer` 受控发送接口与模板渲染，明文验证码只出现在邮件正文，绝不进入日志、审计、错误或队列；发送失败 fail-closed。
+- **第一步只拿受限状态**：启用邮件因素后，第一步密码认证成功只签发 `internal/session` 的**受限会话**；第二步验证成功后才用同一受限会话秘密轮换为完整普通会话（复用会话服务，不另建会话体系），并沿用第一步的 `AppID`/记住我/客户端描述，应用作用域登录不会在第二步后变成全局会话（签发后再次防御性校验作用域）。旧受限会话在轮换后失效；取消登录只取消挑战与验证码，已签发的受限会话不能通过普通用户撤销 API 撤销，由宿主会话管理/到期回收（不作为已认证状态）。
+- **强制策略与账户限流**：宿主 `Policy.MFARequired` 为真但账户没有可用因素时，`BeginLogin` fail-closed 返回 `MFA_REQUIRED`（不签发任何会话），不能仅凭密码完整登录。账户维度有界滑动窗口限流（挑战创建/验证尝试/重发，可配置 `RatePolicy`）防无限重建挑战爆破验证码与邮件轰炸；传输层 IP/接口限流仍待 HTTP 接线。
+- **高权限账户 fail-closed**：root 与持有高敏感权限的账户在密码正确后仍要求强认证（authn 返回受限/待强因素状态），邮件因素**不能**满足其强认证要求，`BeginLogin` 直接返回 `MFA_REQUIRED` 且不创建登录挑战、不签发任何会话，账户保持受限配置状态；管理强认证未实现部分继续拒绝。
+- **因素管理**：新增因素必须先向已验证邮箱发送验证码并验证成功（证明渠道控制权），已有邮件因素时重复新增返回 `CONFLICT`；移除需检查宿主 `Policy`：被强制要求 MFA 时不能移除最后一个可用因素，未强制时才允许本人移除。当前只有 email 因素，TOTP/Passkey/FIDO2 后续按同一 `FactorType`/`Store`/挑战接口接入，本步不预置空实现。
+- **拒绝留痕与不泄密**：高权限拒绝、无已验证邮箱、验证码错误/状态不符/作用域不符、重发冷却、挑战/验证限流、邮件发送失败（带真实用户 Actor）、因素移除被策略拒绝等路径写失败审计；审计/错误/日志不含验证码、尝试令牌或会话秘密。
+- **错误码**：只复用既有 46 码：参数/因素问题 `REQ_INVALID`，越权 `ACCESS_DENIED`，高权限需强认证/需第二因素/无邮箱 `MFA_REQUIRED`，挑战/验证码/过期/尝试用尽 `CHALLENGE_INVALID`，限流 `RATE_LIMITED`，强制策略拒绝移除 `CONFLICT`，策略不可用 `AUTHZ_UNAVAILABLE`，存储/会话 `DB_UNAVAILABLE`，审计 `AUDIT_WRITE_FAILED`，邮件 `MAIL_DELIVERY_FAILED`。
+- **已知限制**：TOTP/Passkey/FIDO2/恢复代码、页面、HTTP 路由、`cmd/login-server` 装配、失败告知与密码找回未实现；取消登录不撤销已签发受限会话（普通用户撤销 API 拒绝受限会话；由宿主会话管理/到期回收）；因素切换（多因素间替换/降级）与“移除需再次验证”留后续；过期挑战/验证码清理任务、跨实例限流/并发压测、race 与非 Windows 未验证；`SetRootPassword` 仍未接 Sensitive（待 CLI/装配收口）。
+
 ## 再次认证、认证强度与敏感操作安全告知（步骤 39）
 
 新增内部再次认证包 `internal/reauth` 与 SQLite 仓储 `internal/reauth/sqlite`，迁移 0019 落地 `reauth_challenges`、`reauth_approvals`、`security_notifications`；把步骤 38 的敏感操作目录接成「执行前校验 + 执行后告知」闭环。本步**不实现 MFA/Passkey、不做页面、不暴露 HTTP 路由**，验收走可信内部 Go API 与真实本地依赖。

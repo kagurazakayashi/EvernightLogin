@@ -59,7 +59,7 @@ func prepareIntegrationEnv(t *testing.T) *integrationEnv {
 	}
 	env.roleService, err = role.New(role.Options{
 		Store: roleStore, Audit: env.recorder, Authorizer: roleAuthorizer, Transfers: env.service,
-		Now: env.clock.Now, Logger: discard,
+		AllowLegacyWithoutSensitive: true, Now: env.clock.Now, Logger: discard,
 	})
 	if err != nil {
 		t.Fatalf("构造角色服务失败: %v", err)
@@ -80,7 +80,7 @@ func prepareIntegrationEnv(t *testing.T) *integrationEnv {
 	}
 	env.groupService, err = group.New(group.Options{
 		Store: groupStore, Audit: env.recorder, Authorizer: groupAuthorizer, Transfers: env.service,
-		Now: env.clock.Now, Logger: discard,
+		AllowLegacyWithoutSensitive: true, Now: env.clock.Now, Logger: discard,
 	})
 	if err != nil {
 		t.Fatalf("构造用户组服务失败: %v", err)
