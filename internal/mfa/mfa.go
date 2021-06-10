@@ -163,6 +163,8 @@ type FactorType string
 const (
 	// FactorEmail 是邮件验证码第二步因素。
 	FactorEmail FactorType = "email"
+	// FactorTOTP 是 TOTP 验证器第二步因素（步骤 41）。
+	FactorTOTP FactorType = "totp"
 )
 
 // Purpose 是挑战用途。
@@ -223,6 +225,16 @@ type Challenge struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	VerifiedAt          time.Time
+}
+
+// SecondFactorTOTP 是 TOTP 第二步因素适配器；生产实现为 *internal/totp.Service，
+// 其 HasActive 与 VerifyLoginCode 方法签名与下面一致。mfa 只负责挑战/会话/限流，
+// 时间步防重放由 totp 实现负责。
+type SecondFactorTOTP interface {
+	// HasActive 报告用户是否有已激活的 TOTP 绑定。
+	HasActive(ctx context.Context, userID string) (bool, error)
+	// VerifyLoginCode 校验登录第二步 TOTP 码；同一步/旧步重放必须返回错误。
+	VerifyLoginCode(ctx context.Context, userID, code string) error
 }
 
 // Policy 是宿主的 MFA 强制策略；实现应默认拒绝/保守。nil 表示没有外部强制策略，

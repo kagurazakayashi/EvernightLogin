@@ -355,6 +355,10 @@ func defaultOperations() []Operation {
 	strongReauthNoConfirm := strongReauth
 	strongReauthNoConfirm.ConfirmationRequired = false
 	strongReauthNoConfirm.NotificationRequired = false
+	// mfaAdd：添加首个第二因素用近期主密码认证（防止先有鸡还是先有蛋）；首次
+	// 绑定仍需近期确认与告知，TOTP 执行器已实现。
+	mfaAdd := Policy{Sensitive: true, ReauthRequired: true, MaxAuthAgeSeconds: 300,
+		Strength: StrengthPassword, ConfirmationRequired: false, NotificationRequired: true}
 
 	return []Operation{
 		{
@@ -373,10 +377,10 @@ func defaultOperations() []Operation {
 		},
 		{
 			ID: "mfa.add", Domain: DomainMFA, Name: "新增两步验证因素",
-			Description:   "为当前账户绑定新的 TOTP/安全密钥等第二因素；必须再次强认证并确认，成功后告知。MFA 执行器未实现前该操作不可满足。",
-			Default:       strongReauth,
+			Description:   "为当前账户绑定 TOTP 等第二因素：首次绑定只需近期主密码认证（避免先有鸡还是先有蛋），绑定需验证渠道控制权，成功后告知；高权限账户仍须强认证但不能仅靠邮件。",
+			Default:       mfaAdd,
 			PermissionKey: "self.credentials.manage",
-			Implemented:   false,
+			Implemented:   true,
 		},
 		{
 			ID: "mfa.remove", Domain: DomainMFA, Name: "移除两步验证因素",

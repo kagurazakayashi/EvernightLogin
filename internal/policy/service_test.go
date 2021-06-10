@@ -659,7 +659,7 @@ func TestEvaluateFailClosed(t *testing.T) {
 	}
 	// 默认要求强认证但环境未实现：fail-closed 为 MFA_REQUIRED，不降级为密码。
 	if _, err := env.service.Evaluate(env.ctx, root, policy.EvaluateRequest{
-		ScopeID: "system", OperationID: "mfa.add",
+		ScopeID: "system", OperationID: "mfa.remove",
 		Verification: policy.Verification{VerifiedAt: now.Add(-time.Minute),
 			Strength: policy.StrengthPassword, Confirmed: true},
 	}); !errors.Is(err, policy.ErrVerificationUnavailable) {
@@ -672,7 +672,7 @@ func TestEvaluateFailClosed(t *testing.T) {
 	strongEnv.seedUser(rootUserID, "root", true)
 	strongEnv.now = now
 	strongDecision, err := strongEnv.service.Evaluate(strongEnv.ctx, strongEnv.userCallerFor(rootUserID), policy.EvaluateRequest{
-		ScopeID: "system", OperationID: "mfa.add",
+		ScopeID: "system", OperationID: "mfa.remove",
 		Verification: policy.Verification{VerifiedAt: now.Add(-time.Minute),
 			Strength: policy.StrengthStrong, Confirmed: true},
 	})

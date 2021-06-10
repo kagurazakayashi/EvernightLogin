@@ -45,6 +45,12 @@ type Options struct {
 	FromAddress string
 	AppName     string
 	SupportURL  string
+	// TOTP 是 TOTP 第二步因素适配器（步骤 41）；nil 表示未接入，存在 TOTP 因素的
+	// 账户按“没有可用因素”处理（强制 MFA 时 fail-closed）。
+	TOTP SecondFactorTOTP
+	// FactorPreference 是第二步因素优先顺序；默认 TOTP 优先于邮件。未列出的因素
+	// 不会被选择；步骤 43 的完整“认证方式选择策略”之前这里只是保守默认顺序。
+	FactorPreference []FactorType
 	// Policy 是宿主的 MFA 强制策略；nil 表示没有外部强制策略。
 	Policy         Policy
 	CodeTTL        time.Duration
@@ -65,6 +71,7 @@ type Service struct {
 	challengeLimiter *counterLimiter
 	verifyLimiter    *counterLimiter
 	resendLimiter    *counterLimiter
+	factorPreference []FactorType
 }
 
 // New 校验依赖并构造服务；缺少存储/审计/凭证/会话或邮件配置时拒绝构造（邮件在
@@ -81,6 +88,11 @@ func New(options Options) (*Service, error) {
 	}
 	if isNil(options.Sessions) {
 		return nil, fmt.Errorf("%w: 会话服务为空", ErrOptionsInvalid)
+	}
+	if isNil(options.TOTP) {
+		// 装配契约：mfa 必须与 TOTP 适配器配对注入，否则已绑定 TOTP 的账户可能
+		// 被当作“没有因素”而只凭密码登录；宁可拒绝启动也不放行。
+		return nil, fmt.Errorf("%w: 必须配对注入 TOTP 适配器", ErrOptionsInvalid)
 	}
 	if isNil(options.Mailer) {
 		return nil, fmt.Errorf("%w: 邮件发送接口为空", ErrOptionsInvalid)
@@ -132,8 +144,12 @@ func New(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	factorPreference, err := resolveFactorPreference(options.FactorPreference)
+	if err != nil {
+		return nil, err
+	}
 	return &Service{
-		opts: options, ratePolicy: ratePolicy,
+		opts: options, ratePolicy: ratePolicy, factorPreference: factorPreference,
 		challengeLimiter: newCounterLimiter(ratePolicy.ChallengeLimit, ratePolicy.ChallengeWindow),
 		verifyLimiter:    newCounterLimiter(ratePolicy.VerifyLimit, ratePolicy.VerifyWindow),
 		resendLimiter:    newCounterLimiter(ratePolicy.ResendLimit, ratePolicy.ResendWindow),
@@ -197,9 +213,16 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 			"challenge_rate_limited", string(CodeRateLimited), request.RequestID)
 		return LoginStart{}, ErrRateLimited
 	}
-	active, err := s.activeEmailFactor(ctx, base.UserID)
+	emailActive, err := s.activeEmailFactor(ctx, base.UserID)
 	if err != nil {
 		return LoginStart{}, err
+	}
+	totpActive := false
+	if !isNil(s.opts.TOTP) {
+		totpActive, err = s.opts.TOTP.HasActive(ctx, base.UserID)
+		if err != nil {
+			return LoginStart{}, ErrStoreUnavailable
+		}
 	}
 	forced := false
 	if !isNil(s.opts.Policy) {
@@ -208,24 +231,27 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 			return LoginStart{}, ErrPolicyUnavailable
 		}
 	}
-	if active == 0 {
+	factor, hasFactor := s.chooseFactor(emailActive > 0, totpActive)
+	if !hasFactor {
 		if forced {
-			// 强制 MFA 却没有可用因素：不能仅凭密码完整登录，fail-closed。
 			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
 				"mfa_required_without_factor", string(CodeMFARequired), request.RequestID)
 			return LoginStart{}, ErrSecondFactorRequired
 		}
 		return LoginStart{RequiresSecondFactor: false}, nil
 	}
-	email, found, err := s.opts.Store.VerifiedEmail(ctx, base.UserID)
-	if err != nil {
-		return LoginStart{}, ErrStoreUnavailable
-	}
-	if !found || email == "" {
-		// 启用因素却没有已验证邮箱：fail-closed，不发未验证地址、不签会话。
-		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
-			"no_verified_email", string(CodeMFARequired), request.RequestID)
-		return LoginStart{}, ErrNoVerifiedEmail
+	email := ""
+	if factor == FactorEmail {
+		var found bool
+		email, found, err = s.opts.Store.VerifiedEmail(ctx, base.UserID)
+		if err != nil {
+			return LoginStart{}, ErrStoreUnavailable
+		}
+		if !found || email == "" {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
+				"no_verified_email", string(CodeMFARequired), request.RequestID)
+			return LoginStart{}, ErrNoVerifiedEmail
+		}
 	}
 	username := base.Username
 	if username == "" {
@@ -243,16 +269,22 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 	if err != nil {
 		return LoginStart{}, err
 	}
-	issued, err := s.opts.Credentials.Issue(ctx, credential.IssueRequest{
-		Purpose: purposeLoginCode, Target: challengeID, Kind: credential.KindCode,
-		TTL: s.opts.CodeTTL, MaxAttempts: s.opts.MaxAttempts,
-	})
-	if err != nil {
-		return LoginStart{}, fmt.Errorf("%w: 无法签发验证码", ErrStoreUnavailable)
+	credentialID := ""
+	issuedSecret := ""
+	if factor == FactorEmail {
+		issued, issueErr := s.opts.Credentials.Issue(ctx, credential.IssueRequest{
+			Purpose: purposeLoginCode, Target: challengeID, Kind: credential.KindCode,
+			TTL: s.opts.CodeTTL, MaxAttempts: s.opts.MaxAttempts,
+		})
+		if issueErr != nil {
+			return LoginStart{}, fmt.Errorf("%w: 无法签发验证码", ErrStoreUnavailable)
+		}
+		credentialID = issued.ID
+		issuedSecret = issued.Secret.Reveal()
 	}
 	challenge := Challenge{
-		ID: challengeID, UserID: base.UserID, FactorType: FactorEmail, Purpose: PurposeLogin,
-		AttemptSHA256: attemptDigest, CredentialID: issued.ID, Generation: 1,
+		ID: challengeID, UserID: base.UserID, FactorType: factor, Purpose: PurposeLogin,
+		AttemptSHA256: attemptDigest, CredentialID: credentialID, Generation: 1,
 		State: StatePending, Username: username, AppID: request.AppID,
 		RememberMe: request.RememberMe, ClientUserAgent: request.Client.UserAgent,
 		ClientAddress: request.Client.Address, Attempts: 0, MaxAttempts: s.opts.MaxAttempts,
@@ -260,13 +292,22 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 		ExpiresAt: now.Add(s.opts.CodeTTL), CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.createChallenge(ctx, challenge); err != nil {
-		s.cancelCredential(ctx, issued.ID, challengeID, purposeLoginCode)
+		if factor == FactorEmail {
+			s.cancelCredential(ctx, credentialID, challengeID, purposeLoginCode)
+		}
 		return LoginStart{}, err
 	}
-	if err := s.sendCode(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, email, username, issued.Secret.Reveal(), request.RequestID); err != nil {
-		s.cancelCredential(ctx, issued.ID, challengeID, purposeLoginCode)
-		s.failChallenge(ctx, challengeID, attemptDigest, 1, "mail_delivery_failed", request.RequestID)
-		return LoginStart{}, err
+	if factor == FactorEmail {
+		if err := s.sendCode(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID},
+			email, username, issuedSecret, request.RequestID); err != nil {
+			s.cancelCredential(ctx, credentialID, challengeID, purposeLoginCode)
+			s.failChallenge(ctx, challengeID, attemptDigest, 1, "mail_delivery_failed", request.RequestID)
+			return LoginStart{}, err
+		}
+	}
+	maskedEmail := ""
+	if factor == FactorEmail {
+		maskedEmail = maskAddress(email)
 	}
 	// 受限会话只在验证码已投递后才签发；第一步绝不给完整会话。
 	restricted, err := s.opts.Sessions.Login(ctx, session.LoginRequest{
@@ -275,7 +316,7 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 		RememberMe: request.RememberMe, Client: request.Client,
 	})
 	if err != nil {
-		s.cancelCredential(ctx, issued.ID, challengeID, purposeLoginCode)
+		s.cancelCredential(ctx, challenge.CredentialID, challengeID, purposeLoginCode)
 		s.failChallenge(ctx, challengeID, attemptDigest, 1, "restricted_session_failed", request.RequestID)
 		return LoginStart{}, fmt.Errorf("%w: %v", ErrSessionUnavailable, err)
 	}
@@ -284,7 +325,7 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 	if restricted.Session.Kind != session.KindRestricted ||
 		restricted.Session.Reason != session.ReasonPendingSecondFactor ||
 		restricted.Session.AppID != request.AppID {
-		s.cancelCredential(ctx, issued.ID, challengeID, purposeLoginCode)
+		s.cancelCredential(ctx, challenge.CredentialID, challengeID, purposeLoginCode)
 		s.failChallenge(ctx, challengeID, attemptDigest, 1, "restricted_session_mismatch", request.RequestID)
 		return LoginStart{}, fmt.Errorf("%w: 受限会话不符", ErrSessionUnavailable)
 	}
@@ -311,7 +352,7 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 		return nil
 	})
 	if err != nil {
-		s.cancelCredential(ctx, issued.ID, challengeID, purposeLoginCode)
+		s.cancelCredential(ctx, challenge.CredentialID, challengeID, purposeLoginCode)
 		return LoginStart{}, mapCriticalError(err)
 	}
 	event := audit.Event{
@@ -320,18 +361,18 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 		Outcome: audit.OutcomeSuccess, RequestID: validRequestID(request.RequestID),
 		Changes: []audit.FieldChange{
 			{Field: "purpose", After: string(PurposeLogin)},
-			{Field: "factor_type", After: string(FactorEmail)},
-			{Field: "recipient", After: maskAddress(email)},
+			{Field: "factor_type", After: string(challenge.FactorType)},
+			{Field: "recipient", After: maskedEmail},
 			{Field: "expires_at_ms", After: fmt.Sprint(challenge.ExpiresAt.UnixMilli())},
 		},
 	}
 	if err := s.opts.Audit.Record(ctx, event); err != nil {
-		s.cancelCredential(ctx, issued.ID, challengeID, purposeLoginCode)
+		s.cancelCredential(ctx, challenge.CredentialID, challengeID, purposeLoginCode)
 		return LoginStart{}, fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
 	}
 	return LoginStart{
 		RequiresSecondFactor: true, ChallengeID: challengeID, AttemptToken: attemptToken,
-		MaskedEmail: maskAddress(email), ExpiresAt: challenge.ExpiresAt, FactorType: FactorEmail,
+		MaskedEmail: maskedEmail, ExpiresAt: challenge.ExpiresAt, FactorType: challenge.FactorType,
 		RestrictedSession: restricted,
 	}, nil
 }
@@ -387,85 +428,44 @@ func (s *Service) Verify(ctx context.Context, request VerifyRequest) (VerifyResu
 	if request.Code == "" || len(request.Code) > 64 {
 		return VerifyResult{}, ErrCodeInvalid
 	}
-	if _, err := s.opts.Credentials.VerifyAndConsume(ctx, credential.VerifyRequest{
+	if challenge.FactorType == FactorTOTP {
+		if isNil(s.opts.TOTP) {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.verify_failed", "totp_unavailable", string(CodeChallengeInvalid), request.RequestID)
+			return VerifyResult{}, ErrChallengeInvalid
+		}
+		if err := s.opts.TOTP.VerifyLoginCode(ctx, challenge.UserID, request.Code); err != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.verify_failed", "totp_invalid", string(CodeChallengeInvalid), request.RequestID)
+			if s.recordFailedAttempt(ctx, challenge, attemptDigest, now, request.RequestID) {
+				return VerifyResult{}, ErrAttemptsExceeded
+			}
+			return VerifyResult{}, ErrCodeInvalid
+		}
+		if err := s.markVerified(ctx, challenge, attemptDigest, now, request.RequestID); err != nil {
+			return VerifyResult{}, err
+		}
+		challenge.State = StateVerified
+		challenge.VerifiedAt = now
+	} else if _, err := s.opts.Credentials.VerifyAndConsume(ctx, credential.VerifyRequest{
 		Kind: credential.KindCode, ID: challenge.CredentialID, Purpose: purposeLoginCode,
 		Target: challenge.ID, Secret: request.Code,
 	}); err != nil {
-		// 验证码错误/过期/重放：先记录挑战自身尝试计数；达到上限时把挑战迁移为
-		// failed（状态机完整性），统一返回不区分凭证状态的原因并写失败审计。
-		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
-			"mfa.verify_failed", "code_invalid", string(CodeChallengeInvalid), request.RequestID)
+		// 验证码错误/过期/重放：凭证服务保证尝试上限与原子消费；挑战自身也记录
+		// 尝试计数并在达到上限时迁移 failed（状态机完整性）。
 		if errors.Is(err, credential.ErrStoreUnavailable) {
 			return VerifyResult{}, ErrStoreUnavailable
 		}
-		exhausted := false
-		countErr := s.opts.Audit.ExecuteCritical(ctx, audit.CriticalRequest{
-			Event: audit.Event{
-				Actor:     audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
-				Action:    "mfa.attempt_recorded",
-				Target:    audit.Target{Type: "mfa_challenge", ID: challenge.ID},
-				RequestID: validRequestID(request.RequestID),
-			},
-			FailureReasonCode:   "mfa.attempt_record_failed",
-			FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
-		}, func(txCtx context.Context, tx audit.Tx) error {
-			attempts, ok, attemptErr := s.opts.Store.RecordAttemptTx(txCtx, tx, challenge.ID,
-				attemptDigest, challenge.Generation, now)
-			if attemptErr != nil {
-				return attemptErr
-			}
-			if !ok {
-				return ErrChallengeInvalid
-			}
-			if attempts >= challenge.MaxAttempts {
-				exhausted = true
-				okTransition, transitionErr := s.opts.Store.UpdateChallengeStateTx(txCtx, tx,
-					challenge.ID, attemptDigest, challenge.Generation, StatePending, StateFailed, now)
-				if transitionErr != nil {
-					return transitionErr
-				}
-				if !okTransition {
-					return ErrChallengeInvalid
-				}
-			}
-			return nil
-		})
-		if countErr != nil {
-			s.opts.Logger.Warn("MFA 尝试计数写入失败", "error", countErr)
-		}
-		if exhausted {
+		if s.recordFailedAttempt(ctx, challenge, attemptDigest, now, request.RequestID) {
 			return VerifyResult{}, ErrAttemptsExceeded
 		}
 		return VerifyResult{}, ErrCodeInvalid
 	}
 	completedAt := now
-	action := "mfa.verified"
-	critical := audit.CriticalRequest{
-		Event: audit.Event{
-			Actor:  audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
-			Action: action, Target: audit.Target{Type: "mfa_challenge", ID: challenge.ID},
-			RequestID: validRequestID(request.RequestID),
-			Changes: []audit.FieldChange{
-				{Field: "purpose", After: string(challenge.Purpose)},
-				{Field: "factor_type", After: string(challenge.FactorType)},
-			},
-		},
-		FailureReasonCode:   "mfa.verify_failed",
-		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
-	}
-	err = s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
-		ok, updateErr := s.opts.Store.UpdateChallengeStateTx(txCtx, tx, challenge.ID, attemptDigest,
-			challenge.Generation, StatePending, StateVerified, now)
-		if updateErr != nil {
-			return updateErr
+	if challenge.FactorType == FactorEmail {
+		if err := s.markVerified(ctx, challenge, attemptDigest, now, request.RequestID); err != nil {
+			return VerifyResult{}, err
 		}
-		if !ok {
-			return ErrChallengeInvalid
-		}
-		return nil
-	})
-	if err != nil {
-		return VerifyResult{}, mapCriticalError(err)
 	}
 	challenge.State = StateVerified
 	challenge.VerifiedAt = now
@@ -505,6 +505,10 @@ func (s *Service) Resend(ctx context.Context, request ResendRequest) (LoginStart
 	challenge, err := s.loadChallenge(ctx, request.ChallengeID)
 	if err != nil {
 		return LoginStart{}, err
+	}
+	if challenge.FactorType != FactorEmail {
+		// TOTP 没有“重发验证码”；重发接口只服务邮件因素，避免对 TOTP 挑战发邮件。
+		return LoginStart{}, fmt.Errorf("%w: 该因素不支持重发", ErrInvalidRequest)
 	}
 	if challenge.Purpose != PurposeLogin || !equalDigest(challenge.AttemptSHA256, attemptDigest) ||
 		challenge.State != StatePending {
@@ -1096,4 +1100,118 @@ func isNil(value any) bool {
 	default:
 		return false
 	}
+}
+
+// resolveFactorPreference 校验因素优先顺序；默认 TOTP 优先于邮件（更符合“强因素
+// 优先”的安全默认），步骤 43 的完整认证方式选择策略之前不做更复杂决策。
+func resolveFactorPreference(value []FactorType) ([]FactorType, error) {
+	if len(value) == 0 {
+		return []FactorType{FactorTOTP, FactorEmail}, nil
+	}
+	seen := make(map[FactorType]bool, len(value))
+	result := make([]FactorType, 0, len(value))
+	for _, factor := range value {
+		if factor != FactorTOTP && factor != FactorEmail {
+			return nil, fmt.Errorf("%w: 未知因素优先项", ErrOptionsInvalid)
+		}
+		if seen[factor] {
+			return nil, fmt.Errorf("%w: 因素优先项重复", ErrOptionsInvalid)
+		}
+		seen[factor] = true
+		result = append(result, factor)
+	}
+	return result, nil
+}
+
+// chooseFactor 按配置顺序选择第一个可用因素。
+func (s *Service) chooseFactor(emailActive, totpActive bool) (FactorType, bool) {
+	for _, factor := range s.factorPreference {
+		switch factor {
+		case FactorTOTP:
+			if totpActive {
+				return FactorTOTP, true
+			}
+		case FactorEmail:
+			if emailActive {
+				return FactorEmail, true
+			}
+		}
+	}
+	return "", false
+}
+
+// recordFailedAttempt 记录挑战自身尝试计数；达到上限时迁移 pending→failed。
+// 返回是否已用尽。
+func (s *Service) recordFailedAttempt(ctx context.Context, challenge Challenge,
+	attemptDigest []byte, now time.Time, requestID string) bool {
+	exhausted := false
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:     audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			Action:    "mfa.attempt_recorded",
+			Target:    audit.Target{Type: "mfa_challenge", ID: challenge.ID},
+			RequestID: validRequestID(requestID),
+		},
+		FailureReasonCode:   "mfa.attempt_record_failed",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		attempts, ok, attemptErr := s.opts.Store.RecordAttemptTx(txCtx, tx, challenge.ID,
+			attemptDigest, challenge.Generation, now)
+		if attemptErr != nil {
+			return attemptErr
+		}
+		if !ok {
+			return ErrChallengeInvalid
+		}
+		if attempts >= challenge.MaxAttempts {
+			exhausted = true
+			okTransition, transitionErr := s.opts.Store.UpdateChallengeStateTx(txCtx, tx,
+				challenge.ID, attemptDigest, challenge.Generation, StatePending, StateFailed, now)
+			if transitionErr != nil {
+				return transitionErr
+			}
+			if !okTransition {
+				return ErrChallengeInvalid
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.opts.Logger.Warn("MFA 尝试计数写入失败", "error", err)
+	}
+	return exhausted
+}
+
+// markVerified 在审计事务内把挑战 pending→verified（单赢家）。
+func (s *Service) markVerified(ctx context.Context, challenge Challenge,
+	attemptDigest []byte, now time.Time, requestID string) error {
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:  audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			Action: "mfa.verified", Target: audit.Target{Type: "mfa_challenge", ID: challenge.ID},
+			RequestID: validRequestID(requestID),
+			Changes: []audit.FieldChange{
+				{Field: "purpose", After: string(challenge.Purpose)},
+				{Field: "factor_type", After: string(challenge.FactorType)},
+			},
+		},
+		FailureReasonCode:   "mfa.verify_failed",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		ok, updateErr := s.opts.Store.UpdateChallengeStateTx(txCtx, tx, challenge.ID, attemptDigest,
+			challenge.Generation, StatePending, StateVerified, now)
+		if updateErr != nil {
+			return updateErr
+		}
+		if !ok {
+			return ErrChallengeInvalid
+		}
+		return nil
+	})
+	if err != nil {
+		return mapCriticalError(err)
+	}
+	return nil
 }

@@ -566,6 +566,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## TOTP 绑定、验证与安全解除（步骤 41）
+
+新增内部 TOTP 域 `internal/totp` 与 SQLite 仓储 `internal/totp/sqlite`，迁移 0021 重建 `mfa_challenges`（因素类型允许 `email`/`totp`，保留 0020 全部列）并落地 `totp_bindings`；本步**不实现二维码 UI、不暴露 HTTP 路由**，验收走可信内部 Go API。
+
+- **标准 TOTP**：HMAC-SHA1、Base32 种子（`crypto/rand` 20 字节）与标准 `otpauth://totp/...` 导入 URI（二维码数据只提供 URI 字符串）；时间步长/窗口/位数有界可配（period 15～60 秒、窗口 0～3 步、位数 6～8），服务端使用自身时钟（可注入以便测试，生产默认真实时间）。已通过 **RFC 6238 官方测试向量**（SHA1 8 位/6 位各 6 组）与时钟窗口边界测试；测试向量通过不等于真实验证器/真机实测，页面接入时仍需人工验收。
+- **种子加密保存**：种子由 `internal/secrets.Sealer` 以用途 `mfa.totp`、对象=绑定 ID、范围 `system` 的 AEAD 信封加密后落库；明文种子/URI 只出现在绑定开始响应（供当前用户展示/导入），不进入日志、审计、普通查询或导出；查询只返回元数据。
+- **绑定中与已激活分离**：`pending` 绑定需近期认证（复用步骤 39 `reauth.OperationRunner`，操作 `mfa.add`）后创建；验证当前验证器验证码成功才在同一审计事务内激活并停用旧 active（重绑先验证新因素再替换旧因素，不会先删后绑导致失去因素）。确认失败递增尝试次数并写失败审计。
+- **防重放**：服务端记录 `last_accepted_step`，登录验证只接受**严格更大**的时间步；同一步并发/重放通过条件更新只允许一方成功（已用多 goroutine 测试）。同一时间步在窗口内不会重复接受。
+- **解除保护**：解除必须先验证当前 TOTP 验证码（证明持有），再检查宿主 `Policy.MFARequired` 与其他强因素；强制 MFA 且没有其他强因素时拒绝移除最后一个可用因素，未强制时本人可解除。
+- **装配约束（宿主必读）**：`BeginBinding` 只允许从**完整（非受限）已认证会话**调用，不得把待第二因素、待改密或受限初始化会话接到绑定入口；高权限账户绑定/更换强因素必须在完成强认证后进行。`mfa.add` 默认只要求近期密码认证，服务层不额外判断会话是否完整，宿主接错入口会退化为主密码即可绑定新因素。
+- **确认步防重放与绑定可用性**：确认绑定所用时间步会写入 `last_accepted_step`，该码不能立即用于登录；`mfa.add` 目录默认策略改为 **近期密码认证**（`password`+300 秒新鲜度，首次加第二因素不再被“要求强认证但未实现”卡死），`Implemented=true`；装配时 `internal/mfa` 必须与 `*internal/totp.Service` 配对注入（`Options.TOTP` 缺失时构造直接失败，避免已绑定 TOTP 的账户被当作无因素放行）。确认失败只写 failure 审计（不伪造成功审计），过期 pending 惰性清理并释放名额。
+- **错误码**：只复用既有 46 码：参数/绑定问题 `REQ_INVALID`，越权 `ACCESS_DENIED`，近期认证/强因素 `REAUTH_REQUIRED`/`MFA_REQUIRED`，验证码/重放/尝试用尽 `CHALLENGE_INVALID`，限流 `RATE_LIMITED`，策略不可用 `AUTHZ_UNAVAILABLE`，存储/加密 `DB_UNAVAILABLE`，审计 `AUDIT_WRITE_FAILED`。
+- **与步骤 40 的 MFA 登录接线（已接入）**：`internal/mfa.BeginLogin` 按可配置因素优先顺序（默认 **TOTP 优先于邮件**）选择第二步：账户有已激活 TOTP 时创建 `factor_type=totp` 挑战、不发送邮件，仍绑定用户/登录尝试/用途/AppID/记住我/客户端/受限会话并沿用步骤 40 的限流与尝试上限；`Verify` 对 TOTP 挑战调用 `totp.VerifyLoginCode`（服务端时间步防重放），成功后才用同一受限会话与同 AppID 等轮换完整会话，失败计入尝试上限并写失败审计，重放/跨步复用被拒绝。两者共存时默认走 TOTP；可用 `Options.FactorPreference` 调整顺序，完整的“认证方式选择策略”属步骤 43。
+- **已知限制**：页面/HTTP/启动装配、真实验证器/真机实测、绑定发起传输层限流（当前仅服务内尝试上限与 pending 数上限）、恢复代码/Passkey/FIDO2、认证方式选择策略（步骤 43）、审计导出与过期清理任务未实现或未验证；race/非 Windows 未验证。
+
 ## 两步验证公共流程与邮件第二步验证（步骤 40）
 
 新增内部 MFA 状态机 `internal/mfa` 与 SQLite 仓储 `internal/mfa/sqlite`，迁移 0020 落地 `mfa_factors`（活动因素）与 `mfa_challenges`（统一挑战：用户、登录尝试摘要、用途、因素、验证码凭证、重发代数、状态机与有效期）；本步**不实现 TOTP/Passkey/FIDO2，不做页面与 HTTP 路由**，验收走可信内部 Go API。

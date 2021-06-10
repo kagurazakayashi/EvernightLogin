@@ -21,12 +21,15 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	mfasqlite "github.com/kagurazakayashi/EvernightLogin/internal/mfa/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
+	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
+	totpsqlite "github.com/kagurazakayashi/EvernightLogin/internal/totp/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -45,6 +48,7 @@ type testEnv struct {
 	audit   *audit.Recorder
 	session *session.Service
 	mail    *testmail.Server
+	totp    *totp.Service
 	now     time.Time
 }
 
@@ -119,9 +123,26 @@ func newTestEnv(t *testing.T, mutate func(*mfa.Options)) *testEnv {
 		t.Fatalf("MFA 存储: %v", err)
 	}
 	env.store = mfaStore
+	sealer, err := secrets.NewSealer(keyring, nil)
+	if err != nil {
+		t.Fatalf("TOTP 加密器: %v", err)
+	}
+	totpStore, err := totpsqlite.New(storage)
+	if err != nil {
+		t.Fatalf("TOTP 存储: %v", err)
+	}
+	totpService, err := totp.New(totp.Options{
+		Store: totpStore, Audit: recorder, Sealer: sealer, Reauth: totpAllowRunner{},
+		IssuerName: "登录服务", Now: func() time.Time { return env.now },
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	})
+	if err != nil {
+		t.Fatalf("TOTP 服务: %v", err)
+	}
+	env.totp = totpService
 	options := mfa.Options{
 		Store: mfaStore, Audit: recorder, Credentials: credentialService,
-		Sessions: sessionService, Mailer: sender,
+		Sessions: sessionService, Mailer: sender, TOTP: totpService,
 		FromAddress: "security@example.com", AppName: "登录服务", SupportURL: "https://example.com/support",
 		Now:    func() time.Time { return env.now },
 		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
@@ -709,5 +730,172 @@ func TestAttemptsExhaustedMarksChallengeFailed(t *testing.T) {
 	}
 	if state := env.queryString(`SELECT state FROM mfa_challenges WHERE id=?`, start.ChallengeID); state != string(mfa.StateFailed) {
 		t.Errorf("挑战状态 = %q，期望 failed", state)
+	}
+}
+
+// totpAllowRunner 是测试用“近期认证通过”的步骤 39 收敛入口，仅用于 TOTP 绑定。
+type totpAllowRunner struct{}
+
+func (totpAllowRunner) Authorize(ctx context.Context, caller reauth.Caller, request reauth.Request) (reauth.Result, error) {
+	return reauth.Result{OperationID: request.OperationID, TargetID: request.TargetID}, nil
+}
+
+func (totpAllowRunner) NotifyOutcome(ctx context.Context, result reauth.Result, outcome reauth.Outcome) error {
+	return nil
+}
+
+// enableTOTP 为测试用户绑定并激活 TOTP，返回种子。
+func (e *testEnv) enableTOTP() []byte {
+	e.t.Helper()
+	e.now = time.Now().UTC()
+	caller, err := totp.UserCaller(userID)
+	if err != nil {
+		e.t.Fatalf("TOTP 调用者: %v", err)
+	}
+	start, err := e.totp.BeginBinding(e.ctx, caller, "req-totp-bind")
+	if err != nil {
+		e.t.Fatalf("开始绑定 TOTP: %v", err)
+	}
+	secret, err := totp.DecodeSecret(start.Secret)
+	if err != nil {
+		e.t.Fatalf("解码 TOTP 种子: %v", err)
+	}
+	code, _, err := totp.GenerateCode(secret, e.now, 30, 6)
+	if err != nil {
+		e.t.Fatalf("生成 TOTP 验证码: %v", err)
+	}
+	if _, err := e.totp.ConfirmBinding(e.ctx, caller, totp.BindConfirm{
+		BindingID: start.BindingID, Code: code, RequestID: "req-totp-confirm"}); err != nil {
+		e.t.Fatalf("确认 TOTP 绑定: %v", err)
+	}
+	// 确认步已被消费（写入 last_accepted_step），推进到下一时间步供登录使用。
+	e.now = e.now.Add(30 * time.Second)
+	return secret
+}
+
+func (e *testEnv) totpCode(secret []byte) string {
+	e.t.Helper()
+	code, _, err := totp.GenerateCode(secret, e.now, 30, 6)
+	if err != nil {
+		e.t.Fatalf("生成 TOTP 验证码: %v", err)
+	}
+	return code
+}
+
+// TestPasswordTOTPFullSession 覆盖：密码→TOTP 第二步→完整会话，且同一步重放拒绝；
+// 邮件因素未启用时不发送邮件、不消费邮件验证码。
+func TestPasswordTOTPFullSession(t *testing.T) {
+	env := newTestEnv(t, nil)
+	secret := env.enableTOTP()
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), RequestID: "req-totp-login"})
+	if err != nil {
+		t.Fatalf("TOTP 第一步: %v", err)
+	}
+	if start.FactorType != mfa.FactorTOTP || start.MaskedEmail != "" {
+		t.Fatalf("因素选择异常: %+v", start)
+	}
+	if !start.RestrictedSession.Session.IsRestricted() {
+		t.Fatal("第一步只能签发受限会话")
+	}
+	code := env.totpCode(secret)
+	result, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken, Code: code,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-totp-verify"})
+	if err != nil {
+		t.Fatalf("TOTP 第二步: %v", err)
+	}
+	if result.Session.Session.IsRestricted() {
+		t.Fatal("第二步成功后应签发完整会话")
+	}
+	if result.Session.Session.AppID != "" {
+		t.Errorf("非应用登录不应绑定应用: %q", result.Session.Session.AppID)
+	}
+	// 同一时间步在新挑战中重放：拒绝（totp 已接受时间步记录）。
+	second, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), RequestID: "req-totp-login-2"})
+	if err != nil {
+		t.Fatalf("第二个 TOTP 挑战: %v", err)
+	}
+	if _, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: second.ChallengeID, AttemptToken: second.AttemptToken, Code: code,
+		ExistingSession: second.RestrictedSession.Secret.Reveal(), RequestID: "req-totp-replay"}); !errors.Is(err, mfa.ErrCodeInvalid) {
+		t.Fatalf("TOTP 同一步重放错误 = %v，期望 ErrCodeInvalid", err)
+	}
+}
+
+// TestTOTPPreferredOverEmailWhenBothEnabled 验证两者共存时默认 TOTP 优先。
+func TestTOTPPreferredOverEmailWhenBothEnabled(t *testing.T) {
+	env := newTestEnv(t, nil)
+	env.enableEmailFactor()
+	env.enableTOTP()
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), RequestID: "req-both"})
+	if err != nil {
+		t.Fatalf("双因素第一步: %v", err)
+	}
+	if start.FactorType != mfa.FactorTOTP {
+		t.Fatalf("默认应优先 TOTP，实际 %q", start.FactorType)
+	}
+}
+
+// TestAppScopedTOTPLoginKeepsScope 验证应用作用域 TOTP 第二步后仍是应用会话。
+func TestAppScopedTOTPLoginKeepsScope(t *testing.T) {
+	env := newTestEnv(t, nil)
+	secret := env.enableTOTP()
+	const appID = "app_00000000000000000000000000000001"
+	env.seedApplication(appID)
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), AppID: appID, RequestID: "req-totp-app"})
+	if err != nil {
+		t.Fatalf("应用 TOTP 第一步: %v", err)
+	}
+	if start.FactorType != mfa.FactorTOTP || start.RestrictedSession.Session.AppID != appID {
+		t.Fatalf("应用 TOTP 受限会话异常: %+v", start)
+	}
+	code := env.totpCode(secret)
+	result, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken, Code: code,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-totp-app-verify"})
+	if err != nil {
+		t.Fatalf("应用 TOTP 第二步: %v", err)
+	}
+	if result.Session.Session.IsRestricted() || result.Session.Session.AppID != appID {
+		t.Fatalf("TOTP 应用会话作用域异常: kind=%s app=%q",
+			result.Session.Session.Kind, result.Session.Session.AppID)
+	}
+}
+
+// TestTOTPWrongCodeAttemptsExceeded 验证 TOTP 错误码计入尝试上限并迁移 failed。
+func TestTOTPWrongCodeAttemptsExceeded(t *testing.T) {
+	env := newTestEnv(t, nil)
+	env.enableTOTP()
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), RequestID: "req-totp-attempts"})
+	if err != nil {
+		t.Fatalf("TOTP 第一步: %v", err)
+	}
+	var lastErr error
+	for attempt := 0; attempt < mfa.DefaultMaxAttempts; attempt++ {
+		_, lastErr = env.service.Verify(env.ctx, mfa.VerifyRequest{
+			ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken, Code: "000000",
+			ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-totp-bad"})
+	}
+	if !errors.Is(lastErr, mfa.ErrAttemptsExceeded) {
+		t.Fatalf("TOTP 尝试用尽错误 = %v，期望 ErrAttemptsExceeded", lastErr)
+	}
+	if state := env.queryString(`SELECT state FROM mfa_challenges WHERE id=?`, start.ChallengeID); state != string(mfa.StateFailed) {
+		t.Errorf("TOTP 挑战状态 = %q，期望 failed", state)
+	}
+}
+
+// TestNewRequiresTOTPAdapter 验证装配契约：mfa 未配对注入 TOTP 适配器时拒绝构造，
+// 避免已绑定 TOTP 的账户被当作“没有因素”而只凭密码登录。
+func TestNewRequiresTOTPAdapter(t *testing.T) {
+	var captured mfa.Options
+	_ = newTestEnv(t, func(options *mfa.Options) { captured = *options })
+	captured.TOTP = nil
+	if _, err := mfa.New(captured); !errors.Is(err, mfa.ErrOptionsInvalid) {
+		t.Fatalf("未注入 TOTP 适配器错误 = %v，期望 ErrOptionsInvalid", err)
 	}
 }

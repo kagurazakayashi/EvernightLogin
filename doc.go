@@ -343,6 +343,22 @@
 // InviteAuthorizer，未接线时普通用户拒绝；HTTP 路由、启动装配、过期记录清理、邮件重发与
 // 多级审批引擎未实现；本包不签发会话、不创建 root。
 //
+// internal/totp 已实现标准 TOTP（RFC 6238，SHA1/Base32/otpauth URI）的绑定与登录
+// 验证核心（步骤 41）：crypto/rand 生成 20 字节种子并经 internal/secrets.Sealer
+// 认证加密保存（用途 mfa.totp/对象=绑定 ID/范围 system），pending 绑定需近期认证
+// （reauth）并在验证验证码后于同一审计事务内激活并替换旧 active；服务端可信时间
+// 与有界时间步/窗口，记录并原子推进 last_accepted_step 防同一步并发/重放；解除先
+// 验证当前验证码再检查强制 MFA 与其他强因素。已通过 RFC 6238 官方测试向量与窗口
+// 边界测试（不代表真实验证器/真机实测）。internal/mfa 登录第二步已接入 TOTP：按可
+// 配置因素顺序（默认 TOTP 优先于邮件）创建 totp 挑战、不发送邮件，Verify 调
+// totp.VerifyLoginCode 后复用步骤 40 的受限会话绑定与轮换逻辑，失败计入尝试上限，
+// 重放拒绝；完整认证方式选择策略属步骤 43。mfa 必须与 TOTP 适配器配对注入（缺失
+// 时构造失败，避免已绑定 TOTP 账户被当作无因素放行）；mfa.add 默认近期密码认证，
+// 确认步写入 last_accepted_step 防立即复用，确认失败只写 failure 审计。页面/HTTP/
+// 装配约束：BeginBinding 只能从完整（非受限）已认证会话调用，高权限账户绑定/更换
+// 强因素须在完成强认证后进行（mfa.add 默认仅要求近期密码认证，服务层不判断会话
+// 是否受限）。确认绑定各拒绝分支写 failure 审计。装配留后续步骤；本包不做二维码 UI。
+//
 // internal/mfa 已实现两步验证公共状态机与邮件第二步验证（步骤 40）：迁移 0020
 // 落地 mfa_factors/mfa_challenges；挑战统一绑定用户、当前登录尝试摘要、用途、因素、
 // 验证码凭证与重发代数，pending 只能条件迁移一次（并发/重放单赢家）。启用邮件因素后
