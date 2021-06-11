@@ -359,6 +359,24 @@
 // 强因素须在完成强认证后进行（mfa.add 默认仅要求近期密码认证，服务层不判断会话
 // 是否受限）。确认绑定各拒绝分支写 failure 审计。装配留后续步骤；本包不做二维码 UI。
 //
+// internal/passkey 已实现 WebAuthn/Passkey 注册、用户名登录、可发现凭证登录与
+// 凭证管理（步骤 42）：迁移 0022 落地 webauthn_user_handles（稳定随机用户句柄）、
+// webauthn_credentials（COSE 公钥/计数器/BE/BS 等元数据）与 webauthn_ceremonies
+// （服务端挑战与绑定的 AppID/记住我/客户端描述）。WebAuthn 协议与密码学校验使用
+// 维护中的 github.com/go-webauthn/webauthn v0.18.2（BSD-3-Clause），不自行实现
+// 密码学；挑战一次性原子消费，库校验 challenge/操作类型/来源/RP ID/签名/UP/UV；
+// 注册凭证绑定服务端挑战中的用户、credential_id 全表唯一（防止把他人凭证登记
+// 到自己名下），用户句柄与用户 ID 无关且稳定。同步凭证（backup eligible）计数器
+// 允许不递增，非同步凭证计数器不递增按可能的复制拒绝。新增/删除凭证复用
+// internal/reauth 与步骤 38 目录的 passkey.register/passkey.remove；删除前在同一
+// 审计事务检查不得失去最后一个登录方式（其他 Passkey 或主密码）。验证成功且满足
+// UV 策略的 Passkey 直接完成登录（不追加同源第二因素），通过 internal/session
+// 签发；应用作用域在开始阶段绑定、完成阶段只以同 AppID 签发并防御性复验，不会
+// 升级为全局会话。本包不暴露 HTTP 路由与页面、不实现 FIDO2 第二因素/认证方式
+// 选择策略（步骤 43）、恢复代码、MDS/attestation 证书链校验与 raw attestation
+// 持久化；测试使用模拟认证器，不代表真实浏览器/Windows Hello/安全密钥实测；
+// root 的 Passkey 登录仍 fail-closed。
+//
 // internal/mfa 已实现两步验证公共状态机与邮件第二步验证（步骤 40）：迁移 0020
 // 落地 mfa_factors/mfa_challenges；挑战统一绑定用户、当前登录尝试摘要、用途、因素、
 // 验证码凭证与重发代数，pending 只能条件迁移一次（并发/重放单赢家）。启用邮件因素后
@@ -369,8 +387,8 @@
 // BeginLogin fail-closed 返回 MFA_REQUIRED 且不签发会话；强制策略但无可用因素同样
 // fail-closed；账户维度有界挑战/验证/重发限流防爆破与邮件轰炸。因素新增需验证渠道
 // 控制权，移除受宿主 Policy 强制策略约束；取消登录不撤销已签发受限会话（由宿主/
-// 到期回收）。明文验证码不进入日志/审计/错误/队列；TOTP/Passkey/FIDO2、页面、HTTP 路由、
-// 装配、因素切换与过期清理留后续步骤。
+// 到期回收）。明文验证码不进入日志/审计/错误/队列；TOTP 已接入（步骤 41），
+// FIDO2 第二因素、页面、HTTP 路由、装配、因素切换与过期清理留后续步骤。
 //
 // internal/reauth 已实现敏感操作的再次认证、认证强度判断与安全告知（步骤 39）：
 // 执行前按步骤 38 有效策略实时判断近期认证（新鲜度/实际强度/完整认证/确认），

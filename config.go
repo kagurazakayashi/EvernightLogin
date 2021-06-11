@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/proxytrust"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
 )
@@ -109,6 +110,9 @@ type Config struct {
 	// Registration 是自主注册策略配置（步骤 33）。默认关闭；管理员创建账户
 	// 不依赖该配置。
 	Registration RegistrationConfig
+	// Passkey 是 WebAuthn/Passkey 依赖方配置（步骤 42）。默认关闭；启用时
+	// RP ID、允许来源与用户验证策略必须显式配置，非法值拒绝启动。
+	Passkey PasskeyConfig
 }
 
 // ServerConfig 是独立服务与嵌入模式共用的监听配置。
@@ -262,6 +266,52 @@ type RegistrationConfig struct {
 // MaxRegistrationDefaultRoles 是默认角色策略允许的最大条数。
 const MaxRegistrationDefaultRoles = 20
 
+// PasskeyConfig 是 WebAuthn/Passkey 的依赖方配置（步骤 42）。
+//
+// 安全边界：RP ID 是 Passkey 的信任根，通常是可注册域名（不能是 IP、不能带
+// 协议/端口/路径）；Passkey 不会跨 RP ID 通用，多域名监听不代表可跨任意域名
+// 使用。允许来源必须是完整来源（scheme://host[:port]），只接受 https 或本地
+// 开发用的 http://localhost，且来源主机必须是 RP ID 或其子域。UserVerification
+// 默认为 required；preferred/discouraged 会降低强度，只应在明确接受风险时设置。
+// 修改后需要重启服务。
+type PasskeyConfig struct {
+	// Enabled 是 Passkey 功能总开关，默认 false（默认拒绝）。关闭时不会创建
+	// 注册/认证挑战，也不接受 Passkey 登录。
+	Enabled bool
+	// RPID 是 WebAuthn Relying Party ID（例如 login.example.com）。
+	RPID string
+	// RPDisplayName 是浏览器展示的依赖方名称；空时由 Passkey 服务使用默认名。
+	RPDisplayName string
+	// AllowedOrigins 是允许的浏览器来源完整列表，至少一个。
+	AllowedOrigins []string
+	// UserVerification 是注册/登录要求的用户验证策略：required（默认）、
+	// preferred 或 discouraged。
+	UserVerification string
+}
+
+// MaxPasskeyOrigins 是允许来源列表的最大条数。
+const MaxPasskeyOrigins = 20
+
+// passkeyConfigProblem 校验 Passkey 配置；返回空字符串表示合法。未启用且未配置
+// 任何 RP 信息时允许留空（功能关闭），一旦配置了就按完整规则校验，避免半成品
+// 配置被静默忽略。
+func passkeyConfigProblem(c PasskeyConfig) string {
+	if !c.Enabled && strings.TrimSpace(c.RPID) == "" && len(c.AllowedOrigins) == 0 {
+		// 功能关闭且没有任何 RP 信息时允许留空（RP 显示名/UV 的默认值不算配置）。
+		return ""
+	}
+	if len(c.AllowedOrigins) > MaxPasskeyOrigins {
+		return fmt.Sprintf("允许来源最多 %d 个", MaxPasskeyOrigins)
+	}
+	if err := passkey.ValidateRPConfig(c.RPID, c.AllowedOrigins); err != nil {
+		return err.Error()
+	}
+	if c.UserVerification != "" && !passkey.UserVerification(c.UserVerification).Valid() {
+		return "用户验证策略必须是 required、preferred 或 discouraged"
+	}
+	return ""
+}
+
 // SecretsConfig 保存从受保护来源解析出的秘密。秘密值不会出现在 YAML 中，
 // 只能来自环境变量、受保护文件或宿主显式选项。
 type SecretsConfig struct {
@@ -377,6 +427,11 @@ const (
 	envRegistrationReview    = EnvVarPrefix + "REGISTRATION_REQUIRE_REVIEW"
 	envRegistrationEmail     = EnvVarPrefix + "REGISTRATION_REQUIRE_EMAIL_VERIFICATION"
 	envRegistrationRoles     = EnvVarPrefix + "REGISTRATION_DEFAULT_ROLE_IDS"
+	envPasskeyEnabled        = EnvVarPrefix + "PASSKEY_ENABLED"
+	envPasskeyRPID           = EnvVarPrefix + "PASSKEY_RP_ID"
+	envPasskeyRPName         = EnvVarPrefix + "PASSKEY_RP_DISPLAY_NAME"
+	envPasskeyOrigins        = EnvVarPrefix + "PASSKEY_ALLOWED_ORIGINS"
+	envPasskeyUserVerify     = EnvVarPrefix + "PASSKEY_USER_VERIFICATION"
 	envSecretsMasterKey      = EnvVarPrefix + "SECRETS_MASTER_KEY"
 	envSecretsTLSPFXPassword = EnvVarPrefix + "SECRETS_TLS_PFX_PASSWORD"
 )
@@ -410,6 +465,11 @@ var configFields = []FieldInfo{
 	{Field: "registration.require_review", Env: envRegistrationReview, Class: ReloadRestartRequired},
 	{Field: "registration.require_email_verification", Env: envRegistrationEmail, Class: ReloadRestartRequired},
 	{Field: "registration.default_role_ids", Env: envRegistrationRoles, Class: ReloadRestartRequired},
+	{Field: "passkey.enabled", Env: envPasskeyEnabled, Class: ReloadRestartRequired},
+	{Field: "passkey.rp_id", Env: envPasskeyRPID, Class: ReloadRestartRequired},
+	{Field: "passkey.rp_display_name", Env: envPasskeyRPName, Class: ReloadRestartRequired},
+	{Field: "passkey.allowed_origins", Env: envPasskeyOrigins, Class: ReloadRestartRequired},
+	{Field: "passkey.user_verification", Env: envPasskeyUserVerify, Class: ReloadRestartRequired},
 	{Field: "secrets.master_key", Env: envSecretsMasterKey, Class: ReloadRestartRequired, Secret: true},
 	{Field: "secrets.tls_pfx_password", Env: envSecretsTLSPFXPassword, Class: ReloadRestartRequired, Secret: true},
 }
@@ -459,6 +519,10 @@ func Default() Config {
 			RequireReview:            false,
 			RequireEmailVerification: false,
 			DefaultRoleIDs:           nil,
+		},
+		Passkey: PasskeyConfig{
+			Enabled:          false,
+			UserVerification: "required",
 		},
 	}
 }
@@ -1053,6 +1117,9 @@ func validateMerged(c Config) ConfigErrors {
 	}
 	if problem := registrationDefaultRolesProblem(c.Registration.DefaultRoleIDs); problem != "" {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "registration.default_role_ids", 0, problem))
+	}
+	if problem := passkeyConfigProblem(c.Passkey); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "passkey", 0, problem))
 	}
 
 	// 非法组合：公开地址使用明文 http 时，服务不得监听非回环接口（主地址或额外

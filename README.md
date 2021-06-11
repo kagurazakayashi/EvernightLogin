@@ -77,6 +77,11 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 | registration.require_review | LOGIN_REGISTRATION_REQUIRE_REVIEW | 需重启 |
 | registration.require_email_verification | LOGIN_REGISTRATION_REQUIRE_EMAIL_VERIFICATION | 需重启 |
 | registration.default_role_ids | LOGIN_REGISTRATION_DEFAULT_ROLE_IDS | 需重启 |
+| passkey.enabled | LOGIN_PASSKEY_ENABLED | 需重启 |
+| passkey.rp_id | LOGIN_PASSKEY_RP_ID | 需重启 |
+| passkey.rp_display_name | LOGIN_PASSKEY_RP_DISPLAY_NAME | 需重启 |
+| passkey.allowed_origins | LOGIN_PASSKEY_ALLOWED_ORIGINS | 需重启 |
+| passkey.user_verification | LOGIN_PASSKEY_USER_VERIFICATION | 需重启 |
 | secrets.master_key | LOGIN_SECRETS_MASTER_KEY | 需重启 |
 | secrets.tls_pfx_password | LOGIN_SECRETS_TLS_PFX_PASSWORD | 需重启 |
 
@@ -580,6 +585,17 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **错误码**：只复用既有 46 码：参数/绑定问题 `REQ_INVALID`，越权 `ACCESS_DENIED`，近期认证/强因素 `REAUTH_REQUIRED`/`MFA_REQUIRED`，验证码/重放/尝试用尽 `CHALLENGE_INVALID`，限流 `RATE_LIMITED`，策略不可用 `AUTHZ_UNAVAILABLE`，存储/加密 `DB_UNAVAILABLE`，审计 `AUDIT_WRITE_FAILED`。
 - **与步骤 40 的 MFA 登录接线（已接入）**：`internal/mfa.BeginLogin` 按可配置因素优先顺序（默认 **TOTP 优先于邮件**）选择第二步：账户有已激活 TOTP 时创建 `factor_type=totp` 挑战、不发送邮件，仍绑定用户/登录尝试/用途/AppID/记住我/客户端/受限会话并沿用步骤 40 的限流与尝试上限；`Verify` 对 TOTP 挑战调用 `totp.VerifyLoginCode`（服务端时间步防重放），成功后才用同一受限会话与同 AppID 等轮换完整会话，失败计入尝试上限并写失败审计，重放/跨步复用被拒绝。两者共存时默认走 TOTP；可用 `Options.FactorPreference` 调整顺序，完整的“认证方式选择策略”属步骤 43。
 - **已知限制**：页面/HTTP/启动装配、真实验证器/真机实测、绑定发起传输层限流（当前仅服务内尝试上限与 pending 数上限）、恢复代码/Passkey/FIDO2、认证方式选择策略（步骤 43）、审计导出与过期清理任务未实现或未验证；race/非 Windows 未验证。
+
+## Passkey 注册、登录与凭证管理（步骤 42）
+
+新增内部 Passkey 域 `internal/passkey` 与 SQLite 仓储 `internal/passkey/sqlite`，迁移 `0022_passkey.sql` 落地 `webauthn_user_handles`（稳定随机用户句柄）、`webauthn_credentials`（公钥凭证元数据）与 `webauthn_ceremonies`（服务端挑战）；WebAuthn 协议与密码学校验使用维护中的 `github.com/go-webauthn/webauthn v0.18.2`（BSD-3-Clause，Go 1.26.0），**不自行实现 WebAuthn 密码学、不实现 FIDO2 第二因素、不暴露 HTTP 路由与完整前端**，验收走可信内部 Go API。测试使用模拟认证器，**不代表真实浏览器/Windows Hello/安全密钥实测**。
+
+- **RP ID 与允许来源**：根配置新增 `passkey.enabled`（默认 false，默认拒绝）、`passkey.rp_id`、`passkey.rp_display_name`、`passkey.allowed_origins`、`passkey.user_verification`（默认 required）及固定环境变量 `LOGIN_PASSKEY_*`；RP ID 必须是可注册域名（拒绝 IP/协议/端口/路径），来源必须是 https（本地开发只允许 `http://localhost`）且主机属于 RP ID 或其子域，非法配置在加载/构造阶段拒绝。Passkey 不跨 RP ID 通用，多域名监听不等于可跨任意域名使用。
+- **注册**：挑战只保存在服务端并一次性原子消费；新增凭证要求近期认证与 `passkey.register` 敏感策略（默认与 `mfa.add` 一致的近期主密码 300 秒 + 安全告知，避免“首个强因素无法建立”的死锁，宿主可加严为 strong）。用户句柄为 32 字节随机值，与用户 ID 无关且稳定；凭证绑定服务端挑战中的用户，客户端不能把他人的凭证登记到自己名下；`credential_id` 全表唯一，重复或跨用户注册返回 CONFLICT；注册要求可发现凭证（resident key required）。
+- **登录**：支持用户名登录与可发现凭证（usernameless）登录；库校验 challenge、操作类型（注册/认证）、来源、RP ID、签名、用户在场（UP）与按策略要求的用户验证（UV），注册挑战不能用于认证、反之亦然。验证成功且满足 UV 策略的 Passkey **直接完成登录**（认证方法只有 `passkey`，不机械追加同源第二因素），会话由 `internal/session` 签发；应用作用域在开始阶段绑定到服务端挑战，完成阶段只以同一 AppID 签发并防御性复验，**不会升级为全局会话**（沿用步骤 40 修复语义）；用户名不存在、账户禁用或无凭证统一返回 `AUTH_FAILED`，不泄露账户存在性。
+- **同步凭证计数器**：backup eligible（同步 Passkey）的签名计数器允许不递增并被接受；非同步凭证计数器不递增按可能的凭证复制拒绝（`AUTH_FAILED`）并写失败审计。BE/BS 备份状态元数据持久化并随登录更新。
+- **凭证管理**：提供查询、重命名（显示名，不改变安全状态）与撤销；撤销要求 `passkey.remove` 近期认证，并在同一审计事务内检查不得删除最后一个可用登录方式（仍有其他 Passkey 或主密码才允许），软删除保留审计关联。
+- **已知限制**：HTTP 路由/页面/`cmd/login-server` 装配、FIDO2 第二因素与完整认证方式选择策略（步骤 43）、恢复代码、MDS/attestation 证书链校验（原始 attestation 数据未持久化）、真实浏览器与真机实测、过期挑战清理任务、race 与非 Windows 验证未做；root 的 Passkey 登录仍 fail-closed（root 强认证路径待后续步骤/CLI 收口）。
 
 ## 两步验证公共流程与邮件第二步验证（步骤 40）
 

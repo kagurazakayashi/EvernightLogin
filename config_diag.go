@@ -79,6 +79,16 @@ func (c Config) fieldValueString(field string) string {
 		return strconv.FormatBool(c.Registration.RequireEmailVerification)
 	case "registration.default_role_ids":
 		return formatStringList(c.Registration.DefaultRoleIDs)
+	case "passkey.enabled":
+		return strconv.FormatBool(c.Passkey.Enabled)
+	case "passkey.rp_id":
+		return strconv.Quote(c.Passkey.RPID)
+	case "passkey.rp_display_name":
+		return strconv.Quote(c.Passkey.RPDisplayName)
+	case "passkey.allowed_origins":
+		return formatStringList(c.Passkey.AllowedOrigins)
+	case "passkey.user_verification":
+		return strconv.Quote(c.Passkey.UserVerification)
 	case "secrets.master_key":
 		return c.Secrets.MasterKey.String()
 	case "secrets.tls_pfx_password":

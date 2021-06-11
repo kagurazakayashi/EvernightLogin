@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 )
 
 // maxConfigFileBytes 是 YAML 配置文件的大小上限，避免误读大文件。
@@ -47,6 +49,7 @@ type Overrides struct {
 	Database     DatabaseOverrides
 	Secrets      SecretsOverrides
 	Registration RegistrationOverrides
+	Passkey      PasskeyOverrides
 }
 
 // ServerOverrides 是 ServerConfig 的显式覆盖项。
@@ -96,6 +99,15 @@ type RegistrationOverrides struct {
 	RequireReview            *bool
 	RequireEmailVerification *bool
 	DefaultRoleIDs           *[]string
+}
+
+// PasskeyOverrides 是 PasskeyConfig 的显式覆盖项。
+type PasskeyOverrides struct {
+	Enabled          *bool
+	RPID             *string
+	RPDisplayName    *string
+	AllowedOrigins   *[]string
+	UserVerification *string
 }
 
 // Load 按“内置默认值 < YAML < 环境变量 < 显式代码选项”的顺序合并并校验配置。
@@ -241,6 +253,11 @@ type configOverrides struct {
 	registrationReview    *bool
 	registrationEmail     *bool
 	registrationRoles     *[]string
+	passkeyEnabled        *bool
+	passkeyRPID           *string
+	passkeyRPName         *string
+	passkeyOrigins        *[]string
+	passkeyUserVerify     *string
 	secretSource          *SecretSource
 	secretValue           *Secret
 	secretPFXSource       *SecretSource
@@ -328,6 +345,21 @@ func (ov *configOverrides) apply(cfg *Config) {
 	if ov.registrationRoles != nil {
 		cfg.Registration.DefaultRoleIDs = append([]string(nil), (*ov.registrationRoles)...)
 	}
+	if ov.passkeyEnabled != nil {
+		cfg.Passkey.Enabled = *ov.passkeyEnabled
+	}
+	if ov.passkeyRPID != nil {
+		cfg.Passkey.RPID = *ov.passkeyRPID
+	}
+	if ov.passkeyRPName != nil {
+		cfg.Passkey.RPDisplayName = *ov.passkeyRPName
+	}
+	if ov.passkeyOrigins != nil {
+		cfg.Passkey.AllowedOrigins = append([]string(nil), (*ov.passkeyOrigins)...)
+	}
+	if ov.passkeyUserVerify != nil {
+		cfg.Passkey.UserVerification = *ov.passkeyUserVerify
+	}
 }
 
 // readConfigFile 读取 YAML 配置文件，并限制文件大小与文件类型。
@@ -359,6 +391,7 @@ type yamlConfig struct {
 	Database     *yamlDatabase     `yaml:"database"`
 	Secrets      *yamlSecrets      `yaml:"secrets"`
 	Registration *yamlRegistration `yaml:"registration"`
+	Passkey      *yamlPasskey      `yaml:"passkey"`
 }
 
 type yamlServer struct {
@@ -411,6 +444,15 @@ type yamlRegistration struct {
 	DefaultRoleIDs           *[]string `yaml:"default_role_ids"`
 }
 
+// yamlPasskey 是 YAML 中的 Passkey 依赖方配置段（步骤 42）。
+type yamlPasskey struct {
+	Enabled          *bool     `yaml:"enabled"`
+	RPID             *string   `yaml:"rp_id"`
+	RPDisplayName    *string   `yaml:"rp_display_name"`
+	AllowedOrigins   *[]string `yaml:"allowed_origins"`
+	UserVerification *string   `yaml:"user_verification"`
+}
+
 // yamlSecretFields 是允许出现的秘密字段名；每个字段的值只能是 env/file 来源映射。
 var yamlSecretFields = map[string]struct{}{
 	"master_key":       {},
@@ -429,7 +471,7 @@ type yamlLeafSpec struct {
 }
 
 var (
-	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration"}
+	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration", "passkey"}
 
 	yamlSectionFields = map[string][]yamlLeafSpec{
 		"server": {
@@ -458,6 +500,12 @@ var (
 			{name: "require_review", tag: "!!bool"},
 			{name: "require_email_verification", tag: "!!bool"},
 		},
+		"passkey": {
+			{name: "enabled", tag: "!!bool"},
+			{name: "rp_id", tag: "!!str"},
+			{name: "rp_display_name", tag: "!!str"},
+			{name: "user_verification", tag: "!!str"},
+		},
 	}
 
 	// yamlSectionListFields 描述字符串列表字段；值是该列表元素允许的 YAML 标签。
@@ -472,6 +520,9 @@ var (
 		},
 		"registration": {
 			"default_role_ids": "!!str",
+		},
+		"passkey": {
+			"allowed_origins": "!!str",
 		},
 	}
 
@@ -886,6 +937,13 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.registrationEmail = doc.Registration.RequireEmailVerification
 		ov.registrationRoles = doc.Registration.DefaultRoleIDs
 	}
+	if doc.Passkey != nil {
+		ov.passkeyEnabled = doc.Passkey.Enabled
+		ov.passkeyRPID = doc.Passkey.RPID
+		ov.passkeyRPName = doc.Passkey.RPDisplayName
+		ov.passkeyOrigins = doc.Passkey.AllowedOrigins
+		ov.passkeyUserVerify = doc.Passkey.UserVerification
+	}
 	if doc.Secrets != nil {
 		if doc.Secrets.MasterKey != nil {
 			source, sourceErr := convertYAMLSecretSource("secrets.master_key", doc.Secrets.MasterKey)
@@ -1108,6 +1166,31 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 			ov.registrationRoles = &items
 		}
 	}
+	if value, ok := lookup(envPasskeyEnabled); ok {
+		flag, err := parseEnvBool(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "passkey.enabled", 0, err.Error()))
+		} else {
+			ov.passkeyEnabled = &flag
+		}
+	}
+	if value, ok := lookup(envPasskeyRPID); ok {
+		ov.passkeyRPID = Ptr(value)
+	}
+	if value, ok := lookup(envPasskeyRPName); ok {
+		ov.passkeyRPName = Ptr(value)
+	}
+	if value, ok := lookup(envPasskeyOrigins); ok {
+		items, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "passkey.allowed_origins", 0, err.Error()))
+		} else {
+			ov.passkeyOrigins = &items
+		}
+	}
+	if value, ok := lookup(envPasskeyUserVerify); ok {
+		ov.passkeyUserVerify = Ptr(value)
+	}
 	if value, ok := lookup(envSecretsMasterKey); ok {
 		if value == "" {
 			errs = append(errs, configErr(ConfigErrorValue, "env", "secrets.master_key", 0,
@@ -1167,6 +1250,11 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 		registrationReview:    options.Registration.RequireReview,
 		registrationEmail:     options.Registration.RequireEmailVerification,
 		registrationRoles:     options.Registration.DefaultRoleIDs,
+		passkeyEnabled:        options.Passkey.Enabled,
+		passkeyRPID:           options.Passkey.RPID,
+		passkeyRPName:         options.Passkey.RPDisplayName,
+		passkeyOrigins:        options.Passkey.AllowedOrigins,
+		passkeyUserVerify:     options.Passkey.UserVerification,
 		secretValue:           options.Secrets.MasterKey,
 	}
 	errs := validateOverrides(&ov, "options")
@@ -1338,6 +1426,15 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 		if problem := registrationDefaultRolesProblem(*ov.registrationRoles); problem != "" {
 			add(ConfigErrorValue, "registration.default_role_ids", problem)
 		}
+	}
+	if ov.passkeyOrigins != nil && len(*ov.passkeyOrigins) > MaxPasskeyOrigins {
+		add(ConfigErrorRange, "passkey.allowed_origins",
+			fmt.Sprintf("允许来源最多 %d 个", MaxPasskeyOrigins))
+	}
+	if ov.passkeyUserVerify != nil && *ov.passkeyUserVerify != "" &&
+		!passkey.UserVerification(*ov.passkeyUserVerify).Valid() {
+		add(ConfigErrorValue, "passkey.user_verification",
+			"用户验证策略必须是 required、preferred 或 discouraged")
 	}
 	if ov.secretValue != nil {
 		if !ov.secretValue.IsSet() {

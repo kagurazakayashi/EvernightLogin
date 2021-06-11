@@ -55,6 +55,20 @@ database:
   wal: true
   busy_timeout_ms: 5000
 
+# Passkey / WebAuthn 依赖方配置（步骤 42）。默认关闭；启用时必须显式配置 RP ID
+# 与至少一个允许来源，非法值会让加载失败。RP ID 是可注册域名（不能带协议/端口/
+# 路径，也不能是 IP）；来源只接受 https 或本地开发用的 http://localhost，且主机
+# 必须是 RP ID 或其子域。Passkey 不跨 RP ID 通用，多域名监听不代表可跨任意域名。
+# passkey:
+#   enabled: true
+#   rp_id: "login.example.com"
+#   rp_display_name: "示例登录"
+#   allowed_origins:
+#     - "https://login.example.com"
+#     # 子域也可以（RP ID 仍是 login.example.com 时不能用 example.com 以外的站点）：
+#     # - "https://auth.login.example.com"
+#   user_verification: "required"
+
 # 秘密不能直接写在本文件里，只能引用受保护来源。取消注释后可直接使用：
 # secrets:
 #   master_key:

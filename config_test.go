@@ -512,6 +512,11 @@ func TestEnvFieldMetadataStable(t *testing.T) {
 		{Field: "registration.require_review", Env: "LOGIN_REGISTRATION_REQUIRE_REVIEW", Class: ReloadRestartRequired},
 		{Field: "registration.require_email_verification", Env: "LOGIN_REGISTRATION_REQUIRE_EMAIL_VERIFICATION", Class: ReloadRestartRequired},
 		{Field: "registration.default_role_ids", Env: "LOGIN_REGISTRATION_DEFAULT_ROLE_IDS", Class: ReloadRestartRequired},
+		{Field: "passkey.enabled", Env: "LOGIN_PASSKEY_ENABLED", Class: ReloadRestartRequired},
+		{Field: "passkey.rp_id", Env: "LOGIN_PASSKEY_RP_ID", Class: ReloadRestartRequired},
+		{Field: "passkey.rp_display_name", Env: "LOGIN_PASSKEY_RP_DISPLAY_NAME", Class: ReloadRestartRequired},
+		{Field: "passkey.allowed_origins", Env: "LOGIN_PASSKEY_ALLOWED_ORIGINS", Class: ReloadRestartRequired},
+		{Field: "passkey.user_verification", Env: "LOGIN_PASSKEY_USER_VERIFICATION", Class: ReloadRestartRequired},
 		{Field: "secrets.master_key", Env: "LOGIN_SECRETS_MASTER_KEY", Class: ReloadRestartRequired, Secret: true},
 		{Field: "secrets.tls_pfx_password", Env: "LOGIN_SECRETS_TLS_PFX_PASSWORD", Class: ReloadRestartRequired, Secret: true},
 	}
