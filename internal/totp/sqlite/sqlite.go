@@ -60,6 +60,9 @@ WHERE id=? AND user_id=? AND status='active' AND last_accepted_step<?`
 
 const hasActiveSQL = `SELECT COUNT(*) FROM totp_bindings WHERE user_id=? AND status='active'`
 
+const bumpSecurityVersionSQL = `UPDATE users SET security_version=security_version+1,updated_at_ms=?
+WHERE id=?`
+
 const usernameSQL = `SELECT username FROM users WHERE id=?`
 
 // Store 是 totp.Store 的 SQLite 实现。
@@ -344,4 +347,23 @@ func scanBinding(rows *sql.Rows) (totp.Binding, error) {
 		binding.ActivatedAt = time.UnixMilli(activatedAt).UTC()
 	}
 	return binding, nil
+}
+
+// IncrementUserSecurityVersionTx 在审计事务内递增用户安全版本使既有会话失效。
+func (s *Store) IncrementUserSecurityVersionTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", totp.ErrOptionsInvalid)
+	}
+	result, err := tx.ExecContext(ctx, bumpSecurityVersionSQL, now.UTC().UnixMilli(), userID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", totp.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", totp.ErrStoreUnavailable, err)
+	}
+	if affected != 1 {
+		return totp.ErrStoreUnavailable
+	}
+	return nil
 }

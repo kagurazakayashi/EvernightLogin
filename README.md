@@ -586,6 +586,18 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **与步骤 40 的 MFA 登录接线（已接入）**：`internal/mfa.BeginLogin` 按可配置因素优先顺序（默认 **TOTP 优先于邮件**）选择第二步：账户有已激活 TOTP 时创建 `factor_type=totp` 挑战、不发送邮件，仍绑定用户/登录尝试/用途/AppID/记住我/客户端/受限会话并沿用步骤 40 的限流与尝试上限；`Verify` 对 TOTP 挑战调用 `totp.VerifyLoginCode`（服务端时间步防重放），成功后才用同一受限会话与同 AppID 等轮换完整会话，失败计入尝试上限并写失败审计，重放/跨步复用被拒绝。两者共存时默认走 TOTP；可用 `Options.FactorPreference` 调整顺序，完整的“认证方式选择策略”属步骤 43。
 - **已知限制**：页面/HTTP/启动装配、真实验证器/真机实测、绑定发起传输层限流（当前仅服务内尝试上限与 pending 数上限）、恢复代码/Passkey/FIDO2、认证方式选择策略（步骤 43）、审计导出与过期清理任务未实现或未验证；race/非 Windows 未验证。
 
+## FIDO2 第二步验证与认证方式选择策略（步骤 43）
+
+新增内部认证事实层 `internal/authfact`，扩展 `internal/passkey` 的凭证用途与第二步认证 ceremony，扩展 `internal/mfa` 的安全密钥因素、统一选择器与强认证初始化闭环，迁移 `0023_fido2_second_factor.sql`（重建三表：凭证 usage 增加 `both`、ceremony 增加 purpose/context_id 与 second_factor 操作、MFA 挑战增加 passkey 因素/strong_setup 用途/factor_ref/require_strong）。协议与密码学仍由 `go-webauthn` 完成，本步**不实现 OAuth/OIDC amr/acr 端点、不暴露 HTTP 路由与页面**。
+
+- **凭证用途**：Passkey 凭证用途分为 `login`（主登录）、`second_factor`（密码后的安全密钥第二步）与 `both`；用途由服务端注册 ceremony 决定并持久化，完成注册时使用挑战中保存的用途，客户端不能改写。主登录只接受 `login/both`，第二步只接受 `second_factor/both`，注册挑战/登录挑战/第二步挑战的操作类型不能互相替代；已有 0022 凭证升级后保持 `login`（不会被自动当作第二因素）。
+- **FIDO2 第二步**：密码认证后由 MFA 创建第二步 WebAuthn 挑战（ceremony 绑定 MFA 挑战 ID，`allowCredentials` 只含第二步用途凭证），校验 challenge/来源/RP ID/签名/UP/UV；成功后才用同一受限会话轮换完整会话，沿用步骤 40 的 AppID/记住我/客户端绑定与限流、尝试上限、应用作用域不升级语义；非同步凭证计数器回退按可能的复制拒绝。
+- **认证方式动态步骤与选择器访问控制**：`internal/authn` 通过可注入 `StrongFactorPresence` 按账户实际已绑定强因素动态给出 RequiredSteps（已绑定只需第二因素，未绑定才要求强因素初始化；未接线时保守按未绑定处理）；`mfa.AvailableSecondFactorMethods` 只允许本人（或系统可信装配层）查询，普通用户不能枚举他人可用方式。选择器语义：`internal/authfact` 统一定义方法（密码/邮件验证码/TOTP/Passkey/安全密钥/恢复代码预留）、因素类别、事实集合、强度（single/MFA/strong）、策略要求与 `Select/Eligible` 选择器、amr/acr 映射函数。选择器只返回用户实际启用且满足策略的方式：Passkey/安全密钥（UV）与密码+TOTP 可满足强认证，邮件不能单独满足强认证、也不会被选中满足强认证；同一因素验证两遍不计为两个独立因素；无可用方式时明确返回错误而不降级。`mfa.AvailableSecondFactorMethods` 提供按用户实际启用因素的可用方式列表。
+- **强度与再认证衔接**：Passkey/安全密钥完成 UV、或密码+安全密钥的完整登录会在认证结果与会话中记录强认证时间；管理访问的强认证闸门按 `session.Options.StrongAuthMaxAge`（默认 15 分钟、1 分钟～24 小时）校验新鲜度，过期后必须重新强认证，**不是一次强认证永久有效**；受限结果携带强认证时间会被拒绝。`AllowTOTPForStrongAuth` 默认 false（强认证默认要求 UV，密码+TOTP 不作为管理强认证）；宿主显式开启时才接受密码+TOTP 受控备用。认证强度不机械相加；高风险操作仍按步骤 39 策略要求近期认证/确认。
+- **强认证初始化闭环（受限，不公开旁路）**：要求强认证但未绑定强因素的账户，密码正确后若宿主显式启用 `AllowStrongAuthSetup`（且注入受限会话撤销器、强因素来源与 `StrongSetupAuthorizer` 受控初始化授权器），只签发**受限会话**并返回允许绑定的强因素方法（默认 Passkey，邮件永远不允许）。授权器必须是可信来源：内置 `bootstrap.Service.AuthorizeStrongSetup` 只放行 root 且状态为 pending_setup/setup_verified 的受控初始化；其他高权限账户需要宿主实现管理员一次性凭证/审批，**普通受限会话不能自助绑定攻击者可控强因素**。绑定完成后必须调用 `CompleteStrongSetup`：校验受限会话/尝试令牌/挑战、确认已真实绑定强因素、撤销受限会话并要求重新登录，全程不签发完整会话。root 既有保护不变，未启用/未授权时继续 fail-closed 返回 MFA_REQUIRED。
+- **删除强因素与最后因素保护**：强制 MFA 账户删除最后一个第二步用途凭证且没有其他强因素（如 TOTP）时拒绝（CONFLICT），凭证仍为软删除并写失败审计。删除 Passkey 或解除 TOTP 都会在同一审计事务内递增用户 `security_version`（并尽力调用注入的会话撤销器），使删除前建立的会话（含记住我）在下次校验时立即失效，不能继续凭旧强认证访问管理接口。邮件因素移除沿用步骤 40 的最后因素保护。
+- **已知限制**：真实浏览器/Windows Hello/YubiKey 安全密钥未实测（测试使用模拟认证器，且 mfa 侧安全密钥适配器用测试替身验证挑战/会话/策略，真实 WebAuthn 校验在 `internal/passkey` 测试中覆盖）；OAuth/OIDC amr/acr 仅内部映射未接协议端点；取消/清理初始化挑战任务、多实例限流、race 与非 Windows 未验证；恢复代码仍属后续步骤。
+
 ## Passkey 注册、登录与凭证管理（步骤 42）
 
 新增内部 Passkey 域 `internal/passkey` 与 SQLite 仓储 `internal/passkey/sqlite`，迁移 `0022_passkey.sql` 落地 `webauthn_user_handles`（稳定随机用户句柄）、`webauthn_credentials`（公钥凭证元数据）与 `webauthn_ceremonies`（服务端挑战）；WebAuthn 协议与密码学校验使用维护中的 `github.com/go-webauthn/webauthn v0.18.2`（BSD-3-Clause，Go 1.26.0），**不自行实现 WebAuthn 密码学、不实现 FIDO2 第二因素、不暴露 HTTP 路由与完整前端**，验收走可信内部 Go API。测试使用模拟认证器，**不代表真实浏览器/Windows Hello/安全密钥实测**。

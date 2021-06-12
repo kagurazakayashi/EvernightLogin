@@ -38,10 +38,18 @@ type Options struct {
 	Sessions SessionIssuer
 	// Reauth 是步骤 39 的近期认证与敏感策略收敛入口；nil 时新增/删除凭证拒绝。
 	Reauth reauth.OperationRunner
-	Config Config
-	Now    func() time.Time
-	Random io.Reader
-	Logger *slog.Logger
+	// OtherStrongFactors 报告其他强因素（如 TOTP）；nil 视为没有。删除最后一个第二
+	// 步凭证且账户被强制 MFA 时，没有其他强因素会拒绝删除（避免失去强认证）。
+	OtherStrongFactors OtherStrongFactors
+	// MFAPolicy 报告账户是否被强制 MFA；nil 视为没有外部强制策略。
+	MFAPolicy MFAPolicy
+	// SessionInvalidator 在删除凭证（强因素变更）后撤销该用户既有会话；nil 时
+	// 仍会在同事务递增 security_version 使会话失效，本接口提供更即时的撤销。
+	SessionInvalidator SessionInvalidator
+	Config             Config
+	Now                func() time.Time
+	Random             io.Reader
+	Logger             *slog.Logger
 }
 
 // Service 是 Passkey 注册、登录与凭证管理服务。构造后不可变，不启动协程、不暴露
@@ -107,15 +115,33 @@ type RegistrationStart struct {
 	ExpiresAt        time.Time
 	RPID             string
 	UserVerification UserVerification
+	// Purpose 是本次注册的目标凭证用途；完成注册时只能使用挑战中保存的用途，
+	// 客户端不能改写。
+	Purpose Purpose
 }
 
-// BeginRegistration 为当前已认证用户在服务端创建注册挑战。
+// BeginRegistration 为当前已认证用户在服务端创建主登录用途的注册挑战
+// （等价于 BeginRegistrationWithPurpose(..., PurposeLogin)）。
 //
 // 装配约束：Caller 必须来自完整（非受限）已认证会话；本服务不判断会话是否受限，
-// 宿主必须拒绝把待第二因素/待改密等受限会话接到注册入口。真正的近期认证检查在
+// 宿主必须拒绝把待第二因素/待改密等受限会话接到注册入口。强认证初始化受限流程
+// 绑定强因素时，宿主必须限定为 PurposeBoth（同时允许主登录与第二步）或
+// PurposeSecondFactor，并在初始化完成后撤销受限会话。真正的近期认证检查在
 // FinishRegistration 的成功写入前执行（passkey.register 策略）。
 func (s *Service) BeginRegistration(ctx context.Context, caller Caller, requestID string) (RegistrationStart, error) {
+	return s.BeginRegistrationWithPurpose(ctx, caller, requestID, PurposeLogin)
+}
+
+// BeginRegistrationWithPurpose 创建指定用途的注册挑战。purpose 由服务端入口决定
+// （主登录注册 / 安全密钥第二步注册 / 强认证初始化），完成后写入凭证且不可由客户端
+// 修改；第二步注册不要求可发现凭证（resident key discouraged），主登录/两者要求
+// 可发现凭证（resident key required）。
+func (s *Service) BeginRegistrationWithPurpose(ctx context.Context, caller Caller,
+	requestID string, purpose Purpose) (RegistrationStart, error) {
 	ctx = normalizeContext(ctx)
+	if !purpose.Valid() {
+		return RegistrationStart{}, fmt.Errorf("%w: 凭证用途未知", ErrInvalidRequest)
+	}
 	if err := s.requireUserCaller(caller); err != nil {
 		return RegistrationStart{}, err
 	}
@@ -148,8 +174,15 @@ func (s *Service) BeginRegistration(ctx context.Context, caller Caller, requestI
 		return RegistrationStart{}, err
 	}
 	user := newWebAuthnUser(state, handle, credentials)
-	creation, sessionData, err := s.webauthn.BeginRegistration(user,
-		webauthn.WithExclusions(credentialDescriptors(credentials)))
+	registrationOptions := []webauthn.RegistrationOption{
+		webauthn.WithExclusions(credentialDescriptors(credentials)),
+	}
+	if !purpose.AllowsLogin() {
+		// 第二步用途通常由外置安全密钥承担，不要求可发现凭证；仍由配置要求 UV。
+		registrationOptions = append(registrationOptions,
+			webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementDiscouraged))
+	}
+	creation, sessionData, err := s.webauthn.BeginRegistration(user, registrationOptions...)
 	if err != nil {
 		s.opts.Logger.Warn("Passkey 注册挑战生成失败", "error", err)
 		return RegistrationStart{}, fmt.Errorf("%w: 无法生成注册挑战", ErrInternal)
@@ -169,7 +202,7 @@ func (s *Service) BeginRegistration(ctx context.Context, caller Caller, requestI
 	}
 	ceremony := Ceremony{
 		ID: ceremonyID, UserID: caller.Actor().ID,
-		Operation: OperationRegistration, Challenge: sessionData.Challenge,
+		Operation: OperationRegistration, Purpose: purpose, Challenge: sessionData.Challenge,
 		RPID: s.opts.Config.RPID, SessionData: sessionBytes,
 		RequestID: validRequestID(requestID), CreatedAt: now,
 		ExpiresAt: now.Add(s.opts.Config.CeremonyTTL),
@@ -180,6 +213,7 @@ func (s *Service) BeginRegistration(ctx context.Context, caller Caller, requestI
 	return RegistrationStart{
 		CeremonyID: ceremony.ID, PublicKey: payload, ExpiresAt: ceremony.ExpiresAt,
 		RPID: s.opts.Config.RPID, UserVerification: s.opts.Config.UserVerification,
+		Purpose: purpose,
 	}, nil
 }
 
@@ -222,7 +256,7 @@ func (s *Service) FinishRegistration(ctx context.Context, caller Caller, request
 	}
 	now := s.now()
 	ceremony, err := s.opts.Store.ConsumeCeremony(ctx, request.CeremonyID,
-		OperationRegistration, caller.Actor().ID, now)
+		OperationRegistration, caller.Actor().ID, "", now)
 	if err != nil {
 		s.recordFailure(ctx, caller.Actor(), "passkey.register_finish_denied", "ceremony_invalid",
 			string(CodeOf(err)), request.RequestID)
@@ -230,6 +264,11 @@ func (s *Service) FinishRegistration(ctx context.Context, caller Caller, request
 	}
 	if ceremony.RPID != s.opts.Config.RPID {
 		s.recordFailure(ctx, caller.Actor(), "passkey.register_finish_denied", "rp_mismatch",
+			string(CodeChallengeInvalid), request.RequestID)
+		return CredentialMetadata{}, ErrCeremonyInvalid
+	}
+	if !ceremony.Purpose.Valid() {
+		s.recordFailure(ctx, caller.Actor(), "passkey.register_finish_denied", "purpose_invalid",
 			string(CodeChallengeInvalid), request.RequestID)
 		return CredentialMetadata{}, ErrCeremonyInvalid
 	}
@@ -268,7 +307,7 @@ func (s *Service) FinishRegistration(ctx context.Context, caller Caller, request
 	}
 	// 近期认证必须在真实写入前执行；策略不满足时 fail-closed，不创建凭证。
 	authorization, err := s.authorize(ctx, caller, operationRegister, request.RequestID,
-		map[string]string{"operation": "register", "usage": usageLogin, "name": name},
+		map[string]string{"operation": "register", "usage": ceremony.Purpose.usage(), "name": name},
 		"注册 Passkey 凭证")
 	if err != nil {
 		s.recordFailure(ctx, caller.Actor(), "passkey.register_finish_denied", reauthReason(err),
@@ -287,13 +326,14 @@ func (s *Service) FinishRegistration(ctx context.Context, caller Caller, request
 		Transports:     transportStrings(credential.Transport),
 		BackupEligible: credential.Flags.BackupEligible, BackedUp: credential.Flags.BackupState,
 		UserPresent: credential.Flags.UserPresent, UserVerified: credential.Flags.UserVerified,
-		Attachment: string(credential.Authenticator.Attachment), Usage: usageLogin,
+		Attachment: string(credential.Authenticator.Attachment), Usage: ceremony.Purpose.usage(),
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	critical := s.critical("passkey.registered", caller.Actor(), record.ID, request.RequestID,
 		[]audit.FieldChange{
 			{Field: "credential_id", After: hex.EncodeToString(record.CredentialID)},
 			{Field: "name", After: record.Name},
+			{Field: "usage", After: record.Usage},
 			{Field: "backup_eligible", After: fmt.Sprint(record.BackupEligible)},
 			{Field: "backed_up", After: fmt.Sprint(record.BackedUp)},
 		})
@@ -349,7 +389,7 @@ func (s *Service) BeginLogin(ctx context.Context, request LoginStartRequest) (Lo
 		return LoginStart{}, idErr
 	}
 	ceremony := Ceremony{
-		ID: ceremonyID, Operation: OperationAuthentication,
+		ID: ceremonyID, Operation: OperationAuthentication, Purpose: PurposeLogin,
 		AppID: appID, RememberMe: request.RememberMe,
 		UserAgent: sanitizeText(request.Client.UserAgent, 256),
 		Address:   sanitizeText(request.Client.Address, 128),
@@ -395,6 +435,10 @@ func (s *Service) BeginLogin(ctx context.Context, request LoginStartRequest) (Lo
 	if err != nil {
 		return LoginStart{}, ErrStoreUnavailable
 	}
+	// 主登录只能使用用途为 login/both 的凭证；第二步凭证不能冒充主登录。
+	credentials = filterCredentials(credentials, func(credential Credential) bool {
+		return credentialPurposeAllowsLogin(credential)
+	})
 	if len(credentials) == 0 {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
 			"passkey.login_begin_denied", "no_credentials", string(CodeAuthFailed), request.RequestID)
@@ -465,7 +509,7 @@ func (s *Service) FinishLogin(ctx context.Context, request LoginFinishRequest) (
 	}
 	now := s.now()
 	ceremony, err := s.opts.Store.ConsumeCeremony(ctx, request.CeremonyID,
-		OperationAuthentication, "", now)
+		OperationAuthentication, "", "", now)
 	if err != nil {
 		s.recordAnonymousFailure(ctx, "passkey.login_finish_denied", "ceremony_invalid", request.RequestID)
 		return LoginResult{}, err
@@ -515,6 +559,11 @@ func (s *Service) FinishLogin(ctx context.Context, request LoginFinishRequest) (
 			"passkey.login_finish_denied", "credential_not_owned", string(CodeAuthFailed), request.RequestID)
 		return LoginResult{}, ErrAuthenticationFailed
 	}
+	if !credentialPurposeAllowsLogin(stored) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: state.UserID},
+			"passkey.login_finish_denied", "purpose_not_allowed", string(CodeAccessDenied), request.RequestID)
+		return LoginResult{}, ErrPurposeNotAllowed
+	}
 	// 同步凭证（backup eligible）允许计数器不递增；非同步凭证计数器回退或不变
 	// 都按可能的凭证复制处理。库已经在认证器数据里更新了计数器/克隆标记。
 	cloneWarning := validatedCredential.Authenticator.CloneWarning
@@ -544,6 +593,11 @@ func (s *Service) FinishLogin(ctx context.Context, request LoginFinishRequest) (
 		return LoginResult{}, mapCriticalError(err)
 	}
 	authenticated := completedAuthentication(state, now)
+	if verified {
+		// Passkey 完成 UV 时为强认证：记录时间供会话管理访问闸门使用（与步骤 39
+		// 敏感操作的再认证语义衔接；仍需操作策略要求再次确认时另行 reauth）。
+		authenticated.StrongAuthCompletedAt = now
+	}
 	issued, err := s.opts.Sessions.Login(ctx, session.LoginRequest{
 		Result: authenticated, AppID: ceremony.AppID, ExistingSession: request.ExistingSession,
 		RequestID: request.RequestID, RememberMe: ceremony.RememberMe,
@@ -579,6 +633,9 @@ func (s *Service) validateAssertion(ctx context.Context, ceremony Ceremony, sess
 		if err != nil {
 			return nil, ErrStoreUnavailable
 		}
+		credentials = filterCredentials(credentials, func(credential Credential) bool {
+			return credentialPurposeAllowsLogin(credential)
+		})
 		if len(credentials) == 0 {
 			return nil, ErrAuthenticationFailed
 		}
@@ -608,6 +665,9 @@ func (s *Service) validateAssertion(ctx context.Context, ceremony Ceremony, sess
 		if err != nil {
 			return nil, ErrStoreUnavailable
 		}
+		credentials = filterCredentials(credentials, func(credential Credential) bool {
+			return credentialPurposeAllowsLogin(credential)
+		})
 		if len(credentials) == 0 {
 			return nil, ErrAuthenticationFailed
 		}
@@ -627,6 +687,231 @@ func (s *Service) validateAssertion(ctx context.Context, ceremony Ceremony, sess
 		return nil, ErrAuthenticationFailed
 	}
 	return credential, nil
+}
+
+// ===== 第二步验证（FIDO2 / 安全密钥） =====
+
+// SecondFactorStart 是开始第二步 WebAuthn 认证的结果。PublicKey 是浏览器
+// navigator.credentials.get() 的 publicKey 选项 JSON（allowCredentials 只包含
+// 用途允许第二步的凭证）。
+type SecondFactorStart struct {
+	CeremonyID string
+	PublicKey  json.RawMessage
+	ExpiresAt  time.Time
+	RPID       string
+}
+
+// BeginSecondFactor 为 MFA 挑战已确认的账户创建第二步认证挑战。
+//
+// 安全边界：userID 与 contextID（MFA 挑战 ID）必须由 internal/mfa 从服务端挑战中
+// 取得并传入，不能来自客户端自述；本方法不签发会话，只完成 WebAuthn 断言校验。
+// 只有用途允许第二步的凭证会进入 allowCredentials，主登录凭证不能冒充第二因素。
+func (s *Service) BeginSecondFactor(ctx context.Context, userID, contextID, requestID string) (SecondFactorStart, error) {
+	ctx = normalizeContext(ctx)
+	if !account.ValidUserID(userID) || contextID == "" || len(contextID) > 128 {
+		return SecondFactorStart{}, ErrInvalidRequest
+	}
+	if err := account.ValidateRequestID(requestID); err != nil {
+		return SecondFactorStart{}, fmt.Errorf("%w: 请求编号无效", ErrInvalidRequest)
+	}
+	s.cleanupCeremonies(ctx)
+	state, found, err := s.opts.Store.UserState(ctx, userID)
+	if err != nil {
+		return SecondFactorStart{}, ErrStoreUnavailable
+	}
+	if !found || !state.Active() || state.IsRoot {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_begin_denied", "account_not_eligible",
+			string(CodeAccessDenied), requestID)
+		return SecondFactorStart{}, ErrAccessDenied
+	}
+	credentials, err := s.opts.Store.ListActiveCredentials(ctx, userID)
+	if err != nil {
+		return SecondFactorStart{}, ErrStoreUnavailable
+	}
+	credentials = filterCredentials(credentials, credentialPurposeAllowsSecondFactor)
+	if len(credentials) == 0 {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_begin_denied", "no_second_factor_credential",
+			string(CodeReqInvalid), requestID)
+		return SecondFactorStart{}, ErrNoSecondFactor
+	}
+	if len(state.Handle) == 0 {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_begin_denied", "user_handle_missing",
+			string(CodeAccessDenied), requestID)
+		return SecondFactorStart{}, ErrAccessDenied
+	}
+	user := newWebAuthnUser(state, state.Handle, credentials)
+	assertion, sessionData, err := s.webauthn.BeginLogin(user)
+	if err != nil {
+		return SecondFactorStart{}, fmt.Errorf("%w: 无法生成第二步认证挑战", ErrInternal)
+	}
+	payload, err := json.Marshal(assertion)
+	if err != nil {
+		return SecondFactorStart{}, fmt.Errorf("%w: 无法序列化第二步选项", ErrInternal)
+	}
+	sessionBytes, err := sessionData.MarshalMsg(nil)
+	if err != nil {
+		return SecondFactorStart{}, fmt.Errorf("%w: 无法保存挑战状态", ErrInternal)
+	}
+	now := s.now()
+	ceremonyID, idErr := s.newID("pkc_")
+	if idErr != nil {
+		return SecondFactorStart{}, idErr
+	}
+	ceremony := Ceremony{
+		ID: ceremonyID, UserID: userID, Operation: OperationSecondFactor,
+		Purpose: PurposeSecondFactor, ContextID: contextID,
+		Challenge: sessionData.Challenge, RPID: s.opts.Config.RPID,
+		SessionData: sessionBytes, RequestID: validRequestID(requestID),
+		CreatedAt: now, ExpiresAt: now.Add(s.opts.Config.CeremonyTTL),
+	}
+	if err := s.opts.Store.CreateCeremony(ctx, ceremony); err != nil {
+		return SecondFactorStart{}, ErrStoreUnavailable
+	}
+	return SecondFactorStart{CeremonyID: ceremony.ID, PublicKey: payload,
+		ExpiresAt: ceremony.ExpiresAt, RPID: s.opts.Config.RPID}, nil
+}
+
+// SecondFactorFinishRequest 是完成第二步认证的请求。ContextID 必须与开始时的 MFA
+// 挑战 ID 一致（服务端再次核对），防止跨登录尝试挪用挑战。
+type SecondFactorFinishRequest struct {
+	CeremonyID string
+	ContextID  string
+	Response   json.RawMessage
+	RequestID  string
+}
+
+// SecondFactorResult 是一次成功 FIDO2 第二步验证的结果；不包含会话秘密，会话由
+// internal/mfa 在挑战状态机内签发。
+type SecondFactorResult struct {
+	UserID          string
+	Credential      CredentialMetadata
+	AuthenticatorID string
+	UserVerified    bool
+	VerifiedAt      time.Time
+}
+
+// FinishSecondFactor 校验第二步 WebAuthn 断言并原子消费挑战。
+// 用途不符/上下文不符/重放/过期都拒绝；非同步凭证计数器回退按可能的复制拒绝；
+// 配置要求 UV 时缺少 UV 拒绝。成功写入计数与审计，不签发会话。
+func (s *Service) FinishSecondFactor(ctx context.Context, request SecondFactorFinishRequest) (SecondFactorResult, error) {
+	ctx = normalizeContext(ctx)
+	if !validRecordID(request.CeremonyID) || request.ContextID == "" ||
+		len(request.Response) == 0 || len(request.Response) > MaxResponseBytes {
+		return SecondFactorResult{}, ErrInvalidRequest
+	}
+	if err := account.ValidateRequestID(request.RequestID); err != nil {
+		return SecondFactorResult{}, fmt.Errorf("%w: 请求编号无效", ErrInvalidRequest)
+	}
+	now := s.now()
+	ceremony, err := s.opts.Store.ConsumeCeremony(ctx, request.CeremonyID,
+		OperationSecondFactor, "", request.ContextID, now)
+	if err != nil {
+		return SecondFactorResult{}, err
+	}
+	if ceremony.RPID != s.opts.Config.RPID || ceremony.Purpose != PurposeSecondFactor ||
+		ceremony.UserID == "" {
+		return SecondFactorResult{}, ErrCeremonyInvalid
+	}
+	userID := ceremony.UserID
+	sessionData, err := decodeSessionData(ceremony.SessionData)
+	if err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_denied", "session_data_invalid", string(CodeChallengeInvalid), request.RequestID)
+		return SecondFactorResult{}, ErrCeremonyInvalid
+	}
+	parsed, err := protocol.ParseCredentialRequestResponseBytes(request.Response)
+	if err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_denied", "response_parse", string(CodeChallengeInvalid), request.RequestID)
+		return SecondFactorResult{}, fmt.Errorf("%w: 第二步响应格式无效", ErrAuthenticationFailed)
+	}
+	state, found, err := s.opts.Store.UserState(ctx, userID)
+	if err != nil {
+		return SecondFactorResult{}, ErrStoreUnavailable
+	}
+	if !found || !state.Active() || len(state.Handle) == 0 {
+		return SecondFactorResult{}, ErrAuthenticationFailed
+	}
+	credentials, err := s.opts.Store.ListActiveCredentials(ctx, userID)
+	if err != nil {
+		return SecondFactorResult{}, ErrStoreUnavailable
+	}
+	credentials = filterCredentials(credentials, credentialPurposeAllowsSecondFactor)
+	if len(credentials) == 0 {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_denied", "no_second_factor_credential",
+			string(CodeReqInvalid), request.RequestID)
+		return SecondFactorResult{}, ErrNoSecondFactor
+	}
+	user := newWebAuthnUser(state, state.Handle, credentials)
+	validated, err := s.webauthn.ValidateLogin(user, *sessionData, parsed)
+	if err != nil {
+		s.opts.Logger.Debug("FIDO2 第二步断言校验失败", "error", err)
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_denied", "assertion_rejected", string(CodeAuthFailed), request.RequestID)
+		return SecondFactorResult{}, ErrAuthenticationFailed
+	}
+	verified := parsed.Response.AuthenticatorData.Flags.HasUserVerified()
+	if s.opts.Config.UserVerification == UserVerificationRequired && !verified {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_denied", "user_verification_missing", string(CodeAuthFailed), request.RequestID)
+		return SecondFactorResult{}, ErrAuthenticationFailed
+	}
+	stored, found, err := s.opts.Store.ActiveCredentialByRawID(ctx, validated.ID)
+	if err != nil {
+		return SecondFactorResult{}, ErrStoreUnavailable
+	}
+	if !found || stored.UserID != userID || !credentialPurposeAllowsSecondFactor(stored) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_denied", "credential_purpose_mismatch",
+			string(CodeAccessDenied), request.RequestID)
+		return SecondFactorResult{}, ErrPurposeNotAllowed
+	}
+	cloneWarning := validated.Authenticator.CloneWarning
+	if cloneWarning && !stored.BackupEligible {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
+			"passkey.second_factor_denied", "clone_warning", string(CodeAuthFailed), request.RequestID)
+		return SecondFactorResult{}, ErrCloneDetected
+	}
+	updated := stored
+	updated.SignCount = validated.Authenticator.SignCount
+	updated.BackedUp = validated.Flags.BackupState
+	updated.UserPresent = validated.Flags.UserPresent
+	updated.UserVerified = validated.Flags.UserVerified
+	updated.LastUsedAt = now
+	updated.UpdatedAt = now
+	updated.Version = stored.Version + 1
+	critical := s.critical("passkey.second_factor_verified",
+		audit.Actor{Type: audit.ActorUser, ID: userID}, stored.ID, request.RequestID,
+		[]audit.FieldChange{
+			{Field: "sign_count", Before: fmt.Sprint(stored.SignCount), After: fmt.Sprint(updated.SignCount)},
+			{Field: "clone_warning", After: fmt.Sprint(cloneWarning)},
+			{Field: "user_verified", After: fmt.Sprint(verified)},
+		})
+	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		return s.opts.Store.UpdateCredentialUsageTx(txCtx, tx, updated, now)
+	}); err != nil {
+		return SecondFactorResult{}, mapCriticalError(err)
+	}
+	return SecondFactorResult{UserID: userID, Credential: metadata(updated),
+		AuthenticatorID: stored.ID, UserVerified: verified, VerifiedAt: now}, nil
+}
+
+// HasSecondFactor 报告用户是否存在可用于第二步验证的 Passkey/安全密钥凭证。
+// 供认证方式选择器判断“安全密钥”因素是否实际启用；不返回凭证内容。
+func (s *Service) HasSecondFactor(ctx context.Context, userID string) (bool, error) {
+	ctx = normalizeContext(ctx)
+	if !account.ValidUserID(userID) {
+		return false, ErrInvalidRequest
+	}
+	available, err := s.opts.Store.HasSecondFactorCredential(ctx, userID)
+	if err != nil {
+		return false, ErrStoreUnavailable
+	}
+	return available, nil
 }
 
 // ===== 凭证管理 =====
@@ -763,6 +1048,34 @@ func (s *Service) Revoke(ctx context.Context, caller Caller, request RevokeReque
 		if !hasPassword && active-1 <= 0 {
 			return ErrLastLoginMethod
 		}
+		// 删除第二步凭证时，若这是最后一个强因素且账户被强制 MFA，必须拒绝：
+		// 否则用户虽有密码登录方式，却会失去满足强制策略的强认证能力。
+		if credentialPurposeAllowsSecondFactor(stored) {
+			secondFactors, countErr := s.opts.Store.CountActiveSecondFactorCredentialsTx(
+				txCtx, tx, caller.Actor().ID)
+			if countErr != nil {
+				return countErr
+			}
+			if secondFactors-1 <= 0 {
+				hasOther := false
+				if !isNil(s.opts.OtherStrongFactors) {
+					hasOther, countErr = s.opts.OtherStrongFactors.HasOtherStrongFactor(txCtx, caller.Actor().ID)
+					if countErr != nil {
+						return countErr
+					}
+				}
+				forced := false
+				if !isNil(s.opts.MFAPolicy) {
+					forced, countErr = s.opts.MFAPolicy.MFARequired(txCtx, caller.Actor().ID)
+					if countErr != nil {
+						return countErr
+					}
+				}
+				if !hasOther && forced {
+					return ErrLastStrongFactor
+				}
+			}
+		}
 		revoked, revokeErr := s.opts.Store.RevokeCredentialTx(txCtx, tx, caller.Actor().ID,
 			stored.ID, "user_revoked", now)
 		if revokeErr != nil {
@@ -771,20 +1084,60 @@ func (s *Service) Revoke(ctx context.Context, caller Caller, request RevokeReque
 		if !revoked {
 			return ErrCredentialNotFound
 		}
-		return nil
+		// 凭证（可能是主登录 Passkey 或第二步安全密钥）变更会改变认证面：在同一
+		// 审计事务内递增 security_version，让删除前建立的所有会话（含记住我）在
+		// 下次校验时立即失效，不能继续凭旧强认证访问管理接口。
+		return s.opts.Store.IncrementUserSecurityVersionTx(txCtx, tx, caller.Actor().ID, now)
 	}); err != nil {
 		mapped := mapCriticalError(err)
-		if errors.Is(mapped, ErrLastLoginMethod) {
+		switch {
+		case errors.Is(mapped, ErrLastLoginMethod):
 			s.recordFailure(ctx, caller.Actor(), "passkey.revoke_denied", "last_login_method",
+				string(CodeConflict), request.RequestID)
+		case errors.Is(mapped, ErrLastStrongFactor):
+			s.recordFailure(ctx, caller.Actor(), "passkey.revoke_denied", "last_strong_factor",
 				string(CodeConflict), request.RequestID)
 		}
 		return mapped
+	}
+	// 审计事务提交后再做即时会话撤销（可靠事件）：失败只记录日志，security_version
+	// 已递增，会话在下次校验时仍会失效。
+	if !isNil(s.opts.SessionInvalidator) {
+		if _, err := s.opts.SessionInvalidator.RevokeAllForUser(ctx, caller.Actor().ID,
+			"passkey_removed"); err != nil {
+			s.opts.Logger.Warn("Passkey 删除后撤销会话失败", "error", err)
+		}
 	}
 	s.notifyOutcome(ctx, authorization, reauth.OutcomeSuccess, request.RequestID)
 	return nil
 }
 
+var _ SessionInvalidator = (*session.Service)(nil)
+
 // ===== 内部辅助 =====
+
+// credentialPurposeAllowsLogin 报告凭证用途是否允许主登录；未知用途 fail-closed。
+func credentialPurposeAllowsLogin(credential Credential) bool {
+	purpose, ok := purposeFromUsage(credential.Usage)
+	return ok && purpose.AllowsLogin()
+}
+
+// credentialPurposeAllowsSecondFactor 报告凭证用途是否允许第二步验证。
+func credentialPurposeAllowsSecondFactor(credential Credential) bool {
+	purpose, ok := purposeFromUsage(credential.Usage)
+	return ok && purpose.AllowsSecondFactor()
+}
+
+// filterCredentials 按谓词过滤凭证副本。
+func filterCredentials(credentials []Credential, keep func(Credential) bool) []Credential {
+	result := make([]Credential, 0, len(credentials))
+	for _, credential := range credentials {
+		if keep(credential) {
+			result = append(result, credential)
+		}
+	}
+	return result
+}
 
 func (s *Service) requireUserCaller(caller Caller) error {
 	if err := caller.Actor().Validate(); err != nil || !caller.IsUser() {
@@ -1075,7 +1428,8 @@ func mapCriticalError(err error) error {
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrCeremonyInvalid),
 		errors.Is(err, ErrCeremonyExpired), errors.Is(err, ErrCredentialNotFound),
 		errors.Is(err, ErrCredentialConflict), errors.Is(err, ErrAccessDenied),
-		errors.Is(err, ErrLastLoginMethod), errors.Is(err, ErrCredentialLimit),
+		errors.Is(err, ErrLastLoginMethod), errors.Is(err, ErrLastStrongFactor),
+		errors.Is(err, ErrCredentialLimit),
 		errors.Is(err, ErrMFARequired), errors.Is(err, ErrReauthRequired),
 		errors.Is(err, ErrStoreUnavailable):
 		return err

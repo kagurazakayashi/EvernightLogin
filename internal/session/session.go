@@ -57,6 +57,11 @@ const (
 
 	// DefaultIdleTimeout 是未指定时的空闲到期期限。
 	DefaultIdleTimeout = 30 * time.Minute
+	// DefaultStrongAuthMaxAge 是强认证事实默认有效期（管理访问的新鲜度窗口）。
+	DefaultStrongAuthMaxAge = 15 * time.Minute
+	// MinStrongAuthMaxAge/MaxStrongAuthMaxAge 是有效期边界。
+	MinStrongAuthMaxAge = time.Minute
+	MaxStrongAuthMaxAge = 24 * time.Hour
 	// MinIdleTimeout/MaxIdleTimeout 是允许配置的空闲期限范围。
 	MinIdleTimeout = time.Minute
 	MaxIdleTimeout = 24 * time.Hour
@@ -193,7 +198,9 @@ type Session struct {
 	SecurityVersion int64
 	// RequiredSteps 是受限会话仍需完成的认证步骤。
 	RequiredSteps []authn.Step
-	// StrongAuthVerifiedAt 是强认证完成时间；零值表示尚未完成强认证，管理访问
+	// StrongAuthVerifiedAt 是强认证完成时间；零值表示尚未完成强认证。管理访问
+	// 由 Service.AuthorizeManagement 按 Options.StrongAuthMaxAge 校验新鲜度，本字段
+	// 只表达“最近一次强认证时间”，不是永久授权。
 	// 必须拒绝。MFA 未实现前不会出现非零值。
 	StrongAuthVerifiedAt time.Time
 	// CreatedAt/LastSeenAt/IdleExpiresAt/AbsoluteExpiresAt 是服务端时间线。

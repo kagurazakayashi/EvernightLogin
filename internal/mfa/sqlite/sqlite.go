@@ -27,15 +27,15 @@ const countFactorSQL = `SELECT COUNT(*) FROM mfa_factors
 WHERE user_id=? AND factor_type=? AND status='active'`
 
 const insertChallengeSQL = `INSERT INTO mfa_challenges(
-id,user_id,factor_type,purpose,attempt_sha256,credential_id,generation,state,username,
+id,user_id,factor_type,purpose,attempt_sha256,credential_id,factor_ref,generation,state,username,
 app_id,remember_me,client_user_agent,client_address,restricted_session_id,attempts,max_attempts,
-security_version,completed_at_ms,expires_at_ms,created_at_ms,updated_at_ms,verified_at_ms
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'',?,?,?,?,?,?,?,NULL)`
+require_strong,security_version,completed_at_ms,expires_at_ms,created_at_ms,updated_at_ms,verified_at_ms
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'',?,?,?,?,?,?,?,?,NULL)`
 
 const selectChallengeSQL = `SELECT id,user_id,factor_type,purpose,attempt_sha256,credential_id,
-generation,state,username,app_id,remember_me,client_user_agent,client_address,
-restricted_session_id,attempts,max_attempts,security_version,completed_at_ms,expires_at_ms,
-created_at_ms,updated_at_ms,COALESCE(verified_at_ms,0)
+factor_ref,generation,state,username,app_id,remember_me,client_user_agent,client_address,
+restricted_session_id,attempts,max_attempts,require_strong,security_version,
+completed_at_ms,expires_at_ms,created_at_ms,updated_at_ms,COALESCE(verified_at_ms,0)
 FROM mfa_challenges WHERE id=?`
 
 const bindSessionSQL = `UPDATE mfa_challenges SET restricted_session_id=?,updated_at_ms=?
@@ -152,10 +152,12 @@ func (s *Store) CreateChallengeTx(ctx context.Context, tx audit.Tx, challenge mf
 	}
 	if _, err := tx.ExecContext(ctx, insertChallengeSQL, challenge.ID, challenge.UserID,
 		string(challenge.FactorType), string(challenge.Purpose), challenge.AttemptSHA256,
-		challenge.CredentialID, challenge.Generation, string(challenge.State), challenge.Username,
+		challenge.CredentialID, challenge.FactorRef, challenge.Generation, string(challenge.State),
+		challenge.Username,
 		challenge.AppID, boolInt(challenge.RememberMe), challenge.ClientUserAgent,
 		challenge.ClientAddress, challenge.Attempts, challenge.MaxAttempts,
-		challenge.SecurityVersion, challenge.CompletedAt.UTC().UnixMilli(),
+		boolInt(challenge.RequireStrong), challenge.SecurityVersion,
+		challenge.CompletedAt.UTC().UnixMilli(),
 		challenge.ExpiresAt.UTC().UnixMilli(), challenge.CreatedAt.UTC().UnixMilli(),
 		challenge.UpdatedAt.UTC().UnixMilli()); err != nil {
 		return fmt.Errorf("%w: %w", mfa.ErrStoreUnavailable, err)
@@ -177,17 +179,20 @@ func (s *Store) GetChallenge(ctx context.Context, id string) (mfa.Challenge, boo
 	var attempt []byte
 	var factorType, purpose, state string
 	var rememberMe int
+	var requireStrong int
 	var completedAt, expiresAt, createdAt, updatedAt, verifiedAt int64
 	if err := rows.Scan(&challenge.ID, &challenge.UserID, &factorType, &purpose, &attempt,
-		&challenge.CredentialID, &challenge.Generation, &state, &challenge.Username,
+		&challenge.CredentialID, &challenge.FactorRef, &challenge.Generation, &state,
+		&challenge.Username,
 		&challenge.AppID, &rememberMe, &challenge.ClientUserAgent, &challenge.ClientAddress,
 		&challenge.RestrictedSessionID, &challenge.Attempts, &challenge.MaxAttempts,
-		&challenge.SecurityVersion, &completedAt, &expiresAt, &createdAt, &updatedAt,
-		&verifiedAt); err != nil {
+		&requireStrong, &challenge.SecurityVersion, &completedAt, &expiresAt, &createdAt,
+		&updatedAt, &verifiedAt); err != nil {
 		return mfa.Challenge{}, false, fmt.Errorf("%w: %w", mfa.ErrStoreUnavailable, err)
 	}
 	challenge.AttemptSHA256 = attempt
 	challenge.RememberMe = rememberMe == 1
+	challenge.RequireStrong = requireStrong == 1
 	challenge.FactorType = mfa.FactorType(factorType)
 	challenge.Purpose = mfa.Purpose(purpose)
 	challenge.State = mfa.ChallengeState(state)

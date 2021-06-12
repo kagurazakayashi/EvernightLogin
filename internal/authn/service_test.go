@@ -839,6 +839,20 @@ func TestAdminAccountRequiresStrongAuth(t *testing.T) {
 		!hasStep(adminResult.RequiredSteps, authn.StepSecondFactor) {
 		t.Fatalf("管理员待完成步骤 = %v，期望同时含强因素绑定与第二因素", adminResult.RequiredSteps)
 	}
+	// 按实际已绑定强因素动态给出步骤：已绑定强因素时只需第二因素（不再要求初始化）。
+	withStrong := env.newService(func(options *authn.Options) {
+		options.StrongFactorPresence = &fakeStrongFactorPresence{has: true}
+	})
+	resultWithStrong, err := withStrong.Authenticate(context.Background(), authn.AuthenticateRequest{
+		Identifier: "adminuser", Password: testPassword, ClientIP: "203.0.113.73", RequestID: "req-strong-step",
+	})
+	if err != nil {
+		t.Fatalf("已绑定强因素的管理员认证错误: %v", err)
+	}
+	if hasStep(resultWithStrong.RequiredSteps, authn.StepStrongAuthSetup) ||
+		!hasStep(resultWithStrong.RequiredSteps, authn.StepSecondFactor) {
+		t.Fatalf("已绑定强因素时待完成步骤 = %v，期望只需要第二因素", resultWithStrong.RequiredSteps)
+	}
 	if len(adminResult.CompletedMethods) != 1 || adminResult.CompletedMethods[0] != authn.MethodPassword {
 		t.Fatalf("管理员已完成方法 = %v", adminResult.CompletedMethods)
 	}
@@ -1588,4 +1602,11 @@ func TestPasswordWorkConcurrencyBounded(t *testing.T) {
 	if busy == 0 {
 		t.Fatal("单槽位 + 10ms 排队超时下没有出现 password_work_busy，并发上限可能未生效")
 	}
+}
+
+// fakeStrongFactorPresence 是强因素存在性测试替身。
+type fakeStrongFactorPresence struct{ has bool }
+
+func (f *fakeStrongFactorPresence) HasStrongFactor(ctx context.Context, userID string) (bool, error) {
+	return f.has, nil
 }

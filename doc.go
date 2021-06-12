@@ -359,6 +359,27 @@
 // 强因素须在完成强认证后进行（mfa.add 默认仅要求近期密码认证，服务层不判断会话
 // 是否受限）。确认绑定各拒绝分支写 failure 审计。装配留后续步骤；本包不做二维码 UI。
 //
+// internal/authfact 与 internal/mfa 已实现 FIDO2 第二步验证与认证方式选择策略
+// （步骤 43）：authfact 统一定义密码/邮件验证码/TOTP/Passkey/安全密钥方法、因素
+// 类别、认证事实集合、强度（single/MFA/strong）、策略要求、选择器与 amr/acr 映射
+// （只映射内部事实，不实现 OAuth/OIDC 端点）。Passkey 凭证用途扩展为
+// login/second_factor/both 并由服务端注册 ceremony 决定，主登录与第二步分别按用途
+// 过滤（迁移 0023 重建三表并保留既有行；已有凭证保持 login）。mfa 的第二步因素
+// 选择器按“实际启用且满足策略”选择：Passkey/安全密钥（UV）优先，其次 TOTP，最后
+// 邮件；强认证要求下邮件不会被选中，无可用方式明确报错不降级；密码+安全密钥/TOTP
+// 或 Passkey UV 会在认证结果与会话记录强认证时间，管理访问强认证闸门据此放行。
+// 要求强认证但未绑定强因素的管理账户在宿主显式启用时只能走受限初始化闭环：仅签发
+// 受限会话、绑定允许的强因素、撤销受限会话并要求重新登录，不公开临时管理员旁路；
+// 进入该闭环必须经宿主注入的 StrongSetupAuthorizer 受控授权（内置 bootstrap 适配器
+// 只放行 root pending_setup/setup_verified，其他高权限账户需管理员一次性凭证/审批），
+// 普通受限会话不能自助绑定。authn 通过可注入 StrongFactorPresence 按实际已绑定强
+// 因素动态给出 RequiredSteps。删除 Passkey 或解除 TOTP 会在同事务递增
+// security_version 并使既有会话失效；管理访问强认证新鲜度由 session
+// StrongAuthMaxAge（默认 15 分钟）约束；AllowTOTPForStrongAuth 默认 false，
+// 强认证默认要求 WebAuthn UV。删除最后一个第二步凭证且无其他强因素时按强制策略拒绝。页面/HTTP/
+// 启动装配、OAuth/OIDC 协议端点、恢复代码、真实浏览器/Windows Hello/安全密钥实测
+// （测试为模拟认证器与测试替身）、清理任务与 race/非 Windows 验证属后续步骤。
+//
 // internal/passkey 已实现 WebAuthn/Passkey 注册、用户名登录、可发现凭证登录与
 // 凭证管理（步骤 42）：迁移 0022 落地 webauthn_user_handles（稳定随机用户句柄）、
 // webauthn_credentials（COSE 公钥/计数器/BE/BS 等元数据）与 webauthn_ceremonies

@@ -202,6 +202,28 @@ func (e *testEnv) registerCredential(userID, name string, simulator *authenticat
 	return meta
 }
 
+// registerCredentialWithPurpose 使用模拟认证器完成指定用途的注册。
+func (e *testEnv) registerCredentialWithPurpose(userID, name string, purpose passkey.Purpose,
+	simulator *authenticator) passkey.CredentialMetadata {
+	e.t.Helper()
+	start, err := e.service.BeginRegistrationWithPurpose(e.ctx, e.caller(userID),
+		"req-register-purpose-1", purpose)
+	if err != nil {
+		e.t.Fatalf("开始注册（用途 %s）: %v", purpose, err)
+	}
+	if start.Purpose != purpose {
+		e.t.Fatalf("注册结果用途 = %s，期望 %s", start.Purpose, purpose)
+	}
+	response := simulator.registrationResponse(e.t, start.PublicKey, testOrigin, "")
+	meta, err := e.service.FinishRegistration(e.ctx, e.caller(userID),
+		passkey.RegistrationFinishRequest{CeremonyID: start.CeremonyID,
+			Response: response, Name: name, RequestID: "req-register-purpose-2"})
+	if err != nil {
+		e.t.Fatalf("完成注册（用途 %s）: %v", purpose, err)
+	}
+	return meta
+}
+
 // ===== 模拟认证器（测试专用，不是真机/浏览器实测） =====
 
 type authenticator struct {
@@ -621,6 +643,10 @@ func TestUsernameLoginIssuesCompleteSession(t *testing.T) {
 	if err != nil || validated.UserID != aliceID || validated.AppID != "" {
 		t.Fatalf("会话校验: %+v err=%v", validated, err)
 	}
+	// Passkey 完成 UV 是强认证：会话满足管理访问的强认证闸门（步骤 43 衔接）。
+	if !validated.CanAccessManagement() {
+		t.Fatal("Passkey UV 登录会话应满足管理访问强认证要求")
+	}
 	// 同一挑战/响应重放：挑战已消费且单赢家。
 	if _, err := env.service.FinishLogin(env.ctx, passkey.LoginFinishRequest{
 		CeremonyID: start.CeremonyID, Response: response, RequestID: "req-login-3"}); !errors.Is(err, passkey.ErrCeremonyInvalid) {
@@ -879,5 +905,223 @@ func TestConfigValidationFailsClosed(t *testing.T) {
 	}
 	if err := passkey.ValidateRPConfig(testRPID, []string{"http://localhost:8080"}); err == nil {
 		t.Error("RP ID 与来源主机不匹配时应拒绝")
+	}
+}
+
+// TestSecondFactorCeremonyAndPurposeEnforcement 验证 FIDO2 第二步认证、用途强校验与
+// 防跨挑战挪用。
+func TestSecondFactorCeremonyAndPurposeEnforcement(t *testing.T) {
+	env := newTestEnv(t, nil)
+	secondary := newAuthenticator(t)
+	secondMeta := env.registerCredentialWithPurpose(bobID, "安全密钥",
+		passkey.PurposeSecondFactor, secondary)
+	primary := newAuthenticator(t)
+	primaryMeta := env.registerCredentialWithPurpose(bobID, "手机 Passkey",
+		passkey.PurposeLogin, primary)
+	if !strings.HasPrefix(secondMeta.ID, "cred_") || !strings.HasPrefix(primaryMeta.ID, "cred_") {
+		t.Fatalf("凭证 ID 异常: %+v %+v", secondMeta, primaryMeta)
+	}
+	// 数据库用途持久化正确。
+	var usage string
+	if err := env.raw.DB().QueryRowContext(env.ctx,
+		`SELECT usage FROM webauthn_credentials WHERE id=?`, secondMeta.ID).Scan(&usage); err != nil {
+		t.Fatalf("读取凭证用途: %v", err)
+	}
+	if usage != "second_factor" {
+		t.Fatalf("第二步凭证用途 = %q", usage)
+	}
+	// 开始第二步：allowCredentials 只能包含第二步用途凭证（不能包含主登录凭证）。
+	start, err := env.service.BeginSecondFactor(env.ctx, bobID, "mfa-challenge-1", "req-sf-1")
+	if err != nil {
+		t.Fatalf("开始第二步: %v", err)
+	}
+	var options requestOptions
+	if err := json.Unmarshal(start.PublicKey, &options); err != nil {
+		t.Fatalf("解析第二步选项: %v", err)
+	}
+	if len(options.PublicKey.AllowCredentials) != 1 ||
+		options.PublicKey.AllowCredentials[0].ID != base64.RawURLEncoding.EncodeToString(secondary.credentialID) {
+		t.Fatalf("第二步 allowCredentials 应只含第二步凭证: %+v", options.PublicKey.AllowCredentials)
+	}
+	// 上下文不符：用其他 MFA 挑战 ID 完成必须拒绝。
+	response := secondary.assertionResponse(t, start.PublicKey, testOrigin, "", 1, nil)
+	if _, err := env.service.FinishSecondFactor(env.ctx, passkey.SecondFactorFinishRequest{
+		CeremonyID: start.CeremonyID, ContextID: "mfa-challenge-other", Response: response,
+		RequestID: "req-sf-2"}); !errors.Is(err, passkey.ErrCeremonyInvalid) {
+		t.Fatalf("跨挑战上下文应拒绝: %v", err)
+	}
+	// 正确上下文验证成功。
+	start, err = env.service.BeginSecondFactor(env.ctx, bobID, "mfa-challenge-1", "req-sf-3")
+	if err != nil {
+		t.Fatalf("开始第二步: %v", err)
+	}
+	response = secondary.assertionResponse(t, start.PublicKey, testOrigin, "", 1, nil)
+	result, err := env.service.FinishSecondFactor(env.ctx, passkey.SecondFactorFinishRequest{
+		CeremonyID: start.CeremonyID, ContextID: "mfa-challenge-1", Response: response,
+		RequestID: "req-sf-4"})
+	if err != nil {
+		t.Fatalf("完成第二步: %v", err)
+	}
+	if !result.UserVerified || result.UserID != bobID || result.AuthenticatorID != secondMeta.ID {
+		t.Fatalf("第二步结果异常: %+v", result)
+	}
+	// 同一挑战/响应重放拒绝。
+	if _, err := env.service.FinishSecondFactor(env.ctx, passkey.SecondFactorFinishRequest{
+		CeremonyID: start.CeremonyID, ContextID: "mfa-challenge-1", Response: response,
+		RequestID: "req-sf-5"}); !errors.Is(err, passkey.ErrCeremonyInvalid) {
+		t.Fatalf("第二步重放应拒绝: %v", err)
+	}
+	// 主登录凭证不能冒充第二因素：以 primary 凭证类型的新用户只注册主登录凭证。
+	onlyPrimary := newTestEnv(t, nil)
+	env3 := onlyPrimary
+	if _, err := env3.service.BeginSecondFactor(env3.ctx, aliceID, "mfa-challenge-2", "req-sf-6"); !errors.Is(err, passkey.ErrNoSecondFactor) {
+		// alice 此时没有任何凭证：没有可用于第二步的凭证。
+		if !errors.Is(err, passkey.ErrNoSecondFactor) {
+			t.Fatalf("没有第二步凭证应明确报无可用方式: %v", err)
+		}
+	}
+	env3.registerCredentialWithPurpose(aliceID, "主登录", passkey.PurposeLogin, newAuthenticator(t))
+	if _, err := env3.service.BeginSecondFactor(env3.ctx, aliceID, "mfa-challenge-3", "req-sf-7"); !errors.Is(err, passkey.ErrNoSecondFactor) {
+		t.Fatalf("主登录凭证不能作为第二因素: %v", err)
+	}
+	// 第二步凭证不能冒充主登录。
+	onlySecond := newTestEnv(t, nil)
+	onlySecond.registerCredentialWithPurpose(aliceID, "安全密钥", passkey.PurposeSecondFactor, newAuthenticator(t))
+	if _, err := onlySecond.service.BeginLogin(onlySecond.ctx, passkey.LoginStartRequest{
+		Username: "alice", RequestID: "req-sf-8"}); !errors.Is(err, passkey.ErrAuthenticationFailed) {
+		t.Fatalf("第二步凭证不能冒充主登录: %v", err)
+	}
+	// both 用途凭证同时可用于主登录与第二步。
+	both := newTestEnv(t, nil)
+	bothSim := newAuthenticator(t)
+	both.registerCredentialWithPurpose(aliceID, "两用", passkey.PurposeBoth, bothSim)
+	if _, err := both.service.BeginSecondFactor(both.ctx, aliceID, "mfa-challenge-4", "req-sf-9"); err != nil {
+		t.Fatalf("both 用途凭证应可用于第二步: %v", err)
+	}
+	if _, err := both.service.BeginLogin(both.ctx, passkey.LoginStartRequest{
+		Username: "alice", RequestID: "req-sf-10"}); err != nil {
+		t.Fatalf("both 用途凭证应可用于主登录: %v", err)
+	}
+}
+
+// TestSecondFactorRequiresUserVerification 验证策略要求 UV 时缺少 UV 的第二步断言被拒绝。
+func TestSecondFactorRequiresUserVerification(t *testing.T) {
+	env := newTestEnv(t, nil)
+	secondary := newAuthenticator(t)
+	env.registerCredentialWithPurpose(bobID, "安全密钥", passkey.PurposeSecondFactor, secondary)
+	secondary.userVerified = false
+	start, err := env.service.BeginSecondFactor(env.ctx, bobID, "mfa-challenge-uv", "req-uv-1")
+	if err != nil {
+		t.Fatalf("开始第二步: %v", err)
+	}
+	response := secondary.assertionResponse(t, start.PublicKey, testOrigin, "", 1, nil)
+	if _, err := env.service.FinishSecondFactor(env.ctx, passkey.SecondFactorFinishRequest{
+		CeremonyID: start.CeremonyID, ContextID: "mfa-challenge-uv", Response: response,
+		RequestID: "req-uv-2"}); !errors.Is(err, passkey.ErrAuthenticationFailed) {
+		t.Fatalf("缺少 UV 的第二步应拒绝: %v", err)
+	}
+}
+
+// fakeMFAPolicy / fakeOtherStrong 用于删除最后强因素保护测试。
+type fakeMFAPolicy struct{ forced bool }
+
+func (f *fakeMFAPolicy) MFARequired(ctx context.Context, userID string) (bool, error) {
+	return f.forced, nil
+}
+
+type fakeOtherStrong struct{ has bool }
+
+func (f *fakeOtherStrong) HasOtherStrongFactor(ctx context.Context, userID string) (bool, error) {
+	return f.has, nil
+}
+
+// TestRevokeProtectsLastStrongFactor 验证强制 MFA 账户删除最后一个第二步凭证时，
+// 若没有其他强因素（如 TOTP）必须拒绝；有其他强因素或未强制时允许。
+func TestRevokeProtectsLastStrongFactor(t *testing.T) {
+	forced := &fakeMFAPolicy{forced: true}
+	env := newTestEnv(t, func(options *passkey.Options) { options.MFAPolicy = forced })
+	env.addPassword(bobID)
+	meta := env.registerCredentialWithPurpose(bobID, "唯一安全密钥",
+		passkey.PurposeSecondFactor, newAuthenticator(t))
+	if err := env.service.Revoke(env.ctx, env.caller(bobID), passkey.RevokeRequest{
+		CredentialID: meta.ID, RequestID: "req-strong-1"}); !errors.Is(err, passkey.ErrLastStrongFactor) {
+		t.Fatalf("强制 MFA 且无其他强因素时应保护最后一个强因素: %v", err)
+	}
+	// 存在其他强因素（例如 TOTP）时允许删除。
+	withTOTP := newTestEnv(t, func(options *passkey.Options) {
+		options.MFAPolicy = forced
+		options.OtherStrongFactors = &fakeOtherStrong{has: true}
+	})
+	withTOTP.addPassword(bobID)
+	meta2 := withTOTP.registerCredentialWithPurpose(bobID, "安全密钥",
+		passkey.PurposeSecondFactor, newAuthenticator(t))
+	if err := withTOTP.service.Revoke(withTOTP.ctx, withTOTP.caller(bobID), passkey.RevokeRequest{
+		CredentialID: meta2.ID, RequestID: "req-strong-2"}); err != nil {
+		t.Fatalf("有其他强因素时应允许删除: %v", err)
+	}
+	// 未强制 MFA 时允许删除（密码登录方式仍存在）。
+	unforced := newTestEnv(t, nil)
+	unforced.addPassword(aliceID)
+	meta3 := unforced.registerCredentialWithPurpose(aliceID, "安全密钥",
+		passkey.PurposeSecondFactor, newAuthenticator(t))
+	if err := unforced.service.Revoke(unforced.ctx, unforced.caller(aliceID), passkey.RevokeRequest{
+		CredentialID: meta3.ID, RequestID: "req-strong-3"}); err != nil {
+		t.Fatalf("未强制 MFA 时应允许删除: %v", err)
+	}
+}
+
+// fakeSessionInvalidator 记录强因素删除后的即时会话撤销调用。
+type fakeSessionInvalidator struct{ calls int }
+
+func (f *fakeSessionInvalidator) RevokeAllForUser(ctx context.Context, userID, reason string) (int64, error) {
+	f.calls++
+	return 1, nil
+}
+
+// TestRevokeInvalidatesExistingSessions 验证删除凭证后删除前建立的强认证会话失效：
+// 同事务递增 security_version + 注入的 SessionInvalidator 撤销会话，旧会话不能再
+// 通过管理访问强认证闸门。
+func TestRevokeInvalidatesExistingSessions(t *testing.T) {
+	invalidator := &fakeSessionInvalidator{}
+	env := newTestEnv(t, func(options *passkey.Options) {
+		options.SessionInvalidator = invalidator
+	})
+	simulator := newAuthenticator(t)
+	meta := env.registerCredential(aliceID, "手机 Passkey", simulator)
+	start, err := env.service.BeginLogin(env.ctx, passkey.LoginStartRequest{
+		Username: "alice", RequestID: "req-invalidate-1"})
+	if err != nil {
+		t.Fatalf("开始登录: %v", err)
+	}
+	result, err := env.service.FinishLogin(env.ctx, passkey.LoginFinishRequest{
+		CeremonyID: start.CeremonyID,
+		Response:   simulator.assertionResponse(t, start.PublicKey, testOrigin, "", 1, nil),
+		RequestID:  "req-invalidate-2"})
+	if err != nil {
+		t.Fatalf("登录: %v", err)
+	}
+	if _, err := env.session.AuthorizeManagement(env.ctx, result.Session.Secret.Reveal()); err != nil {
+		t.Fatalf("删除前强认证会话应可管理访问: %v", err)
+	}
+	// 增加主密码，使撤销不触发“最后登录方式”保护。
+	env.addPassword(aliceID)
+	if err := env.service.Revoke(env.ctx, env.caller(aliceID), passkey.RevokeRequest{
+		CredentialID: meta.ID, RequestID: "req-invalidate-3"}); err != nil {
+		t.Fatalf("撤销凭证: %v", err)
+	}
+	if invalidator.calls != 1 {
+		t.Fatalf("删除强因素后应触发会话撤销: %d", invalidator.calls)
+	}
+	// security_version 递增使旧会话失效（即使没有即时撤销实现也 fail-closed）。
+	if _, err := env.session.Validate(env.ctx, result.Session.Secret.Reveal()); err == nil {
+		t.Fatal("删除强因素后旧会话必须失效")
+	}
+	var version int
+	if err := env.raw.DB().QueryRowContext(env.ctx,
+		`SELECT security_version FROM users WHERE id=?`, aliceID).Scan(&version); err != nil {
+		t.Fatalf("读取安全版本: %v", err)
+	}
+	if version < 2 {
+		t.Fatalf("删除强因素后 security_version 应递增: %d", version)
 	}
 }

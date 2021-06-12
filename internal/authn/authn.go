@@ -33,6 +33,7 @@
 package authn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -64,10 +65,18 @@ type Method string
 const (
 	// MethodPassword 表示已通过正式密码验证。
 	MethodPassword Method = "password"
-	// MethodSecondFactor 表示第二因素（MFA）通过；步骤 29 未实现。
+	// MethodSecondFactor 是通用第二因素标识；新代码应按具体因素使用
+	// MethodEmailOTP/MethodTOTP/MethodSecurityKey 以便强度与 amr 映射，不要再用
+	// 本标识表达具体因素。
 	MethodSecondFactor Method = "second_factor"
-	// MethodPasskey 表示 Passkey 通过；后续步骤实现。
+	// MethodPasskey 表示 Passkey/WebAuthn 凭证（主登录或第二步）通过。
 	MethodPasskey Method = "passkey"
+	// MethodEmailOTP 表示邮件验证码（弱持有因素，不构成强认证）。
+	MethodEmailOTP Method = "email_otp"
+	// MethodTOTP 表示 TOTP 验证器第二步通过（与密码组合为受控强认证）。
+	MethodTOTP Method = "totp"
+	// MethodSecurityKey 表示 FIDO2 安全密钥第二步通过（WebAuthn UV 时为强认证）。
+	MethodSecurityKey Method = "security_key"
 	// MethodRecoveryCode 表示恢复代码替代第二因素；后续步骤实现。
 	MethodRecoveryCode Method = "recovery_code"
 )
@@ -75,11 +84,20 @@ const (
 // Valid 报告方法标识是否已定义。
 func (m Method) Valid() bool {
 	switch m {
-	case MethodPassword, MethodSecondFactor, MethodPasskey, MethodRecoveryCode:
+	case MethodPassword, MethodSecondFactor, MethodPasskey, MethodEmailOTP,
+		MethodTOTP, MethodSecurityKey, MethodRecoveryCode:
 		return true
 	default:
 		return false
 	}
+}
+
+// StrongFactorPresence 报告账户是否已绑定可满足强认证的因素（TOTP 或
+// Passkey/安全密钥）。authn 用它动态决定 RequiredSteps：已绑定强因素只需要完成
+// 第二因素；未绑定才要求强因素初始化。nil 表示未知，按未绑定处理（保守，但不会
+// 降级——初始化流程仍需受控授权）。
+type StrongFactorPresence interface {
+	HasStrongFactor(ctx context.Context, userID string) (bool, error)
 }
 
 // Step 是“完成登录前仍必须完成”的步骤稳定标识。会话服务据此降级为受限会话，
@@ -167,6 +185,10 @@ type AuthenticateResult struct {
 	// Restricted 为 true 表示结果不得用于完整业务或管理访问，会话服务只能签发
 	// 受限会话（例如等待 MFA 或强制改密）；本步不签发任何会话。
 	Restricted bool
+	// StrongAuthCompletedAt 是本次认证完成强认证（Passkey/安全密钥 UV，或
+	// 密码+TOTP 受控组合）的服务端时间；零值表示未完成强认证。会话服务据此决定
+	// 管理访问是否满足强认证要求；受限结果不得携带该时间。
+	StrongAuthCompletedAt time.Time
 	// PasswordUpgradeApplied 表示本次登录顺带把旧参数哈希升级为当前参数成功。
 	PasswordUpgradeApplied bool
 	// SecurityVersion 是认证时的账户安全版本，供会话服务绑定与失效判断。

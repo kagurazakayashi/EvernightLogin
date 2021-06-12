@@ -245,6 +245,31 @@ func (s *Service) Initialize(ctx context.Context, caller Caller, request Initial
 	return InitializeResult{Root: root, State: StatePendingSetup, SetupCredential: issued}, nil
 }
 
+// AuthorizeStrongSetup 实现 mfa.StrongSetupAuthorizer：只允许唯一 root 且初始化
+// 状态为 pending_setup / setup_verified 的受控初始化流程；其他用户（包括普通
+// 高权限账户）一律拒绝，必须由宿主另行提供管理员一次性凭证/审批实现。本方法不签发
+// 会话、不改变初始化状态，root 保护语义不变。
+func (s *Service) AuthorizeStrongSetup(ctx context.Context, userID, requestID string) error {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !account.ValidUserID(userID) {
+		return ErrInvalidRequest
+	}
+	record, found, err := s.store.GetInitialization(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+	if !found || record.RootUserID != userID {
+		return ErrAccessDenied
+	}
+	if record.State != StatePendingSetup && record.State != StateSetupVerified {
+		return ErrAccessDenied
+	}
+	return nil
+}
+
 // Status 读取初始化状态与一次性配置凭证的安全诊断信息，并写读取审计；审计失败
 // 时拒绝返回数据（fail-closed）。它不返回凭证摘要、秘密或密码材料。
 func (s *Service) Status(ctx context.Context, caller Caller) (Status, error) {

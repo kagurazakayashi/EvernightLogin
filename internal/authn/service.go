@@ -85,6 +85,10 @@ type Options struct {
 	// RootInitialization 是 root 受限初始化状态存储（bootstrap.Store 的子集）；
 	// 必填。设置 root 正式密码必须复用 0008 状态机，不能绕过。
 	RootInitialization RootInitializationStore
+	// StrongFactorPresence 报告账户是否已绑定强因素，用于动态生成待完成步骤：
+	// 已绑定 → 只要求第二因素；未绑定/未接线 → 要求强因素初始化。缺失时保守按
+	// 未绑定处理（fail-closed，不放宽）。
+	StrongFactorPresence StrongFactorPresence
 	// Params 是当前 Argon2id 参数；零值使用 DefaultParams。
 	Params Params
 	// PasswordPolicy 是密码长度/弱密码/历史策略；零值使用默认策略。
@@ -138,6 +142,7 @@ type Service struct {
 	operationLimiter *ratelimit.Limiter
 
 	emailLoginEnabled bool
+	strongPresence    StrongFactorPresence
 	sensitive         SensitiveRunner
 	allowLegacy       bool
 	now               func() time.Time
@@ -240,6 +245,7 @@ func New(options Options) (*Service, error) {
 		locks:             newFailureTracker(failurePolicy, now),
 		sweep:             newSweepGuard(failurePolicy, now),
 		emailLoginEnabled: options.EmailLoginEnabled,
+		strongPresence:    options.StrongFactorPresence,
 		sensitive:         options.Sensitive,
 		allowLegacy:       options.AllowLegacyWithoutSensitive,
 		now:               now,
@@ -452,7 +458,7 @@ func (s *Service) Authenticate(ctx context.Context, request AuthenticateRequest)
 		// 管理强认证（root/高权限权限持有者）要求第二因素；MFA 尚未实现，密码
 		// 正确只能得到受限的“已完成第一因素”结果，绝不能当作完整登录。
 		result.Outcome = OutcomePendingSecondFactor
-		result.RequiredSteps = strongAuthSteps()
+		result.RequiredSteps = s.strongAuthStepsFor(ctx, user.UserID)
 		result.Restricted = true
 	case credential.MustChange:
 		result.Outcome = OutcomePendingPasswordChange
@@ -848,7 +854,7 @@ func (s *Service) SetRootPassword(ctx context.Context, caller Caller, request Se
 		PasswordChangedAt:  changeResult.ChangedAt,
 	}
 	if strongAuthRequired {
-		result.RequiredSteps = strongAuthSteps()
+		result.RequiredSteps = s.strongAuthStepsFor(ctx, user.UserID)
 	}
 	s.logger.Info("root 正式密码已设置",
 		"root_user_id", user.UserID,
@@ -921,6 +927,21 @@ type RootPasswordResult struct {
 // 因此两步都列出；会话步骤只能据此签发受限会话。
 func strongAuthSteps() []Step {
 	return []Step{StepStrongAuthSetup, StepSecondFactor}
+}
+
+// strongAuthStepsFor 按账户实际已绑定的强因素动态返回待完成步骤：已绑定强因素时
+// 只需要完成第二因素；未绑定（或存在性检查失败）时保守要求先完成强因素初始化。
+func (s *Service) strongAuthStepsFor(ctx context.Context, userID string) []Step {
+	if !isNilInterface(s.strongPresence) {
+		has, err := s.strongPresence.HasStrongFactor(ctx, userID)
+		if err != nil {
+			s.logger.Warn("强因素存在性检查失败，按未绑定处理", "user_id", userID,
+				"reason", "presence_unavailable")
+		} else if has {
+			return []Step{StepSecondFactor}
+		}
+	}
+	return strongAuthSteps()
 }
 
 // checkPasswordPolicy 用统一策略校验密码，并把账户展示信息作为弱密码检查标识。

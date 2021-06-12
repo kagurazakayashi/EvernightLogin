@@ -1,11 +1,14 @@
 // Package mfa 实现两步验证（MFA）公共状态机与邮件第二步验证。
 //
 // 范围与安全不变量：
-//   - 第一步密码认证由 internal/authn 完成；只有密码正确且账户不受“必须强认证”
-//     限制时才允许以邮件第二步继续。高权限账户（root 与持有高敏感系统权限的账户）
-//     密码正确后 authn 返回 pending_second_factor/受限状态，邮件因素**不能**满足
-//     其强认证要求，本包 fail-closed 返回 MFA_REQUIRED，不签发任何会话，账户保持
-//     受限配置状态。
+//   - 第一步密码认证由 internal/authn 完成。第二步因素由统一选择器按“用户实际启用
+//     且满足策略”选择：Passkey/安全密钥（WebAuthn UV）优先，其次 TOTP，最后邮件；
+//     强认证要求下邮件永远不会被选中，也不存在“降级到邮件”的路径。高权限账户
+//     （root 与持有高敏感系统权限的账户）密码正确后 authn 返回
+//     pending_second_factor/受限状态：有可用强因素时走 Passkey/安全密钥或 TOTP
+//     第二步；没有可用强因素时默认 fail-closed 返回 MFA_REQUIRED，只有宿主显式
+//     启用 AllowStrongAuthSetup 才进入受限初始化闭环（仅签发受限会话、绑定强因素、
+//     撤销受限会话并要求重新登录，绝不签发完整会话）。
 //   - 普通账户启用邮件因素后，第一步成功只能拿到 internal/session 的**受限会话**；
 //     第二步验证成功后再用同一受限会话秘密轮换为完整普通会话（复用会话服务，不另
 //     建会话体系）。
@@ -19,9 +22,9 @@
 //     时拒绝，不降级到未验证地址。发送失败 fail-closed（不签发受限会话完成第二步），
 //     并写失败审计。
 //   - 因素新增必须先向已验证邮箱发送验证码并验证成功（证明渠道控制权）；移除需检查
-//     强制策略：被 Policy 要求 MFA 时不能移除最后一个可用因素。当前只实现 email
-//     因素；TOTP/Passkey/FIDO2 后续按同一 FactorType/Store 接口接入，本包不预置
-//     空实现或假装已支持。
+//     强制策略：被 Policy 要求 MFA 时不能移除最后一个可用因素。已实现的第二步因素
+//     包括 email、TOTP（适配器）与 Passkey/安全密钥（适配器，步骤 43）；安全密钥
+//     第二步要求凭证用途允许 second_factor，且策略要求强认证时必须有 UV。
 //   - 本包不做页面、不暴露 HTTP 路由；会话签发通过注入的 SessionIssuer 完成，宿主
 //     装配时传入 *internal/session.Service。
 package mfa
@@ -38,33 +41,38 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
+	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
 // 领域错误哨兵。错误文本不包含验证码、尝试令牌或会话秘密。
 var (
-	ErrOptionsInvalid       = errors.New("MFA 服务选项无效")
-	ErrInvalidRequest       = errors.New("MFA 请求无效")
-	ErrAccessDenied         = errors.New("未获准执行该 MFA 操作")
-	ErrStrongAuthRequired   = errors.New("高权限账户需要强认证，邮件因素不可满足")
-	ErrSecondFactorRequired = errors.New("需要完成第二因素验证")
-	ErrChallengeInvalid     = errors.New("MFA 挑战无效")
-	ErrChallengeExpired     = errors.New("MFA 挑战已过期")
-	ErrCodeInvalid          = errors.New("验证码无效或已失效")
-	ErrAttemptsExceeded     = errors.New("验证码尝试次数已用尽")
-	ErrRateLimited          = errors.New("MFA 请求过于频繁")
-	ErrNoVerifiedEmail      = errors.New("账户没有已验证邮箱，无法使用邮件因素")
-	ErrFactorExists         = errors.New("该类型 MFA 因素已启用")
-	ErrFactorNotFound       = errors.New("未找到可用的 MFA 因素")
-	ErrFactorRequired       = errors.New("策略要求 MFA，不能移除最后一个可用因素")
-	ErrMailFailed           = errors.New("验证码邮件发送失败")
-	ErrSessionUnavailable   = errors.New("会话服务暂时不可用")
-	ErrPolicyUnavailable    = errors.New("MFA 策略检查暂时不可用")
-	ErrStoreUnavailable     = errors.New("MFA 存储暂时不可用")
-	ErrAuditUnavailable     = errors.New("关键操作未能可靠记录")
+	ErrOptionsInvalid        = errors.New("MFA 服务选项无效")
+	ErrInvalidRequest        = errors.New("MFA 请求无效")
+	ErrAccessDenied          = errors.New("未获准执行该 MFA 操作")
+	ErrStrongAuthRequired    = errors.New("高权限账户需要强认证，邮件因素不可满足")
+	ErrSecondFactorRequired  = errors.New("需要完成第二因素验证")
+	ErrChallengeInvalid      = errors.New("MFA 挑战无效")
+	ErrChallengeExpired      = errors.New("MFA 挑战已过期")
+	ErrCodeInvalid           = errors.New("验证码无效或已失效")
+	ErrAttemptsExceeded      = errors.New("验证码尝试次数已用尽")
+	ErrRateLimited           = errors.New("MFA 请求过于频繁")
+	ErrNoVerifiedEmail       = errors.New("账户没有已验证邮箱，无法使用邮件因素")
+	ErrFactorExists          = errors.New("该类型 MFA 因素已启用")
+	ErrFactorNotFound        = errors.New("未找到可用的 MFA 因素")
+	ErrFactorRequired        = errors.New("策略要求 MFA，不能移除最后一个可用因素")
+	ErrMailFailed            = errors.New("验证码邮件发送失败")
+	ErrSessionUnavailable    = errors.New("会话服务暂时不可用")
+	ErrPolicyUnavailable     = errors.New("MFA 策略检查暂时不可用")
+	ErrStoreUnavailable      = errors.New("MFA 存储暂时不可用")
+	ErrAuditUnavailable      = errors.New("关键操作未能可靠记录")
+	ErrNoAvailableMethod     = errors.New("没有可用且满足策略的第二因素")
+	ErrStrongSetupIncomplete = errors.New("强认证初始化尚未完成")
+	ErrStrongSetupDenied     = errors.New("不允许强认证初始化")
 )
 
 // ErrorCode 是 MFA 领域对根包错误码注册表的投影（只复用既有码）。
@@ -95,7 +103,8 @@ func CodeOf(err error) ErrorCode {
 	case errors.Is(err, ErrAccessDenied):
 		return CodeAccessDenied
 	case errors.Is(err, ErrStrongAuthRequired), errors.Is(err, ErrSecondFactorRequired),
-		errors.Is(err, ErrNoVerifiedEmail):
+		errors.Is(err, ErrNoVerifiedEmail), errors.Is(err, ErrNoAvailableMethod),
+		errors.Is(err, ErrStrongSetupIncomplete), errors.Is(err, ErrStrongSetupDenied):
 		return CodeMFARequired
 	case errors.Is(err, ErrChallengeInvalid), errors.Is(err, ErrChallengeExpired),
 		errors.Is(err, ErrCodeInvalid), errors.Is(err, ErrAttemptsExceeded):
@@ -165,6 +174,9 @@ const (
 	FactorEmail FactorType = "email"
 	// FactorTOTP 是 TOTP 验证器第二步因素（步骤 41）。
 	FactorTOTP FactorType = "totp"
+	// FactorPasskey 是 WebAuthn/FIDO2 安全密钥第二步因素（步骤 43）；凭证用途必须
+	// 允许第二步，与主登录 Passkey 凭证区分。
+	FactorPasskey FactorType = "passkey"
 )
 
 // Purpose 是挑战用途。
@@ -175,6 +187,9 @@ const (
 	PurposeLogin Purpose = "login"
 	// PurposeFactorEnroll 是新增因素时的渠道控制权验证。
 	PurposeFactorEnroll Purpose = "factor_enroll"
+	// PurposeStrongSetup 是“要求强认证但尚未绑定强因素”的管理账户的受限初始化：
+	// 只签发受限会话、绑定允许的强因素，完成后撤销受限会话并要求重新登录。
+	PurposeStrongSetup Purpose = "strong_setup"
 )
 
 // ChallengeState 是统一 MFA 状态机。
@@ -205,9 +220,12 @@ type Challenge struct {
 	Purpose       Purpose
 	AttemptSHA256 []byte
 	CredentialID  string
-	Generation    int
-	State         ChallengeState
-	Username      string
+	// FactorRef 是第二步 WebAuthn ceremony ID（FactorPasskey 使用），与邮件/TOTP
+	// 验证码凭证分开，避免借用 credential_id 的语义。
+	FactorRef  string
+	Generation int
+	State      ChallengeState
+	Username   string
 	// AppID/RememberMe/Client 是第一步签发受限会话时使用的环境，第二步必须用同值
 	// 签发完整会话，避免应用作用域登录在第二步后变成全局会话。
 	AppID           string
@@ -219,12 +237,15 @@ type Challenge struct {
 	RestrictedSessionID string
 	Attempts            int
 	MaxAttempts         int
-	SecurityVersion     int64
-	CompletedAt         time.Time
-	ExpiresAt           time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-	VerifiedAt          time.Time
+	// RequireStrong 表示本挑战所属账户被策略要求强认证：安全密钥第二步必须完成
+	// 用户验证（UV）才能满足，否则拒绝（不能把无 UV 的断言当强认证）。
+	RequireStrong   bool
+	SecurityVersion int64
+	CompletedAt     time.Time
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	VerifiedAt      time.Time
 }
 
 // SecondFactorTOTP 是 TOTP 第二步因素适配器；生产实现为 *internal/totp.Service，
@@ -235,6 +256,39 @@ type SecondFactorTOTP interface {
 	HasActive(ctx context.Context, userID string) (bool, error)
 	// VerifyLoginCode 校验登录第二步 TOTP 码；同一步/旧步重放必须返回错误。
 	VerifyLoginCode(ctx context.Context, userID, code string) error
+}
+
+// SecondFactorPasskey 是 WebAuthn/FIDO2 安全密钥第二步适配器；生产实现为
+// *internal/passkey.Service（其 BeginSecondFactor/FinishSecondFactor/HasSecondFactor
+// 语义与下面一致）。mfa 只负责挑战/会话/限流，WebAuthn 校验由 passkey 实现负责。
+type SecondFactorPasskey interface {
+	// HasSecondFactor 报告用户是否有用途允许第二步的有效凭证。
+	HasSecondFactor(ctx context.Context, userID string) (bool, error)
+	// BeginSecondFactor 为指定 MFA 挑战创建第二步认证挑战（allowCredentials 只含
+	// 第二步用途凭证）；contextID 由服务端挑战得出。
+	BeginSecondFactor(ctx context.Context, userID, contextID, requestID string) (passkey.SecondFactorStart, error)
+	// FinishSecondFactor 校验第二步断言；成功返回用户验证结果与凭证元数据。
+	FinishSecondFactor(ctx context.Context, request passkey.SecondFactorFinishRequest) (passkey.SecondFactorResult, error)
+}
+
+// StrongFactorSource 报告账户当前是否已绑定可用于强认证的因素（TOTP 或用途允许
+// 第二步的 Passkey/安全密钥）；用于强认证初始化闭环完成判定。nil 时视为未就绪
+// （fail-closed，不允许完成初始化）。
+type StrongFactorSource interface {
+	HasStrongFactor(ctx context.Context, userID string) (bool, error)
+}
+
+// StrongSetupAuthorizer 授权强认证初始化（受控状态）：必须是可信来源确认该用户
+// 处于初始化/受邀状态（如 root pending_setup 状态）或已获管理员一次性凭证/审批；
+// 未注入或拒绝时不允许初始化。mfa 本身不验证审批，宿主必须提供可信实现。
+type StrongSetupAuthorizer interface {
+	AuthorizeStrongSetup(ctx context.Context, userID, requestID string) error
+}
+
+// SessionRevoker 是撤销受限会话的契约；强认证初始化完成后必须撤销受限会话，避免
+// 留下临时受限通道。启用 AllowStrongAuthSetup 时必须注入（构造期校验）。
+type SessionRevoker interface {
+	Logout(ctx context.Context, secret string) error
 }
 
 // Policy 是宿主的 MFA 强制策略；实现应默认拒绝/保守。nil 表示没有外部强制策略，
@@ -365,15 +419,65 @@ func pendingSecondFactorResult(base authn.AuthenticateResult) authn.Authenticate
 	}
 }
 
-// completeResult 在第二因素真实通过后构造完整认证结果（内部可信边界）。
-func completeResult(challenge Challenge, completedAt time.Time) authn.AuthenticateResult {
+// completeResult 在第二因素真实通过后构造完整认证结果（内部可信边界）。factorMethod
+// 是具体第二因素方法（邮件/TOTP/安全密钥），strongAuthAt 只在该因素满足强认证时
+// 非零；受限结果不会携带强认证时间（会话服务会拒绝）。
+func completeResult(challenge Challenge, completedAt time.Time,
+	factorMethod authfact.Method, strongAuthAt time.Time) authn.AuthenticateResult {
 	return authn.AuthenticateResult{
 		UserID: challenge.UserID, Username: challenge.Username,
-		Outcome:          authn.OutcomeComplete,
-		CompletedMethods: []authn.Method{authn.MethodPassword, authn.MethodSecondFactor},
-		CompletedAt:      completedAt,
-		Restricted:       false,
-		SecurityVersion:  challenge.SecurityVersion,
+		Outcome:               authn.OutcomeComplete,
+		CompletedMethods:      []authn.Method{authn.MethodPassword, authnMethodOf(factorMethod)},
+		CompletedAt:           completedAt,
+		StrongAuthCompletedAt: strongAuthAt,
+		Restricted:            false,
+		SecurityVersion:       challenge.SecurityVersion,
+	}
+}
+
+// strongSetupResult 构造“强认证未就绪、进入受限初始化”的认证结果；只能签发受限
+// 会话，不得当作完整登录。
+func strongSetupResult(base authn.AuthenticateResult) authn.AuthenticateResult {
+	return authn.AuthenticateResult{
+		UserID: base.UserID, Username: base.Username,
+		Outcome:          authn.OutcomePendingSecondFactor,
+		CompletedMethods: []authn.Method{authn.MethodPassword},
+		CompletedAt:      base.CompletedAt,
+		RequiredSteps:    []authn.Step{authn.StepStrongAuthSetup},
+		Restricted:       true,
+		SecurityVersion:  base.SecurityVersion,
+	}
+}
+
+// factorTypeOf 把认证事实方法映射为 MFA 因素类型。
+func factorTypeOf(method authfact.Method) FactorType {
+	switch method {
+	case authfact.MethodSecurityKey, authfact.MethodPasskey:
+		return FactorPasskey
+	case authfact.MethodTOTP:
+		return FactorTOTP
+	case authfact.MethodEmailOTP:
+		return FactorEmail
+	default:
+		return ""
+	}
+}
+
+// authnMethodOf 把认证事实方法映射为 authn 认证方法标识。
+func authnMethodOf(method authfact.Method) authn.Method {
+	switch method {
+	case authfact.MethodPassword:
+		return authn.MethodPassword
+	case authfact.MethodEmailOTP:
+		return authn.MethodEmailOTP
+	case authfact.MethodTOTP:
+		return authn.MethodTOTP
+	case authfact.MethodSecurityKey:
+		return authn.MethodSecurityKey
+	case authfact.MethodPasskey:
+		return authn.MethodPasskey
+	default:
+		return authn.MethodSecondFactor
 	}
 }
 
@@ -385,11 +489,16 @@ const (
 
 // VerifyRequest 是第二步验证请求。
 type VerifyRequest struct {
-	ChallengeID     string
-	AttemptToken    string
-	Code            string
-	ExistingSession string
-	RequestID       string
+	ChallengeID  string
+	AttemptToken string
+	// Code 是邮件/TOTP 验证码；安全密钥第二步不使用该字段。
+	Code string
+	// PasskeyCeremonyID/PasskeyResponse 是安全密钥第二步的 WebAuthn ceremony 与
+	// 断言响应 JSON；其他因素不使用。
+	PasskeyCeremonyID string
+	PasskeyResponse   []byte
+	ExistingSession   string
+	RequestID         string
 }
 
 // VerifyResult 是第二因素通过后的完整会话与认证结果。
@@ -397,6 +506,12 @@ type VerifyResult struct {
 	Session       session.IssuedSession
 	Authenticated authn.AuthenticateResult
 	ChallengeID   string
+	// Method 是本次完成的第二因素方法；AMR/ACR/Strength 是认证事实的未来 OAuth/
+	// OIDC 映射（本步骤只提供内部事实与映射，不实现协议端点）。
+	Method   string
+	AMR      []string
+	ACR      string
+	Strength string
 }
 
 // 合同：credential 服务类型在接口中直接使用，避免再包一层不受控发送接口。

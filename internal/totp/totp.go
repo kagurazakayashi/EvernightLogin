@@ -25,6 +25,7 @@
 package totp
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
@@ -135,6 +136,13 @@ func CodeOf(err error) ErrorCode {
 	default:
 		return CodeInternalError
 	}
+}
+
+// SessionInvalidator 在解除强因素（TOTP）后撤销该用户既有会话；生产实现为
+// *internal/session.Service。即使未注入，解除绑定也会在同一审计事务内递增
+// security_version 让既有会话失效。nil 表示未接线（仍会递增安全版本）。
+type SessionInvalidator interface {
+	RevokeAllForUser(ctx context.Context, userID, reason string) (int64, error)
 }
 
 // Caller 是可信调用身份；不能由请求参数自称。

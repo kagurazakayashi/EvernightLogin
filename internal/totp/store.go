@@ -35,6 +35,9 @@ type Store interface {
 	DisableActiveTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) (bool, error)
 	// AdvanceAcceptedStepTx 条件推进已接受时间步（只接受严格更大的 step）。
 	AdvanceAcceptedStepTx(ctx context.Context, tx audit.Tx, userID, bindingID string, step int64, now time.Time) (bool, error)
+	// IncrementUserSecurityVersionTx 在审计事务内递增用户 security_version，使既有
+	// 会话失效（解除强因素后使用）。
+	IncrementUserSecurityVersionTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) error
 	// HasActive 报告用户是否有 active TOTP 绑定。
 	HasActive(ctx context.Context, userID string) (bool, error)
 	// Username 返回用户显示用户名（用于导入 URI 标签）。

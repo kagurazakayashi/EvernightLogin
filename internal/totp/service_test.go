@@ -29,6 +29,13 @@ var seedTime = time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 
 const userID = "usr_00000000000000000000000000000001"
 
+type fakeSessionInvalidator struct{ calls int }
+
+func (f *fakeSessionInvalidator) RevokeAllForUser(ctx context.Context, userID, reason string) (int64, error) {
+	f.calls++
+	return 1, nil
+}
+
 type allowRunner struct{ calls int }
 
 func (r *allowRunner) Authorize(ctx context.Context, caller reauth.Caller, request reauth.Request) (reauth.Result, error) {
@@ -485,5 +492,41 @@ func TestBeginBindingWithRealReauthPolicy(t *testing.T) {
 	if _, err := service.ConfirmBinding(env.ctx, env.caller(), totp.BindConfirm{
 		BindingID: start.BindingID, Code: mustCode(t, secret, env.now), RequestID: "req-real-confirm"}); err != nil {
 		t.Fatalf("真实 reauth 路径确认: %v", err)
+	}
+}
+
+// TestRemoveBindingInvalidatesExistingSessions 验证解除 TOTP（强因素）后：
+// 同一审计事务递增 security_version，并触发注入的会话撤销器；旧强认证会话失效。
+func TestRemoveBindingInvalidatesExistingSessions(t *testing.T) {
+	invalidator := &fakeSessionInvalidator{}
+	env := newTestEnv(t, func(options *totp.Options) {
+		options.SessionInvalidator = invalidator
+	})
+	env.now = time.Now().UTC()
+	caller := env.caller()
+	start, err := env.service.BeginBinding(env.ctx, caller, "req-remove-invalidate")
+	if err != nil {
+		t.Fatalf("开始绑定: %v", err)
+	}
+	secret, err := totp.DecodeSecret(start.Secret)
+	if err != nil {
+		t.Fatalf("解码种子: %v", err)
+	}
+	if _, err := env.service.ConfirmBinding(env.ctx, caller, totp.BindConfirm{
+		BindingID: start.BindingID, Code: mustCode(t, secret, env.now),
+		RequestID: "req-remove-invalidate-confirm"}); err != nil {
+		t.Fatalf("确认绑定: %v", err)
+	}
+	env.now = env.now.Add(30 * time.Second)
+	if err := env.service.RemoveBinding(env.ctx, caller, totp.RemoveRequest{
+		Code: mustCode(t, secret, env.now), RequestID: "req-remove-invalidate-remove"}); err != nil {
+		t.Fatalf("解除绑定: %v", err)
+	}
+	if invalidator.calls != 1 {
+		t.Fatalf("解除强因素后应触发会话撤销: %d", invalidator.calls)
+	}
+	version := env.count(`SELECT security_version FROM users WHERE id=?`, userID)
+	if version < 2 {
+		t.Fatalf("解除强因素后 security_version 应递增: %d", version)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
 // Policy 是宿主的 MFA 强制策略。
@@ -51,6 +52,9 @@ type Options struct {
 	Policy Policy
 	// OtherFactors 报告是否存在其他强因素；nil 视为没有。
 	OtherFactors OtherFactors
+	// SessionInvalidator 在解除 TOTP 后撤销该用户既有会话；nil 时仍会在同事务
+	// 递增 security_version 使会话失效。
+	SessionInvalidator SessionInvalidator
 	// IssuerName 是 otpauth 导入 URI 的签发者名称。
 	IssuerName    string
 	PeriodSeconds int
@@ -69,6 +73,8 @@ type AuditRecorder interface {
 	RecordFailure(ctx context.Context, event audit.Event) error
 	ExecuteCritical(ctx context.Context, request audit.CriticalRequest, change audit.Change) error
 }
+
+var _ SessionInvalidator = (*session.Service)(nil)
 
 // Service 是 TOTP 绑定与验证服务。构造后不可变，不启动协程，不做二维码 UI。
 type Service struct {
@@ -439,9 +445,17 @@ func (s *Service) RemoveBinding(ctx context.Context, caller Caller, request Remo
 		if !removed {
 			return ErrBindingNotFound
 		}
-		return nil
+		// 解除强因素改变认证面：同事务递增 security_version 让解除前建立的所有
+		// 会话（含记住我）立即失效，不能继续凭旧强认证访问管理接口。
+		return s.opts.Store.IncrementUserSecurityVersionTx(txCtx, tx, caller.Actor().ID, now)
 	}); err != nil {
 		return mapCriticalError(err)
+	}
+	if !isNil(s.opts.SessionInvalidator) {
+		if _, err := s.opts.SessionInvalidator.RevokeAllForUser(ctx, caller.Actor().ID,
+			"totp_removed"); err != nil {
+			s.opts.Logger.Warn("TOTP 解除后撤销会话失败", "error", err)
+		}
 	}
 	return nil
 }

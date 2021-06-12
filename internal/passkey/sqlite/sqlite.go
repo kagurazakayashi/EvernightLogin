@@ -20,9 +20,9 @@ const credentialColumns = `id,user_id,credential_id,public_key,aaguid,rp_id,name
 transports,backup_eligible,backed_up,user_present,user_verified,attachment,usage,version,
 COALESCE(last_used_at_ms,0),COALESCE(revoked_at_ms,0),revoked_reason,created_at_ms,updated_at_ms`
 
-const ceremonyColumns = `id,COALESCE(user_id,''),operation,challenge,rp_id,session_data,
-app_id,remember_me,client_user_agent,client_address,request_id,created_at_ms,expires_at_ms,
-COALESCE(consumed_at_ms,0)`
+const ceremonyColumns = `id,COALESCE(user_id,''),operation,purpose,context_id,challenge,
+rp_id,session_data,app_id,remember_me,client_user_agent,client_address,request_id,
+created_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0)`
 
 const (
 	insertHandleSQL = `INSERT INTO webauthn_user_handles(user_id,handle,created_at_ms,updated_at_ms)
@@ -49,7 +49,16 @@ FROM webauthn_credentials WHERE credential_id=? AND revoked_at_ms IS NULL`
 
 	countActiveSQL = `SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=? AND revoked_at_ms IS NULL`
 
+	bumpSecurityVersionSQL = `UPDATE users SET security_version=security_version+1,updated_at_ms=?
+WHERE id=?`
+
+	countActiveSecondFactorSQL = `SELECT COUNT(*) FROM webauthn_credentials
+WHERE user_id=? AND revoked_at_ms IS NULL AND usage IN('second_factor','both')`
+
 	hasPasswordSQL = `SELECT COUNT(*) FROM password_credentials WHERE user_id=?`
+
+	hasSecondFactorSQL = `SELECT COUNT(*) FROM webauthn_credentials
+WHERE user_id=? AND revoked_at_ms IS NULL AND usage IN('second_factor','both')`
 
 	insertCredentialSQL = `INSERT INTO webauthn_credentials(
 id,user_id,credential_id,public_key,aaguid,rp_id,name,sign_count,transports,
@@ -72,9 +81,9 @@ version=version+1,updated_at_ms=?
 WHERE id=? AND user_id=? AND revoked_at_ms IS NULL`
 
 	insertCeremonySQL = `INSERT INTO webauthn_ceremonies(
-id,user_id,operation,challenge,rp_id,session_data,app_id,remember_me,
+id,user_id,operation,purpose,context_id,challenge,rp_id,session_data,app_id,remember_me,
 client_user_agent,client_address,request_id,created_at_ms,expires_at_ms,consumed_at_ms
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`
 
 	ceremonyByIDSQL = `SELECT ` + ceremonyColumns + ` FROM webauthn_ceremonies WHERE id=?`
 
@@ -280,6 +289,43 @@ func (s *Store) HasPasswordCredentialTx(ctx context.Context, tx audit.Tx, userID
 	return count > 0, nil
 }
 
+// CountActiveSecondFactorCredentialsTx 在审计事务中统计第二步用途凭证数量。
+func (s *Store) CountActiveSecondFactorCredentialsTx(ctx context.Context, tx audit.Tx, userID string) (int, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("%w: 审计事务为空", passkey.ErrStoreUnavailable)
+	}
+	rows, err := tx.QueryContext(ctx, countActiveSecondFactorSQL, userID)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", passkey.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0, fmt.Errorf("%w: 无法统计第二步凭证", passkey.ErrStoreUnavailable)
+	}
+	var count int
+	if err := rows.Scan(&count); err != nil {
+		return 0, fmt.Errorf("%w: %w", passkey.ErrStoreUnavailable, err)
+	}
+	return count, nil
+}
+
+// HasSecondFactorCredential 报告用户是否存在用途允许第二步验证的有效凭证。
+func (s *Store) HasSecondFactorCredential(ctx context.Context, userID string) (bool, error) {
+	rows, err := s.store.QueryContext(ctx, hasSecondFactorSQL, userID)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", passkey.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, fmt.Errorf("%w: 无法统计第二步凭证", passkey.ErrStoreUnavailable)
+	}
+	var count int
+	if err := rows.Scan(&count); err != nil {
+		return false, fmt.Errorf("%w: %w", passkey.ErrStoreUnavailable, err)
+	}
+	return count > 0, nil
+}
+
 // CreateCredentialTx 在审计事务中创建凭证；凭证 ID 冲突返回 ErrCredentialConflict。
 func (s *Store) CreateCredentialTx(ctx context.Context, tx audit.Tx, credential passkey.Credential) error {
 	if tx == nil {
@@ -342,6 +388,25 @@ func (s *Store) RevokeCredentialTx(ctx context.Context, tx audit.Tx, userID, rec
 	return affected == 1, nil
 }
 
+// IncrementUserSecurityVersionTx 在审计事务内递增用户安全版本使既有会话失效。
+func (s *Store) IncrementUserSecurityVersionTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", passkey.ErrStoreUnavailable)
+	}
+	result, err := tx.ExecContext(ctx, bumpSecurityVersionSQL, now.UTC().UnixMilli(), userID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", passkey.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", passkey.ErrStoreUnavailable, err)
+	}
+	if affected != 1 {
+		return passkey.ErrStoreUnavailable
+	}
+	return nil
+}
+
 // UpdateCredentialUsageTx 在认证成功后更新计数器、备份状态与最近使用时间。
 func (s *Store) UpdateCredentialUsageTx(ctx context.Context, tx audit.Tx, credential passkey.Credential, now time.Time) error {
 	if tx == nil {
@@ -371,8 +436,13 @@ func (s *Store) CreateCeremony(ctx context.Context, ceremony passkey.Ceremony) e
 	if ceremony.UserID != "" {
 		userID = ceremony.UserID
 	}
+	purpose := ceremony.Purpose
+	if purpose == "" {
+		purpose = passkey.PurposeLogin
+	}
 	if _, err := s.store.ExecContext(ctx, insertCeremonySQL,
-		ceremony.ID, userID, string(ceremony.Operation), ceremony.Challenge,
+		ceremony.ID, userID, string(ceremony.Operation), string(purpose),
+		ceremony.ContextID, ceremony.Challenge,
 		ceremony.RPID, ceremony.SessionData, ceremony.AppID, boolInt(ceremony.RememberMe),
 		ceremony.UserAgent, ceremony.Address, ceremony.RequestID,
 		ceremony.CreatedAt.UTC().UnixMilli(), ceremony.ExpiresAt.UTC().UnixMilli()); err != nil {
@@ -383,7 +453,7 @@ func (s *Store) CreateCeremony(ctx context.Context, ceremony passkey.Ceremony) e
 
 // ConsumeCeremony 一次性原子消费挑战；并发只有一方成功。
 func (s *Store) ConsumeCeremony(ctx context.Context, id string, operation passkey.Operation,
-	userID string, now time.Time) (passkey.Ceremony, error) {
+	userID, contextID string, now time.Time) (passkey.Ceremony, error) {
 	millis := now.UTC().UnixMilli()
 	ceremony, found, err := s.ceremonyByID(ctx, id)
 	if err != nil {
@@ -396,6 +466,9 @@ func (s *Store) ConsumeCeremony(ctx context.Context, id string, operation passke
 		return passkey.Ceremony{}, passkey.ErrCeremonyInvalid
 	}
 	if userID != "" && ceremony.UserID != userID {
+		return passkey.Ceremony{}, passkey.ErrCeremonyInvalid
+	}
+	if contextID != "" && ceremony.ContextID != contextID {
 		return passkey.Ceremony{}, passkey.ErrCeremonyInvalid
 	}
 	if !ceremony.ConsumedAt.IsZero() {
@@ -454,18 +527,21 @@ func (s *Store) ceremonyByID(ctx context.Context, id string) (passkey.Ceremony, 
 	var (
 		ceremony        passkey.Ceremony
 		operation       string
+		purpose         string
 		rememberMe      int
 		createdAtMillis int64
 		expiresAtMillis int64
 		consumedAtMill  int64
 	)
-	if err := rows.Scan(&ceremony.ID, &ceremony.UserID, &operation, &ceremony.Challenge,
+	if err := rows.Scan(&ceremony.ID, &ceremony.UserID, &operation, &purpose,
+		&ceremony.ContextID, &ceremony.Challenge,
 		&ceremony.RPID, &ceremony.SessionData, &ceremony.AppID, &rememberMe,
 		&ceremony.UserAgent, &ceremony.Address, &ceremony.RequestID,
 		&createdAtMillis, &expiresAtMillis, &consumedAtMill); err != nil {
 		return passkey.Ceremony{}, false, fmt.Errorf("%w: %w", passkey.ErrStoreUnavailable, err)
 	}
 	ceremony.Operation = passkey.Operation(operation)
+	ceremony.Purpose = passkey.Purpose(purpose)
 	ceremony.RememberMe = rememberMe != 0
 	ceremony.CreatedAt = time.UnixMilli(createdAtMillis).UTC()
 	ceremony.ExpiresAt = time.UnixMilli(expiresAtMillis).UTC()

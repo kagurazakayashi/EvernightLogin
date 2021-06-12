@@ -15,12 +15,14 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	credentialsqlite "github.com/kagurazakayashi/EvernightLogin/internal/credential/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	mfasqlite "github.com/kagurazakayashi/EvernightLogin/internal/mfa/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
@@ -897,5 +899,398 @@ func TestNewRequiresTOTPAdapter(t *testing.T) {
 	captured.TOTP = nil
 	if _, err := mfa.New(captured); !errors.Is(err, mfa.ErrOptionsInvalid) {
 		t.Fatalf("未注入 TOTP 适配器错误 = %v，期望 ErrOptionsInvalid", err)
+	}
+}
+
+// ===== 步骤 43：FIDO2 第二步与认证方式选择策略 =====
+
+// fakeSecondFactorPasskey 是测试用的安全密钥第二步替身；真实 WebAuthn 校验在
+// internal/passkey 测试中用模拟认证器覆盖。它只验证 mfa 侧的挑战绑定/会话/策略。
+type fakeSecondFactorPasskey struct {
+	has           bool
+	userVerified  bool
+	failVerify    error
+	userID        string
+	lastContextID string
+	beginCalls    int
+	finishCalls   int
+}
+
+func (f *fakeSecondFactorPasskey) HasSecondFactor(ctx context.Context, userID string) (bool, error) {
+	return f.has, nil
+}
+
+func (f *fakeSecondFactorPasskey) BeginSecondFactor(ctx context.Context, userID, contextID, requestID string) (passkey.SecondFactorStart, error) {
+	f.beginCalls++
+	f.userID = userID
+	f.lastContextID = contextID
+	return passkey.SecondFactorStart{
+		CeremonyID: "pkc_fake_security_key",
+		PublicKey:  []byte(`{"publicKey":{"challenge":"fake-challenge"}}`),
+		ExpiresAt:  time.Now().UTC().Add(time.Minute),
+		RPID:       "login.example.com",
+	}, nil
+}
+
+func (f *fakeSecondFactorPasskey) FinishSecondFactor(ctx context.Context, request passkey.SecondFactorFinishRequest) (passkey.SecondFactorResult, error) {
+	f.finishCalls++
+	if f.failVerify != nil {
+		return passkey.SecondFactorResult{}, f.failVerify
+	}
+	return passkey.SecondFactorResult{
+		UserID: f.userID, AuthenticatorID: "cred_fake", UserVerified: f.userVerified,
+		VerifiedAt: time.Now().UTC(),
+	}, nil
+}
+
+type fakeStrongSetupAuthorizer struct {
+	allow bool
+	calls int
+}
+
+func (f *fakeStrongSetupAuthorizer) AuthorizeStrongSetup(ctx context.Context, userID, requestID string) error {
+	f.calls++
+	if !f.allow {
+		return errors.New("初始化未获授权")
+	}
+	return nil
+}
+
+type fakeStrongFactorSource struct{ has bool }
+
+func (f *fakeStrongFactorSource) HasStrongFactor(ctx context.Context, userID string) (bool, error) {
+	return f.has, nil
+}
+
+type realSessionRevoker struct {
+	session *session.Service
+	calls   int
+}
+
+func (r *realSessionRevoker) Logout(ctx context.Context, secret string) error {
+	r.calls++
+	return r.session.Logout(ctx, secret)
+}
+
+// TestFIDO2SecurityKeySecondFactorFullSession 覆盖：密码 + 安全密钥（WebAuthn UV）
+// 完成登录；安全密钥 ceremony 绑定 MFA 挑战上下文；会话获得强认证标记；重放拒绝。
+func TestFIDO2SecurityKeySecondFactorFullSession(t *testing.T) {
+	adapter := &fakeSecondFactorPasskey{has: true, userVerified: true}
+	env := newTestEnv(t, func(options *mfa.Options) { options.Passkeys = adapter })
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), RequestID: "req-fido2-1"})
+	if err != nil {
+		t.Fatalf("第一步: %v", err)
+	}
+	if start.FactorType != mfa.FactorPasskey || start.PasskeyCeremonyID == "" ||
+		len(start.PasskeyOptions) == 0 || !start.RequiresSecondFactor {
+		t.Fatalf("安全密钥第二步启动结果异常: %+v", start)
+	}
+	if adapter.lastContextID != start.ChallengeID {
+		t.Fatalf("WebAuthn ceremony 上下文应绑定 MFA 挑战: %q != %q",
+			adapter.lastContextID, start.ChallengeID)
+	}
+	result, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		PasskeyCeremonyID: start.PasskeyCeremonyID, PasskeyResponse: []byte(`{"id":"fake"}`),
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-fido2-2"})
+	if err != nil {
+		t.Fatalf("安全密钥第二步验证: %v", err)
+	}
+	if result.Session.Session.IsRestricted() {
+		t.Fatal("第二步成功后应签发完整会话")
+	}
+	if result.Authenticated.StrongAuthCompletedAt.IsZero() {
+		t.Fatal("安全密钥 UV 完成应在认证结果记录强认证时间")
+	}
+	if result.Strength != "strong" || result.ACR != "urn:evernight:acr:strong" {
+		t.Fatalf("认证事实强度/ACR 异常: %q %q", result.Strength, result.ACR)
+	}
+	amr := strings.Join(result.AMR, ",")
+	if !strings.Contains(amr, "hwk") || !strings.Contains(amr, "user") || !strings.Contains(amr, "mfa") {
+		t.Fatalf("AMR 映射缺少安全密钥/UV/MFA: %v", result.AMR)
+	}
+	validated, err := env.session.Validate(env.ctx, result.Session.Secret.Reveal())
+	if err != nil || !validated.CanAccessManagement() {
+		t.Fatalf("安全密钥强认证会话应满足管理访问强认证闸门: %+v err=%v", validated, err)
+	}
+	// 重放同一挑战/assertion 拒绝。
+	if _, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		PasskeyCeremonyID: start.PasskeyCeremonyID, PasskeyResponse: []byte(`{"id":"fake"}`),
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-fido2-replay"}); !errors.Is(err, mfa.ErrChallengeInvalid) {
+		t.Fatalf("安全密钥第二步重放应拒绝: %v", err)
+	}
+	// ceremony 上下文不符（跨挑战挪用）拒绝。
+	second, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), RequestID: "req-fido2-3"})
+	if err != nil {
+		t.Fatalf("第一步: %v", err)
+	}
+	if _, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: second.ChallengeID, AttemptToken: second.AttemptToken,
+		PasskeyCeremonyID: "pkc_other_context", PasskeyResponse: []byte(`{"id":"fake"}`),
+		ExistingSession: second.RestrictedSession.Secret.Reveal(), RequestID: "req-fido2-4"}); !errors.Is(err, mfa.ErrChallengeInvalid) {
+		t.Fatalf("跨挑战 ceremony 应拒绝: %v", err)
+	}
+}
+
+// TestStrongRequirementRejectsSecurityKeyWithoutUV 验证管理账户强认证策略下没有 UV
+// 的安全密钥断言被拒绝，不会降级为完整会话。
+func TestStrongRequirementRejectsSecurityKeyWithoutUV(t *testing.T) {
+	adapter := &fakeSecondFactorPasskey{has: true, userVerified: false}
+	env := newTestEnv(t, func(options *mfa.Options) { options.Passkeys = adapter })
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-uv-1"})
+	if err != nil {
+		t.Fatalf("强认证账户第一步: %v", err)
+	}
+	if start.FactorType != mfa.FactorPasskey {
+		t.Fatalf("应选择安全密钥因素: %v", start.FactorType)
+	}
+	if _, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		PasskeyCeremonyID: start.PasskeyCeremonyID, PasskeyResponse: []byte(`{}`),
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-uv-2"}); !errors.Is(err, mfa.ErrStrongAuthRequired) {
+		t.Fatalf("缺少 UV 的强认证第二步应拒绝: %v", err)
+	}
+}
+
+// TestStrongRequirementDoesNotDowngradeToEmail 验证只有邮件因素的管理账户不会被
+// 降级到邮件第二步，而是明确返回需要强认证。
+func TestStrongRequirementDoesNotDowngradeToEmail(t *testing.T) {
+	env := newTestEnv(t, nil)
+	env.enableEmailFactor()
+	if _, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-nodowngrade-1"}); !errors.Is(err, mfa.ErrStrongAuthRequired) {
+		t.Fatalf("只有邮件时强认证账户应拒绝而不是降级: %v", err)
+	}
+	if got := env.count(`SELECT COUNT(*) FROM mfa_challenges WHERE user_id=? AND purpose='login'`, userID); got != 0 {
+		t.Fatalf("拒绝降级时不应创建第二步挑战: %d", got)
+	}
+}
+
+// TestStrongRequirementPrefersSecurityKeyThenTOTP 验证选择器优先返回安全密钥，
+// 没有安全密钥时回退 TOTP，且邮件永远不会被选中满足强认证。
+func TestStrongRequirementPrefersSecurityKeyThenTOTP(t *testing.T) {
+	adapter := &fakeSecondFactorPasskey{has: true, userVerified: true}
+	env := newTestEnv(t, func(options *mfa.Options) { options.Passkeys = adapter })
+	env.enableEmailFactor()
+	env.enableTOTP()
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-pref-1"})
+	if err != nil || start.FactorType != mfa.FactorPasskey {
+		t.Fatalf("有安全密钥时应优先选择: factor=%v err=%v", start.FactorType, err)
+	}
+	// 没有安全密钥时选择 TOTP（而不是邮件）。
+	env2 := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowTOTPForStrongAuth = true
+	})
+	env2.enableEmailFactor()
+	env2.enableTOTP()
+	start2, err := env2.service.BeginLogin(env2.ctx, mfa.BeginLoginRequest{
+		Result: env2.pendingStrongAuth(), RequestID: "req-pref-2"})
+	if err != nil || start2.FactorType != mfa.FactorTOTP {
+		t.Fatalf("无安全密钥时应回退 TOTP 而不是邮件: factor=%v err=%v", start2.FactorType, err)
+	}
+}
+
+// TestStrongAuthDefaultRejectsTOTPOnly 验证默认策略下“密码+TOTP”不能满足管理
+// 强认证（要求 Passkey/安全密钥 UV）；无可用强因素时明确报 MFA_REQUIRED，而不是
+// 静默接受较弱方式。
+func TestStrongAuthDefaultRejectsTOTPOnly(t *testing.T) {
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+	})
+	env.enableTOTP()
+	if _, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-totp-only-1"}); !errors.Is(err, mfa.ErrStrongAuthRequired) {
+		t.Fatalf("默认要求 UV 时密码+TOTP 不应满足管理强认证: %v", err)
+	}
+}
+
+// TestStrongAuthSetupRequiresControlledAuthorization 验证普通受限会话不能自助进入
+// 强认证初始化：授权器缺失/拒绝时 fail-closed 返回 MFA_REQUIRED，不创建挑战。
+func TestStrongAuthSetupRequiresControlledAuthorization(t *testing.T) {
+	deny := &fakeStrongSetupAuthorizer{allow: false}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.Revoker = &realSessionRevoker{}
+		options.StrongSetupAuthorizer = deny
+	})
+	if _, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-setup-deny-1"}); !errors.Is(err, mfa.ErrStrongAuthRequired) {
+		t.Fatalf("初始化未获授权时应拒绝: %v", err)
+	}
+	if deny.calls != 1 {
+		t.Fatalf("应调用受控初始化授权器: %d", deny.calls)
+	}
+	if got := env.count(`SELECT COUNT(*) FROM mfa_challenges WHERE user_id=? AND purpose='strong_setup'`, userID); got != 0 {
+		t.Fatalf("未获授权时不应创建初始化挑战: %d", got)
+	}
+}
+
+// TestStrongAuthInitializationClosure 验证管理账户强认证初始化闭环：受限会话 +
+// 初始化挑战 → 绑定强因素 → 完成初始化（撤销受限会话）→ 必须重新登录；未绑定
+// 强因素时不能完成。
+func TestStrongAuthInitializationClosure(t *testing.T) {
+	strongSource := &fakeStrongFactorSource{has: false}
+	revoker := &realSessionRevoker{}
+	authorizer := &fakeStrongSetupAuthorizer{allow: true}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = strongSource
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = authorizer
+	})
+	revoker.session = env.session
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-setup-1"})
+	if err != nil {
+		t.Fatalf("强认证初始化启动: %v", err)
+	}
+	if !start.SetupRequired || len(start.AllowedSetupMethods) == 0 ||
+		start.AllowedSetupMethods[0] != authfact.MethodPasskey {
+		t.Fatalf("初始化启动结果异常: %+v", start)
+	}
+	if !start.RestrictedSession.Session.IsRestricted() {
+		t.Fatal("初始化流程只能签发受限会话")
+	}
+	// 尚未绑定强因素时不能完成初始化。
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-setup-2"}); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("未绑定强因素时完成初始化应拒绝: %v", err)
+	}
+	// 宿主通过受限流程完成强因素绑定后，完成初始化：撤销受限会话并要求重新登录。
+	strongSource.has = true
+	result, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-setup-3"})
+	if err != nil {
+		t.Fatalf("完成强认证初始化: %v", err)
+	}
+	if !result.MustReauthenticate || result.UserID != userID {
+		t.Fatalf("初始化完成结果异常: %+v", result)
+	}
+	if revoker.calls != 1 {
+		t.Fatalf("初始化完成后应撤销受限会话: revoker=%d", revoker.calls)
+	}
+	if _, err := env.session.Validate(env.ctx, start.RestrictedSession.Secret.Reveal()); err == nil {
+		t.Fatal("初始化完成后受限会话必须失效")
+	}
+	// 同一初始化挑战不能重复完成。
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-setup-4"}); !errors.Is(err, mfa.ErrChallengeInvalid) {
+		t.Fatalf("重复完成初始化应拒绝: %v", err)
+	}
+}
+
+// TestAvailableSecondFactorMethodsOnlyReturnsEnabled 验证认证方式选择器只返回实际
+// 启用且满足策略的方式；没有因素时返回空列表而不是报错或猜测。
+func TestAvailableSecondFactorMethodsOnlyReturnsEnabled(t *testing.T) {
+	adapter := &fakeSecondFactorPasskey{has: false, userVerified: true}
+	env := newTestEnv(t, func(options *mfa.Options) { options.Passkeys = adapter })
+	methods, err := env.service.AvailableSecondFactorMethods(env.ctx, env.caller(), userID)
+	if err != nil {
+		t.Fatalf("可用方式: %v", err)
+	}
+	if len(methods) != 0 {
+		t.Fatalf("没有启用因素时应返回空列表: %v", methods)
+	}
+	adapter.has = true
+	env.enableEmailFactor()
+	env.enableTOTP()
+	methods, err = env.service.AvailableSecondFactorMethods(env.ctx, env.caller(), userID)
+	if err != nil {
+		t.Fatalf("可用方式: %v", err)
+	}
+	joined := ""
+	for _, method := range methods {
+		joined += string(method) + ","
+	}
+	for _, want := range []string{"security_key,", "totp,", "email_otp,"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("可用方式缺少 %q: %v", want, methods)
+		}
+	}
+	// 未强制 MFA 时允许本人移除邮件因素。
+	if err := env.service.RemoveEmailFactor(env.ctx, env.caller(), "req-remove-1"); err != nil {
+		t.Fatalf("未强制 MFA 时允许移除邮件因素: %v", err)
+	}
+	// 删除最后一个因素保护：强制 MFA 且没有其他可用因素时拒绝移除。
+	forcedEnv := newTestEnv(t, func(options *mfa.Options) {
+		options.Policy = &fakeMFARequiredPolicy{forced: true}
+	})
+	forcedEnv.enableEmailFactor()
+	if err := forcedEnv.service.RemoveEmailFactor(forcedEnv.ctx, forcedEnv.caller(),
+		"req-remove-2"); !errors.Is(err, mfa.ErrFactorRequired) {
+		t.Fatalf("强制 MFA 时移除最后可用因素应被拒绝: %v", err)
+	}
+}
+
+// fakeMFARequiredPolicy 模拟宿主强制 MFA 策略。
+type fakeMFARequiredPolicy struct{ forced bool }
+
+func (f *fakeMFARequiredPolicy) MFARequired(ctx context.Context, userID string) (bool, error) {
+	return f.forced, nil
+}
+
+// TestTOTPStrongAuthGatedByPolicy 验证 TOTP 强认证时间门控：挑战要求强认证且宿主
+// 显式允许密码+TOTP 时才记录强认证时间；普通账户的 TOTP 第二步只完成登录，不授予
+// 管理访问强认证。
+func TestTOTPStrongAuthGatedByPolicy(t *testing.T) {
+	// 允许密码+TOTP 作为强认证备用：管理账户验证成功后应记录强认证时间。
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.AllowTOTPForStrongAuth = true
+	})
+	secret := env.enableTOTP()
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-totp-gate-1"})
+	if err != nil || start.FactorType != mfa.FactorTOTP {
+		t.Fatalf("允许 TOTP 强认证备用时应选择 TOTP: factor=%v err=%v", start.FactorType, err)
+	}
+	code, _, err := totp.GenerateCode(secret, env.now, 30, 6)
+	if err != nil {
+		t.Fatalf("生成 TOTP 码: %v", err)
+	}
+	strongResult, err := env.service.Verify(env.ctx, mfa.VerifyRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken, Code: code,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-totp-gate-2"})
+	if err != nil {
+		t.Fatalf("TOTP 强认证第二步: %v", err)
+	}
+	if strongResult.Authenticated.StrongAuthCompletedAt.IsZero() {
+		t.Fatal("允许密码+TOTP 满足强认证时应记录强认证时间")
+	}
+	// 普通账户（无强认证要求）的 TOTP 第二步：完整会话但不记录强认证时间。
+	normal := newTestEnv(t, nil)
+	normalSecret := normal.enableTOTP()
+	normalStart, err := normal.service.BeginLogin(normal.ctx, mfa.BeginLoginRequest{
+		Result: normal.completeAuthn(), RequestID: "req-totp-gate-3"})
+	if err != nil || normalStart.FactorType != mfa.FactorTOTP {
+		t.Fatalf("普通账户应选择已启用 TOTP: factor=%v err=%v", normalStart.FactorType, err)
+	}
+	normalCode, _, err := totp.GenerateCode(normalSecret, normal.now, 30, 6)
+	if err != nil {
+		t.Fatalf("生成 TOTP 码: %v", err)
+	}
+	normalResult, err := normal.service.Verify(normal.ctx, mfa.VerifyRequest{
+		ChallengeID: normalStart.ChallengeID, AttemptToken: normalStart.AttemptToken,
+		Code: normalCode, ExistingSession: normalStart.RestrictedSession.Secret.Reveal(),
+		RequestID: "req-totp-gate-4"})
+	if err != nil {
+		t.Fatalf("普通账户 TOTP 第二步: %v", err)
+	}
+	if !normalResult.Authenticated.StrongAuthCompletedAt.IsZero() {
+		t.Fatal("普通账户的 TOTP 第二步不应记录管理强认证时间")
+	}
+	if normalResult.Session.Session.IsRestricted() {
+		t.Fatal("普通账户 TOTP 第二步应签发完整会话")
 	}
 }

@@ -71,6 +71,10 @@ type Options struct {
 	// AbsoluteTimeout 是绝对到期期限；0 使用 DefaultAbsoluteTimeout，且不得小于
 	// IdleTimeout。
 	AbsoluteTimeout time.Duration
+	// StrongAuthMaxAge 是强认证事实的有效期（管理访问的强认证新鲜度窗口）；
+	// 0 使用 DefaultStrongAuthMaxAge（15 分钟），允许 1 分钟～24 小时。超过窗口后
+	// 既有会话的管理访问要求重新完成强认证（不是一次验证永久有效）。
+	StrongAuthMaxAge time.Duration
 	// RememberMeTimeout 是“记住我”登录的绝对到期期限；0 使用
 	// DefaultRememberMeTimeout，必须不小于 AbsoluteTimeout 且不超过
 	// MaxAbsoluteTimeout。
@@ -116,6 +120,7 @@ type Service struct {
 	rememberTimeout time.Duration
 	maxActive       int
 	devicePolicy    DevicePolicy
+	strongAuthAge   time.Duration
 	authorizer      ScopeAuthorizer
 	sensitive       SensitiveRunner
 	allowLegacy     bool
@@ -182,6 +187,14 @@ func New(store Store, options Options) (*Service, error) {
 	if devicePolicy == DevicePolicySingle && options.MaxActiveSessions > 1 {
 		return nil, fmt.Errorf("%w: 单设备策略下最大在线数只能为 0 或 1", ErrOptionsInvalid)
 	}
+	strongAuthAge := options.StrongAuthMaxAge
+	if strongAuthAge == 0 {
+		strongAuthAge = DefaultStrongAuthMaxAge
+	}
+	if strongAuthAge < MinStrongAuthMaxAge || strongAuthAge > MaxStrongAuthMaxAge {
+		return nil, fmt.Errorf("%w: 强认证有效期必须在 %s～%s 之间",
+			ErrOptionsInvalid, MinStrongAuthMaxAge, MaxStrongAuthMaxAge)
+	}
 	cookieName := options.CookieName
 	if cookieName == "" {
 		cookieName = DefaultCookieName
@@ -220,6 +233,7 @@ func New(store Store, options Options) (*Service, error) {
 		rememberTimeout: rememberTimeout,
 		maxActive:       options.MaxActiveSessions,
 		devicePolicy:    devicePolicy,
+		strongAuthAge:   strongAuthAge,
 		authorizer:      options.Authorizer,
 		sensitive:       options.Sensitive,
 		allowLegacy:     options.AllowLegacyWithoutSensitive,
@@ -270,6 +284,7 @@ type authnSpec struct {
 	kind            Kind
 	reason          Reason
 	steps           []authn.Step
+	strongAuthAt    time.Time
 }
 
 // sessionSpecFromAuth 校验认证结果并映射为会话类别。它绝不把不完整认证当完整
@@ -297,6 +312,13 @@ func sessionSpecFromAuth(result authn.AuthenticateResult) (authnSpec, error) {
 	if err != nil {
 		return authnSpec{}, err
 	}
+	if !result.StrongAuthCompletedAt.IsZero() {
+		// 强认证时间只能出现在完整、非受限认证结果中；受限结果携带该时间意味着
+		// 调用方试图用未完成认证获得管理访问，直接拒绝。
+		if result.Outcome != authn.OutcomeComplete || result.Restricted || len(result.RequiredSteps) != 0 {
+			return authnSpec{}, fmt.Errorf("%w: 受限认证结果不得携带强认证时间", ErrInvalidRequest)
+		}
+	}
 	restricted := reason != ReasonNone
 	// 组合一致性：complete 必须 unrestricted 且无剩余步骤；受限结论必须标记
 	// Restricted 且带原因。
@@ -322,6 +344,7 @@ func sessionSpecFromAuth(result authn.AuthenticateResult) (authnSpec, error) {
 		kind:            kind,
 		reason:          reason,
 		steps:           append([]authn.Step(nil), result.RequiredSteps...),
+		strongAuthAt:    result.StrongAuthCompletedAt,
 	}, nil
 }
 
@@ -392,6 +415,7 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 		SecretDigest:      secretDigest,
 		CSRFDigest:        csrfDigest,
 		KeyID:             keyID,
+		StrongAuthAt:      spec.strongAuthAt,
 		RowVersion:        1,
 		CreatedAt:         now,
 		LastSeenAt:        now,
@@ -1294,7 +1318,9 @@ func (s *Service) AuthorizeBusiness(ctx context.Context, secret string) (Session
 }
 
 // AuthorizeManagement 校验会话并要求其可访问管理接口：必须是普通会话且已完成
-// 强认证。MFA 尚未实现，本步没有任何会话能通过该检查，管理访问保持拒绝。
+// 强认证且在有效期内（Options.StrongAuthMaxAge，默认 15 分钟）。强认证不是一次
+// 验证永久有效；过期后必须重新完成强认证（如 Passkey/安全密钥 UV 或密码+TOTP，
+// 取决于策略）。
 func (s *Service) AuthorizeManagement(ctx context.Context, secret string) (Session, error) {
 	current, err := s.Validate(ctx, secret)
 	if err != nil {
@@ -1308,10 +1334,14 @@ func (s *Service) AuthorizeManagement(ctx context.Context, secret string) (Sessi
 		)
 		return Session{}, ErrRestrictedSession
 	}
-	if current.StrongAuthVerifiedAt.IsZero() {
-		s.logger.Info("会话缺少强认证，拒绝管理访问",
+	now := s.clockNow()
+	if current.StrongAuthVerifiedAt.IsZero() ||
+		current.StrongAuthVerifiedAt.After(now) ||
+		now.Sub(current.StrongAuthVerifiedAt) > s.strongAuthAge {
+		s.logger.Info("会话缺少有效强认证，拒绝管理访问",
 			"session_id", current.ID,
 			"user_id", current.UserID,
+			"strong_auth_max_age", s.strongAuthAge.String(),
 		)
 		return Session{}, ErrStrongAuthRequired
 	}

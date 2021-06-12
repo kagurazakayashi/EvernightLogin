@@ -38,6 +38,12 @@ type Store interface {
 	CountActiveCredentialsTx(ctx context.Context, tx audit.Tx, userID string) (int, error)
 	// HasPasswordCredentialTx 在审计事务中报告用户是否有正式密码登录方式。
 	HasPasswordCredentialTx(ctx context.Context, tx audit.Tx, userID string) (bool, error)
+	// CountActiveSecondFactorCredentialsTx 在审计事务中统计用户未撤销且用途允许
+	// 第二步验证的凭证数量（删除最后强因素保护）。
+	CountActiveSecondFactorCredentialsTx(ctx context.Context, tx audit.Tx, userID string) (int, error)
+	// HasSecondFactorCredential 报告用户是否存在未撤销且用途允许第二步验证的
+	// Passkey/安全密钥凭证（认证方式选择器使用，不返回凭证内容）。
+	HasSecondFactorCredential(ctx context.Context, userID string) (bool, error)
 
 	// CreateCredentialTx 在审计事务中创建凭证；凭证 ID 冲突返回 ErrCredentialConflict。
 	CreateCredentialTx(ctx context.Context, tx audit.Tx, credential Credential) error
@@ -45,16 +51,20 @@ type Store interface {
 	RenameCredentialTx(ctx context.Context, tx audit.Tx, userID, credentialID, name string, now time.Time) (bool, error)
 	// RevokeCredentialTx 在审计事务中撤销本人凭证；不存在/已撤销返回 false。
 	RevokeCredentialTx(ctx context.Context, tx audit.Tx, userID, credentialID, reason string, now time.Time) (bool, error)
+	// IncrementUserSecurityVersionTx 在审计事务内递增用户 security_version，使既有
+	// 会话失效（删除凭证等认证面变更后使用）。
+	IncrementUserSecurityVersionTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) error
 	// UpdateCredentialUsageTx 在认证成功后原子更新计数器与备份状态等元数据。
 	// 计数器只在更大时推进（同步凭证允许不递增）。
 	UpdateCredentialUsageTx(ctx context.Context, tx audit.Tx, credential Credential, now time.Time) error
 
 	// CreateCeremony 保存挑战记录（开始注册/认证时调用，不写成功审计）。
 	CreateCeremony(ctx context.Context, ceremony Ceremony) error
-	// ConsumeCeremony 一次性原子消费挑战：校验操作类型、绑定用户、未消费且未过期。
-	// 成功返回挑战记录；重复消费/操作类型不符返回 ErrCeremonyInvalid，过期返回
-	// ErrCeremonyExpired。并发调用只有一方成功。
-	ConsumeCeremony(ctx context.Context, id string, operation Operation, userID string, now time.Time) (Ceremony, error)
+	// ConsumeCeremony 一次性原子消费挑战：校验操作类型、绑定用户、上下文（如第二步
+	// 绑定的 MFA 挑战 ID）、未消费且未过期。成功返回挑战记录；重复消费/操作类型或
+	// 上下文不符返回 ErrCeremonyInvalid，过期返回 ErrCeremonyExpired。并发调用只有
+	// 一方成功。userID/contextID 为空表示不限制该维度（可发现凭证登录）。
+	ConsumeCeremony(ctx context.Context, id string, operation Operation, userID, contextID string, now time.Time) (Ceremony, error)
 	// CleanupExpiredCeremonies 惰性清理过期且未消费的挑战；返回删除数量。
 	CleanupExpiredCeremonies(ctx context.Context, before time.Time, limit int) (int64, error)
 }

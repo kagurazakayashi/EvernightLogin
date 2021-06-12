@@ -27,10 +27,15 @@
 //     app_id，完成阶段只能以同一 app_id 签发，不会被升级为全局会话，并通过
 //     防御性复验确认结果作用域。
 //
+// 已支持 FIDO2 步骤（步骤 43）：凭证用途 login/second_factor/both 由服务端注册
+// ceremony 决定；第二步认证使用独立 ceremony 操作类型并绑定 MFA 挑战 ID，主登录与
+// 第二步按用途互相隔离。认证方式选择策略与 amr/acr 映射在 internal/authfact 与
+// internal/mfa。
+//
 // 未实现（不宣称）：HTTP 路由与页面、真实浏览器/Windows Hello/安全密钥实测
-// （测试使用模拟认证器）、FIDO2 作为第二因素、认证方式选择策略、恢复代码、
-// 凭证清理任务、元数据服务（MDS）校验、attestation 证书链校验（仅接受
-// attestation none 语义的常规注册结果）。
+// （测试使用模拟认证器）、OAuth/OIDC 协议端点、恢复代码、凭证清理任务、元数据
+// 服务（MDS）校验、attestation 证书链校验（仅接受 attestation none 语义的常规
+// 注册结果）。
 package passkey
 
 import (
@@ -65,7 +70,8 @@ const (
 	MaxResponseBytes = 64 * 1024
 	// DefaultRPDisplayName 是未配置时的 RP 显示名。
 	DefaultRPDisplayName = "EvernightLogin"
-	// usageLogin 是 Passkey 作为主登录凭证的用途标记（步骤 43 第二因素另用）。
+	// usageLogin 是 Passkey 作为主登录凭证的用途文本（与迁移 0023 的 CHECK 一致）；
+	// 第二步用途为 second_factor，两者兼容为 both。
 	usageLogin = "login"
 )
 
@@ -101,6 +107,42 @@ func (v UserVerification) protocolValue() protocol.UserVerificationRequirement {
 	default:
 		return protocol.VerificationRequired
 	}
+}
+
+// Purpose 是 Passkey 凭证的允许用途，由服务端注册 ceremony 决定并强校验；客户端
+// 不能通过完成注册请求的参数改写。
+type Purpose string
+
+const (
+	// PurposeLogin 表示该凭证只能用于主登录（可发现凭证登录/用户名登录）。
+	PurposeLogin Purpose = "login"
+	// PurposeSecondFactor 表示该凭证只能用于密码之后的第二步（FIDO2 安全密钥）。
+	PurposeSecondFactor Purpose = "second_factor"
+	// PurposeBoth 表示凭证同时允许主登录与第二步。
+	PurposeBoth Purpose = "both"
+)
+
+// Valid 报告用途是否已定义。
+func (p Purpose) Valid() bool {
+	return p == PurposeLogin || p == PurposeSecondFactor || p == PurposeBoth
+}
+
+// AllowsLogin 报告该用途是否允许作为主登录凭证。
+func (p Purpose) AllowsLogin() bool { return p == PurposeLogin || p == PurposeBoth }
+
+// AllowsSecondFactor 报告该用途是否允许作为第二步验证凭证。
+func (p Purpose) AllowsSecondFactor() bool { return p == PurposeSecondFactor || p == PurposeBoth }
+
+// usage 把用途转换为持久化 usage 文本（与迁移 0023 的 CHECK 一致）。
+func (p Purpose) usage() string { return string(p) }
+
+// purposeFromUsage 把持久化 usage 还原为用途；未知值 fail-closed。
+func purposeFromUsage(usage string) (Purpose, bool) {
+	purpose := Purpose(usage)
+	if !purpose.Valid() {
+		return "", false
+	}
+	return purpose, true
 }
 
 // Config 是 Passkey 的依赖方（RP）配置。RPID 与允许来源必须由宿主显式给出，
@@ -219,6 +261,9 @@ var (
 	ErrCredentialLimit      = errors.New("Passkey 凭证数量已达上限")
 	ErrCloneDetected        = errors.New("Passkey 凭证可能已被复制")
 	ErrLastLoginMethod      = errors.New("不能删除最后一个可用登录方式")
+	ErrLastStrongFactor     = errors.New("不能删除最后一个强认证因素")
+	ErrPurposeNotAllowed    = errors.New("该 Passkey 凭证用途不允许此操作")
+	ErrNoSecondFactor       = errors.New("没有可用于第二步验证的 Passkey 凭证")
 	ErrSessionUnavailable   = errors.New("会话签发暂时不可用")
 	ErrStoreUnavailable     = errors.New("Passkey 存储暂时不可用")
 	ErrAuditUnavailable     = errors.New("关键操作未能可靠记录")
@@ -247,9 +292,10 @@ func CodeOf(err error) ErrorCode {
 	switch {
 	case err == nil:
 		return ""
-	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrCredentialNotFound):
+	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrCredentialNotFound),
+		errors.Is(err, ErrNoSecondFactor):
 		return CodeReqInvalid
-	case errors.Is(err, ErrAccessDenied):
+	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrPurposeNotAllowed):
 		return CodeAccessDenied
 	case errors.Is(err, ErrReauthRequired):
 		return CodeReauthRequired
@@ -260,7 +306,7 @@ func CodeOf(err error) ErrorCode {
 	case errors.Is(err, ErrCeremonyInvalid), errors.Is(err, ErrCeremonyExpired):
 		return CodeChallengeInvalid
 	case errors.Is(err, ErrCredentialConflict), errors.Is(err, ErrCredentialLimit),
-		errors.Is(err, ErrLastLoginMethod):
+		errors.Is(err, ErrLastLoginMethod), errors.Is(err, ErrLastStrongFactor):
 		return CodeConflict
 	case errors.Is(err, ErrSessionUnavailable):
 		return CodeDBUnavailable
@@ -299,13 +345,17 @@ type Operation string
 const (
 	// OperationRegistration 是注册（credential create）操作。
 	OperationRegistration Operation = "registration"
-	// OperationAuthentication 是登录（credential get）操作。
+	// OperationAuthentication 是主登录（credential get）操作。
 	OperationAuthentication Operation = "authentication"
+	// OperationSecondFactor 是密码之后的第二步（FIDO2 安全密钥）认证操作；与主登录
+	// 使用不同操作类型，挑战不能互相替代。
+	OperationSecondFactor Operation = "second_factor"
 )
 
 // Valid 报告操作类型是否已定义。
 func (o Operation) Valid() bool {
-	return o == OperationRegistration || o == OperationAuthentication
+	return o == OperationRegistration || o == OperationAuthentication ||
+		o == OperationSecondFactor
 }
 
 // UserState 是 Passkey 登录/注册所需的账户快照（来自 users 表，只读）。
@@ -339,13 +389,15 @@ type Credential struct {
 	UserPresent    bool
 	UserVerified   bool
 	Attachment     string
-	Usage          string
-	Version        int64
-	LastUsedAt     time.Time
-	RevokedAt      time.Time
-	RevokedReason  string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// Usage 是迁移 0023 中的用途文本：login / second_factor / both；用途由服务端
+	// 注册 ceremony 决定，登录/第二步查询都按用途过滤并强校验。
+	Usage         string
+	Version       int64
+	LastUsedAt    time.Time
+	RevokedAt     time.Time
+	RevokedReason string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // CredentialMetadata 是返回给用户的凭证元数据（不含公钥等协议细节）。
@@ -361,9 +413,14 @@ type CredentialMetadata struct {
 
 // Ceremony 是一条服务端挑战记录。
 type Ceremony struct {
-	ID          string
-	UserID      string // 为空表示可发现凭证登录尚未确定用户
-	Operation   Operation
+	ID        string
+	UserID    string // 为空表示可发现凭证登录尚未确定用户
+	Operation Operation
+	// Purpose 是注册 ceremony 的目标凭证用途；第二步认证 ceremony 固定为
+	// PurposeSecondFactor，其他操作为 PurposeLogin。
+	Purpose Purpose
+	// ContextID 是第二步认证绑定的 MFA 挑战 ID（防止跨登录尝试挪用挑战）。
+	ContextID   string
 	Challenge   string
 	RPID        string
 	SessionData []byte
@@ -380,6 +437,24 @@ type Ceremony struct {
 // SessionIssuer 是会话签发契约；生产实现为 *internal/session.Service。
 type SessionIssuer interface {
 	Login(ctx context.Context, request session.LoginRequest) (session.IssuedSession, error)
+}
+
+// OtherStrongFactors 报告账户在给定凭证之外是否还有可用于强认证的因素（如 TOTP）；
+// nil 表示没有。删除最后一个第二步凭证且账户被强制 MFA 时用于拒绝“失去全部强因素”。
+type OtherStrongFactors interface {
+	HasOtherStrongFactor(ctx context.Context, userID string) (bool, error)
+}
+
+// SessionInvalidator 在删除强因素后使该用户既有会话立即失效（撤销全部会话）；
+// 生产实现为 *internal/session.Service。即使未注入，删除强因素也会在同一审计事务
+// 内递增用户 security_version 让既有会话失效，本接口是更及时的可靠事件。
+type SessionInvalidator interface {
+	RevokeAllForUser(ctx context.Context, userID, reason string) (int64, error)
+}
+
+// MFAPolicy 报告账户是否被策略强制要求 MFA；nil 表示没有外部强制策略。
+type MFAPolicy interface {
+	MFARequired(ctx context.Context, userID string) (bool, error)
 }
 
 // AuditRecorder 是安全审计写入契约；实现必须 fail-closed。

@@ -12,9 +12,11 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
+	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
@@ -48,9 +50,31 @@ type Options struct {
 	// TOTP 是 TOTP 第二步因素适配器（步骤 41）；nil 表示未接入，存在 TOTP 因素的
 	// 账户按“没有可用因素”处理（强制 MFA 时 fail-closed）。
 	TOTP SecondFactorTOTP
-	// FactorPreference 是第二步因素优先顺序；默认 TOTP 优先于邮件。未列出的因素
-	// 不会被选择；步骤 43 的完整“认证方式选择策略”之前这里只是保守默认顺序。
+	// FactorPreference 是第二步因素优先顺序；默认 Passkey/安全密钥 > TOTP > 邮件
+	// （强因素优先）。选择器只会返回用户实际启用且满足策略的因素；未列出的因素
+	// 不会被选择。
 	FactorPreference []FactorType
+	// Passkeys 是 FIDO2 安全密钥第二步适配器；nil 时“安全密钥”因素视为不可用。
+	Passkeys SecondFactorPasskey
+	// StrongFactorSource 报告账户是否已有强认证因素，用于强认证初始化闭环判定；
+	// nil 时视为未就绪（不允许完成初始化）。
+	StrongFactorSource StrongFactorSource
+	// StrongSetupAuthorizer 授权进入强认证初始化（受控初始化/受邀状态/管理员一次性
+	// 凭证或审批）；AllowStrongAuthSetup=true 时必填，nil 或拒绝时初始化 fail-closed。
+	StrongSetupAuthorizer StrongSetupAuthorizer
+	// Revoker 撤销受限会话；AllowStrongAuthSetup=true 时必须注入。
+	Revoker SessionRevoker
+	// AllowTOTPForStrongAuth 允许“密码+TOTP”满足管理强认证（受控备用）；默认
+	// false，即强认证默认要求 Passkey/安全密钥的用户验证（UV）。显式设为 true
+	// 时才接受 TOTP 作为强认证备用方式，并在 README/装配文档说明风险。
+	AllowTOTPForStrongAuth bool
+	// AllowStrongAuthSetup 允许对“要求强认证但未绑定强因素”的管理账户走受限
+	// 初始化闭环（只签发受限会话、绑定允许方式后撤销并要求重新登录）；默认 false
+	// 保守拒绝，宿主显式装配后启用。
+	AllowStrongAuthSetup bool
+	// StrongSetupMethods 是允许在初始化流程中绑定的强因素方法；默认
+	// [MethodPasskey]（邮件永远不允许）。宿主必须保证对应绑定入口已限制为受限会话。
+	StrongSetupMethods []authfact.Method
 	// Policy 是宿主的 MFA 强制策略；nil 表示没有外部强制策略。
 	Policy         Policy
 	CodeTTL        time.Duration
@@ -148,6 +172,33 @@ func New(options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 认证方式选择策略与强认证初始化闭环的装配约束：缺依赖时 fail-closed。
+	if options.AllowStrongAuthSetup {
+		if isNil(options.Revoker) || isNil(options.StrongFactorSource) ||
+			isNil(options.StrongSetupAuthorizer) {
+			return nil, fmt.Errorf(
+				"%w: 启用强认证初始化必须注入会话撤销器、强因素来源与受控初始化授权器", ErrOptionsInvalid)
+		}
+	}
+	if options.Passkeys != nil && isNil(options.Passkeys) {
+		return nil, fmt.Errorf("%w: 安全密钥适配器为空", ErrOptionsInvalid)
+	}
+	setupMethods := options.StrongSetupMethods
+	if len(setupMethods) == 0 {
+		setupMethods = []authfact.Method{authfact.MethodPasskey}
+	}
+	seenMethod := make(map[authfact.Method]bool, len(setupMethods))
+	for _, method := range setupMethods {
+		if !method.Valid() || method == authfact.MethodEmailOTP ||
+			method == authfact.MethodPassword || method == authfact.MethodRecoveryCode {
+			return nil, fmt.Errorf("%w: 强认证初始化只允许 Passkey/安全密钥/TOTP 方法", ErrOptionsInvalid)
+		}
+		if seenMethod[method] {
+			return nil, fmt.Errorf("%w: 强认证初始化方法重复", ErrOptionsInvalid)
+		}
+		seenMethod[method] = true
+	}
+	options.StrongSetupMethods = setupMethods
 	return &Service{
 		opts: options, ratePolicy: ratePolicy, factorPreference: factorPreference,
 		challengeLimiter: newCounterLimiter(ratePolicy.ChallengeLimit, ratePolicy.ChallengeWindow),
@@ -180,10 +231,21 @@ type LoginStart struct {
 	FactorType   FactorType
 	// RestrictedSession 是限制用途的受限会话；第二步成功后才换成完整会话。
 	RestrictedSession session.IssuedSession
+	// PasskeyCeremonyID/PasskeyOptions 是安全密钥第二步的 WebAuthn ceremony 与
+	// publicKey 选项 JSON（FactorType=passkey 时存在）；Options 不含秘密。
+	PasskeyCeremonyID string
+	PasskeyOptions    []byte
+	// SetupRequired 表示账户要求强认证但尚未绑定强因素，当前处于受限初始化闭环：
+	// 只能绑定 AllowedSetupMethods 中的方式，完成后调用 CompleteStrongSetup 并要求
+	// 重新登录；绝不会在本流程签发完整会话。
+	SetupRequired       bool
+	AllowedSetupMethods []authfact.Method
 }
 
-// BeginLogin 在密码认证成功后启动邮件第二步：高权限账户 fail-closed；普通账户未
-// 启用因素时返回 RequiresSecondFactor=false；启用时签发受限会话并发送验证码。
+// BeginLogin 在密码认证成功后按认证方式选择策略启动第二步：优先 Passkey/安全密钥，
+// 其次 TOTP，最后邮件；只选择用户实际启用且满足策略的因素，高权限账户不会降级到
+// 邮件。要求强认证但未绑定强因素的管理账户在宿主显式启用时进入受限初始化闭环，
+// 只签发受限会话并返回允许绑定的强因素方法，绝不签发完整会话。
 func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (LoginStart, error) {
 	ctx = normalizeContext(ctx)
 	if err := account.ValidateRequestID(request.RequestID); err != nil {
@@ -202,8 +264,22 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 	if !hasPassword {
 		return LoginStart{}, fmt.Errorf("%w: 缺少密码认证方法", ErrInvalidRequest)
 	}
-	// 高权限账户：密码正确但 authn 要求强认证/受限时，邮件因素不能替代强认证。
-	if base.Restricted || base.Outcome != authn.OutcomeComplete || len(base.RequiredSteps) > 0 {
+	// 认证结论分析：受限/不完整只能通过“强认证初始化”或强因素第二步继续；
+	// 待改密等其余受限原因仍然 fail-closed，不能被第二因素流程绕过。
+	requiresStrong := base.Restricted || base.Outcome != authn.OutcomeComplete ||
+		len(base.RequiredSteps) > 0
+	strongSetupStep := false
+	for _, step := range base.RequiredSteps {
+		switch step {
+		case authn.StepStrongAuthSetup:
+			strongSetupStep = true
+		case authn.StepPasswordChange:
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
+				"password_change_required", string(CodeMFARequired), request.RequestID)
+			return LoginStart{}, ErrStrongAuthRequired
+		}
+	}
+	if requiresStrong && !strongSetupStep {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
 			"strong_auth_required", string(CodeMFARequired), request.RequestID)
 		return LoginStart{}, ErrStrongAuthRequired
@@ -213,13 +289,20 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 			"challenge_rate_limited", string(CodeRateLimited), request.RequestID)
 		return LoginStart{}, ErrRateLimited
 	}
-	emailActive, err := s.activeEmailFactor(ctx, base.UserID)
+	emailCount, err := s.activeEmailFactor(ctx, base.UserID)
 	if err != nil {
 		return LoginStart{}, err
 	}
 	totpActive := false
 	if !isNil(s.opts.TOTP) {
 		totpActive, err = s.opts.TOTP.HasActive(ctx, base.UserID)
+		if err != nil {
+			return LoginStart{}, ErrStoreUnavailable
+		}
+	}
+	passkeyActive := false
+	if !isNil(s.opts.Passkeys) {
+		passkeyActive, err = s.opts.Passkeys.HasSecondFactor(ctx, base.UserID)
 		if err != nil {
 			return LoginStart{}, ErrStoreUnavailable
 		}
@@ -231,15 +314,57 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 			return LoginStart{}, ErrPolicyUnavailable
 		}
 	}
-	factor, hasFactor := s.chooseFactor(emailActive > 0, totpActive)
-	if !hasFactor {
+	// 认证事实：只把真实完成的密码写入；未完成强认证时不会伪造事实。
+	facts := authfact.MustSet(authfact.Fact{Method: authfact.MethodPassword,
+		VerifiedAt: base.CompletedAt})
+	requirement := authfact.Requirement{Minimum: authfact.StrengthSingle}
+	if forced {
+		requirement.Minimum = authfact.StrengthMFA
+	}
+	if requiresStrong {
+		// 管理账户要求强认证：默认要求 Passkey/安全密钥完成 UV（RequireUserVerification），
+		// 邮件明确不是合格方式；只有在宿主显式 AllowTOTPForStrongAuth 时才允许
+		// 密码+TOTP 作为受控备用。
+		requirement.Minimum = authfact.StrengthStrong
+		requirement.RequireUserVerification = !s.opts.AllowTOTPForStrongAuth
+	}
+	available := make([]authfact.Available, 0, 3)
+	for _, factor := range s.factorPreference {
+		switch factor {
+		case FactorPasskey:
+			if !isNil(s.opts.Passkeys) && passkeyActive {
+				available = append(available, authfact.Available{Method: authfact.MethodSecurityKey,
+					Enabled: true, SupportsUserVerification: true})
+			}
+		case FactorTOTP:
+			if totpActive {
+				available = append(available, authfact.Available{Method: authfact.MethodTOTP, Enabled: true})
+			}
+		case FactorEmail:
+			if emailCount > 0 {
+				available = append(available, authfact.Available{Method: authfact.MethodEmailOTP, Enabled: true})
+			}
+		}
+	}
+	chosen, selectErr := authfact.Select(facts, available, requirement)
+	if selectErr != nil {
+		if requiresStrong {
+			if s.opts.AllowStrongAuthSetup {
+				return s.beginStrongSetup(ctx, base, request)
+			}
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
+				"strong_factor_missing", string(CodeMFARequired), request.RequestID)
+			return LoginStart{}, ErrStrongAuthRequired
+		}
 		if forced {
 			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
 				"mfa_required_without_factor", string(CodeMFARequired), request.RequestID)
 			return LoginStart{}, ErrSecondFactorRequired
 		}
+		// 非强制、无可用因素：无需第二步，调用方按既有密码流程继续。
 		return LoginStart{RequiresSecondFactor: false}, nil
 	}
+	factor := factorTypeOf(chosen.Method)
 	email := ""
 	if factor == FactorEmail {
 		var found bool
@@ -271,6 +396,9 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 	}
 	credentialID := ""
 	issuedSecret := ""
+	factorRef := ""
+	passkeyOptions := []byte(nil)
+	passkeyCeremonyID := ""
 	if factor == FactorEmail {
 		issued, issueErr := s.opts.Credentials.Issue(ctx, credential.IssueRequest{
 			Purpose: purposeLoginCode, Target: challengeID, Kind: credential.KindCode,
@@ -282,12 +410,30 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 		credentialID = issued.ID
 		issuedSecret = issued.Secret.Reveal()
 	}
+	if factor == FactorPasskey {
+		// 安全密钥第二步：ceremony 绑定本 MFA 挑战 ID，验证时强制同一上下文。
+		if isNil(s.opts.Passkeys) {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
+				"passkey_unavailable", string(CodeMFARequired), request.RequestID)
+			return LoginStart{}, ErrNoAvailableMethod
+		}
+		start, startErr := s.opts.Passkeys.BeginSecondFactor(ctx, base.UserID, challengeID, request.RequestID)
+		if startErr != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
+				"passkey_ceremony_failed", string(CodeMFARequired), request.RequestID)
+			return LoginStart{}, ErrNoAvailableMethod
+		}
+		passkeyCeremonyID = start.CeremonyID
+		passkeyOptions = start.PublicKey
+		factorRef = start.CeremonyID
+	}
 	challenge := Challenge{
 		ID: challengeID, UserID: base.UserID, FactorType: factor, Purpose: PurposeLogin,
-		AttemptSHA256: attemptDigest, CredentialID: credentialID, Generation: 1,
+		AttemptSHA256: attemptDigest, CredentialID: credentialID, FactorRef: factorRef, Generation: 1,
 		State: StatePending, Username: username, AppID: request.AppID,
 		RememberMe: request.RememberMe, ClientUserAgent: request.Client.UserAgent,
 		ClientAddress: request.Client.Address, Attempts: 0, MaxAttempts: s.opts.MaxAttempts,
+		RequireStrong:   requiresStrong,
 		SecurityVersion: base.SecurityVersion, CompletedAt: base.CompletedAt,
 		ExpiresAt: now.Add(s.opts.CodeTTL), CreatedAt: now, UpdatedAt: now,
 	}
@@ -309,7 +455,7 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 	if factor == FactorEmail {
 		maskedEmail = maskAddress(email)
 	}
-	// 受限会话只在验证码已投递后才签发；第一步绝不给完整会话。
+	// 受限会话只在第二步挑战准备好后签发；第一步绝不给完整会话。
 	restricted, err := s.opts.Sessions.Login(ctx, session.LoginRequest{
 		Result: pendingSecondFactorResult(base), AppID: request.AppID,
 		ExistingSession: request.ExistingSession, RequestID: request.RequestID,
@@ -320,8 +466,6 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 		s.failChallenge(ctx, challengeID, attemptDigest, 1, "restricted_session_failed", request.RequestID)
 		return LoginStart{}, fmt.Errorf("%w: %v", ErrSessionUnavailable, err)
 	}
-	// 受限会话必须是本挑战用途（待第二因素）且应用上下文一致；否则撤销并拒绝，
-	// 防止应用作用域登录被其他受限会话替身接管。
 	if restricted.Session.Kind != session.KindRestricted ||
 		restricted.Session.Reason != session.ReasonPendingSecondFactor ||
 		restricted.Session.AppID != request.AppID {
@@ -370,11 +514,284 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 		s.cancelCredential(ctx, challenge.CredentialID, challengeID, purposeLoginCode)
 		return LoginStart{}, fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
 	}
-	return LoginStart{
+	start := LoginStart{
 		RequiresSecondFactor: true, ChallengeID: challengeID, AttemptToken: attemptToken,
 		MaskedEmail: maskedEmail, ExpiresAt: challenge.ExpiresAt, FactorType: challenge.FactorType,
 		RestrictedSession: restricted,
+	}
+	if factor == FactorPasskey {
+		start.PasskeyCeremonyID = passkeyCeremonyID
+		start.PasskeyOptions = passkeyOptions
+	}
+	return start, nil
+}
+
+// beginStrongSetup 为“要求强认证但尚未绑定强因素”的管理账户创建受限初始化挑战：
+// 只签发受限会话、返回允许绑定的强因素方法；绑定成功后必须调用 CompleteStrongSetup
+// 撤销受限会话并要求重新登录，绝不在此流程中签发完整会话。
+func (s *Service) beginStrongSetup(ctx context.Context, base authn.AuthenticateResult,
+	request BeginLoginRequest) (LoginStart, error) {
+	// 受控初始化状态校验：普通受限会话不能自助绑定强因素；授权失败 fail-closed，
+	// 不创建初始化挑战、不签发受限会话。
+	if isNil(s.opts.StrongSetupAuthorizer) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID},
+			"mfa.strong_setup_denied", "initialization_not_authorized", string(CodeMFARequired), request.RequestID)
+		return LoginStart{}, ErrStrongAuthRequired
+	}
+	if err := s.opts.StrongSetupAuthorizer.AuthorizeStrongSetup(ctx, base.UserID, request.RequestID); err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID},
+			"mfa.strong_setup_denied", "initialization_denied", string(CodeMFARequired), request.RequestID)
+		return LoginStart{}, ErrStrongAuthRequired
+	}
+	methods := s.opts.StrongSetupMethods
+	if len(methods) == 0 {
+		methods = []authfact.Method{authfact.MethodPasskey}
+	}
+	now := s.now()
+	challengeID, err := newID(s.opts.Random, "mfc_")
+	if err != nil {
+		return LoginStart{}, err
+	}
+	attemptToken, attemptDigest, err := newAttemptToken(s.opts.Random)
+	if err != nil {
+		return LoginStart{}, err
+	}
+	challenge := Challenge{
+		ID: challengeID, UserID: base.UserID, FactorType: FactorPasskey,
+		Purpose: PurposeStrongSetup, AttemptSHA256: attemptDigest, Generation: 1,
+		State: StatePending, Username: base.Username, AppID: request.AppID,
+		RememberMe: request.RememberMe, ClientUserAgent: request.Client.UserAgent,
+		ClientAddress: request.Client.Address, Attempts: 0, MaxAttempts: s.opts.MaxAttempts,
+		RequireStrong:   true,
+		SecurityVersion: base.SecurityVersion, CompletedAt: base.CompletedAt,
+		ExpiresAt: now.Add(s.opts.CodeTTL), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.createChallenge(ctx, challenge); err != nil {
+		return LoginStart{}, err
+	}
+	restricted, err := s.opts.Sessions.Login(ctx, session.LoginRequest{
+		Result: strongSetupResult(base), AppID: request.AppID,
+		ExistingSession: request.ExistingSession, RequestID: request.RequestID,
+		RememberMe: request.RememberMe, Client: request.Client,
+	})
+	if err != nil {
+		s.failChallenge(ctx, challengeID, attemptDigest, 1, "restricted_session_failed", request.RequestID)
+		return LoginStart{}, fmt.Errorf("%w: %v", ErrSessionUnavailable, err)
+	}
+	if restricted.Session.Kind != session.KindRestricted ||
+		restricted.Session.Reason != session.ReasonPendingSecondFactor ||
+		restricted.Session.AppID != request.AppID {
+		s.failChallenge(ctx, challengeID, attemptDigest, 1, "restricted_session_mismatch", request.RequestID)
+		return LoginStart{}, fmt.Errorf("%w: 受限会话不符", ErrSessionUnavailable)
+	}
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:     audit.Actor{Type: audit.ActorUser, ID: base.UserID},
+			Action:    "mfa.strong_setup_challenge",
+			Target:    audit.Target{Type: "mfa_challenge", ID: challengeID},
+			RequestID: validRequestID(request.RequestID),
+			Changes: []audit.FieldChange{
+				{Field: "purpose", After: string(PurposeStrongSetup)},
+				{Field: "restricted_session", After: restricted.Session.ID},
+			},
+		},
+		FailureReasonCode:   "mfa.strong_setup_bind_failed",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		ok, bindErr := s.opts.Store.BindRestrictedSessionTx(txCtx, tx, challengeID, attemptDigest, 1,
+			restricted.Session.ID, now)
+		if bindErr != nil {
+			return bindErr
+		}
+		if !ok {
+			return ErrChallengeInvalid
+		}
+		return nil
+	}); err != nil {
+		return LoginStart{}, mapCriticalError(err)
+	}
+	return LoginStart{
+		RequiresSecondFactor: true, SetupRequired: true, ChallengeID: challengeID,
+		AttemptToken: attemptToken, ExpiresAt: challenge.ExpiresAt,
+		FactorType: FactorPasskey, AllowedSetupMethods: methods, RestrictedSession: restricted,
 	}, nil
+}
+
+// StrongSetupCompleteRequest 是强认证初始化完成请求；ExistingSession 必须是初始化
+// 挑战绑定的那个受限会话。
+type StrongSetupCompleteRequest struct {
+	ChallengeID     string
+	AttemptToken    string
+	ExistingSession string
+	RequestID       string
+}
+
+// StrongSetupCompleteResult 是初始化完成结果；调用方必须要求用户重新登录，不得
+// 据此签发完整会话。
+type StrongSetupCompleteResult struct {
+	UserID             string
+	Methods            []authfact.Method
+	MustReauthenticate bool
+}
+
+// CompleteStrongSetup 完成强认证初始化闭环：校验受限会话/尝试令牌/挑战状态，确认
+// 账户已真实绑定强因素（由 StrongFactorSource 报告），撤销受限会话并标记挑战已完成。
+// 本方法不签发会话；邮箱不是允许的初始化方式。
+func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCompleteRequest) (StrongSetupCompleteResult, error) {
+	ctx = normalizeContext(ctx)
+	attemptDigest, err := hexAttemptToken(request.AttemptToken)
+	if err != nil {
+		return StrongSetupCompleteResult{}, ErrChallengeInvalid
+	}
+	challenge, err := s.loadChallenge(ctx, request.ChallengeID)
+	if err != nil {
+		return StrongSetupCompleteResult{}, err
+	}
+	if challenge.Purpose != PurposeStrongSetup || challenge.FactorType != FactorPasskey {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "purpose_mismatch", string(CodeChallengeInvalid), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrChallengeInvalid
+	}
+	if !equalDigest(challenge.AttemptSHA256, attemptDigest) || challenge.State != StatePending {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "invalid_challenge", string(CodeChallengeInvalid), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrChallengeInvalid
+	}
+	if !s.verifyLimiter.allow(challenge.UserID, s.now()) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "verify_rate_limited", string(CodeRateLimited), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrRateLimited
+	}
+	now := s.now()
+	if !now.Before(challenge.ExpiresAt) {
+		s.transition(ctx, challenge, attemptDigest, challenge.Generation, StateExpired, request.RequestID)
+		return StrongSetupCompleteResult{}, ErrChallengeExpired
+	}
+	sessionRecord, err := s.opts.Sessions.Validate(ctx, request.ExistingSession)
+	if err != nil || sessionRecord.UserID != challenge.UserID ||
+		!sessionRecord.IsRestricted() || sessionRecord.Kind != session.KindRestricted ||
+		sessionRecord.Reason != session.ReasonPendingSecondFactor ||
+		sessionRecord.AppID != challenge.AppID ||
+		sessionRecord.ID != challenge.RestrictedSessionID || challenge.RestrictedSessionID == "" {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "restricted_session_invalid", string(CodeChallengeInvalid), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrChallengeInvalid
+	}
+	if isNil(s.opts.StrongFactorSource) || isNil(s.opts.Revoker) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "strong_source_unavailable", string(CodeMFARequired), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
+	}
+	hasStrong, err := s.opts.StrongFactorSource.HasStrongFactor(ctx, challenge.UserID)
+	if err != nil {
+		return StrongSetupCompleteResult{}, ErrPolicyUnavailable
+	}
+	if !hasStrong {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "strong_factor_missing", string(CodeMFARequired), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
+	}
+	// 先撤销受限会话，避免留下临时受限通道；撤销失败则 fail-closed 不标记完成。
+	if err := s.opts.Revoker.Logout(ctx, request.ExistingSession); err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "restricted_session_revoke_failed", string(CodeDBUnavailable), request.RequestID)
+		return StrongSetupCompleteResult{}, fmt.Errorf("%w: 撤销受限会话失败", ErrSessionUnavailable)
+	}
+	if err := s.markVerified(ctx, challenge, attemptDigest, now, request.RequestID); err != nil {
+		return StrongSetupCompleteResult{}, err
+	}
+	methods := s.opts.StrongSetupMethods
+	if len(methods) == 0 {
+		methods = []authfact.Method{authfact.MethodPasskey}
+	}
+	event := audit.Event{
+		Actor:   audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+		Action:  "mfa.strong_setup_completed",
+		Target:  audit.Target{Type: "mfa_challenge", ID: challenge.ID},
+		Outcome: audit.OutcomeSuccess, RequestID: validRequestID(request.RequestID),
+		Changes: []audit.FieldChange{{Field: "restricted_session", Before: challenge.RestrictedSessionID,
+			After: "revoked"}, {Field: "must_reauthenticate", After: "true"}},
+	}
+	if err := s.opts.Audit.Record(ctx, event); err != nil {
+		return StrongSetupCompleteResult{}, fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
+	}
+	return StrongSetupCompleteResult{UserID: challenge.UserID, Methods: methods,
+		MustReauthenticate: true}, nil
+}
+
+// AvailableSecondFactorMethods 返回用户当前实际启用且满足策略的第二因素方法
+// （按 FactorPreference 顺序；强制 MFA 时邮件仍可作为 MFA 的第二步，但满足强认证
+// 时不接受邮件，见 BeginLogin 选择器）。空列表表示没有可用方式，不泄露其他账户。
+func (s *Service) AvailableSecondFactorMethods(ctx context.Context, caller Caller,
+	userID string) ([]authfact.Method, error) {
+	ctx = normalizeContext(ctx)
+	if err := caller.actor.Validate(); err != nil {
+		return nil, ErrAccessDenied
+	}
+	// 只允许本人查询；系统组件（可信装配层）可代为查询，普通用户不能枚举他人。
+	if caller.actor.Type == audit.ActorUser && caller.actor.ID != userID {
+		return nil, ErrAccessDenied
+	}
+	if !account.ValidUserID(userID) {
+		return nil, ErrInvalidRequest
+	}
+	emailCount, err := s.activeEmailFactor(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	totpActive := false
+	if !isNil(s.opts.TOTP) {
+		totpActive, err = s.opts.TOTP.HasActive(ctx, userID)
+		if err != nil {
+			return nil, ErrStoreUnavailable
+		}
+	}
+	passkeyActive := false
+	if !isNil(s.opts.Passkeys) {
+		passkeyActive, err = s.opts.Passkeys.HasSecondFactor(ctx, userID)
+		if err != nil {
+			return nil, ErrStoreUnavailable
+		}
+	}
+	forced := false
+	if !isNil(s.opts.Policy) {
+		forced, err = s.opts.Policy.MFARequired(ctx, userID)
+		if err != nil {
+			return nil, ErrPolicyUnavailable
+		}
+	}
+	requirement := authfact.Requirement{Minimum: authfact.StrengthSingle}
+	if forced {
+		requirement.Minimum = authfact.StrengthMFA
+	}
+	// 第一因素已完成密码；列表语义是“密码之后可用的第二因素”。
+	facts := authfact.MustSet(authfact.Fact{Method: authfact.MethodPassword,
+		VerifiedAt: s.now()})
+	available := make([]authfact.Available, 0, 3)
+	for _, factor := range s.factorPreference {
+		switch factor {
+		case FactorPasskey:
+			if !isNil(s.opts.Passkeys) && passkeyActive {
+				available = append(available, authfact.Available{Method: authfact.MethodSecurityKey,
+					Enabled: true, SupportsUserVerification: true})
+			}
+		case FactorTOTP:
+			if totpActive {
+				available = append(available, authfact.Available{Method: authfact.MethodTOTP, Enabled: true})
+			}
+		case FactorEmail:
+			if emailCount > 0 {
+				available = append(available, authfact.Available{Method: authfact.MethodEmailOTP, Enabled: true})
+			}
+		}
+	}
+	eligible := authfact.Eligible(facts, available, requirement)
+	methods := make([]authfact.Method, 0, len(eligible))
+	for _, candidate := range eligible {
+		methods = append(methods, candidate.Method)
+	}
+	return methods, nil
 }
 
 // Verify 校验邮件验证码并原子消费挑战；成功后用受限会话秘密轮换签发完整普通会话。
@@ -425,10 +842,72 @@ func (s *Service) Verify(ctx context.Context, request VerifyRequest) (VerifyResu
 			"mfa.verify_failed", "restricted_session_invalid", string(CodeChallengeInvalid), request.RequestID)
 		return VerifyResult{}, ErrChallengeInvalid
 	}
-	if request.Code == "" || len(request.Code) > 64 {
-		return VerifyResult{}, ErrCodeInvalid
+	if challenge.Purpose != PurposeLogin {
+		// 强认证初始化挑战只能通过 CompleteStrongSetup 完成，不能当作登录第二步。
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.verify_failed", "purpose_mismatch", string(CodeChallengeInvalid), request.RequestID)
+		return VerifyResult{}, ErrChallengeInvalid
 	}
-	if challenge.FactorType == FactorTOTP {
+	factorMethod := authfact.MethodEmailOTP
+	strongAuthAt := time.Time{}
+	userVerified := false
+	authenticatorRef := ""
+	switch challenge.FactorType {
+	case FactorPasskey:
+		if isNil(s.opts.Passkeys) || request.PasskeyCeremonyID == "" || len(request.PasskeyResponse) == 0 ||
+			request.PasskeyCeremonyID != challenge.FactorRef {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.verify_failed", "passkey_ceremony_invalid", string(CodeChallengeInvalid), request.RequestID)
+			return VerifyResult{}, ErrChallengeInvalid
+		}
+		result, passkeyErr := s.opts.Passkeys.FinishSecondFactor(ctx, passkey.SecondFactorFinishRequest{
+			CeremonyID: request.PasskeyCeremonyID, ContextID: challenge.ID,
+			Response: request.PasskeyResponse, RequestID: request.RequestID,
+		})
+		if passkeyErr != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.verify_failed", "passkey_invalid", string(CodeChallengeInvalid), request.RequestID)
+			if s.recordFailedAttempt(ctx, challenge, attemptDigest, now, request.RequestID) {
+				return VerifyResult{}, ErrAttemptsExceeded
+			}
+			return VerifyResult{}, ErrCodeInvalid
+		}
+		if result.UserID != challenge.UserID {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.verify_failed", "passkey_user_mismatch", string(CodeChallengeInvalid), request.RequestID)
+			return VerifyResult{}, ErrChallengeInvalid
+		}
+		if challenge.RequireStrong && !result.UserVerified {
+			// 策略要求强认证时，未完成用户验证的安全密钥断言不能算强认证，也不
+			// 能降级为普通第二步；计入尝试次数并明确拒绝。
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.verify_failed", "strong_auth_uv_missing", string(CodeMFARequired), request.RequestID)
+			if s.recordFailedAttempt(ctx, challenge, attemptDigest, now, request.RequestID) {
+				return VerifyResult{}, ErrAttemptsExceeded
+			}
+			return VerifyResult{}, ErrStrongAuthRequired
+		}
+		if err := s.markVerified(ctx, challenge, attemptDigest, now, request.RequestID); err != nil {
+			return VerifyResult{}, err
+		}
+		challenge.State = StateVerified
+		challenge.VerifiedAt = result.VerifiedAt
+		factorMethod = authfact.MethodSecurityKey
+		userVerified = result.UserVerified
+		authenticatorRef = result.AuthenticatorID
+		if result.UserVerified {
+			strongAuthAt = now
+		}
+	case FactorTOTP:
+		if request.Code == "" || len(request.Code) > 64 {
+			return VerifyResult{}, ErrCodeInvalid
+		}
+		factorMethod = authfact.MethodTOTP
+		// 门控：只有挑战明确要求强认证且宿主显式允许“密码+TOTP”满足强认证时才
+		// 记录强认证时间；普通 MFA 的 TOTP 只完成登录，不授予管理访问强认证。
+		if challenge.RequireStrong && s.opts.AllowTOTPForStrongAuth {
+			strongAuthAt = now
+		}
 		if isNil(s.opts.TOTP) {
 			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
 				"mfa.verify_failed", "totp_unavailable", string(CodeChallengeInvalid), request.RequestID)
@@ -447,29 +926,36 @@ func (s *Service) Verify(ctx context.Context, request VerifyRequest) (VerifyResu
 		}
 		challenge.State = StateVerified
 		challenge.VerifiedAt = now
-	} else if _, err := s.opts.Credentials.VerifyAndConsume(ctx, credential.VerifyRequest{
-		Kind: credential.KindCode, ID: challenge.CredentialID, Purpose: purposeLoginCode,
-		Target: challenge.ID, Secret: request.Code,
-	}); err != nil {
-		// 验证码错误/过期/重放：凭证服务保证尝试上限与原子消费；挑战自身也记录
-		// 尝试计数并在达到上限时迁移 failed（状态机完整性）。
-		if errors.Is(err, credential.ErrStoreUnavailable) {
-			return VerifyResult{}, ErrStoreUnavailable
+	case FactorEmail:
+		if request.Code == "" || len(request.Code) > 64 {
+			return VerifyResult{}, ErrCodeInvalid
 		}
-		if s.recordFailedAttempt(ctx, challenge, attemptDigest, now, request.RequestID) {
-			return VerifyResult{}, ErrAttemptsExceeded
+		if _, err := s.opts.Credentials.VerifyAndConsume(ctx, credential.VerifyRequest{
+			Kind: credential.KindCode, ID: challenge.CredentialID, Purpose: purposeLoginCode,
+			Target: challenge.ID, Secret: request.Code,
+		}); err != nil {
+			// 验证码错误/过期/重放：凭证服务保证尝试上限与原子消费；挑战自身也记录
+			// 尝试计数并在达到上限时迁移 failed（状态机完整性）。
+			if errors.Is(err, credential.ErrStoreUnavailable) {
+				return VerifyResult{}, ErrStoreUnavailable
+			}
+			if s.recordFailedAttempt(ctx, challenge, attemptDigest, now, request.RequestID) {
+				return VerifyResult{}, ErrAttemptsExceeded
+			}
+			return VerifyResult{}, ErrCodeInvalid
 		}
-		return VerifyResult{}, ErrCodeInvalid
-	}
-	completedAt := now
-	if challenge.FactorType == FactorEmail {
 		if err := s.markVerified(ctx, challenge, attemptDigest, now, request.RequestID); err != nil {
 			return VerifyResult{}, err
 		}
+		challenge.State = StateVerified
+		challenge.VerifiedAt = now
+	default:
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.verify_failed", "unsupported_factor", string(CodeMFARequired), request.RequestID)
+		return VerifyResult{}, fmt.Errorf("%w: 不支持的第二步方式", ErrNoAvailableMethod)
 	}
-	challenge.State = StateVerified
-	challenge.VerifiedAt = now
-	authenticated := completeResult(challenge, completedAt)
+	completedAt := now
+	authenticated := completeResult(challenge, completedAt, factorMethod, strongAuthAt)
 	issued, err := s.opts.Sessions.Login(ctx, session.LoginRequest{
 		Result: authenticated, AppID: challenge.AppID, ExistingSession: request.ExistingSession,
 		RequestID: request.RequestID, RememberMe: challenge.RememberMe,
@@ -485,7 +971,14 @@ func (s *Service) Verify(ctx context.Context, request VerifyRequest) (VerifyResu
 	if issued.Session.IsRestricted() || issued.Session.AppID != challenge.AppID {
 		return VerifyResult{}, fmt.Errorf("%w: 完整会话作用域不符", ErrSessionUnavailable)
 	}
-	return VerifyResult{Session: issued, Authenticated: authenticated, ChallengeID: challenge.ID}, nil
+	facts := authfact.MustSet(
+		authfact.Fact{Method: authfact.MethodPassword, VerifiedAt: challenge.CompletedAt},
+		authfact.Fact{Method: factorMethod, VerifiedAt: completedAt,
+			UserVerified: userVerified, AuthenticatorID: authenticatorRef},
+	)
+	return VerifyResult{Session: issued, Authenticated: authenticated, ChallengeID: challenge.ID,
+		Method: string(factorMethod), AMR: authfact.AMR(facts), ACR: authfact.ACR(facts),
+		Strength: facts.Strength().String()}, nil
 }
 
 // ResendRequest 是重发验证码请求。
@@ -857,6 +1350,13 @@ func (s *Service) Factors(ctx context.Context, caller Caller) ([]Factor, error) 
 	return factors, nil
 }
 
+// 生产适配器编译期契约固化：安全密钥第二步使用真实 *passkey.Service，会话撤销
+// 使用真实 *session.Service（测试替身只允许出现在测试路径）。
+var (
+	_ SecondFactorPasskey = (*passkey.Service)(nil)
+	_ SessionRevoker      = (*session.Service)(nil)
+)
+
 // ===== 内部辅助 =====
 
 func (s *Service) activeEmailFactor(ctx context.Context, userID string) (int, error) {
@@ -1106,7 +1606,7 @@ func isNil(value any) bool {
 // 优先”的安全默认），步骤 43 的完整认证方式选择策略之前不做更复杂决策。
 func resolveFactorPreference(value []FactorType) ([]FactorType, error) {
 	if len(value) == 0 {
-		return []FactorType{FactorTOTP, FactorEmail}, nil
+		return []FactorType{FactorPasskey, FactorTOTP, FactorEmail}, nil
 	}
 	seen := make(map[FactorType]bool, len(value))
 	result := make([]FactorType, 0, len(value))
