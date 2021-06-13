@@ -28,6 +28,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -73,6 +74,13 @@ const (
 
 	// DefaultRememberMeTimeout 是“记住我”登录未指定时的更长绝对到期期限。
 	DefaultRememberMeTimeout = 7 * 24 * time.Hour
+
+	// DefaultRecoverySessionTTL 是受限恢复会话的默认绝对到期期限（短时）。
+	DefaultRecoverySessionTTL = 15 * time.Minute
+	// MinRecoverySessionTTL/MaxRecoverySessionTTL 是受限恢复会话期限的允许范围。
+	// 恢复代码成功后的会话只能是短时受限会话，不得像普通登录那样长期有效。
+	MinRecoverySessionTTL = 5 * time.Minute
+	MaxRecoverySessionTTL = 30 * time.Minute
 
 	// MaxActiveSessionsLimit 是“最大在线数”可配置上限；0 表示不限制。
 	MaxActiveSessionsLimit = 100
@@ -231,6 +239,35 @@ func (s Session) CanAccessBusiness() bool {
 // 强认证。MFA 未实现前该条件恒不成立，管理访问保持拒绝。
 func (s Session) CanAccessManagement() bool {
 	return s.IsNormal() && !s.StrongAuthVerifiedAt.IsZero()
+}
+
+// RecoverySessionRequest 是签发受限恢复会话（restricted/recovery）的请求。
+//
+// 安全边界：本结构只能由可信恢复流程（internal/recovery）在成功原子消费一枚恢复
+// 代码之后构造。签发前必须通过注入的 RecoverySessionGate 复核恢复尝试仍然有效；
+// 未注入 gate 时一律拒绝签发（fail-closed）。恢复会话不绑定应用、不携带强认证
+// 时间、不允许记住我，绝对到期期限固定为短时（Options.RecoverySessionTTL）。
+type RecoverySessionRequest struct {
+	// UserID 是第一步密码认证已确认的账户稳定 ID。
+	UserID string
+	// SecurityVersion 是第一步认证结果携带的账户安全版本；签发前会与当前值
+	// 交叉校验。
+	SecurityVersion int64
+	// AttemptID 是恢复流程的服务端尝试 ID（客户端不可见、不可自称）。
+	AttemptID string
+	// ExistingSession 是本次请求携带的旧会话秘密（可选，用于防会话固定轮换）。
+	ExistingSession string
+	// RequestID 可选，写入审计用于关联查询。
+	RequestID string
+	// Client 是设备列表展示用客户端描述；不参与授权。
+	Client ClientInfo
+}
+
+// RecoverySessionGate 授权签发受限恢复会话。生产实现为 internal/recovery.Service：
+// 只有恢复代码已原子消费且恢复尝试处于待绑定、未过期、尚未绑定会话时返回 nil。
+// nil gate 表示未装配恢复流程，签发一律拒绝。
+type RecoverySessionGate interface {
+	AuthorizeRecoverySession(ctx context.Context, request RecoverySessionRequest) error
 }
 
 // IssuedSession 是签发结果。Secret 是“会话ID.秘密”形式的完整会话凭据（浏览器
@@ -426,13 +463,17 @@ const (
 	ActionSessionEviction Action = "session.eviction"
 	// ActionSessionAccountDisabledRevoke 是账户禁用流程触发的服务端批量退出。
 	ActionSessionAccountDisabledRevoke Action = "session.account_disabled_revoke"
+	// ActionSessionRestrictedDenied 是受限恢复会话尝试访问普通业务/管理接口被拒绝
+	// 的失败审计动作（步骤 44）：越权必须拒绝且留痕，审计不可用不改变拒绝结果。
+	ActionSessionRestrictedDenied Action = "session.restricted_denied"
 )
 
 // Valid 报告动作是否已定义。
 func (a Action) Valid() bool {
 	switch a {
 	case ActionSessionIssue, ActionSessionRevoke, ActionSessionRevokeOwn,
-		ActionSessionAdminRevoke, ActionSessionEviction, ActionSessionAccountDisabledRevoke:
+		ActionSessionAdminRevoke, ActionSessionEviction, ActionSessionAccountDisabledRevoke,
+		ActionSessionRestrictedDenied:
 		return true
 	default:
 		return false
@@ -465,6 +506,9 @@ var (
 	// ErrConcurrentLimit 表示并发登录数量约束在事务内复核失败；为避免突破上限
 	// 而整体回滚、拒绝签发。
 	ErrConcurrentLimit = errors.New("并发会话数量约束未满足")
+	// ErrRecoveryNotAllowed 表示受限恢复会话签发被拒绝（未装配恢复流程、
+	// 恢复尝试无效/过期/已绑定会话，或账户不允许恢复）。
+	ErrRecoveryNotAllowed = errors.New("不允许签发受限恢复会话")
 	// ErrStoreUnavailable 表示会话存储暂时不可用。
 	ErrStoreUnavailable = errors.New("会话存储暂时不可用")
 	// ErrAuditUnavailable 表示安全审计未能可靠写入，操作被拒绝。
@@ -504,7 +548,7 @@ func CodeOf(err error) ErrorCode {
 		errors.Is(err, ErrRotationFailed), errors.Is(err, ErrConcurrentLimit):
 		return CodeAuthFailed
 	case errors.Is(err, ErrRestrictedSession), errors.Is(err, ErrStrongAuthRequired),
-		errors.Is(err, ErrAccessDenied):
+		errors.Is(err, ErrAccessDenied), errors.Is(err, ErrRecoveryNotAllowed):
 		return CodeAccessDenied
 	case errors.Is(err, ErrStoreUnavailable):
 		return CodeDBUnavailable

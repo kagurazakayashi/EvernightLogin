@@ -85,6 +85,15 @@ type Options struct {
 	// DevicePolicy 是同一账户的并发登录设备策略；空使用 DevicePolicyMultiple。
 	// 单设备策略会在签发事务中先撤销该账户此前全部活动会话，再签发新会话。
 	DevicePolicy DevicePolicy
+	// RecoveryGate 授权签发受限恢复会话（步骤 44）。nil 表示未装配恢复代码流程，
+	// 所有受限恢复会话签发一律拒绝（fail-closed）。
+	RecoveryGate RecoverySessionGate
+	// RecoverySessionTTL 是受限恢复会话的绝对到期期限；0 使用
+	// DefaultRecoverySessionTTL，允许 MinRecoverySessionTTL～MaxRecoverySessionTTL。
+	RecoverySessionTTL time.Duration
+	// AllowRootRecoverySessions 允许为 root 签发受限恢复会话；默认 false。root
+	// 应急恢复必须由受控本地通道处理，普通恢复代码流程不能作用于 root。
+	AllowRootRecoverySessions bool
 	// Authorizer 判定管理员能否在给定范围强制下线；nil 时管理强制下线一律拒绝
 	// （fail-closed）。用户本人退出自己的会话不依赖它。
 	Authorizer ScopeAuthorizer
@@ -112,23 +121,26 @@ type Options struct {
 // Service 是会话服务。构造后不可变，可被多个 goroutine 并发使用；它不拥有
 // 数据库连接、不启动后台协程、也不自动清理过期会话（由维护任务调用 Cleanup）。
 type Service struct {
-	store           Store
-	audit           AuditRecorder
-	ring            *secrets.Keyring
-	idleTimeout     time.Duration
-	absoluteTimeout time.Duration
-	rememberTimeout time.Duration
-	maxActive       int
-	devicePolicy    DevicePolicy
-	strongAuthAge   time.Duration
-	authorizer      ScopeAuthorizer
-	sensitive       SensitiveRunner
-	allowLegacy     bool
-	cookieName      string
-	cookiePolicy    CookiePolicy
-	logger          *slog.Logger
-	now             func() time.Time
-	random          io.Reader
+	store             Store
+	audit             AuditRecorder
+	ring              *secrets.Keyring
+	idleTimeout       time.Duration
+	absoluteTimeout   time.Duration
+	rememberTimeout   time.Duration
+	maxActive         int
+	devicePolicy      DevicePolicy
+	strongAuthAge     time.Duration
+	authorizer        ScopeAuthorizer
+	sensitive         SensitiveRunner
+	allowLegacy       bool
+	recoveryGate      RecoverySessionGate
+	recoveryTTL       time.Duration
+	allowRootRecovery bool
+	cookieName        string
+	cookiePolicy      CookiePolicy
+	logger            *slog.Logger
+	now               func() time.Time
+	random            io.Reader
 }
 
 // New 创建会话服务。存储、审计或密钥环为空、缺少当前写密钥、期限/策略不合法时
@@ -195,6 +207,14 @@ func New(store Store, options Options) (*Service, error) {
 		return nil, fmt.Errorf("%w: 强认证有效期必须在 %s～%s 之间",
 			ErrOptionsInvalid, MinStrongAuthMaxAge, MaxStrongAuthMaxAge)
 	}
+	recoveryTTL := options.RecoverySessionTTL
+	if recoveryTTL == 0 {
+		recoveryTTL = DefaultRecoverySessionTTL
+	}
+	if recoveryTTL < MinRecoverySessionTTL || recoveryTTL > MaxRecoverySessionTTL {
+		return nil, fmt.Errorf("%w: 受限恢复会话期限必须在 %s～%s 之间",
+			ErrOptionsInvalid, MinRecoverySessionTTL, MaxRecoverySessionTTL)
+	}
 	cookieName := options.CookieName
 	if cookieName == "" {
 		cookieName = DefaultCookieName
@@ -225,23 +245,26 @@ func New(store Store, options Options) (*Service, error) {
 		random = rand.Reader
 	}
 	return &Service{
-		store:           store,
-		audit:           options.Audit,
-		ring:            options.Keyring,
-		idleTimeout:     idleTimeout,
-		absoluteTimeout: absoluteTimeout,
-		rememberTimeout: rememberTimeout,
-		maxActive:       options.MaxActiveSessions,
-		devicePolicy:    devicePolicy,
-		strongAuthAge:   strongAuthAge,
-		authorizer:      options.Authorizer,
-		sensitive:       options.Sensitive,
-		allowLegacy:     options.AllowLegacyWithoutSensitive,
-		cookieName:      cookieName,
-		cookiePolicy:    cookiePolicy,
-		logger:          logger,
-		now:             now,
-		random:          random,
+		store:             store,
+		audit:             options.Audit,
+		ring:              options.Keyring,
+		idleTimeout:       idleTimeout,
+		absoluteTimeout:   absoluteTimeout,
+		rememberTimeout:   rememberTimeout,
+		maxActive:         options.MaxActiveSessions,
+		devicePolicy:      devicePolicy,
+		strongAuthAge:     strongAuthAge,
+		authorizer:        options.Authorizer,
+		sensitive:         options.Sensitive,
+		allowLegacy:       options.AllowLegacyWithoutSensitive,
+		recoveryGate:      options.RecoveryGate,
+		recoveryTTL:       recoveryTTL,
+		allowRootRecovery: options.AllowRootRecoverySessions,
+		cookieName:        cookieName,
+		cookiePolicy:      cookiePolicy,
+		logger:            logger,
+		now:               now,
+		random:            random,
 	}, nil
 }
 
@@ -509,6 +532,197 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 	return issued, nil
 }
 
+// IssueRecoverySession 在恢复代码被原子消费成功后签发短时受限恢复会话。
+//
+// 该会话的受限原因是 recovery：internal/session 自身与所有 AuthorizeBusiness /
+// AuthorizeManagement 调用都会拒绝它访问普通业务与管理接口。恢复流程只允许通过
+// internal/recovery 的专门接口核对状态、绑定新安全方式与取消退出。
+//
+// 安全约束（缺一不可）：
+//   - 必须注入 RecoverySessionGate 且其对本次尝试返回 nil；未装配恢复流程时拒绝。
+//   - 账户必须 active 且安全版本与第一步认证结果一致；root 默认拒绝（受控本地
+//     通道未接入前不得用普通恢复代码流程恢复 root）。
+//   - 期限固定为短时 RecoverySessionTTL，空闲到期不超过该期限；不绑定应用、
+//     不携带强认证时间、不使用记住我；恢复流程结束后必须以正常登录重新获得完整
+//     会话，本方法绝不签发普通会话。
+//   - 签发与成功审计一致提交；失败审计不携带恢复代码或会话秘密。
+func (s *Service) IssueRecoverySession(ctx context.Context, request RecoverySessionRequest) (IssuedSession, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return IssuedSession{}, err
+	}
+	if !account.ValidUserID(request.UserID) {
+		return IssuedSession{}, fmt.Errorf("%w: 用户 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.SecurityVersion <= 0 {
+		return IssuedSession{}, fmt.Errorf("%w: 缺少账户安全版本", ErrInvalidRequest)
+	}
+	if !validRecoveryAttemptID(request.AttemptID) {
+		return IssuedSession{}, fmt.Errorf("%w: 恢复尝试 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.RequestID != "" && !validRequestID(request.RequestID) {
+		return IssuedSession{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
+	}
+	if isNilInterface(s.recoveryGate) {
+		s.recordRecoveryRejection(ctx, request, "recovery_gate_not_configured")
+		return IssuedSession{}, ErrRecoveryNotAllowed
+	}
+	if err := s.recoveryGate.AuthorizeRecoverySession(ctx, request); err != nil {
+		s.recordRecoveryRejection(ctx, request, "recovery_attempt_not_authorized")
+		return IssuedSession{}, ErrRecoveryNotAllowed
+	}
+	now := s.clockNow()
+	state, found, err := s.store.LoadUserState(ctx, request.UserID)
+	if err != nil {
+		return IssuedSession{}, s.storeFailure(ctx, "读取账户状态", err)
+	}
+	if !found || state.Status != account.StatusActive {
+		s.recordRecoveryRejection(ctx, request, "account_not_eligible")
+		return IssuedSession{}, ErrAccountNotEligible
+	}
+	if state.SecurityVersion != request.SecurityVersion {
+		s.recordRecoveryRejection(ctx, request, "security_version_changed")
+		return IssuedSession{}, ErrAccountNotEligible
+	}
+	if state.IsRoot && !s.allowRootRecovery {
+		s.recordRecoveryRejection(ctx, request, "root_recovery_not_supported")
+		return IssuedSession{}, ErrRecoveryNotAllowed
+	}
+	existing, err := s.loadRevocableSession(ctx, request.ExistingSession)
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	material, err := s.newSessionMaterial()
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	keyID := s.ring.CurrentKeyID()
+	secretDigest, err := s.ring.HMACDigest(keyID, secretDigestDomain, digestMessage(material.id, material.secret))
+	if err != nil {
+		s.logger.Error("无法生成恢复会话秘密摘要", "reason", "key_unavailable")
+		return IssuedSession{}, fmt.Errorf("%w: 无法生成会话秘密摘要", ErrOptionsInvalid)
+	}
+	csrfDigest, err := s.ring.HMACDigest(keyID, csrfDigestDomain, digestMessage(material.id, material.csrf))
+	if err != nil {
+		s.logger.Error("无法生成恢复会话 CSRF 摘要", "reason", "key_unavailable")
+		return IssuedSession{}, fmt.Errorf("%w: 无法生成 CSRF 令牌摘要", ErrOptionsInvalid)
+	}
+	absoluteExpiresAt := now.Add(s.recoveryTTL)
+	idleExpiresAt := now.Add(s.idleTimeout)
+	if idleExpiresAt.After(absoluteExpiresAt) {
+		idleExpiresAt = absoluteExpiresAt
+	}
+	record := Record{
+		ID:                material.id,
+		UserID:            request.UserID,
+		Kind:              KindRestricted,
+		Reason:            ReasonRecovery,
+		SecurityVersion:   request.SecurityVersion,
+		SecretDigest:      secretDigest,
+		CSRFDigest:        csrfDigest,
+		KeyID:             keyID,
+		RowVersion:        1,
+		CreatedAt:         now,
+		LastSeenAt:        now,
+		IdleExpiresAt:     idleExpiresAt,
+		AbsoluteExpiresAt: absoluteExpiresAt,
+		RequestID:         request.RequestID,
+		ClientUserAgent:   sanitizeClientInfo(request.Client).UserAgent,
+		ClientAddress:     sanitizeClientInfo(request.Client).Address,
+	}
+	event := audit.Event{
+		Actor:     audit.Actor{Type: audit.ActorUser, ID: request.UserID},
+		Action:    string(ActionSessionIssue),
+		Target:    audit.Target{Type: "session", ID: record.ID},
+		RequestID: request.RequestID,
+		Changes: []audit.FieldChange{
+			{Field: "session_kind", After: string(record.Kind)},
+			{Field: "restricted_reason", After: string(record.Reason)},
+			{Field: "recovery_attempt_id", After: request.AttemptID},
+			{Field: "security_version", After: strconv.FormatInt(record.SecurityVersion, 10)},
+			{Field: "idle_expires_at", After: idleExpiresAt.UTC().Format(time.RFC3339)},
+			{Field: "absolute_expires_at", After: absoluteExpiresAt.UTC().Format(time.RFC3339)},
+			{Field: "short_lived", After: "true"},
+		},
+	}
+	if existing != nil {
+		event.Changes = append(event.Changes, audit.FieldChange{Field: "session_rotation", After: "previous_session_revoked"})
+	}
+	critical := audit.CriticalRequest{
+		Event:             event,
+		FailureReasonCode: "recovery_session_issue_failed",
+		FailureErrorCodeFor: func(err error) string {
+			return string(CodeOf(s.mapCriticalError(ctx, err)))
+		},
+	}
+	insertErr := s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		if existing != nil {
+			revoked, revokeErr := s.store.Revoke(txCtx, tx, RevokeCondition{
+				ID:     existing.ID,
+				Now:    now,
+				Reason: RevokeReasonRotated,
+			})
+			if revokeErr != nil {
+				return revokeErr
+			}
+			if !revoked {
+				return ErrRotationFailed
+			}
+		}
+		return s.store.Insert(txCtx, tx, record)
+	})
+	if insertErr != nil {
+		return IssuedSession{}, s.mapCriticalError(ctx, insertErr)
+	}
+	issued := IssuedSession{
+		Session:    record.session(),
+		Secret:     newSecret(material.id + secretSeparator + material.secret),
+		CSRFSecret: newSecret(material.csrf),
+	}
+	if existing != nil {
+		issued.RotatedSessionID = existing.ID
+	}
+	s.logger.Info("受限恢复会话已签发",
+		"session_id", record.ID,
+		"user_id", record.UserID,
+		"reason", string(record.Reason),
+		"absolute_expires_at", absoluteExpiresAt,
+	)
+	return issued, nil
+}
+
+// recordRecoveryRejection 记录恢复会话签发被拒绝的失败审计；审计不可用只写运行
+// 日志，不改变“拒绝签发”的结论，也不泄露恢复代码/尝试内容。
+func (s *Service) recordRecoveryRejection(ctx context.Context, request RecoverySessionRequest, reason string) {
+	event := audit.Event{
+		Actor:      audit.Actor{Type: audit.ActorAnonymous},
+		Action:     string(ActionSessionIssue),
+		Target:     audit.Target{Type: "user", ID: request.UserID},
+		Outcome:    audit.OutcomeFailure,
+		ErrorCode:  string(CodeAccessDenied),
+		ReasonCode: reason,
+	}
+	if err := s.audit.RecordFailure(ctx, event); err != nil {
+		s.logger.Warn("恢复会话签发拒绝的失败审计写入失败", "reason", reason, "error_category", "audit_unavailable")
+	}
+	s.logger.Info("受限恢复会话签发被拒绝", "user_id", request.UserID, "reason", reason)
+}
+
+// validRecoveryAttemptID 校验恢复尝试 ID 格式：rca_ 前缀加 32 位小写十六进制。
+// 该格式由 internal/recovery 固定，客户端不可构造；session 只作为装配契约校验。
+func validRecoveryAttemptID(id string) bool {
+	const prefix = "rca_"
+	if len(id) != len(prefix)+32 || !strings.HasPrefix(id, prefix) {
+		return false
+	}
+	for _, r := range id[len(prefix):] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // checkEligibility 在签发前重读账户与应用/成员状态。任何不一致都拒绝签发；对外
 // 统一 ErrAccountNotEligible（与登录失败一致），内部原因只写失败审计与日志。
 func (s *Service) checkEligibility(ctx context.Context, spec authnSpec, appID string) error {
@@ -603,7 +817,8 @@ func (s *Service) Validate(ctx context.Context, secret string) (Session, error) 
 
 // Renew 续期：延长空闲到期并返回更新后的会话。续期绝不越过绝对到期；并发续期
 // 安全（以最后一次为准），与撤销竞争时撤销优先。账户/应用/成员状态不满足时拒绝
-// 续期并视为会话失效。
+// 续期并视为会话失效。受限恢复会话（ReasonRecovery）不允许续期，返回受限拒绝，
+// 以保持“核对/绑定/退出”的短时边界。
 func (s *Service) Renew(ctx context.Context, secret string) (Session, error) {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
@@ -620,6 +835,15 @@ func (s *Service) Renew(ctx context.Context, secret string) (Session, error) {
 	}
 	if err := s.checkCurrentState(ctx, record); err != nil {
 		return Session{}, err
+	}
+	// 受限恢复会话是短时一次性流程会话（只允许核对/绑定/退出），不允许续期延长其
+	// 生命周期；越权续期返回统一受限拒绝，恢复流程结束后必须重新正常登录。
+	if record.Kind == KindRestricted && record.Reason == ReasonRecovery {
+		s.logger.Info("受限恢复会话不允许续期",
+			"session_id", record.ID,
+			"user_id", record.UserID,
+		)
+		return Session{}, ErrRestrictedSession
 	}
 	idleExpiresAt := now.Add(s.idleTimeout)
 	if idleExpiresAt.After(record.AbsoluteExpiresAt) {
@@ -1299,6 +1523,27 @@ func (s *Service) enforceConcurrencyPolicy(ctx context.Context, tx audit.Tx, rec
 	return nil
 }
 
+// recordRestrictedDenial 为受限**恢复**会话的越权访问写失败审计（步骤 44 要求：
+// 越权必须拒绝并审计）。其他受限原因（待第二因素/待改密/初始化）是正常登录中间
+// 状态，频繁访问拒绝不逐条写审计以避免噪声；恢复会话是安全敏感状态，必须留痕。
+// 审计写入失败只写运行日志，绝不改变“拒绝访问”的结论。
+func (s *Service) recordRestrictedDenial(ctx context.Context, current Session, operation string) {
+	if current.Reason != ReasonRecovery {
+		return
+	}
+	event := audit.Event{
+		Actor:      audit.Actor{Type: audit.ActorUser, ID: current.UserID},
+		Action:     string(ActionSessionRestrictedDenied),
+		Target:     audit.Target{Type: "session", ID: current.ID},
+		Outcome:    audit.OutcomeFailure,
+		ErrorCode:  string(CodeAccessDenied),
+		ReasonCode: operation,
+	}
+	if err := s.audit.RecordFailure(ctx, event); err != nil {
+		s.logger.Warn("恢复会话越权拒绝的失败审计写入失败", "operation", operation, "error_category", "audit_unavailable")
+	}
+}
+
 // AuthorizeBusiness 校验会话并要求其可访问普通业务接口。受限会话一律拒绝；
 // 这是 Go API 层的统一守卫，HTTP 宿主应在业务处理器最前面调用。
 func (s *Service) AuthorizeBusiness(ctx context.Context, secret string) (Session, error) {
@@ -1312,6 +1557,7 @@ func (s *Service) AuthorizeBusiness(ctx context.Context, secret string) (Session
 			"user_id", current.UserID,
 			"reason", string(current.Reason),
 		)
+		s.recordRestrictedDenial(ctx, current, "business_api")
 		return Session{}, ErrRestrictedSession
 	}
 	return current, nil
@@ -1332,6 +1578,7 @@ func (s *Service) AuthorizeManagement(ctx context.Context, secret string) (Sessi
 			"user_id", current.UserID,
 			"reason", string(current.Reason),
 		)
+		s.recordRestrictedDenial(ctx, current, "management_api")
 		return Session{}, ErrRestrictedSession
 	}
 	now := s.clockNow()

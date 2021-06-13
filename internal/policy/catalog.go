@@ -407,10 +407,10 @@ func defaultOperations() []Operation {
 		},
 		{
 			ID: "recovery.codes.rotate", Domain: DomainMFA, Name: "更新恢复代码",
-			Description:   "生成新的一组一次性恢复代码并作废旧组；必须强认证并确认，成功告知，执行器未实现前 fail-closed。",
-			Default:       strongReauth,
+			Description:   "生成新的一组一次性恢复代码并作废旧组；需要近期身份验证与安全告知（执行器为 internal/recovery，恢复代码只替代第二步、使用后进入受限恢复并要求重新绑定）。强认证实现前默认按近期主密码判定以避免功能死锁，高权限账户应由宿主加严为 strong。",
+			Default:       mfaAdd,
 			PermissionKey: "self.credentials.manage",
-			Implemented:   false,
+			Implemented:   true,
 		},
 		{
 			ID: "email.change.request", Domain: DomainEmail, Name: "申请变更已验证邮箱",

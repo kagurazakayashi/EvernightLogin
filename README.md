@@ -586,6 +586,22 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **与步骤 40 的 MFA 登录接线（已接入）**：`internal/mfa.BeginLogin` 按可配置因素优先顺序（默认 **TOTP 优先于邮件**）选择第二步：账户有已激活 TOTP 时创建 `factor_type=totp` 挑战、不发送邮件，仍绑定用户/登录尝试/用途/AppID/记住我/客户端/受限会话并沿用步骤 40 的限流与尝试上限；`Verify` 对 TOTP 挑战调用 `totp.VerifyLoginCode`（服务端时间步防重放），成功后才用同一受限会话与同 AppID 等轮换完整会话，失败计入尝试上限并写失败审计，重放/跨步复用被拒绝。两者共存时默认走 TOTP；可用 `Options.FactorPreference` 调整顺序，完整的“认证方式选择策略”属步骤 43。
 - **已知限制**：页面/HTTP/启动装配、真实验证器/真机实测、绑定发起传输层限流（当前仅服务内尝试上限与 pending 数上限）、恢复代码/Passkey/FIDO2、认证方式选择策略（步骤 43）、审计导出与过期清理任务未实现或未验证；race/非 Windows 未验证。
 
+## 恢复代码、受限恢复会话与强制重新绑定（步骤 44）
+
+新增内部恢复域 `internal/recovery` 与 SQLite 仓储 `internal/recovery/sqlite`，扩展 `internal/session` 的短时受限恢复会话签发入口，迁移 `0024_recovery_codes.sql` 落地 `recovery_code_groups`（按组管理、同一用户最多一个 active 组）、`recovery_codes`（只存 HMAC-SHA256 验证摘要）与 `recovery_attempts`（代码消费→受限恢复会话→新因素绑定的短时尝试）。本步**不暴露 HTTP 路由、不装配 `cmd/login-server`、不实现 OAuth/OIDC 令牌**，验收走可信内部 Go API；新因素绑定通过宿主注入的 `FactorBinder` 完成，测试使用明确标注的模拟验证器，**不代表真实认证器兼容性**。
+
+- **一次性高熵代码与按组管理**：每条代码是 10 字节安全随机数的 base32 文本（80 位熵，`XXXX-XXXX-XXXX-XXXX` 分组展示，接收时忽略空格/连字符并统一大写）；生成时只向当前用户展示一次，数据库仅保存按当前密钥环 `key_id` 与账户 ID 绑定的 HMAC-SHA256 摘要（32 字节），**无法从数据库、日志或审计还原代码**。代码组按用户代次（generation）管理：重新生成在同一审计事务内把旧组置 `superseded` 并插入新组，旧代码立即失效；同一用户唯一 active 组与唯一 generation 保证并发重新生成只有一个成功。
+- **原子验证与消费**：`Begin` 必须携带 `internal/authn` 的第一步真实认证结果，且该结果必须是“密码已通过、仍待第二因素”的受限结论（完整认证、非受限、无密码方法、携带强认证时间或 root 账户一律拒绝）；恢复代码只替代第二步，不替代密码。代码验证通过后，消费使用条件更新（`used_at_ms IS NULL → 非空`）并与恢复尝试创建在同一审计事务提交：并发重复使用同一代码只有一个赢家，事务失败（审计不可用等）整体回滚，代码保持可用且不产生尝试；已有进行中尝试时使用另一枚代码不会烧掉该代码；恢复代码尝试另有账户维度有界限流（默认 10 次/10 分钟，可配置 1～100 次与 1 分钟～1 小时），80 位熵下不可爆破，主要用于降噪与防滥用。
+- **短时受限恢复会话**：代码成功后由 `session.IssueRecoverySession` 签发 `KindRestricted / ReasonRecovery` 会话（必须通过恢复流程注入的 `RecoverySessionGate` 复核尝试仍待绑定、未过期且尚未绑定会话），绝对到期默认 15 分钟（5～30 分钟有界），不绑定应用、不使用记住我、不携带强认证时间；该会话访问普通业务与管理接口会被 `internal/session` 既有守卫拒绝，且**不允许续期**（保持短时边界）。恢复流程只通过 `Snapshot`（核对状态/允许方式/剩余代码）、`BeginRebind`/`Complete`（绑定新安全方式）与 `Cancel`（取消退出）提供能力，不签发任何 OAuth/Token。root 恢复会话默认拒绝（`AllowRootRecoverySessions` 默认 false，root 应急恢复必须走受控本地通道）。
+- **新因素验证前保留旧状态**：在 `FactorBinder.VerifyRebind` 真实验证成功前，恢复流程不删除/不降级任何旧 MFA 因素、不撤销用户既有会话、不生成新代码组；绑定计划（方法+绑定 ID）由服务端记录并与完成请求交叉校验，客户端不能跳过“开始绑定”直接完成。新因素验证失败只递增有界尝试次数并写失败审计，用尽后尝试作废并发送告知，恢复仍未完成。
+- **强度要求与不降级**：宿主注入 `Requirements.RecoveryStrength` 按账户真实权限返回最低强度（未注入时默认 `StrengthStrong`，fail-closed）；强认证要求下只允许 WebAuthn 用户验证（UV）的 Passkey/安全密钥证明，TOTP 只能在要求为“第二因素”时使用，**邮件永远不是恢复流程允许的新因素**——密码 + 恢复代码不能把已绑定的安全密钥降级为邮箱。要求不可用时在消费代码前 fail-closed，避免烧掉用户代码。
+- **完成后作废旧凭证并要求重新登录**：完成在同一个审计事务内：结束尝试、条件作废旧代码组（旧组已被并发撤销/取代时 fail-closed 整体回滚，不插入新 active 组）、生成新一组恢复代码、递增账户 `security_version`（使恢复前建立的会话立即失效）并写成功审计；提交后尽力撤销该用户全部会话、按策略撤销旧 MFA 因素（`FactorRevoker`）并发送不含代码明文的安全告知，随后必须使用新配置的安全方式重新正常登录（`ReloginRequired=true`）。提交后撤销失败不回滚已完成的恢复（安全版本已递增），但写失败审计；新代码只返回一次，投递失败需要用户重新登录后再次更新。
+- **取消/中断安全处理**：`Cancel` 只结束尝试并尽力退出恢复会话，不删除旧因素、不作废旧组、不递增安全版本；已消费的代码不会恢复（一次性语义），用户可用剩余代码或正常方式重新登录。尝试超过有效期后在读取时惰性迁移为 `expired` 并拒绝后续操作。
+- **敏感策略与防 MFA 绕过（44-FIX）**：恢复代码生成/重新生成走步骤 38/39 的 `recovery.codes.rotate` 操作与近期认证（目录条目 `Implemented=true`）。同时新增可注入的账户所需强度契约 `AuthLevelRequirements.RequiredLevel`：**已绑定强因素或高权限账户必须返回 `AuthLevelStrong`**，服务端要求 `reauth.Signals` 中携带新鲜（默认 15 分钟、可配置 1 分钟～24 小时）的强认证事实（宿主会话中间件必须把 `session.Session.StrongAuthVerifiedAt`/强认证标记映射为 `reauth.WithSignals`），否则拒绝更新恢复代码并写失败审计——避免“完整会话+密码”静默重新生成恢复代码后再用“密码+新码”替代第二因素绕过 MFA。未绑定强因素的普通账户可返回 `AuthLevelPassword` 仅要求近期主密码（避免死锁）；未注入契约时默认按 `AuthLevelStrong` fail-closed。
+- **通知与审计**：恢复代码生成、代码使用、开始绑定、验证失败、完成、取消、过期与旧因素/会话撤销失败均有稳定审计动作；代码、摘要、会话秘密与绑定秘密不进入日志、审计、错误或告知正文；`MailNotifier` 复用 `internal/mailer` 告知模板只向已验证邮箱发送（测试使用本地捕获器/测试发送器，不真实外发）。
+- **错误码**：只复用既有 46 码：参数问题 `REQ_INVALID`，越权/root 保护 `ACCESS_DENIED`，更新代码需近期认证 `REAUTH_REQUIRED`，受限恢复会话需重新绑定/强度不足/方式不允许 `MFA_REBIND_REQUIRED`，代码/尝试无效或过期或验证失败 `CHALLENGE_INVALID`，并发冲突 `CONFLICT`，限流 `RATE_LIMITED`，策略不可用 `AUTHZ_UNAVAILABLE`，存储/会话 `DB_UNAVAILABLE`，审计 `AUDIT_WRITE_FAILED`，告知 `MAIL_DELIVERY_FAILED`。
+- **已知限制**：HTTP 路由/页面/`cmd/login-server` 装配、真实认证器与真实邮件外发、客服/管理员人工核验恢复（`recovery.request`/`recovery.approve`/`recovery.mfa.approve` 工作流与审批）、root 受控恢复 CLI、恢复代码过期清理任务、多实例限流、race 与非 Windows 未验证；`FactorBinder`/`Requirements`/`FactorRevoker` 的生产适配器需宿主装配（测试替身只验证接口契约）。
+
 ## FIDO2 第二步验证与认证方式选择策略（步骤 43）
 
 新增内部认证事实层 `internal/authfact`，扩展 `internal/passkey` 的凭证用途与第二步认证 ceremony，扩展 `internal/mfa` 的安全密钥因素、统一选择器与强认证初始化闭环，迁移 `0023_fido2_second_factor.sql`（重建三表：凭证 usage 增加 `both`、ceremony 增加 purpose/context_id 与 second_factor 操作、MFA 挑战增加 passkey 因素/strong_setup 用途/factor_ref/require_strong）。协议与密码学仍由 `go-webauthn` 完成，本步**不实现 OAuth/OIDC amr/acr 端点、不暴露 HTTP 路由与页面**。
@@ -788,6 +804,7 @@ go run .\cmd\login-server --help
 | internal/bootstrap/ | 本地受控首次初始化、唯一 root 受限待配置状态、一次性配置凭证、`ready` 条件转换与 root 保护规则（内部包） | 是 |
 | internal/authn/ | 正式密码 Argon2id 哈希/验证与参数升级、密码策略、用户名/已验证邮箱登录、失败限制与认证结果（内部包） | 是 |
 | internal/session/ | 服务端会话签发/校验/续期/撤销、普通与受限会话、空闲/绝对到期、登录轮换、Cookie 与 CSRF 绑定（内部包） | 是 |
+| internal/recovery/ | 恢复代码生成/按组作废/原子消费、短时受限恢复会话与强制重新绑定（内部包） | 是 |
 | internal/testmail/ | 仅供测试的本地 SMTP 接收服务器（内存保存、查询/取出/清空、限制、可选 AUTH/STARTTLS）；不得装配进生产路径 | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表、定时计划/尝试历史表、权限委派资格表、预设初始化版本表、root 初始化状态表、密码凭证/已验证邮箱表与会话表） | 是 |
