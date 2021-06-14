@@ -18,7 +18,9 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/bootstrap"
+	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/ratelimit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 )
 
 // 内部诊断原因码。它们只写安全审计，不返回给匿名调用者。
@@ -542,6 +544,11 @@ func (s *Service) SetPassword(ctx context.Context, caller Caller, request SetPas
 		if err := s.reauthenticatePasswordChange(ctx, caller, user, credential, request); err != nil {
 			return SetPasswordResult{}, err
 		}
+		// 刚完成当前密码复核：把该事实作为步骤 39 敏感策略的近期 password 认证
+		// 事实传入，避免宿主还要重复注入 Signals；要求 strong 的策略仍会 fail-closed。
+		ctx = reauth.WithSignals(ctx, reauth.Signals{
+			VerifiedAt: s.clockNow(), Strength: policy.StrengthPassword, Complete: true,
+		})
 	}
 
 	if err := s.checkPasswordPolicy(request.NewPassword, user); err != nil {

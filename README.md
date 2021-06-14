@@ -571,6 +571,19 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 修改密码、邮件找回与关联凭证失效（步骤 45）
+
+新增 `internal/passwordreset` 与 `internal/passwordreset/sqlite`，迁移 0025 落地 `password_reset_requests`（找回请求：用户、令牌提示、受保护凭证 ID、状态、有效期，不存 token 明文）与 `oauth_revocation_events`（OAuth Token 撤销可靠事件/outbox，仅入队，消费者后续 OAuth 步骤接入）。
+
+- **主动改密**：复用 `internal/authn.SetPassword`（当前密码复核、密码策略/历史复用、步骤 39 敏感操作策略与告知）；成功后安全版本已递增，本服务再撤销该账户**全部会话**，默认**要求重新登录**（不保留当前会话、不返回新会话）；撤销失败不回滚已成功改密（安全版本已保证旧会话失效）并写失败审计；写入 OAuth 撤销 outbox。
+- **邮件找回**：只向**已验证邮箱**发送短期（默认 15 分钟）高熵一次性入口（复用 `internal/credential` 摘要保存与原子消费、`internal/mailer` 找回模板）；公开响应不区分账户存在性——未找到、无密码、禁用、root、邮件发送失败都返回同一通用结果（差异只进内部审计）。访问入口**不建立任何会话**，只用于原子消费凭证 + 设置新密码；找回**不解除 MFA/Passkey**，也不为无密码账户自动添加密码；root 密码仍只能本地受控初始化。并发/重放同一入口只有一方成功。
+- **一致性**：密码写入、安全版本递增、历史与审计在 authn 事务内完成；请求状态与 outbox 在找回服务审计事务内；会话撤销在提交后执行（失败不回滚，旧会话已因安全版本失效）。禁用账户、密码策略不满足、邮件失败明确拒绝或记录原因。
+- **安全告知与限流**：找回重置成功后向已验证邮箱发送“密码已通过邮件找回被重置”安全告知（不含密码/入口；投递失败只写失败审计、不回滚重置）。公开找回入口实现每邮箱/每来源有界滑动窗口限流与冷却（`Options.RatePolicy`，默认每小时 5 次），超限统一响应；命中与未命中都执行签发+取消一次性凭证等主要数据库工作以缩小时序侧信道，但发送邮件仍是命中路径独有，**残余时序差与传输层 IP 限流待 HTTP 接线**。`ResetURLBase` 必须是受控的无凭证 http(s) 绝对地址；预检查入口会校验 token secret 摘要（不消费）并计入限流。
+- **入口生命周期**：新找回请求在同一事务内作废旧 pending 并撤销旧凭证；找回完成后作废该用户其余 pending；主动改密也作废全部 pending 找回入口。过期请求清理任务尚未实现（靠状态/有效期与凭证过期兜底）。
+- **装配要求**：主动改密需认证事实；`authn.SetPassword` 在用户提供当前密码并复核成功后会自动把“近期 password 认证”事实注入步骤 39 敏感策略（宿主无需重复注入 `reauth.Signals`），要求 strong 的策略仍 fail-closed；管理员/system 通道仍按各自策略判定。OAuth 撤销 outbox 在密码变更提交后写入（有界重试 3 次，失败写失败审计），**不同事务**：即使 enqueue 失败，改密/重置仍已生效，outbox 可由人工/后续运维补偿；不宣称外部 Token 已撤销。
+- **边界**：本步只写入 OAuth 撤销 outbox，**不宣称已撤销所有外部应用/Token**；页面/HTTP/启动装配、真实邮件投递、OAuth 撤销消费者、清理过期请求任务留后续步骤。
+- **错误码**：复用既有 46 码（越权 `ACCESS_DENIED`、入口无效/过期/重放 `CHALLENGE_INVALID`、禁用账户 `USER_DISABLED`、邮件失败 `MAIL_DELIVERY_FAILED`、存储 `DB_UNAVAILABLE`、审计 `AUDIT_WRITE_FAILED` 等），不新增码。
+
 ## TOTP 绑定、验证与安全解除（步骤 41）
 
 新增内部 TOTP 域 `internal/totp` 与 SQLite 仓储 `internal/totp/sqlite`，迁移 0021 重建 `mfa_challenges`（因素类型允许 `email`/`totp`，保留 0020 全部列）并落地 `totp_bindings`；本步**不实现二维码 UI、不暴露 HTTP 路由**，验收走可信内部 Go API。

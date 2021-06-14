@@ -1,0 +1,544 @@
+package passwordreset
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
+	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
+)
+
+// ChangePassword 执行本人主动改密：authn.SetPassword 负责当前密码复核、密码策略/
+// 历史复用与步骤 39 敏感操作策略；成功后安全版本已递增（旧会话失效），本方法再
+// 撤销该账户全部会话（默认要求重新登录）并写入 OAuth 撤销 outbox。撤销/outbox 失败
+// 不回滚已成功的改密（安全版本已保证失效），但会记录失败审计与日志。
+func (s *Service) ChangePassword(ctx context.Context, caller Caller, request ChangeRequest) (ChangeResult, error) {
+	ctx = normalizeContext(ctx)
+	if err := caller.actor.Validate(); err != nil || !caller.IsUser() {
+		return ChangeResult{}, ErrAccessDenied
+	}
+	if err := account.ValidateRequestID(request.RequestID); err != nil {
+		return ChangeResult{}, fmt.Errorf("%w: 请求编号无效", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(request.NewPassword) == "" || len(request.NewPassword) > 1024 {
+		return ChangeResult{}, fmt.Errorf("%w: 新密码长度无效", ErrInvalidRequest)
+	}
+	authnCaller, err := authn.UserCaller(caller.actor.ID)
+	if err != nil {
+		return ChangeResult{}, ErrAccessDenied
+	}
+	if request.RequestID != "" {
+		authnCaller, err = authnCaller.WithRequestID(request.RequestID)
+		if err != nil {
+			return ChangeResult{}, fmt.Errorf("%w: 请求编号无效", ErrInvalidRequest)
+		}
+	}
+	result, err := s.opts.Passwords.SetPassword(ctx, authnCaller, authn.SetPasswordRequest{
+		TargetUserID: caller.actor.ID, NewPassword: request.NewPassword,
+		CurrentPassword: request.CurrentPassword, ClientIP: request.ClientIP,
+		RequireChange: false, RequestID: request.RequestID,
+	})
+	if err != nil {
+		s.recordFailure(ctx, caller.actor, "password.changed", "password_change_rejected",
+			string(CodeOf(err)), request.RequestID)
+		return ChangeResult{}, err
+	}
+	// 默认安全策略：改密后要求重新登录，撤销包括当前会话在内的全部会话。安全版本
+	// 已递增，因此即使撤销失败，旧会话也会在下次校验时因版本不匹配失效。
+	sessionsRevoked, revokeErr := s.opts.Sessions.RevokeAllForUser(ctx, caller.actor.ID, "password_changed")
+	if revokeErr != nil {
+		s.opts.Logger.Warn("改密后会话撤销失败（安全版本已使旧会话失效）", "error", revokeErr)
+		s.recordFailure(ctx, caller.actor, "password.changed", "session_revoke_failed",
+			string(CodeDBUnavailable), request.RequestID)
+	}
+	// 主动改密也作废该用户所有 pending 找回入口（旧 token 立即失效）。
+	s.invalidatePending(ctx, caller.actor.ID, request.RequestID, "password_changed")
+	outboxID, outboxErr := s.appendOutboxWithRetry(ctx, caller.actor.ID, outboxReasonChanged, request.RequestID)
+	if outboxErr != nil {
+		s.opts.Logger.Warn("改密后 OAuth 撤销事件写入失败", "error", outboxErr)
+	}
+	return ChangeResult{
+		UserID: caller.actor.ID, SecurityVersion: result.SecurityVersion,
+		RequiresRelogin: true, SessionsRevoked: sessionsRevoked,
+		OutboxEventID: outboxID, ChangedAt: result.PasswordChangedAt,
+	}, nil
+}
+
+// BeginReset 开始邮件找回。为避免账户存在性泄露，未找到、无密码、禁用、root、
+// 限流或邮件发送失败都返回相同的零值结果与 nil 错误；只有内部存储/审计失败向上
+// 返回。命中与未命中都会执行签发+取消一次性凭证等主要数据库工作，缩小可观测时延
+// 差异（发送邮件仍是命中路径独有，残余时序差与传输层限流待 HTTP 接线）。
+func (s *Service) BeginReset(ctx context.Context, request BeginResetRequest) (BeginResult, error) {
+	ctx = normalizeContext(ctx)
+	normalized := strings.ToLower(strings.TrimSpace(request.Identifier))
+	if normalized == "" || len(normalized) > 254 || !strings.Contains(normalized, "@") {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_requested", "invalid_identifier", string(CodeReqInvalid), request.RequestID)
+		return BeginResult{}, nil
+	}
+	now := s.now()
+	// 每邮箱/每来源有界滑动窗口限流，防账户枚举与邮件轰炸；超限回统一响应。
+	if !s.emailLimiter.allow(normalized, now) || !s.ipLimiter.allow(strings.TrimSpace(request.ClientIP), now) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_requested", "rate_limited", string(CodeRateLimited), request.RequestID)
+		return BeginResult{}, nil
+	}
+	candidate, found, err := s.opts.Store.FindUserByEmail(ctx, normalized)
+	if err != nil {
+		return BeginResult{}, ErrStoreUnavailable
+	}
+	eligible := found && candidate.Active && !candidate.IsRoot && candidate.HasPassword
+	if !eligible {
+		// 统一响应：仍执行一次签发+取消的等量主要工作以缓解时序侧信道；发送邮件与
+		// 持久化找回请求仍是命中路径独有，残余差异已在 README 说明。
+		if err := s.dummyCredentialWork(ctx); err != nil {
+			return BeginResult{}, err
+		}
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_requested", "ineligible", string(CodeAccessDenied), request.RequestID)
+		return BeginResult{}, nil
+	}
+	resetID, err := newID(s.opts.Random, "prq_", 16)
+	if err != nil {
+		return BeginResult{}, err
+	}
+	issued, err := s.opts.Credentials.Issue(ctx, credential.IssueRequest{
+		Purpose: resetPurpose, Target: candidate.UserID, Kind: credential.KindToken,
+		TTL: s.opts.TokenTTL,
+	})
+	if err != nil {
+		return BeginResult{}, ErrStoreUnavailable
+	}
+	secret := issued.Secret.Reveal()
+	tokenSha := sha256.Sum256([]byte(secret))
+	record := ResetRequest{
+		ID: resetID, UserID: candidate.UserID, MaskedEmail: candidate.MaskedEmail,
+		CredentialID: issued.ID, TokenSHA256: tokenSha[:], State: "pending",
+		CreatedAt: now, ExpiresAt: now.Add(s.opts.TokenTTL),
+	}
+	oldPending, listErr := s.opts.Store.ListPending(ctx, candidate.UserID)
+	if listErr != nil {
+		return BeginResult{}, ErrStoreUnavailable
+	}
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:  audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			Action: "password.reset_requested", Outcome: audit.OutcomeSuccess,
+			Target:    audit.Target{Type: "user", ID: candidate.UserID},
+			RequestID: validRequestID(request.RequestID),
+			Changes: []audit.FieldChange{
+				{Field: "recipient", After: candidate.MaskedEmail},
+				{Field: "expires_at_ms", After: fmt.Sprint(record.ExpiresAt.UnixMilli())},
+			},
+		},
+		FailureReasonCode:   "password.reset_request_failed",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		// 新请求作废旧 pending（同一事务内状态迁移），避免多条入口同时有效。
+		if _, cancelErr := s.opts.Store.CancelPendingTx(txCtx, tx, candidate.UserID, now); cancelErr != nil {
+			return cancelErr
+		}
+		return s.opts.Store.CreateRequestTx(txCtx, tx, record)
+	}); err != nil {
+		return BeginResult{}, mapCriticalError(err)
+	}
+	// 旧 pending 的凭证在状态迁移后尽力撤销（不存在/已消费时幂等忽略）。
+	s.revokeCredentials(ctx, oldPending)
+	token := resetID + "." + secret
+	resetURL := s.opts.ResetURLBase + "?token=" + url.QueryEscape(token)
+	if err := s.sendResetMail(ctx, candidate, resetURL, request.RequestID); err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_requested", "mail_failed", string(CodeMailDeliveryFailed), request.RequestID)
+		return BeginResult{}, nil
+	}
+	return BeginResult{}, nil
+}
+
+// dummyCredentialWork 在未命中路径执行与命中路径相近的签发+取消数据库工作，用于
+// 缓解账户枚举时序侧信道；不发送邮件、不写找回请求。
+func (s *Service) dummyCredentialWork(ctx context.Context) error {
+	dummyID, err := newID(s.opts.Random, "prq_", 16)
+	if err != nil {
+		return err
+	}
+	issued, err := s.opts.Credentials.Issue(ctx, credential.IssueRequest{
+		Purpose: resetPurpose, Target: "unknown", Kind: credential.KindToken, TTL: s.opts.TokenTTL,
+	})
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if err := s.opts.Credentials.Cancel(context.WithoutCancel(ctx), credential.CancelRequest{
+		ID: issued.ID, Purpose: resetPurpose, Target: "unknown",
+	}); err != nil {
+		s.opts.Logger.Warn("找回未命中路径凭证取消失败", "error", err, "dummy_id", dummyID)
+	}
+	return nil
+}
+
+// revokeCredentials 尽力撤销给定找回请求关联的凭证（幂等；已消费/过期忽略）。
+func (s *Service) revokeCredentials(ctx context.Context, requests []ResetRequest) {
+	for _, request := range requests {
+		if request.CredentialID == "" {
+			continue
+		}
+		if err := s.opts.Credentials.Cancel(context.WithoutCancel(ctx), credential.CancelRequest{
+			ID: request.CredentialID, Purpose: resetPurpose, Target: request.UserID,
+		}); err != nil {
+			s.opts.Logger.Warn("撤销旧找回凭证失败", "error", err)
+		}
+	}
+}
+
+// ValidateResetToken 只校验入口是否仍可用（不消费凭证、不建立会话）：校验 ID 状态/
+// 有效期与 token secret 摘要，供页面展示新密码表单前的预检查。无效 token 计入同一
+// 限流器，避免被用于探测。
+func (s *Service) ValidateResetToken(ctx context.Context, token string) error {
+	ctx = normalizeContext(ctx)
+	request, secret, err := s.parseToken(ctx, token)
+	if err != nil {
+		return err
+	}
+	if !s.validateLimiter().allow(hashToken(secret), s.now()) {
+		return ErrTokenInvalid
+	}
+	computed := sha256.Sum256([]byte(secret))
+	if len(request.TokenSHA256) != len(computed) ||
+		subtle.ConstantTimeCompare(request.TokenSHA256, computed[:]) != 1 {
+		return ErrTokenInvalid
+	}
+	if !s.now().Before(request.ExpiresAt) {
+		return ErrTokenExpired
+	}
+	return nil
+}
+
+// validateLimiter 复用邮箱限流器做 token 预检查限流（同进程有界）。
+func (s *Service) validateLimiter() *windowLimiter { return s.emailLimiter }
+
+func hashToken(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return string(sum[:])
+}
+
+// CompleteReset 校验并原子消费找回入口后重置密码：不签发任何会话（必须重新登录），
+// 不解除 MFA/Passkey，也不为无密码账户添加密码。并发使用同一 token 只有一个成功。
+// 成功后向已验证邮箱发送不含密码/凭证的安全告知，并作废该用户其余 pending 入口。
+func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (ResetResult, error) {
+	ctx = normalizeContext(ctx)
+	if err := account.ValidateRequestID(request.RequestID); err != nil {
+		return ResetResult{}, fmt.Errorf("%w: 请求编号无效", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(request.NewPassword) == "" || len(request.NewPassword) > 1024 {
+		return ResetResult{}, fmt.Errorf("%w: 新密码长度无效", ErrInvalidRequest)
+	}
+	resetRequest, secret, err := s.parseToken(ctx, request.Token)
+	if err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "invalid_token", string(CodeChallengeInvalid), request.RequestID)
+		return ResetResult{}, err
+	}
+	// 非消费摘要校验：token 必须是创建该请求时保存的同一 secret。
+	computed := sha256.Sum256([]byte(secret))
+	if len(resetRequest.TokenSHA256) != len(computed) ||
+		subtle.ConstantTimeCompare(resetRequest.TokenSHA256, computed[:]) != 1 {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "token_digest_mismatch", string(CodeChallengeInvalid), request.RequestID)
+		return ResetResult{}, ErrTokenInvalid
+	}
+	now := s.now()
+	if !now.Before(resetRequest.ExpiresAt) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "expired", string(CodeChallengeInvalid), request.RequestID)
+		return ResetResult{}, ErrTokenExpired
+	}
+	if resetRequest.State != "pending" {
+		return ResetResult{}, ErrTokenInvalid
+	}
+	// 重新确认账户在 token 发出后仍可找回：禁用/删除/无密码/root 必须在完成层拒绝。
+	target, targetFound, err := s.opts.Store.GetResetTarget(ctx, resetRequest.UserID)
+	if err != nil {
+		return ResetResult{}, ErrStoreUnavailable
+	}
+	if !targetFound || !target.Active {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "account_disabled", string(CodeUserDisabled), request.RequestID)
+		return ResetResult{}, ErrAccountDisabled
+	}
+	if target.IsRoot {
+		return ResetResult{}, ErrAccessDenied
+	}
+	if !target.HasPassword {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "no_password", string(CodeAccessDenied), request.RequestID)
+		return ResetResult{}, ErrNoPassword
+	}
+	// 原子消费：同一 token 并发/重放只有一个请求成功。
+	if _, err := s.opts.Credentials.VerifyAndConsume(ctx, credential.VerifyRequest{
+		Kind: credential.KindToken, ID: resetRequest.CredentialID, Purpose: resetPurpose,
+		Target: resetRequest.UserID, Secret: secret,
+	}); err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "consume_failed", string(CodeChallengeInvalid), request.RequestID)
+		return ResetResult{}, ErrTokenInvalid
+	}
+	systemCaller, err := authn.SystemCaller("passwordreset")
+	if err != nil {
+		return ResetResult{}, ErrOptionsInvalid
+	}
+	result, err := s.opts.Passwords.ResetPasswordForRecovery(ctx, systemCaller,
+		authn.RecoveryResetRequest{
+			UserID: resetRequest.UserID, NewPassword: request.NewPassword,
+			RequestID: request.RequestID, Reason: outboxReasonReset,
+		})
+	if err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "password_reset_rejected",
+			string(CodeOf(err)), request.RequestID)
+		return ResetResult{}, err
+	}
+	// 成功路径：标记本次请求 consumed 并作废该用户其余 pending 入口（同一事务）。
+	otherPending, listErr := s.opts.Store.ListPending(ctx, resetRequest.UserID)
+	if listErr != nil {
+		return ResetResult{}, ErrStoreUnavailable
+	}
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:  audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			Action: "password.reset_completed", Outcome: audit.OutcomeSuccess,
+			Target:    audit.Target{Type: "user", ID: resetRequest.UserID},
+			RequestID: validRequestID(request.RequestID),
+			Changes: []audit.FieldChange{
+				{Field: "security_version_change", After: "password_reset"},
+				{Field: "requires_relogin", After: "true"},
+			},
+		},
+		FailureReasonCode:   "password.reset_completed_failed",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		ok, consumeErr := s.opts.Store.ConsumeRequestTx(txCtx, tx, resetRequest.ID, now)
+		if consumeErr != nil {
+			return consumeErr
+		}
+		if !ok {
+			return ErrTokenInvalid
+		}
+		if _, cancelErr := s.opts.Store.CancelPendingTx(txCtx, tx, resetRequest.UserID, now); cancelErr != nil {
+			return cancelErr
+		}
+		return nil
+	}); err != nil {
+		return ResetResult{}, mapCriticalError(err)
+	}
+	s.revokeCredentials(ctx, otherPending)
+	sessionsRevoked, revokeErr := s.opts.Sessions.RevokeAllForUser(ctx, resetRequest.UserID, "password_reset")
+	if revokeErr != nil {
+		s.opts.Logger.Warn("找回改密后会话撤销失败（安全版本已使旧会话失效）", "error", revokeErr)
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "session_revoke_failed", string(CodeDBUnavailable), request.RequestID)
+	}
+	outboxID, outboxErr := s.appendOutboxWithRetry(ctx, resetRequest.UserID, outboxReasonReset, request.RequestID)
+	if outboxErr != nil {
+		s.opts.Logger.Warn("找回改密后 OAuth 撤销事件写入失败", "error", outboxErr)
+	}
+	// 安全告知：投递失败只记录失败审计，不回滚已成功重置；正文不含密码/token。
+	s.sendResetNotice(ctx, resetRequest.UserID, request.RequestID)
+	return ResetResult{
+		UserID: resetRequest.UserID, SecurityVersion: result.SecurityVersion,
+		RequiresRelogin: true, SessionsRevoked: sessionsRevoked,
+		OutboxEventID: outboxID, ResetAt: result.PasswordChangedAt,
+	}, nil
+}
+
+// ===== 内部辅助 =====
+
+// appendOutboxWithRetry 是有界重试的 outbox 写入（3 次尝试）；最终失败写失败审计。
+func (s *Service) appendOutboxWithRetry(ctx context.Context, userID, reason, requestID string) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		eventID, err := s.appendOutbox(ctx, userID, reason, requestID)
+		if err == nil {
+			return eventID, nil
+		}
+		lastErr = err
+	}
+	s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+		"oauth.revocation_enqueue_failed", "outbox_unavailable", string(CodeAuditWriteFailed), requestID)
+	return "", lastErr
+}
+
+// invalidatePending 作废用户所有 pending 找回请求与其凭证（主动改密/新请求时调用）。
+func (s *Service) invalidatePending(ctx context.Context, userID, requestID, reason string) {
+	pending, err := s.opts.Store.ListPending(ctx, userID)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:     audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			Action:    "password.reset_requests_cancelled",
+			Target:    audit.Target{Type: "user", ID: userID},
+			RequestID: validRequestID(requestID),
+			Changes:   []audit.FieldChange{{Field: "reason", After: reason}},
+		},
+		FailureReasonCode:   "password.reset_cancel_failed",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		_, cancelErr := s.opts.Store.CancelPendingTx(txCtx, tx, userID, s.now())
+		return cancelErr
+	}); err != nil {
+		s.opts.Logger.Warn("作废旧找回请求失败", "error", err)
+		return
+	}
+	s.revokeCredentials(ctx, pending)
+}
+
+// sendResetNotice 在找回重置成功后发送安全告知；失败只记录失败审计，不回滚重置。
+func (s *Service) sendResetNotice(ctx context.Context, userID, requestID string) {
+	email, found, err := s.opts.Store.VerifiedEmail(ctx, userID)
+	if err != nil || !found || email == "" {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_notice_failed", "no_verified_email", string(CodeMailDeliveryFailed), requestID)
+		return
+	}
+	content, err := s.opts.Templates.Render(mailer.RenderRequest{
+		Kind: mailer.KindSecurityNotice,
+		Notice: &mailer.SecurityNoticeData{
+			Event:      "密码已通过邮件找回被重置",
+			OccurredAt: s.now().Format(time.RFC3339),
+			AppName:    s.opts.AppName, SupportURL: s.opts.SupportURL,
+		},
+	})
+	if err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_notice_failed", "template_invalid", string(CodeMailDeliveryFailed), requestID)
+		return
+	}
+	from, fromErr := mailer.ParseAddress(s.opts.FromAddress)
+	to, toErr := mailer.ParseAddress(email)
+	if fromErr != nil || toErr != nil {
+		return
+	}
+	if err := s.opts.Mailer.Send(ctx, mailer.Message{From: from, To: []mailer.Address{to},
+		Subject: content.Subject, TextBody: content.TextBody}); err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_notice_failed", "delivery_failed", string(CodeMailDeliveryFailed), requestID)
+	}
+}
+
+// appendOutbox 在审计事务内写入 OAuth 撤销事件；失败只记录日志（不隐藏已发生改密）。
+func (s *Service) appendOutbox(ctx context.Context, userID, reason, requestID string) (string, error) {
+	var eventID string
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:     audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			Action:    "oauth.revocation_enqueued",
+			Target:    audit.Target{Type: "user", ID: userID},
+			RequestID: validRequestID(requestID),
+			Changes:   []audit.FieldChange{{Field: "reason", After: reason}},
+		},
+		FailureReasonCode:   "oauth.revocation_enqueue_failed",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		event, insertErr := s.opts.Store.InsertOutboxTx(txCtx, tx, userID, reason, s.now())
+		if insertErr != nil {
+			return insertErr
+		}
+		eventID = event
+		return nil
+	})
+	if err != nil {
+		return "", mapCriticalError(err)
+	}
+	return eventID, nil
+}
+
+// loadPendingToken 解析 token 并读取 pending 请求（不做凭证验证）。
+func (s *Service) loadPendingToken(ctx context.Context, token string) (ResetRequest, error) {
+	request, _, err := s.parseToken(ctx, token)
+	if err != nil {
+		return ResetRequest{}, err
+	}
+	if request.State != "pending" {
+		return ResetRequest{}, ErrTokenInvalid
+	}
+	return request, nil
+}
+
+// parseToken 拆分 resetID.secret 并加载请求；只做格式与存在性校验。
+func (s *Service) parseToken(ctx context.Context, token string) (ResetRequest, string, error) {
+	if len(token) == 0 || len(token) > 512 {
+		return ResetRequest{}, "", ErrTokenInvalid
+	}
+	resetID, secret, found := strings.Cut(token, ".")
+	if !found || len(secret) < 16 || !validResetID(resetID) {
+		return ResetRequest{}, "", ErrTokenInvalid
+	}
+	request, ok, err := s.opts.Store.GetRequest(ctx, resetID)
+	if err != nil {
+		return ResetRequest{}, "", ErrStoreUnavailable
+	}
+	if !ok {
+		return ResetRequest{}, "", ErrTokenInvalid
+	}
+	return request, secret, nil
+}
+
+func validResetID(value string) bool {
+	if len(value) != 4+32 || value[:4] != "prq_" {
+		return false
+	}
+	for index := 4; index < len(value); index++ {
+		character := value[index]
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// sendResetMail 渲染并投递找回邮件；明文 token 只出现在该邮件正文中。
+func (s *Service) sendResetMail(ctx context.Context, candidate Candidate, resetURL, requestID string) error {
+	content, err := s.opts.Templates.Render(mailer.RenderRequest{
+		Kind: mailer.KindPasswordReset,
+		PasswordReset: &mailer.PasswordResetData{
+			DisplayName: candidate.Username, ResetURL: resetURL,
+			ExpiresIn: formatDuration(s.opts.TokenTTL), AppName: s.opts.AppName,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("%w: 模板渲染失败", ErrMailFailed)
+	}
+	from, fromErr := mailer.ParseAddress(s.opts.FromAddress)
+	to, toErr := mailer.ParseAddress(candidate.Email)
+	if fromErr != nil || toErr != nil {
+		return fmt.Errorf("%w: 地址无效", ErrMailFailed)
+	}
+	if err := s.opts.Mailer.Send(ctx, mailer.Message{
+		From: from, To: []mailer.Address{to},
+		Subject: content.Subject, TextBody: content.TextBody,
+	}); err != nil {
+		return fmt.Errorf("%w: 投递失败", ErrMailFailed)
+	}
+	return nil
+}
+
+func formatDuration(value time.Duration) string {
+	minutes := int(value / time.Minute)
+	if minutes <= 0 {
+		return "数分钟"
+	}
+	return fmt.Sprintf("%d 分钟", minutes)
+}

@@ -133,8 +133,8 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 24 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" {
-		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012 0013 0014 0015 0016 0017 0018 0019 0020 0021 0022 0023 0024]", versions)
+	if len(versions) != 25 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" {
+		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012 0013 0014 0015 0016 0017 0018 0019 0020 0021 0022 0023 0024 0025]", versions)
 	}
 	type column struct {
 		kind    string
