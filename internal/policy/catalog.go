@@ -488,6 +488,27 @@ func defaultOperations() []Operation {
 			Implemented:        false,
 		},
 		{
+			ID: "support.case.create", Domain: DomainRecovery, Name: "登记客服求助单",
+			Description:   "客服在授权数据范围内登记求助单并定位普通用户；必须强认证并绑定操作/目标，root 与实际高权限账户拒绝处理，不能读取用户秘密或把求助单变成账户接管。",
+			Default:       strongReauthNoConfirm,
+			PermissionKey: "support.cases.create",
+			Implemented:   true,
+		},
+		{
+			ID: "support.case.update", Domain: DomainRecovery, Name: "更新客服求助单",
+			Description:   "转派或结束客服求助单并追加不可覆盖的处理历史；必须强认证并绑定操作/目标，只能处理分配给自己的求助单。",
+			Default:       strongReauthNoConfirm,
+			PermissionKey: "support.cases.update",
+			Implemented:   true,
+		},
+		{
+			ID: "support.reset.send", Domain: DomainRecovery, Name: "客服向原验证邮箱发起找回",
+			Description:   "由客服向目标此前已验证的邮箱发送一次性密码找回入口；必须强认证，不能指定新地址、读取链接/验证码或解除 MFA，发送不立即失效原密码，高权限账户拒绝。",
+			Default:       strongReauthNoConfirm,
+			PermissionKey: "recovery.request",
+			Implemented:   true,
+		},
+		{
 			ID: "support.recovery.approve", Domain: DomainRecovery, Name: "审批客服人工核验恢复",
 			Description:   "审批普通用户的人工核验恢复申请；必须强认证与确认，目标/操作/接收地址改变后原审批失效，不能单人接管高权限账户。",
 			Default:       strongReauth,

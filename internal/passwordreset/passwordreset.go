@@ -49,6 +49,8 @@ var (
 	ErrAccountDisabled  = errors.New("账户当前不可用")
 	ErrNoPassword       = errors.New("账户未设置密码，不能通过找回流程添加")
 	ErrMailFailed       = errors.New("找回邮件发送失败")
+	ErrNoVerifiedEmail  = errors.New("账户没有可用于找回的已验证邮箱")
+	ErrRateLimited      = errors.New("请求过于频繁")
 	ErrSessionRevoke    = errors.New("会话撤销未完成")
 	ErrStoreUnavailable = errors.New("密码找回存储暂时不可用")
 	ErrAuditUnavailable = errors.New("关键操作未能可靠记录")
@@ -80,12 +82,15 @@ func CodeOf(err error) ErrorCode {
 		return ""
 	case errors.Is(err, ErrInvalidRequest):
 		return CodeReqInvalid
-	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrNoPassword):
+	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrNoPassword),
+		errors.Is(err, ErrNoVerifiedEmail):
 		return CodeAccessDenied
 	case errors.Is(err, ErrTokenInvalid), errors.Is(err, ErrTokenExpired):
 		return CodeChallengeInvalid
 	case errors.Is(err, ErrAccountDisabled):
 		return CodeUserDisabled
+	case errors.Is(err, ErrRateLimited):
+		return CodeRateLimited
 	case errors.Is(err, ErrMailFailed):
 		return CodeMailDeliveryFailed
 	case errors.Is(err, ErrSessionRevoke):
@@ -235,9 +240,12 @@ type Options struct {
 	TokenTTL time.Duration
 	// RatePolicy 是公开找回入口每邮箱/每来源限流；零值使用 DefaultRatePolicy。
 	RatePolicy RatePolicy
-	Now        func() time.Time
-	Random     io.Reader
-	Logger     *slog.Logger
+	// SupportRatePolicy 是受信客服通道按目标用户的限流；零值使用
+	// DefaultSupportRatePolicy。它防止客服重复发起导致邮件轰炸。
+	SupportRatePolicy SupportRatePolicy
+	Now               func() time.Time
+	Random            io.Reader
+	Logger            *slog.Logger
 }
 
 // Service 是改密/找回流程服务。构造后不可变，不启动协程，不签发会话。
@@ -246,6 +254,8 @@ type Service struct {
 	// 邮箱与来源两个维度各自滑动窗口计数；进程内单实例语义。
 	emailLimiter *windowLimiter
 	ipLimiter    *windowLimiter
+	// supportLimiter 是受信客服通道按目标用户的限流。
+	supportLimiter *supportLimiter
 }
 
 // windowLimiter 是有界进程内滑动窗口计数限流器；容量超限时清理最旧键。
@@ -332,6 +342,15 @@ func New(options Options) (*Service, error) {
 	if options.RatePolicy.Window < time.Minute || options.RatePolicy.Window > 24*time.Hour {
 		return nil, fmt.Errorf("%w: 找回限流窗口必须在 1 分钟～24 小时之间", ErrOptionsInvalid)
 	}
+	if options.SupportRatePolicy.Limit == 0 && options.SupportRatePolicy.Window == 0 {
+		options.SupportRatePolicy = DefaultSupportRatePolicy()
+	}
+	if options.SupportRatePolicy.Limit < 1 || options.SupportRatePolicy.Limit > 100 {
+		return nil, fmt.Errorf("%w: 客服找回限流次数必须在 1～100 之间", ErrOptionsInvalid)
+	}
+	if options.SupportRatePolicy.Window < time.Minute || options.SupportRatePolicy.Window > 24*time.Hour {
+		return nil, fmt.Errorf("%w: 客服找回限流窗口必须在 1 分钟～24 小时之间", ErrOptionsInvalid)
+	}
 	if options.TokenTTL == 0 {
 		options.TokenTTL = DefaultTokenTTL
 	}
@@ -358,6 +377,10 @@ func New(options Options) (*Service, error) {
 		opts:         options,
 		emailLimiter: newWindowLimiter(options.RatePolicy.Limit, options.RatePolicy.Window),
 		ipLimiter:    newWindowLimiter(options.RatePolicy.Limit, options.RatePolicy.Window),
+		supportLimiter: &supportLimiter{
+			policy:  options.SupportRatePolicy,
+			entries: make(map[string][]time.Time),
+		},
 	}, nil
 }
 

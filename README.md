@@ -571,6 +571,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 客服求助单与向原验证邮箱发起密码找回（步骤 46）
+
+新增内部客服域 `internal/support` 与 SQLite 仓储 `internal/support/sqlite`，迁移 `0026_support_cases.sql` 落地 `support_cases`（目标用户、创建人/当前指派客服、处理原因、状态机、脱敏邮箱快照、行版本）与 `support_case_events`（追加式处理历史：动作、真实操作者与时间、状态迁移；数据库触发器禁止 UPDATE）。本步**不暴露 HTTP 路由、不装配 `cmd/login-server`、不实现人工核验审批与执行（步骤 47）**，验收走可信内部 Go API 与临时 SQLite。
+
+- **工作人员与强认证**：客服是普通实名操作账户（每名工作人员独立账户），登录强认证由既有 `internal/authn` 对客服等高权限角色要求；登记/转派/状态变更/发起找回四个写动作还经步骤 38/39 `internal/reauth` 的敏感策略执行前校验（目录新增 `support.case.create`/`support.case.update`/`support.reset.send`，默认要求近期**强认证**并绑定操作/目标/服务端参数摘要，成功/失败都写审计）。敏感策略执行器缺失时服务构造失败，不存在跳过强认证的装配路径；读取求助单要求已认证的完整会话加 `support.cases.read` 权限。
+- **权限与数据范围**：功能权限 `support.cases.read/create/update` 与 `recovery.request` 来自 `internal/preset` 既有目录（客服角色默认拥有）；数据范围由 `internal/authz` 计算——`all` 覆盖全部普通用户，`resources` 仅显式列出的用户，**`undefined`/`none` 一律拒绝**（不把“未声明”当全部数据）。生产适配器 `NewAuthzAuthorizer`/`NewAuthzTargetProtector` 包装 `internal/authz.Service`，未接线/依赖故障 fail-closed。
+- **求助单与脱敏**：记录目标稳定 ID、真实操作者、处理原因、当前指派、状态与处理历史；返回给客服的只有稳定 ID、脱敏用户名（前两字符 + `***`）、脱敏邮箱（首字符 + `***@域名`）与布尔可用性，**不返回邮箱明文、密码/MFA/凭证/找回 token**。目标定位同样只返回脱敏资料；范围外目标与不存在统一 `ACCESS_DENIED`。
+- **归属与指派**：客服只能读取/操作**分配给自己的**求助单，查看他人工单统一拒绝并写失败审计（不泄露存在性）；转派要求新受理人当前具备客服资格且数据范围覆盖目标，原受理人转派后立即失去访问；登记、转派、状态变更在行版本条件更新下并发单赢家，变更与处理历史在同一审计事务提交，审计不可用时整体回滚。
+- **高权限目标拒绝**：目标按**实际权限**识别——root 与持有系统管理/审批/导出等能力（`users.*`、`roles.*`、`recovery.approve`、`audit.*`、`backups.*`、`security.policy.manage` 等）的账户返回 `SUPPORT_TARGET_PROTECTED`，普通客服不能登记、定位或发起找回；识别依据是 `internal/authz` 有效权限查询，不看角色名，有效权限无法完整证明时按受保护 fail-closed。
+- **发送动作复用的绑定**：`internal/passwordreset` 新增受信通道 `SendResetForSupport`：**按稳定用户 ID** 定位，收件地址只来自该用户此前已验证的邮箱（调用方不能指定或替换），复用同一高熵一次性入口/凭证摘要原子消费/邮件模板/审计；只返回“已投递”布尔，**不返回邮件链接/验证码/token**，不能指定新密码，发送本身不修改密码、安全版本与 MFA（原密码在用户完成找回前仍有效），不签发会话。按目标用户有界滑动窗口限流（默认 3 次/小时，可配置），超限返回 `RATE_LIMITED` 且不改变求助单状态。
+- **缺少验证渠道**：无已验证邮箱或无密码的目标不会被“恢复”；求助单只转入 `manual_review`（人工核验待处理，审计动作 `support.case.manual_review`），本步不实现审批与执行，**不以客服确认直接恢复账户**。
+- **状态机**：`pending_verification` → `sent`/`manual_review`/`closed`/`cancelled`；`sent` → `manual_review`/`closed`/`cancelled`；`manual_review` → `closed`/`cancelled`；`closed`/`cancelled` 为终态，不能再转派或变更。动作与拒绝均写审计动作 `support.case.*`。
+- **错误码**：只复用既有 46 码：参数 `REQ_INVALID`，越权/归属/范围 `ACCESS_DENIED`，高权限目标 `SUPPORT_TARGET_PROTECTED`，目标不可用/禁用 `USER_DISABLED`，终态/版本冲突 `CONFLICT`，强认证/两步验证 `REAUTH_REQUIRED`/`MFA_REQUIRED`，限流 `RATE_LIMITED`，权限服务不可用 `AUTHZ_UNAVAILABLE`，存储 `DB_UNAVAILABLE`，审计 `AUDIT_WRITE_FAILED`，邮件 `MAIL_DELIVERY_FAILED`。
+- **已知限制**：页面/HTTP 路由/启动装配、人工核验审批与执行（步骤 47，含 `recovery.approve`/独立审批/等待期/可信交付）、录音/证件采集/通用工单平台（明确不做）、真实邮件外发、过期求助单与历史清理任务、多实例/分布式限流、race 与非 Windows 未验证。数据范围写入口（把客服分配给哪些用户）仍待管理接口/后续步骤提供，未配置显式数据范围时客服按 fail-closed 无法处理目标。
+
 ## 修改密码、邮件找回与关联凭证失效（步骤 45）
 
 新增 `internal/passwordreset` 与 `internal/passwordreset/sqlite`，迁移 0025 落地 `password_reset_requests`（找回请求：用户、令牌提示、受保护凭证 ID、状态、有效期，不存 token 明文）与 `oauth_revocation_events`（OAuth Token 撤销可靠事件/outbox，仅入队，消费者后续 OAuth 步骤接入）。
@@ -670,7 +685,7 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 
 新增内部敏感策略包 `internal/policy` 与 SQLite 仓储 `internal/policy/sqlite`，迁移 0018 落地 `sensitive_policy_scopes`（每个作用域的策略版本）与 `sensitive_operation_policies`（只保存偏离默认值的覆盖行与应用声明，不复制系统默认目录）；本步**只做目录/策略配置层，不执行敏感操作、不暴露 HTTP 路由、不接 `cmd/login-server`**，执行器与页面留步骤 39 及后续，验收走可信内部 Go API 与测试。
 
-- **稳定操作目录**：系统内置 28 个稳定操作标识，覆盖密码修改/管理员重置、MFA/Passkey/恢复代码、邮箱变更、受控更名、角色与权限调整、应用凭证轮换、敏感数据导出、备份导出/恢复、审计清理、root 恢复、客服恢复审批、会话管理强认证、「修改敏感策略」本身，以及 onboarding 邀请创建/注册审核、authn root 设置正式密码、邮箱变更确认、角色组合权限/角色启停、组成员变更等专门操作；每条含中文名称、直白说明、默认策略、基础权限标识、是否 root 专属、是否不可取消敏感与业务是否已实现。默认策略保守：高风险/root 专属操作默认要求强认证，MFA/Passkey 未实现前这些要求 fail-closed。
+- **稳定操作目录**：系统内置 31 个稳定操作标识，覆盖密码修改/管理员重置、MFA/Passkey/恢复代码、邮箱变更、受控更名、角色与权限调整、应用凭证轮换、敏感数据导出、备份导出/恢复、审计清理、root 恢复、客服恢复审批、会话管理强认证、「修改敏感策略」本身，以及 onboarding 邀请创建/注册审核、authn root 设置正式密码、邮箱变更确认、角色组合权限/角色启停、组成员变更、客服求助单登记/更新与向原验证邮箱发起找回等专门操作；每条含中文名称、直白说明、默认策略、基础权限标识、是否 root 专属、是否不可取消敏感与业务是否已实现。默认策略保守：高风险/root 专属操作默认要求强认证，MFA/Passkey 未实现前这些要求 fail-closed。
 - **默认与覆盖合并**：数据库只保存偏离默认值的覆盖行；读取有效策略时由目录默认值逐字段合并覆盖行，恢复默认即删除覆盖行，因此目录升级不会重写用户配置、也不会把配置误当默认值。支持读取有效策略、相对默认值的字段差异、逐项恢复与整体恢复（整体恢复只删除 override，保留应用声明操作；无覆盖时幂等成功、不递增版本、不伪造审计）。
 - **版本与并发**：每个作用域（system 与各应用）独立策略版本，只有真实变更才递增；修改/恢复必须携带期望版本并在同一审计事务内条件递增，过期版本返回 `CONFLICT`，两个服务实例并发只有一成功。
 - **root 与变更保护**：系统和应用策略只能由**真实 root 账户**修改（受信 system/local_admin 也不能自称 root），且必须通过宿主注入的 `ReauthVerifier`；未接线/验证失败 fail-closed 返回 `REAUTH_REQUIRED`。普通管理员、应用管理员与普通用户一律拒绝。修改与恢复默认均在同一审计事务写成功/失败审计（稳定用户 ID、操作 ID、来源、字段差异），审计失败整体回滚。
