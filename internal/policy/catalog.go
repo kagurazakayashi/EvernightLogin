@@ -509,11 +509,25 @@ func defaultOperations() []Operation {
 			Implemented:   true,
 		},
 		{
+			ID: "support.recovery.request", Domain: DomainRecovery, Name: "发起人工核验恢复申请",
+			Description:   "客服在获准范围内为既有渠道不可用的普通账户发起人工核验恢复申请；必须强认证并绑定目标/操作类型/核验依据/交付渠道；密码恢复与 MFA 恢复分别申请，root 与实际高权限账户拒绝。",
+			Default:       strongReauthNoConfirm,
+			PermissionKey: "recovery.request",
+			Implemented:   true,
+		},
+		{
 			ID: "support.recovery.approve", Domain: DomainRecovery, Name: "审批客服人工核验恢复",
-			Description:   "审批普通用户的人工核验恢复申请；必须强认证与确认，目标/操作/接收地址改变后原审批失效，不能单人接管高权限账户。",
+			Description:   "独立审批人批准普通用户的人工核验恢复申请；必须强认证与确认并绑定申请内容摘要/操作类型，发起者与目标本人不得自批，批准有等待期与有效期，内容变化或审批人资格撤销后批准失效。",
 			Default:       strongReauth,
 			PermissionKey: "recovery.approve",
-			Implemented:   false,
+			Implemented:   true,
+		},
+		{
+			ID: "support.recovery.execute", Domain: DomainRecovery, Name: "执行人工核验恢复",
+			Description:   "在批准等待期已满且未过期时一次性执行密码恢复或 MFA 恢复；必须强认证并绑定请求/批准/内容摘要，执行前复核审批人与目标状态，双执行竞争只成功一次，成功后撤销旧凭证/会话并要求重新登录。",
+			Default:       strongReauth,
+			PermissionKey: "recovery.approve",
+			Implemented:   true,
 		},
 		{
 			ID: "session.management.access", Domain: DomainSession, Name: "访问管理接口",

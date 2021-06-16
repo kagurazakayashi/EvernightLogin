@@ -341,6 +341,54 @@ type TargetProtector interface {
 	Protected(ctx context.Context, targetUserID string) (bool, error)
 }
 
+// SendRatePolicy 是客服发起找回的限流策略：按客服账户与全局发起预算双维度限流，
+// 防止单个客服账户重复触发邮件或全局批量触发。零值使用 DefaultSendRatePolicy。
+type SendRatePolicy struct {
+	// StaffLimit/StaffWindow 是单个客服账户窗口内允许的发起次数。
+	StaffLimit  int
+	StaffWindow time.Duration
+	// GlobalLimit/GlobalWindow 是全体客服窗口内允许的发起总次数。
+	GlobalLimit  int
+	GlobalWindow time.Duration
+}
+
+// DefaultSendRatePolicy 返回保守默认：单客服 10 分钟 5 次、全局每小时 100 次。
+func DefaultSendRatePolicy() SendRatePolicy {
+	return SendRatePolicy{
+		StaffLimit: 5, StaffWindow: 10 * time.Minute,
+		GlobalLimit: 100, GlobalWindow: time.Hour,
+	}
+}
+
+// resolve 返回带默认值的策略副本。
+func (p SendRatePolicy) resolve() SendRatePolicy {
+	defaults := DefaultSendRatePolicy()
+	if p.StaffLimit == 0 && p.StaffWindow == 0 {
+		p.StaffLimit, p.StaffWindow = defaults.StaffLimit, defaults.StaffWindow
+	}
+	if p.GlobalLimit == 0 && p.GlobalWindow == 0 {
+		p.GlobalLimit, p.GlobalWindow = defaults.GlobalLimit, defaults.GlobalWindow
+	}
+	return p
+}
+
+// validate 校验限流参数边界（有界，避免无限制或近零窗口）。
+func (p SendRatePolicy) validate() error {
+	if p.StaffLimit < 1 || p.StaffLimit > 50 {
+		return fmt.Errorf("%w: 单客服找回限流次数必须在 1～50 之间", ErrOptionsInvalid)
+	}
+	if p.StaffWindow < time.Minute || p.StaffWindow > 24*time.Hour {
+		return fmt.Errorf("%w: 单客服找回限流窗口必须在 1 分钟～24 小时之间", ErrOptionsInvalid)
+	}
+	if p.GlobalLimit < 1 || p.GlobalLimit > 10000 {
+		return fmt.Errorf("%w: 全局找回限流次数必须在 1～10000 之间", ErrOptionsInvalid)
+	}
+	if p.GlobalWindow < time.Minute || p.GlobalWindow > 24*time.Hour {
+		return fmt.Errorf("%w: 全局找回限流窗口必须在 1 分钟～24 小时之间", ErrOptionsInvalid)
+	}
+	return nil
+}
+
 // ResetSender 是受信客服通道的找回发送契约；生产实现 *passwordreset.Service。
 // 只按目标用户 ID 发起，收件地址由找回服务从已验证邮箱中读取，调用方不能指定。
 type ResetSender interface {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
+	"github.com/kagurazakayashi/EvernightLogin/internal/preset"
 )
 
 // PermissionChecker 是 internal/authz.Service 中本包使用的最小只读接口，便于生产
@@ -15,10 +16,13 @@ type PermissionChecker interface {
 	EffectivePermissions(ctx context.Context, caller authz.Caller, subjectUserID, scopeID string, options authz.ListOptions) (authz.EffectiveResult, error)
 }
 
-// protectedTargetPermissions 是“受保护高权限能力”的系统权限机器标识集合，逐项对照
-// internal/preset 的权限目录维护。目标持有任一此类权限即视为高权限账户，普通客服
-// 不得处理；该集合只用来追加保护（宁可拒绝），不是授予依据，新增目录权限时同步复查。
-var protectedTargetPermissions = map[string]struct{}{
+// baselineProtectedTargetPermissions 是人工维护的“受保护高权限能力”系统权限机器
+// 标识基线；启动时与 internal/preset 权限目录交叉自检（见 buildProtectedTargetPermissions）：
+// 基线中的每个权限必须存在于目录（防拼写/改名漂移），目录中新增的 RootOnly 或
+// RequiresReauth 权限会自动并入保护集合（防目录新增高权限项漏判）。目标持有任一
+// 此类权限即视为高权限账户，普通客服不得处理；该集合只追加保护（宁可拒绝），不是
+// 授予依据。
+var baselineProtectedTargetPermissions = map[string]struct{}{
 	"users.create":                    {},
 	"users.update":                    {},
 	"users.disable":                   {},
@@ -51,6 +55,35 @@ var protectedTargetPermissions = map[string]struct{}{
 	"security.policy.manage":          {},
 	"settings.manage":                 {},
 	"diagnostics.read":                {},
+}
+
+// buildProtectedTargetPermissions 由人工基线与 internal/preset 权限目录元数据生成
+// 最终保护集合，并做启动自检：基线权限缺失或目录声明 RootOnly/RequiresReauth 的
+// 权限未进入保护集合都视为配置漂移错误（fail-closed，拒绝构造授权器）。
+func buildProtectedTargetPermissions(definitions []preset.PermissionDefinition) (map[string]struct{}, error) {
+	protected := make(map[string]struct{}, len(baselineProtectedTargetPermissions)+len(definitions))
+	for key := range baselineProtectedTargetPermissions {
+		protected[key] = struct{}{}
+	}
+	known := make(map[string]preset.PermissionDefinition, len(definitions))
+	for _, definition := range definitions {
+		known[definition.Key] = definition
+	}
+	for key := range baselineProtectedTargetPermissions {
+		if _, exists := known[key]; !exists {
+			return nil, fmt.Errorf("%w: 受保护权限清单中的 %q 不在权限目录中（目录漂移）",
+				ErrOptionsInvalid, key)
+		}
+	}
+	for _, definition := range definitions {
+		if definition.RootOnly || definition.RequiresReauth {
+			protected[definition.Key] = struct{}{}
+		}
+	}
+	if len(protected) == 0 {
+		return nil, fmt.Errorf("%w: 受保护权限集合为空", ErrOptionsInvalid)
+	}
+	return protected, nil
 }
 
 // AuthzAuthorizer 用既有 internal/authz 引擎实现 Authorizer：
@@ -152,6 +185,7 @@ func (a *AuthzAuthorizer) StaffEligible(ctx context.Context, staffUserID string)
 type AuthzTargetProtector struct {
 	checker      PermissionChecker
 	systemCaller authz.Caller
+	protected    map[string]struct{}
 }
 
 // NewAuthzTargetProtector 构造目标保护识别器；checker 为空（含 typed-nil）时返回错误。
@@ -163,7 +197,15 @@ func NewAuthzTargetProtector(checker PermissionChecker) (*AuthzTargetProtector, 
 	if err != nil {
 		return nil, fmt.Errorf("%w: 无法构造受限系统查询身份", ErrOptionsInvalid)
 	}
-	return &AuthzTargetProtector{checker: checker, systemCaller: systemCaller}, nil
+	catalog := preset.DefaultCatalog()
+	if catalog == nil {
+		return nil, fmt.Errorf("%w: 权限目录不可用", ErrOptionsInvalid)
+	}
+	protected, err := buildProtectedTargetPermissions(catalog.Permissions)
+	if err != nil {
+		return nil, err
+	}
+	return &AuthzTargetProtector{checker: checker, systemCaller: systemCaller, protected: protected}, nil
 }
 
 // Protected 实现 TargetProtector。
@@ -185,7 +227,7 @@ func (p *AuthzTargetProtector) Protected(ctx context.Context, targetUserID strin
 		return true, nil
 	}
 	for _, permission := range target.Permissions {
-		if _, protected := protectedTargetPermissions[permission.Key]; protected {
+		if _, protected := p.protected[permission.Key]; protected {
 			return true, nil
 		}
 	}

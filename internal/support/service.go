@@ -15,6 +15,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
+	"github.com/kagurazakayashi/EvernightLogin/internal/ratelimit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 )
 
@@ -34,14 +35,20 @@ type Options struct {
 	// 客服登记/更新/发起找回都必须经它判定近期强认证与操作绑定，缺失时拒绝构造。
 	Sensitive   reauth.OperationRunner
 	ResetSender ResetSender
-	Now         func() time.Time
-	Random      io.Reader
-	Logger      *slog.Logger
+	// SendRate 是客服发起找回的账户维度+全局预算限流；零值使用
+	// DefaultSendRatePolicy（单客服 10 分钟 5 次、全局每小时 100 次）。
+	SendRate SendRatePolicy
+	Now      func() time.Time
+	Random   io.Reader
+	Logger   *slog.Logger
 }
 
 // Service 是客服求助单服务。构造后不可变，不启动协程、不签发会话。
 type Service struct {
-	opts Options
+	opts          Options
+	sendRate      SendRatePolicy
+	staffLimiter  *ratelimit.Limiter
+	globalLimiter *ratelimit.Limiter
 }
 
 // New 校验依赖并构造服务；任何依赖为空（含 typed-nil）都返回错误。
@@ -73,7 +80,26 @@ func New(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Service{opts: options}, nil
+	sendRate := options.SendRate.resolve()
+	if err := sendRate.validate(); err != nil {
+		return nil, err
+	}
+	staffLimiter, err := ratelimit.New(ratelimit.Options{
+		Policy: ratelimit.Policy{Limit: sendRate.StaffLimit, Window: sendRate.StaffWindow},
+		Now:    options.Now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: 客服找回限流器构造失败", ErrOptionsInvalid)
+	}
+	globalLimiter, err := ratelimit.New(ratelimit.Options{
+		Policy: ratelimit.Policy{Limit: sendRate.GlobalLimit, Window: sendRate.GlobalWindow},
+		Now:    options.Now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: 全局找回限流器构造失败", ErrOptionsInvalid)
+	}
+	return &Service{opts: options, sendRate: sendRate,
+		staffLimiter: staffLimiter, globalLimiter: globalLimiter}, nil
 }
 
 // CreateCaseRequest 是登记求助单请求。Reason 是不可信自由文本，只保存不执行。
@@ -456,6 +482,12 @@ func (s *Service) TransitionCase(ctx context.Context, caller Caller, request Tra
 	if !request.ToStatus.Valid() {
 		return CaseView{}, fmt.Errorf("%w: 目标状态无效", ErrInvalidRequest)
 	}
+	// `sent` 只能由 SendReset 在真实投递成功后内部写入；人工状态迁移不得伪造
+	// “已发送”（否则会把未投递的找回入口当作已完成恢复）。
+	if request.ToStatus == StatusSent {
+		s.recordFailure(ctx, caller.actor, ActionCaseDenied, "support_case", request.CaseID, "manual_sent_forbidden", string(CodeReqInvalid), request.RequestID)
+		return CaseView{}, fmt.Errorf("%w: 不允许人工迁移到 sent", ErrInvalidRequest)
+	}
 	note, ok := validNote(request.Note)
 	if !ok {
 		return CaseView{}, fmt.Errorf("%w: 处理说明长度或内容无效", ErrInvalidRequest)
@@ -573,6 +605,16 @@ func (s *Service) SendReset(ctx context.Context, caller Caller, request SendRequ
 	if !updateScope.Allows(record.TargetUserID) || !resetScope.Allows(record.TargetUserID) {
 		s.recordFailure(ctx, caller.actor, ActionCaseDenied, "support_case", request.CaseID, "target_out_of_scope", string(CodeAccessDenied), request.RequestID)
 		return SendResult{}, ErrAccessDenied
+	}
+	// 找回发送的客服账户维度 + 全局发起预算限流：防止单个账户重复触发或全局批量
+	// 触发邮件。超限写失败审计并返回 RATE_LIMITED，不读取/修改目标状态。
+	if decision := s.staffLimiter.Allow(caller.actor.ID); !decision.Allowed {
+		s.recordFailure(ctx, caller.actor, ActionCaseDenied, "support_case", request.CaseID, "send_rate_limited_staff", string(CodeRateLimited), request.RequestID)
+		return SendResult{}, ErrRateLimited
+	}
+	if decision := s.globalLimiter.Allow("global"); !decision.Allowed {
+		s.recordFailure(ctx, caller.actor, ActionCaseDenied, "support_case", request.CaseID, "send_rate_limited_global", string(CodeRateLimited), request.RequestID)
+		return SendResult{}, ErrRateLimited
 	}
 	target, err := s.loadTarget(ctx, record.TargetUserID)
 	if err != nil {
@@ -870,7 +912,8 @@ func eventViewOf(event EventRecord) EventView {
 func allowedTransition(from, to CaseStatus) bool {
 	switch from {
 	case StatusPendingVerification:
-		return to == StatusSent || to == StatusManualReview || to == StatusClosed || to == StatusCancelled
+		// sent 只能由 SendReset 内部在真实投递后写入，不接受人工迁移。
+		return to == StatusManualReview || to == StatusClosed || to == StatusCancelled
 	case StatusSent:
 		return to == StatusManualReview || to == StatusClosed || to == StatusCancelled
 	case StatusManualReview:

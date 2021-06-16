@@ -571,6 +571,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 人工核验恢复、独立审批与受控执行（步骤 47）
+
+新增内部领域 `internal/manualrecovery` 与 SQLite 仓储 `internal/manualrecovery/sqlite`，迁移 `0027_manual_recovery.sql`（`manual_recovery_requests`/`manual_recovery_approvals`/`manual_recovery_executions` 三表：内容摘要绑定、同请求唯一 active 批准、同一批准唯一执行、状态机与等待期/有效期约束），扩展 `internal/policy` 目录（新增 `support.recovery.request`/`support.recovery.execute`，`support.recovery.approve` 标记已实现）。本步**不暴露 HTTP 路由、不装配 `cmd/login-server`**；实际密码/MFA 恢复由宿主注入的 `Executor` 完成，测试使用明确标注的执行器替身，不代表真实邮件投递/凭证撤销链路实测。
+
+- **默认关闭、root/宿主显式配置**：`Policy` 默认零值即关闭，所有阶段返回 `REQ_INVALID`（`ErrDisabled`）并写失败审计；启用必须显式配置核验依据（只允许线下证件原件核验、公证/书面声明等可复核依据，**安全问题/电话口述等弱依据不在枚举内**）、可信交付方式（第一版只允许目标此前**已验证邮箱**）、等待期（默认 24 小时，1 小时～7 天）、批准有效期（默认 48 小时，1 小时～7 天且必须大于等待期）、申请有效期（默认 7 天，1 小时～30 天）与“必须独立审批人”开关（启用时必须为 true）；启用时还必须装配通知适配器（成功/失败都要告知既有渠道）。
+- **分别申请、分别授权**：密码恢复（`password_reset`）与 MFA 恢复（`mfa_reset`）是不同的操作类型，分别创建申请；审批功能权限分别为 `recovery.approve` 与 `recovery.mfa.approve`，一次批准只绑定一条请求的固定内容摘要与操作类型，不能用于任意重置。
+- **申请绑定与不存敏感明文**：申请绑定目标稳定 ID、发起者、操作类型、核验依据与外部核验记录编号、证据摘要（只保存 SHA-256，不保存证件/证据明文）、原因、交付渠道与**交付地址不可逆指纹**（第一版为既有已验证邮箱的指纹，不保存邮箱明文）、目标 `security_version` 与高权限快照、可选支持工单号；服务端计算 `content_digest` 绑定全部内容，任何替换或换绑交付地址都会被检测。root 与按**实际权限**识别的高权限账户拒绝普通人工恢复（`SUPPORT_TARGET_PROTECTED`，root 由步骤 48 受控 CLI 处理）。
+- **独立审批**：审批人不得为发起者或目标本人（`ACCESS_DENIED` 并写失败审计）；审批前重读目标状态（停用/变高权限/交付地址指纹变化拒绝），审批必须经步骤 38/39 敏感策略（`support.recovery.approve`，默认强认证）与功能权限；`StaffAuthorizer.AuthorizeApproval` 携带目标账户与作用域，生产适配器可限制“只能审批数据范围内目标”，范围外目标在审批路径直接拒绝。批准生成等待期起点与有效期，并绑定内容摘要与交付地址指纹。审批人资格在执行时还会重新校验：权限被撤销、批准过期或内容变化都会使批准失效（分别退回待审批或置失败）。
+- **短期一次性受控执行**：执行必须在批准等待期已满且批准未过期时进行；执行前重新校验请求/批准内容摘要、审批人当前资格、执行人功能权限、目标是否变为 root/高权限/停用/安全版本变化、交付地址指纹未变，并校验申请自身未过期（`Policy` 强制申请有效期不小于等待期+批准有效期；执行权 claim SQL 同时匹配 `expires_at > now` 防竞态）。通过后在同一审计事务内条件更新 `approved→executing` 并创建唯一执行记录（**双执行竞争只有一个成功**），再调用宿主执行器完成实际恢复。执行器故障时申请/批准/执行置失败、通知既有渠道失败、不写成功审计；最终审计提交失败时尽力调用执行器补偿且绝不宣称成功。
+- **成功后失效与通知**：执行成功后请求 `completed`、批准 `consumed`；执行器契约要求撤销旧密码/MFA 凭证与相关会话、必要时交付一次性恢复入口，并要求用户重新正常登录；最终审计/状态提交成功后才发送完成通知并记录通知状态（失败只记录状态与失败审计，不回滚已完成的恢复；通知绝不早于“已完成”事实）。每个阶段（申请/批准/拒绝/执行/失败/拒绝）都记录**真实操作者**与稳定 ID，审计不可覆盖；证据明文、密码、MFA 秘密、恢复代码、凭证/token 均不进入数据库/日志/审计。
+- **步骤 46 遗留收口**：(a) 客服 `SendReset` 增加**客服账户维度 + 全局发起预算**双限流（默认单客服 10 分钟 5 次、全局每小时 100 次，可配置 1～50 次/1 分钟～24 小时、1～10000 次/1 分钟～24 小时），超限 `RATE_LIMITED` 并写失败审计；(b) `support.TransitionCase` 禁止人工迁移到 `sent`（`sent` 只能由 `SendReset` 在真实投递成功后内部写入），补测试；(c) 处理历史“不可覆盖”已有真实执行 `UPDATE` 被触发器拒绝的运行时用例（现有 `TestReassignAndStatusTransitionsAudited` 持续覆盖）；(d) 客服受保护权限清单改为“人工基线 + `internal/preset` 权限目录元数据自检/派生”：目录中 `RootOnly`/`RequiresReauth` 的新高权限项自动并入保护集合，基线权限缺失（目录漂移）拒绝构造授权器，补内部测试；(e) 已知信息面与信任边界（如实记录，不涉及秘密）：客服范围内 `exists/disabled/protected` 等错误码差异属于已授权客服可见的信息面，公开接口仍必须统一响应；`SendResetForSupport` 等内部受信 API 的 `system` 调用者不受客服数据范围约束，装配层必须只从受控服务路径调用，不得暴露为普通 HTTP 入口。
+- **47-FIX（双审计后）**：(1) 审批授权签名加入目标账户与作用域，生产适配器可限制审批人只审批数据范围内目标（范围外拒绝并留痕）；(2) 批准与内容摘要绑定交付地址不可逆指纹，执行前重读比对，换绑邮箱即 fail-closed 并审计；(3) 执行路径校验申请 `ExpiresAt`，claim SQL 加入 `expires_at > now`，`Policy` 强制申请有效期不小于等待期+批准有效期；(4) 完成通知改到最终审计/状态提交之后，失败不会误报“已完成”；(5) 启用人工恢复必须装配通知适配器；(6) 批准被消费/失效后，历史审批人仍可查看申请（历史参与人授权），无关人员拒绝。
+- **错误码**：只复用既有 46 码（`REQ_INVALID`/`ACCESS_DENIED`/`REAUTH_REQUIRED`/`MFA_REQUIRED`/`SUPPORT_TARGET_PROTECTED`/`USER_DISABLED`/`CONFLICT`/`CHALLENGE_INVALID`/`AUTHZ_UNAVAILABLE`/`DB_UNAVAILABLE`/`AUDIT_WRITE_FAILED`/`MAIL_DELIVERY_FAILED`/`INTERNAL_ERROR`）。
+- **已知限制**：HTTP 路由/页面/`cmd/login-server` 装配、真实执行器（密码重置/MFA 撤销/会话与凭证失效/一次性入口交付）与真实邮件外发、数据范围写入口、审批通知与人工核验页面、清理任务、多实例限流、race 与非 Windows 未验证；执行器/授权器/目标状态读取均为宿主装配契约，测试替身只验证接口与状态机，不等于真实恢复链路实测。
+
 ## 客服求助单与向原验证邮箱发起密码找回（步骤 46）
 
 新增内部客服域 `internal/support` 与 SQLite 仓储 `internal/support/sqlite`，迁移 `0026_support_cases.sql` 落地 `support_cases`（目标用户、创建人/当前指派客服、处理原因、状态机、脱敏邮箱快照、行版本）与 `support_case_events`（追加式处理历史：动作、真实操作者与时间、状态迁移；数据库触发器禁止 UPDATE）。本步**不暴露 HTTP 路由、不装配 `cmd/login-server`、不实现人工核验审批与执行（步骤 47）**，验收走可信内部 Go API 与临时 SQLite。
@@ -833,6 +848,7 @@ go run .\cmd\login-server --help
 | internal/authn/ | 正式密码 Argon2id 哈希/验证与参数升级、密码策略、用户名/已验证邮箱登录、失败限制与认证结果（内部包） | 是 |
 | internal/session/ | 服务端会话签发/校验/续期/撤销、普通与受限会话、空闲/绝对到期、登录轮换、Cookie 与 CSRF 绑定（内部包） | 是 |
 | internal/recovery/ | 恢复代码生成/按组作废/原子消费、短时受限恢复会话与强制重新绑定（内部包） | 是 |
+| internal/manualrecovery/ | 人工核验恢复申请、独立审批与一次性受控执行（默认关闭，内部包） | 是 |
 | internal/testmail/ | 仅供测试的本地 SMTP 接收服务器（内存保存、查询/取出/清空、限制、可选 AUTH/STARTTLS）；不得装配进生产路径 | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表、定时计划/尝试历史表、权限委派资格表、预设初始化版本表、root 初始化状态表、密码凭证/已验证邮箱表与会话表） | 是 |
