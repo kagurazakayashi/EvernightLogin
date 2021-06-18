@@ -389,6 +389,26 @@
 // 装配通知适配器；已消费/失效批准的历史审批人仍可查看申请。页面/HTTP/装配、真实
 // 执行器与邮件外发、数据范围写入口、清理任务、race/非 Windows 未验证。
 //
+// internal/oauthclient 已实现应用作为 OAuth 客户端的安全设置登记与客户端身份
+// 验证（步骤 49）：迁移 0029 落地 oauth_clients（与 applications 一对一：客户端
+// 类型、授权类型、精确回调/退出回调、Scope、允许目标资源、身份验证方式、PKCE
+// 要求、行版本）、oauth_client_secrets（只存前缀与 32 字节摘要，支持到期/撤销/
+// 轮换过渡，明文只在登记/轮换响应出现一次）与 oauth_client_certificates（只存
+// 公钥证书与 SHA-256 指纹，不存私钥）。客户端类型必须与应用登记一致：公开客户端
+// 无 secret/证书、强制 PKCE、禁止 client_credentials；保密客户端必须配置
+// client_secret_basic/client_secret_post/tls_client_auth 之一，明确拒绝
+// password/implicit 与非法组合。回调逐字节精确匹配（大小写、编码、片段、子域、
+// 通配、userinfo 边界），唯一宽松点是 RFC 8252 公开客户端回环 IP 动态端口（路径
+// 与查询仍精确），自定义私有 scheme 只允许公开客户端，保密客户端只允许 https；
+// 退出回调同规则。证书身份要求有效期与登记指纹精确一致，证书链信任由 TLS 层完成。
+// 登记/修改安全设置与凭证轮换/撤销要求应用管理权限（AppAuthorizer 复用
+// internal/app.Authorizer）与步骤 38/39 敏感策略（oauth.client.register/
+// settings.change，复用 application.credential.rotate），绑定客户端与安全设置
+// 摘要，拒绝路径写审计；修改使用行版本条件更新。客户端身份验证成功只代表客户端
+// 身份，不代表该客户端用户已认证；应用停用返回 CLIENT_DISABLED，其余失败统一
+// CLIENT_AUTH_FAILED 并写审计。private_key_jwt、授权端点/令牌签发、PKCE 实际
+// 校验、Device Flow、数据范围细粒度接线与 HTTP 管理接口留后续步骤；真实 mTLS
+// 握手/CA 链、过期凭证清理、多实例限流与 race/非 Windows 未验证。
 // internal/passwordreset 已实现主动改密与邮件找回（步骤 45）：改密复用 authn
 // SetPassword 的当前密码复核/密码策略/历史/敏感操作策略，成功后安全版本递增并撤销
 // 全部会话（默认重登）、写 OAuth 撤销 outbox；邮件找回只向已验证邮箱发送短期高熵
@@ -501,9 +521,10 @@
 // 过期挑战/批准清理、失败告知限频的多实例共享与 race/非 Windows 验证留后续。
 //
 // internal/policy 已实现可管理的敏感操作目录、root 策略配置与恢复默认（步骤 38）：
-// 系统内置 31 个稳定敏感操作（密码、邮箱、MFA/Passkey、权限、应用凭证、备份、
+// 系统内置 35 个稳定敏感操作（密码、邮箱、MFA/Passkey、权限、应用凭证、备份、
 // 审计、会话管理、root 恢复、邀请/注册审核、root 设置密码、邮箱确认、角色权限/启停、
-// 组成员变更、客服求助单登记/更新与向原验证邮箱发起找回，以及策略本身），每条有
+// 组成员变更、客服求助单登记/更新与向原验证邮箱发起找回、人工核验恢复、OAuth 客户端
+// 安全设置登记/修改，以及策略本身），每条有
 // 中文名称/说明、默认策略（是否敏感、认证新鲜度、所需认证强度、确认、告知）与
 // 不可被策略覆盖的基础权限、root 专属与
 // 审计约束；迁移 0018 只保存偏离默认值的覆盖行与应用声明，恢复默认即删除覆盖行，

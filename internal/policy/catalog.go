@@ -445,7 +445,21 @@ func defaultOperations() []Operation {
 			Description:   "轮换应用密钥或公钥凭证；必须强认证并确认，成功后告知，不包含服务器 HTTPS 私钥。",
 			Default:       strongReauth,
 			PermissionKey: "applications.credentials.manage",
-			Implemented:   false,
+			Implemented:   true,
+		},
+		{
+			ID: "oauth.client.register", Domain: DomainApplication, Name: "登记 OAuth 客户端安全设置",
+			Description:   "为应用登记 OAuth 客户端类型、授权类型、精确回调/退出回调、Scope、允许的目标资源、客户端身份验证方式与 PKCE 要求；必须强认证与确认并告知，公开客户端不得使用密钥假装保密。",
+			Default:       strongReauth,
+			PermissionKey: "applications.update",
+			Implemented:   true,
+		},
+		{
+			ID: "oauth.client.settings.change", Domain: DomainApplication, Name: "修改 OAuth 客户端安全设置",
+			Description:   "修改已登记客户端的授权类型、回调、Scope、允许目标资源与 PKCE 要求；必须强认证与确认并告知，回调精确匹配、禁止通配与开放重定向，不能借修改安全设置转移应用权限。",
+			Default:       strongReauth,
+			PermissionKey: "applications.update",
+			Implemented:   true,
 		},
 		{
 			ID: "data.sensitive.export", Domain: DomainApplication, Name: "导出敏感数据",

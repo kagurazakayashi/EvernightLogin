@@ -572,6 +572,18 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## OAuth 客户端类型、回调规则与应用凭证管理（步骤 49）
+
+新增内部 `internal/oauthclient` 与 SQLite 仓储 `internal/oauthclient/sqlite`，迁移 `0029_oauth_clients.sql` 落地 `oauth_clients`（与 applications 一对一的安全设置：客户端类型、授权类型、精确回调/退出回调、Scope、允许的目标资源 audience、身份验证方式、PKCE 要求、行版本）、`oauth_client_secrets`（只存前缀与 32 字节 SHA-256 摘要，支持到期/撤销/轮换过渡）与 `oauth_client_certificates`（只存公钥证书与 SHA-256 指纹，不存私钥）。应用显示资料仍在 `internal/app`，本步**不暴露 HTTP 路由、不实现授权端点/令牌签发/动态客户端注册/第三方登录**，验收走可信内部 Go API 与临时 SQLite。
+
+- **客户端类型与合法组合**：`client_id` 使用应用稳定 ID（1:1）；客户端类型必须与 `applications.client_type` 一致且创建后不可通过资料更新改变。公开客户端没有 secret/证书，身份验证方式为空，**强制 PKCE**，禁止 `client_credentials`；保密客户端必须配置至少一种身份验证方式（`client_secret_basic`/`client_secret_post`/`tls_client_auth`），`tls_client_auth` 登记时必须同时提供公钥证书，配置 `client_secret_*` 时服务端生成并只返回一次密钥。公开客户端不得用打包密钥假装保密。明确拒绝 `password`/`implicit` 授权；`refresh_token` 只能与 `authorization_code`/设备码一起登记。
+- **回调精确匹配**：只登记绝对回调地址，逐字节精确匹配（区分大小写、百分号编码、路径与查询串），**禁止片段、通配符、userinfo、子域包含与前缀匹配**（`https://app.example.com/cb` 不匹配 `.../CB`、`.../cb%2F`、`.../cb#frag`、`sub.app.example.com`、`app.example.com.evil.test`）。唯一例外是 RFC 8252 原生应用回环地址动态端口：仅公开客户端的 `http://127.0.0.1`/`[::1]` 回调忽略端口，路径与查询串仍精确；自定义私有 scheme 只允许公开客户端且格式为 `scheme:/path`；保密客户端只允许 https。退出回调使用同一规则。`MatchRedirectURI`/`MatchPostLogoutRedirectURI` 供后续授权端点复用。
+- **客户端凭证**：密钥明文只在登记/轮换响应出现一次，库中只存前缀与摘要（验证使用恒定时间比较），列表只返回 ID/前缀/时间；支持有效期（默认 180 天，24 小时～5 年）、撤销与**轮换过渡**（新密钥立即生效，旧密钥在过渡期（默认 24 小时、可配置 1 分钟～30 天）内仍可用，超出退休时间或原有效期即拒绝）。证书身份验证要求证书当前有效且 SHA-256 指纹与某个未撤销登记证书精确一致；证书链信任由 TLS 层完成。仅剩一个可用凭证时拒绝撤销（先轮换，避免自锁），重复撤销幂等。
+- **身份验证语义**：`VerifyClientSecret`/`VerifyClientCertificate` 成功只表示**客户端身份**成立，不代表该客户端的任意用户已认证；应用停用返回 `CLIENT_DISABLED`，其余失败统一 `CLIENT_AUTH_FAILED`（不区分未登记/类型不符/过期/撤销/错误，避免探测），成功/失败均写审计但不含密钥明文。
+- **权限与再次验证**：登记/修改安全设置映射既有应用管理权限（`application.get`/`application.update`，经 `AppAuthorizer` 复用 `internal/app.Authorizer`，应用管理员仅限获准应用），凭证轮换/撤销同样要求管理权限；这些写动作还必须经步骤 38/39 `internal/reauth` 敏感策略（目录新增 `oauth.client.register`/`oauth.client.settings.change`，复用 `application.credential.rotate` 并标记已实现，默认要求近期强认证），绑定客户端 ID 与服务端计算的安全设置摘要，失败/拒绝写审计。修改安全设置使用行版本条件更新（并发单赢家），不影响应用显示资料或应用权限归属。
+- **错误码**：只复用既有 46 码（参数/非法组合/回调不一致 `REQ_INVALID`，客户端身份失败 `CLIENT_AUTH_FAILED`，应用停用 `CLIENT_DISABLED`，越权 `ACCESS_DENIED`，再次验证 `REAUTH_REQUIRED`/`MFA_REQUIRED`，冲突/最后凭证 `CONFLICT`，权限服务 `AUTHZ_UNAVAILABLE`，存储 `DB_UNAVAILABLE`，审计 `AUDIT_WRITE_FAILED`），不新增设计码。
+- **已知限制**：`private_key_jwt`（JWK 私钥签名断言）未实现（本步选定 TLS 客户端证书作为非密钥身份方式，后续 OIDC/JWKS 步骤接入）；授权端点/令牌签发/PKCE 挑战校验/Device Flow/Client Credentials 实际发放不在本步范围，`require_pkce` 只是登记要求；细粒度 `applications.credentials.manage` 数据范围接线与 HTTP 管理接口留后续；真实 mTLS 握手/CA 链校验、过期凭证清理任务、多实例限流、race 与非 Windows 未验证。
+
 ## root 密码与两步验证的本地应急重置（步骤 48）
 
 新增内部 `internal/rootrecovery` 与本地命令 `cmd/loginctl root-recover`，迁移 `0028_root_recovery.sql` 落地 `root_recovery_events`（恢复操作记录 + 待补发安全告知 outbox）。本步**只补这一个本地命令**，不建完整 CLI、不暴露 HTTP 路由、不实现远程恢复、不在程序启动时自动执行恢复。
@@ -713,7 +725,7 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 
 新增内部敏感策略包 `internal/policy` 与 SQLite 仓储 `internal/policy/sqlite`，迁移 0018 落地 `sensitive_policy_scopes`（每个作用域的策略版本）与 `sensitive_operation_policies`（只保存偏离默认值的覆盖行与应用声明，不复制系统默认目录）；本步**只做目录/策略配置层，不执行敏感操作、不暴露 HTTP 路由、不接 `cmd/login-server`**，执行器与页面留步骤 39 及后续，验收走可信内部 Go API 与测试。
 
-- **稳定操作目录**：系统内置 31 个稳定操作标识，覆盖密码修改/管理员重置、MFA/Passkey/恢复代码、邮箱变更、受控更名、角色与权限调整、应用凭证轮换、敏感数据导出、备份导出/恢复、审计清理、root 恢复、客服恢复审批、会话管理强认证、「修改敏感策略」本身，以及 onboarding 邀请创建/注册审核、authn root 设置正式密码、邮箱变更确认、角色组合权限/角色启停、组成员变更、客服求助单登记/更新与向原验证邮箱发起找回等专门操作；每条含中文名称、直白说明、默认策略、基础权限标识、是否 root 专属、是否不可取消敏感与业务是否已实现。默认策略保守：高风险/root 专属操作默认要求强认证，MFA/Passkey 未实现前这些要求 fail-closed。
+- **稳定操作目录**：系统内置 35 个稳定操作标识，覆盖密码修改/管理员重置、MFA/Passkey/恢复代码、邮箱变更、受控更名、角色与权限调整、应用凭证轮换、敏感数据导出、备份导出/恢复、审计清理、root 恢复、客服恢复审批、会话管理强认证、「修改敏感策略」本身，以及 onboarding 邀请创建/注册审核、authn root 设置正式密码、邮箱变更确认、角色组合权限/角色启停、组成员变更、客服求助单登记/更新与向原验证邮箱发起找回、人工核验恢复申请/审批/执行，以及 OAuth 客户端安全设置登记/修改等专门操作；每条含中文名称、直白说明、默认策略、基础权限标识、是否 root 专属、是否不可取消敏感与业务是否已实现。默认策略保守：高风险/root 专属操作默认要求强认证，MFA/Passkey 未实现前这些要求 fail-closed。
 - **默认与覆盖合并**：数据库只保存偏离默认值的覆盖行；读取有效策略时由目录默认值逐字段合并覆盖行，恢复默认即删除覆盖行，因此目录升级不会重写用户配置、也不会把配置误当默认值。支持读取有效策略、相对默认值的字段差异、逐项恢复与整体恢复（整体恢复只删除 override，保留应用声明操作；无覆盖时幂等成功、不递增版本、不伪造审计）。
 - **版本与并发**：每个作用域（system 与各应用）独立策略版本，只有真实变更才递增；修改/恢复必须携带期望版本并在同一审计事务内条件递增，过期版本返回 `CONFLICT`，两个服务实例并发只有一成功。
 - **root 与变更保护**：系统和应用策略只能由**真实 root 账户**修改（受信 system/local_admin 也不能自称 root），且必须通过宿主注入的 `ReauthVerifier`；未接线/验证失败 fail-closed 返回 `REAUTH_REQUIRED`。普通管理员、应用管理员与普通用户一律拒绝。修改与恢复默认均在同一审计事务写成功/失败审计（稳定用户 ID、操作 ID、来源、字段差异），审计失败整体回滚。
