@@ -3,6 +3,7 @@ module github.com/kagurazakayashi/EvernightLogin
 go 1.26.0
 
 require (
+	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.6

@@ -409,6 +409,21 @@
 // CLIENT_AUTH_FAILED 并写审计。private_key_jwt、授权端点/令牌签发、PKCE 实际
 // 校验、Device Flow、数据范围细粒度接线与 HTTP 管理接口留后续步骤；真实 mTLS
 // 握手/CA 链、过期凭证清理、多实例限流与 race/非 Windows 未验证。
+// internal/token 已实现 OAuth/OIDC 令牌签发与验证核心、签名密钥轮换与 JWKS 公钥
+// 发布（步骤 50，不实现刷新令牌与 HTTP/Discovery 端点）：采用 go-jose/v4 成熟 JOSE
+// 库，算法固定 ES256；签名私钥为 ECDSA P-256 的 PKCS#8 并经 internal/secrets.Sealer
+// 认证加密保存，公钥以 JWK/JWKS 发布（active/next/保留期内 retired），revoked 与
+// 超保留期公钥不发布。Access Token 采用 RFC 9068（typ=at+jwt、token_use=access、
+// iss/aud/sub/client_id/scope/iat/exp/jti），ID Token 使用 typ=JWT、token_use=id、
+// aud=client_id；验证器只使用本地受控密钥集（kid 必须属于可验证集合，拒绝 jku/x5u/
+// x5c/jwk/crit 等未受控密钥引用），校验签发方/接收方/类型/必需声明/有效期与时钟
+// 容差。签发只接受宿主可信 Caller，普通用户只能为自己签发，系统/本地管理员代表
+// 其他主体必须经注入的 IssuanceAuthorizer；客户端授权类型/Scope/audience 来自
+// internal/oauthclient 登记配置（生产适配器已提供，应用停用拒绝）。密钥轮换/撤销
+// 只允许可信基础设施身份并写审计，KeyRetention 必须覆盖最长令牌有效期+容差；
+// 迁移 0030 落地 token_signing_keys（私钥只存密文）。刷新令牌、撤销列表、HTTP
+// 路由/Discovery、自动轮换调度与 race/非 Windows 未验证。
+//
 // internal/passwordreset 已实现主动改密与邮件找回（步骤 45）：改密复用 authn
 // SetPassword 的当前密码复核/密码策略/历史/敏感操作策略，成功后安全版本递增并撤销
 // 全部会话（默认重登）、写 OAuth 撤销 outbox；邮件找回只向已验证邮箱发送短期高熵

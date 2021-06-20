@@ -1185,10 +1185,12 @@ func TestLogAndAuditRedaction(t *testing.T) {
 	if strings.Contains(env.logBuffer.String(), wrongPassword) {
 		t.Error("认证失败日志包含密码")
 	}
-	// 步骤 29 不签发会话；令牌表仍不得提前创建（会话表 sessions 由步骤 30 的
-	// 迁移 0010 建立，本断言只针对认证包不产生 Token 结构）。
-	if env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE '%token%'`) != 0 {
-		t.Fatal("本步不应创建令牌表")
+	// 步骤 29 不签发会话或令牌；后续步骤 50 只建立“签名密钥表”（token_signing_keys），
+	// 认证包仍不得产生 Access/Refresh Token 等令牌记录表。
+	if env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (
+		name LIKE '%access_token%' OR name LIKE '%refresh_token%'
+		OR name LIKE '%oauth_token%' OR name LIKE '%token_plain%')`) != 0 {
+		t.Fatal("认证流程不应创建访问/刷新令牌记录表")
 	}
 	// 等价断言：认证包不写会话行，也不依赖步骤 30 的 internal/session（认证成功
 	// 不等于登录，会话签发必须由调用方显式完成）。

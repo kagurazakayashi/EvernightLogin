@@ -572,6 +572,19 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## OAuth/OIDC 令牌核心、签名密钥轮换与 JWKS（步骤 50）
+
+新增内部令牌域 `internal/token` 与 SQLite 仓储 `internal/token/sqlite`，迁移 `0030_token_signing_keys.sql`（`token_signing_keys`：私钥只存 AEAD 密文、公钥 JWK、next/active/retired/revoked 状态与退役保留期，active/next 部分唯一索引），并新增直接依赖 `github.com/go-jose/go-jose/v4 v4.1.9`。本步**不实现刷新令牌、不暴露 HTTP 路由/Discovery/OIDC 端点**，签发验签与 JWKS 均为可信内部 Go API。
+
+- **成熟库与固定算法**：JWS 签名/验证使用 go-jose v4（Apache-2.0，Go 1.24+，2026-11 发布、维护活跃、无额外传递依赖），不自行实现密码学；算法固定为 **ES256**（ECDSA P-256/SHA-256），验证时以库的允许算法列表 + 头部检查拒绝其余 alg（包括 `none`/`HS256` 等）。运行时与迁移结构都只允许 ES256。
+- **私钥保护与公钥发布**：签名私钥为 `crypto/rand` 生成的 ECDSA P-256，PKCS#8 编码后经 `internal/secrets.Sealer` 以用途 `oauth.signing`/对象=kid/范围=system 认证加密保存；数据库、审计、日志与 JWKS 均不出现私钥材料。`PublishedJWKS` 只输出 active、next（仅预发布、不用于验证）与保留期内 retired 的公钥 JWK（`kty/crv/kid/use/alg`，无私有字段），revoked 与超过保留期的 retired 不发布；HTTP 路由留后续步骤。
+- **密钥生命周期与轮换**：状态 `next`（预发布）→ `active`（唯一签名密钥）→ `retired`（保留期内旧令牌仍可验证、公钥继续发布）；`revoked` 为紧急撤销入口（立即拒绝该密钥签发的令牌并停止发布）。`RotateSigningKey`/`RevokeSigningKey` 只允许系统/本地管理员可信调用者并写审计；轮换在同一审计事务内插入 next、退役旧 active、激活新 active，数据库部分唯一索引保证同一时刻最多一个 active/next。`KeyRetention`（默认 24 小时）必须覆盖最长令牌有效期+时钟容差，否则拒绝构造；退役保留期后旧令牌验证拒绝。
+- **Access Token 与 ID Token 明确分离**：Access Token 采用 RFC 9068 约定：JOSE 头 `typ=at+jwt`，声明 `iss/aud/sub/client_id/scope/iat/nbf/exp/jti/token_use=access`；ID Token 使用 `typ=JWT`、`token_use=id`、`aud=client_id`（单一）、可选 `nonce/auth_time`。验证器同时校验 header typ 与 token_use，Access Token 不能当 ID Token 用，反之亦然。
+- **验证安全边界**：只使用本地受控密钥集（kid 必须属于 active 或保留期内 retired），**不依据未验证头部请求远程密钥**：拒绝 `jku/x5u/x5c/jwk/crit` 等未受控密钥引用；固定检查 issuer、audience、类型、必需声明、有效期与可注入时钟容差（默认 1 分钟）；拒绝重复顶层声明与未知/畸形 kid；签名失败、过期、接收方不匹配、密钥撤销分别映射稳定错误码。
+- **签发仅接受可信已授权上下文**：`Caller` 由宿主边界构造、不能由请求参数自称；普通用户只能为自己签发，受信系统/本地管理员代表其他主体签发必须经注入的 `IssuanceAuthorizer` 显式批准（nil 拒绝构造，fail-closed）。客户端、授权类型、Scope 与 audience 必须来自 `internal/oauthclient` 已登记配置（生产适配器 `NewOAuthClientSource` 读取客户端安全设置，应用停用返回 `CLIENT_DISABLED`），`client_credentials` 仅允许保密客户端且主体为客户端自身；刷新令牌请求明确拒绝（本步不实现）。签发/拒绝/轮换/撤销均写审计且不含令牌原文或密钥材料。
+- **错误码**：只复用既有 46 码：`REQ_INVALID`/`ACCESS_DENIED`/`TOKEN_INVALID`/`TOKEN_EXPIRED`/`TOKEN_REVOKED`/`TOKEN_AUDIENCE_MISMATCH`/`CLIENT_DISABLED`/`CONFLICT`/`DB_UNAVAILABLE`/`AUDIT_WRITE_FAILED`/`INTERNAL_ERROR`。
+- **已知限制**：刷新令牌（不透明秘密）、授权端点/令牌端点 HTTP 路由、Discovery/UserInfo、Token 撤销/状态查询与撤销列表、多实例密钥缓存与协调、自动轮换调度器、密钥备份/恢复演练、真实业务资源 audience 治理、OAuth 端到端流程未实现；本步签发验签组件不等于完整 OAuth/OIDC 流程；race/非 Windows 未验证。
+
 ## OAuth 客户端类型、回调规则与应用凭证管理（步骤 49）
 
 新增内部 `internal/oauthclient` 与 SQLite 仓储 `internal/oauthclient/sqlite`，迁移 `0029_oauth_clients.sql` 落地 `oauth_clients`（与 applications 一对一的安全设置：客户端类型、授权类型、精确回调/退出回调、Scope、允许的目标资源 audience、身份验证方式、PKCE 要求、行版本）、`oauth_client_secrets`（只存前缀与 32 字节 SHA-256 摘要，支持到期/撤销/轮换过渡）与 `oauth_client_certificates`（只存公钥证书与 SHA-256 指纹，不存私钥）。应用显示资料仍在 `internal/app`，本步**不暴露 HTTP 路由、不实现授权端点/令牌签发/动态客户端注册/第三方登录**，验收走可信内部 Go API 与临时 SQLite。
