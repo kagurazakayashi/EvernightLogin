@@ -179,6 +179,11 @@ func sealBinding(kid string) secrets.Binding {
 
 // ensureActiveKey 返回当前 active 签名密钥；没有时创建并激活一把（系统主体审计）。
 // 引导建钥只发生在没有任何 active 密钥时；已有密钥永不自动替换。
+//
+// 紧急撤销 active 后的语义（步骤 51 收口）：下一次签发会引导创建**全新** active
+// 密钥（不会复用被撤销密钥），这是显式的自动恢复，不是把 revoked 降级复用；如果
+// 运维需要暂停签发，应在服务装配层停止调用签发入口/下线令牌端点，而不是依赖本
+// 方法失败。该语义与本文件 RevokeSigningKey 的说明保持一致。
 func (s *Service) ensureActiveKey(ctx context.Context) (KeyRecord, error) {
 	active, found, err := s.opts.Store.GetActiveKey(ctx)
 	if err != nil {
@@ -293,9 +298,12 @@ func (s *Service) signClaims(record KeyRecord, payload []byte, typ string) (stri
 	return compact, nil
 }
 
-// PublishedJWKS 返回 JWKS 公钥集合（active + next 预发布 + 保留期内 retired），
-// 不含任何私有字段；revoked 与超过保留期的 retired 不再发布。JWKS 只是纯数据，
-// HTTP 路由由后续步骤装配。
+// PublishedJWKS 返回 JWKS 公钥集合（active + next + 保留期内 retired），不含任何
+// 私有字段；revoked 与超过保留期的 retired 不再发布。当前 RotateSigningKey 在单一
+// 事务内插入 next 并立即激活，因此提交后不会长期存在 next 密钥；发布集合保留 next
+// 是为将来“先预发布下一把公钥、再切换 active”的显式过渡预留，不代表当前实现已经
+// 提前预发布（README/MEMORY 已记录该一致性说明）。JWKS 只是纯数据，HTTP 路由由
+// 后续步骤装配。
 func (s *Service) PublishedJWKS(ctx context.Context) ([]byte, error) {
 	records, err := s.opts.Store.ListKeys(ctx)
 	if err != nil {
@@ -457,8 +465,11 @@ func (s *Service) RotateSigningKey(ctx context.Context, caller Caller, requestID
 }
 
 // RevokeSigningKey 紧急撤销一把签名密钥（next/active/retired）：立即让该密钥签发的
-// 令牌验证失败并停止发布其公钥；仅允许系统/本地管理员可信调用者。撤销 active 密钥
-// 后需尽快轮换出新 active，否则签发返回密钥不可用（fail-closed，不自动降级）。
+// 令牌验证失败并停止发布其公钥；仅允许系统/本地管理员可信调用者。
+//
+// 撤销 active 后不会降级复用 revoked 密钥：下一次签发由 ensureActiveKey 引导创建
+// 全新 active（新的 kid/私钥），旧令牌仍因 revoked 拒绝。若需要暂停签发，应由宿主
+// 装配层下线签发入口；本方法本身不设置“暂停签发”持久闸门。
 func (s *Service) RevokeSigningKey(ctx context.Context, caller Caller, requestID, kid, reason string) error {
 	ctx = normalizeContext(ctx)
 	if err := caller.actor.Validate(); err != nil || !caller.IsTrusted() {

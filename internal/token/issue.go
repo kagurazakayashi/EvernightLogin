@@ -167,17 +167,20 @@ func (s *Service) IssueAccessToken(ctx context.Context, caller Caller, request I
 		Token: Token{value: compact}, TokenID: tokenID, KeyID: key.Kid,
 		IssuedAt: now, ExpiresAt: now.Add(s.accessTTL), Subject: subject, Audience: audiences,
 	}
-	s.recordIssued(ctx, caller, "token.access.issued", "oauth_client", client.ClientID,
-		[]audit.FieldChange{
-			{Field: "subject", After: subject},
-			{Field: "client_id", After: client.ClientID},
-			{Field: "audience", After: strings.Join(audiences, " ")},
-			{Field: "scope", After: strings.Join(scopes, " ")},
-			{Field: "token_use", After: TokenUseAccess},
-			{Field: "jti", After: tokenID},
-			{Field: "kid", After: key.Kid},
-			{Field: "expires_at", After: issued.ExpiresAt.UTC().Format(time.RFC3339)},
-		}, request.RequestID)
+	auditChanges := []audit.FieldChange{
+		{Field: "subject", After: subject},
+		{Field: "client_id", After: client.ClientID},
+		{Field: "audience", After: strings.Join(audiences, " ")},
+		{Field: "scope", After: strings.Join(scopes, " ")},
+		{Field: "token_use", After: TokenUseAccess},
+		{Field: "jti", After: tokenID},
+		{Field: "kid", After: key.Kid},
+		{Field: "expires_at", After: issued.ExpiresAt.UTC().Format(time.RFC3339)},
+	}
+	if err := s.recordIssued(ctx, caller, "token.access.issued", "oauth_client",
+		client.ClientID, auditChanges, request.RequestID); err != nil {
+		return IssuedToken{}, err
+	}
 	s.logger.Info("Access Token 已签发",
 		"client_id", client.ClientID, "subject", subject, "jti", tokenID, "kid", key.Kid)
 	return issued, nil
@@ -210,6 +213,13 @@ func (s *Service) IssueIDToken(ctx context.Context, caller Caller, request Issue
 	if err != nil {
 		s.denyIssuance(ctx, caller, "oauth_client", request.ClientID, "client_unavailable", err)
 		return IssuedToken{}, err
+	}
+	// ID Token 只能产生于授权码/设备码流程；client_credentials 与未登记授权码的
+	// 客户端不得凭 ID Token 接口获得身份令牌（步骤 52 会使用本校验）。
+	if !grantAllowed(client, GrantAuthorizationCode) && !grantAllowed(client, GrantDeviceCode) {
+		s.denyIssuance(ctx, caller, "oauth_client", client.ClientID,
+			"id_token_grant_not_allowed", ErrGrantNotAllowed)
+		return IssuedToken{}, ErrGrantNotAllowed
 	}
 	issuance := IssuanceRequest{
 		ClientID: client.ClientID, SubjectUserID: request.SubjectUserID,
@@ -249,15 +259,18 @@ func (s *Service) IssueIDToken(ctx context.Context, caller Caller, request Issue
 		IssuedAt: now, ExpiresAt: now.Add(s.idTokenTTL), Subject: request.SubjectUserID,
 		Audience: []string{client.ClientID},
 	}
-	s.recordIssued(ctx, caller, "token.id_token.issued", "oauth_client", client.ClientID,
-		[]audit.FieldChange{
-			{Field: "subject", After: request.SubjectUserID},
-			{Field: "client_id", After: client.ClientID},
-			{Field: "token_use", After: TokenUseID},
-			{Field: "jti", After: tokenID},
-			{Field: "kid", After: key.Kid},
-			{Field: "expires_at", After: issued.ExpiresAt.UTC().Format(time.RFC3339)},
-		}, request.RequestID)
+	idAuditChanges := []audit.FieldChange{
+		{Field: "subject", After: request.SubjectUserID},
+		{Field: "client_id", After: client.ClientID},
+		{Field: "token_use", After: TokenUseID},
+		{Field: "jti", After: tokenID},
+		{Field: "kid", After: key.Kid},
+		{Field: "expires_at", After: issued.ExpiresAt.UTC().Format(time.RFC3339)},
+	}
+	if err := s.recordIssued(ctx, caller, "token.id_token.issued", "oauth_client",
+		client.ClientID, idAuditChanges, request.RequestID); err != nil {
+		return IssuedToken{}, err
+	}
 	s.logger.Info("ID Token 已签发", "client_id", client.ClientID, "jti", tokenID, "kid", key.Kid)
 	return issued, nil
 }
@@ -361,6 +374,10 @@ func (s *Service) verifyJWS(ctx context.Context, raw, expectedType string) (veri
 	parts := strings.Split(raw, ".")
 	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil || len(headerJSON) == 0 || len(headerJSON) > 4096 {
+		return verifiedJWS{}, ErrMalformedToken
+	}
+	// 严格拒绝重复顶层/嵌套字段，避免 encoding/json 覆盖语义造成头部/声明歧义。
+	if err := rejectDuplicateJSONFields(headerJSON); err != nil {
 		return verifiedJWS{}, ErrMalformedToken
 	}
 	var rawHeader map[string]json.RawMessage
@@ -614,9 +631,10 @@ func (s *Service) resolveSubject(ctx context.Context, caller Caller, request Iss
 	return request.SubjectUserID, nil
 }
 
-// recordIssued 写成功审计（不含令牌原文）。
+// recordIssued 写成功审计（不含令牌原文）。签发是安全关键操作：审计不可用时整个
+// 签发按失败处理（token 不返回、不写日志成功），避免出现“有令牌无审计”的不一致。
 func (s *Service) recordIssued(ctx context.Context, caller Caller, action, targetType, targetID string,
-	changes []audit.FieldChange, requestID string) {
+	changes []audit.FieldChange, requestID string) error {
 	event := audit.Event{
 		Actor: caller.actor, Action: action,
 		Target:  audit.Target{Type: targetType, ID: targetID},
@@ -626,8 +644,11 @@ func (s *Service) recordIssued(ctx context.Context, caller Caller, action, targe
 		event.RequestID = requestID
 	}
 	if err := s.opts.Audit.Record(ctx, event); err != nil {
-		s.logger.Warn("令牌签发审计写入失败", "action", action, "error_category", "audit_unavailable")
+		s.logger.Warn("令牌签发审计写入失败，按 fail-closed 拒绝签发",
+			"action", action, "error_category", "audit_unavailable")
+		return ErrAuditUnavailable
 	}
+	return nil
 }
 
 // denyIssuance 写失败审计（不含令牌/秘密）。

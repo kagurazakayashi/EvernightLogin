@@ -572,6 +572,19 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## OAuth 授权码、PKCE 与授权确认（步骤 51）
+
+新增内部 `internal/oauthflow` 与 SQLite 仓储 `internal/oauthflow/sqlite`，迁移 `0031_oauth_authorization.sql` 落地 `oauth_authorization_requests`（确认请求 + 真实会话/客户端/回调/Scope/audience/state/nonce/PKCE 绑定与 pending→approved/denied 一次性决定）与 `oauth_authorization_codes`（授权码只存 SHA-256 摘要、短时一次性、消费/重放时间戳）。本步**不建浏览器 UI、不暴露 HTTP 路由/Discovery 端点、不签发刷新令牌**，验收走可信内部 Go API 与临时 SQLite。
+
+- **授权请求校验**：`client_id` 必须已登记且所属应用启用；`redirect_uri` 复用 `internal/oauthclient` 的逐字节精确匹配/RFC 8252 回环规则；只接受 `response_type=code`，明确拒绝 `token`/`id_token`/`password` 与组合；PKCE 只接受 **S256**（43 位 base64url challenge），公开客户端与登记 `require_pkce` 的客户端强制，保密客户端默认也强制，仅显式配置 `AllowConfidentialWithoutPKCE` 时才允许省略，任何情况都拒绝 `plain`；Scope 与 resource/audience 必须属于客户端登记集合，resource 省略时仅在客户端只登记一个目标资源时使用该默认值；`state` 原样回传但不参与授权判断，`nonce` 持久化供步骤 52 OIDC 使用。
+- **回调安全**：无效/未登记 `redirect_uri`、未知/停用客户端、非法 `client_id` 返回协议错误且**禁止重定向**（`OAuthError.RedirectLocation` 返回 false），错误不泄露敏感细节；其余授权端点错误只在已验证的合法回调上以标准 `error`/`error_description`/`state` 重定向，不出现开放重定向。
+- **用户确认**：`BeginAuthorization` 必须绑定真实完整用户会话（`internal/session.Validate`，受限/跨应用作用域拒绝），不接受客户端自报用户；同时复核账户 active、应用成员关系与安全版本。确认请求默认 10 分钟有效，`DecideAuthorization` 重新校验同一会话/账户/成员后，按新增敏感操作 `oauth.authorization.approve` 经 `internal/reauth` 要求近期认证；未接线/拒绝时 fail-closed 不发码，**没有任何自动批准路径**。拒绝返回标准 `access_denied` 重定向且不签发授权码。
+- **授权码**：确认通过后在单一审计事务内条件迁移 pending→approved 并写入授权码摘要；默认 5 分钟（上限 10 分钟）、高熵随机、一次性，绑定 user+client+精确 redirect_uri+PKCE challenge+scope+audience+会话安全版本快照。明文授权码只在确认响应/重定向中出现一次，数据库只存 SHA-256 摘要，日志与审计不含授权码/令牌。
+- **Token 端点兑换**：标准 `authorization_code` 请求，保密客户端必须通过 `oauthclient.VerifyClientSecret` 或 `VerifyClientCertificate` 认证，公开客户端必须 PKCE；逐项校验绑定（client、精确 redirect_uri、code_verifier 的 S256 恒定比较、用户/会话/成员仍有效、客户端 Scope/audience 未被收紧），随后用审计事务条件消费授权码（**并发兑换单赢家**），再由 `internal/token` 以用户身份签发 Access Token。重复/并发兑换返回标准 `invalid_grant` 并记录 `replayed_at_ms`；过期、跨客户端、回调替换、错误/缺失 verifier 均按标准错误拒绝。错误响应使用 OAuth `error`/`error_description` 与规范 HTTP 状态（`invalid_client` 401，其余 400/500/503），不是项目通用业务响应格式。
+- **边界与已知限制**：访问令牌是无状态 JWT，本步**没有令牌撤销列表/刷新家族**（步骤 54），因此重复兑换只记录重放，不宣称撤销已签发令牌；PKCE/回调不匹配时不消费授权码（允许客户端用正确参数重试，verifier 高熵），成功兑换后令牌签发失败会保留已消费状态（fail-closed，需重新授权）；不支持 password/implicit/设备码/刷新；无 HTTP 路由、传输层限流、确认页 UI（步骤 65）、过期请求/授权码清理任务；确认页数据只含 client_id、Scope、audience、回调与有效期，应用展示名需页面层按受控资料补充；非 Windows/race 未验证。
+- **步骤 50 遗留收口**：明确“撤销 active 密钥后下一次签发自动引导全新 active”的语义（不降级复用 revoked 密钥，暂停签发由装配层负责）；说明 `next` 当前是轮换事务中间态、JWKS 保留 next 为未来预发布预留；签发成功审计失败改为 fail-closed（不返回令牌）；JWS 头/声明集严格拒绝重复 JSON 字段；补并发轮换单赢家测试；ID Token 增加“客户端必须登记 authorization_code/device_code grant”校验（步骤 52 使用）。
+- **错误码**：协议错误使用标准 OAuth `error` 值；内部诊断只复用既有 46 码，不新增设计码。
+
 ## OAuth/OIDC 令牌核心、签名密钥轮换与 JWKS（步骤 50）
 
 新增内部令牌域 `internal/token` 与 SQLite 仓储 `internal/token/sqlite`，迁移 `0030_token_signing_keys.sql`（`token_signing_keys`：私钥只存 AEAD 密文、公钥 JWK、next/active/retired/revoked 状态与退役保留期，active/next 部分唯一索引），并新增直接依赖 `github.com/go-jose/go-jose/v4 v4.1.9`。本步**不实现刷新令牌、不暴露 HTTP 路由/Discovery/OIDC 端点**，签发验签与 JWKS 均为可信内部 Go API。

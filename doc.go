@@ -409,6 +409,27 @@
 // CLIENT_AUTH_FAILED 并写审计。private_key_jwt、授权端点/令牌签发、PKCE 实际
 // 校验、Device Flow、数据范围细粒度接线与 HTTP 管理接口留后续步骤；真实 mTLS
 // 握手/CA 链、过期凭证清理、多实例限流与 race/非 Windows 未验证。
+// internal/oauthflow 与 internal/oauthflow/sqlite 已实现 OAuth 2.0 授权码 + PKCE
+// 的授权请求、用户确认、授权码发行与 Token 端点兑换（步骤 51，不建浏览器 UI、
+// 不暴露 HTTP 路由、不签发刷新令牌）。授权端点校验客户端登记、逐字节精确回调
+// （RFC 8252 回环例外复用 oauthclient 规则）、只允许 response_type=code 与 PKCE
+// S256（公开客户端强制、保密客户端默认强制，明确拒绝 plain/password/implicit）、
+// Scope/audience 属于客户端登记集合；无效 client/redirect 不重定向，其余协议错误
+// 只向已验证合法回调返回标准 error/error_description/state。确认请求绑定真实完整
+// 用户会话（session.Validate）、账户 active、应用成员与安全版本，确认前按新增敏感
+// 操作 oauth.authorization.approve 经 internal/reauth 要求近期认证（未接线/拒绝
+// fail-closed），无自动批准；批准在审计事务内一次性迁移并签发高熵短时授权码，库中
+// 只存 SHA-256 摘要，明文只在确认响应出现一次，日志/审计不含授权码/令牌。Token 端点
+// 要求保密客户端经 oauthclient 验证 secret/证书、公开客户端 PKCE，逐项校验绑定后
+// 条件消费授权码（并发单赢家），再由 internal/token 以用户身份签发 Access Token；
+// 重复兑换记录 replayed_at_ms 并以标准 invalid_grant 拒绝（访问令牌无状态，撤销
+// 列表/刷新家族留步骤 54）。标准 OAuth 错误与 HTTP 状态不使用项目业务响应格式。
+// 迁移 0031 落地 oauth_authorization_requests/oauth_authorization_codes（只存摘要、
+// 无明文/秘密）。已同步收口步骤 50 遗留：撤销 active 后自动引导全新密钥的明确语义、
+// next 过渡说明、签发成功审计失败 fail-closed、JWS 重复字段严格拒绝、并发轮换
+// 单赢家测试与 ID Token grant 校验。HTTP 路由/限流、确认页 UI（步骤 65）、过期
+// 记录清理、令牌撤销列表、非 Windows/race 未验证。
+//
 // internal/token 已实现 OAuth/OIDC 令牌签发与验证核心、签名密钥轮换与 JWKS 公钥
 // 发布（步骤 50，不实现刷新令牌与 HTTP/Discovery 端点）：采用 go-jose/v4 成熟 JOSE
 // 库，算法固定 ES256；签名私钥为 ECDSA P-256 的 PKCS#8 并经 internal/secrets.Sealer

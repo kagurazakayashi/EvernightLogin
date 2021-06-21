@@ -359,6 +359,11 @@ func defaultOperations() []Operation {
 	// 绑定仍需近期确认与告知，TOTP 执行器已实现。
 	mfaAdd := Policy{Sensitive: true, ReauthRequired: true, MaxAuthAgeSeconds: 300,
 		Strength: StrengthPassword, ConfirmationRequired: false, NotificationRequired: true}
+	// oauthConsent：用户批准第三方/应用 OAuth 授权。要求近期主认证（300 秒）与敏感
+	// 操作策略；显式确认由授权确认页本身完成，不再额外要求通用确认字段；不发送
+	// 邮件告知（避免把授权页面操作变成通知噪声），拒绝路径不签发授权码。
+	oauthConsent := Policy{Sensitive: true, ReauthRequired: true, MaxAuthAgeSeconds: 300,
+		Strength: StrengthPassword, ConfirmationRequired: false, NotificationRequired: false}
 
 	return []Operation{
 		{
@@ -452,6 +457,14 @@ func defaultOperations() []Operation {
 			Description:   "为应用登记 OAuth 客户端类型、授权类型、精确回调/退出回调、Scope、允许的目标资源、客户端身份验证方式与 PKCE 要求；必须强认证与确认并告知，公开客户端不得使用密钥假装保密。",
 			Default:       strongReauth,
 			PermissionKey: "applications.update",
+			Implemented:   true,
+		},
+		{
+			ID: "oauth.authorization.approve", Domain: DomainApplication,
+			Name:          "批准 OAuth 应用授权请求",
+			Description:   "用户在授权确认页批准应用以本人身份访问其账户数据；必须绑定真实用户会话并完成近期身份验证，确认页清晰显示应用与请求范围，范围与目标资源不能超出客户端登记；拒绝不签发授权码，取消确认不改变安全状态。",
+			Default:       oauthConsent,
+			PermissionKey: "",
 			Implemented:   true,
 		},
 		{
