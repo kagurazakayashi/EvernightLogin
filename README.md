@@ -572,6 +572,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## OIDC 身份令牌、发现文档与 UserInfo（步骤 52）
+
+新增内部 `internal/oidc` 与只读仓储 `internal/oidc/sqlite`（UserInfo 用户来源），迁移 `0032_oidc.sql` 扩展 `sessions.auth_methods_json` 与授权请求/授权码的 `auth_time_ms`/`auth_methods_json`。本步**不暴露 HTTP 路由、不装配 `cmd/login-server`**，验收走可信内部 Go API；互操作验证使用独立 go-jose 校验流程，**真实第三方 OIDC 客户端未实测**。
+
+- **openid scope 与 ID Token 开关**：只有授权请求显式包含 `openid` 且服务配置了 OIDC 时才可能签发 ID Token；未配置 OIDC 时 openid scope 在授权请求阶段即按 `invalid_scope` 拒绝（不声明/不静默忽略未实现能力）。兑换成功后若 scope 含 openid 则同时签发 ID Token，否则响应不含 ID Token。ID Token 使用 `typ=JWT`+`token_use=id`，与 Access Token（`at+jwt`/`token_use=access`）按类型严格区分，不能互相调用。
+- **真实认证事实**：登录会话新增 `auth_methods_json`，只记录服务端认证结果中的稳定方法标识；授权确认时把会话真实登录时间与方法快照写入授权请求与授权码（`auth_time_ms`/`auth_methods_json`），兑换签发 ID Token 时使用。`auth_time` 来自会话创建时间；`amr`/`acr` 由 `internal/authfact` 从这些方法映射（`pwd`/`otp`/`totp`/`mfa` 与 `urn:evernight:acr:*`），调用方不能自述或伪造强度；升级前旧会话/授权记录方法为空时 fail-closed 拒绝签发（不伪造 amr）。
+- **ID Token 声明与 subject**：必需声明 `iss/sub/aud/exp/iat`，`aud` 为单一 client_id，`azp` 恒为 client_id（多值 aud 时一致）；`nonce` 原样回传；`auth_time`、`amr`、`acr` 如上。`sub` 采用**按客户端配对的稳定假名**（HMAC-SHA256(主机秘密, client_id|user_id)），同一用户对不同客户端不可关联，同一客户端跨登录稳定；Discovery `subject_types_supported=["pairwise"]`。真实用户 ID 只进内部审计/授权判定，不写入 ID Token/UserInfo。
+- **发现文档**：固定公开 issuer（https；本地回环可 http；无查询/片段/userinfo、无尾斜杠），所有端点必须与 issuer 同源且路径位于 issuer 路径前缀下（拒绝 `..` 段）。只声明真实实现的授权码 + PKCE S256 + ES256 + pairwise 与已实现端点/Scope/Claims；不声明 refresh/device/revocation/end_session/introspection 等未实现能力，`claims_parameter_supported`/`request_parameter_supported` 均为 false。
+- **UserInfo**：必须验证 Access Token 的签名/签发方/类型/有效期，并以 **issuer 作为 UserInfo 资源受众**（客户端登记允许 audience 需包含 issuer 才能调用），要求 `openid` scope；按 scope 裁剪：`profile` 返回 name/preferred_username/locale/zoneinfo/updated_at，`email` 返回 email+email_verified（仅当存在已验证邮箱，如实反映验证状态；无邮箱不返回）。返回 `sub` 与 ID Token 一致；不输出密码、MFA、凭证、会话或找回材料。
+- **错误与审计**：openid 未配置/端点配置非法/认证事实缺失 fail-closed；UserInfo 协议错误使用标准 `invalid_token`/`insufficient_scope`/`invalid_request` 与 401/403，不泄露令牌细节；令牌、声明原文与用户秘密不进入日志/审计。
+- **步骤 51 遗留收口**：(a) 移除 `AllowConfidentialWithoutPKCE`，所有授权码统一强制 PKCE S256（与 0031 表非空约束一致）；(b) `Exchange` 按客户端**当前登记**重新精确匹配回调；(c) 授权码/重定向地址改为脱敏类型（默认格式化输出 `[REDACTED]`，仅显式 `Reveal()` 可用于传输）；(d) 并发兑换失败方补写 `replayed_at_ms`；(e) `DecideAuthorization` 前重读客户端，应用停用或移除 authorization_code 时拒绝确认。
+- **错误码**：复用既有 46 码（参数 `REQ_INVALID`、令牌 `TOKEN_INVALID`、越权/scope `ACCESS_DENIED`、账户 `USER_DISABLED`、存储 `DB_UNAVAILABLE`、内部 `INTERNAL_ERROR`），不新增设计码；协议层使用标准 OAuth/OIDC error。
+- **已知限制**：只有授权码流程可选 ID Token；刷新令牌/设备码/结束会话/撤销端点/动态注册未实现；`private_key_jwt` 等未选择；Authorization Endpoint/Token Endpoint/UserInfo 的 HTTP 路由与页面、真实第三方 OIDC 客户端互操作、subject 秘密轮换、方法级 UV 细分 amr（passkey UV 的 `user` 取值）与 race/非 Windows 未验证。
+
 ## OAuth 授权码、PKCE 与授权确认（步骤 51）
 
 新增内部 `internal/oauthflow` 与 SQLite 仓储 `internal/oauthflow/sqlite`，迁移 `0031_oauth_authorization.sql` 落地 `oauth_authorization_requests`（确认请求 + 真实会话/客户端/回调/Scope/audience/state/nonce/PKCE 绑定与 pending→approved/denied 一次性决定）与 `oauth_authorization_codes`（授权码只存 SHA-256 摘要、短时一次性、消费/重放时间戳）。本步**不建浏览器 UI、不暴露 HTTP 路由/Discovery 端点、不签发刷新令牌**，验收走可信内部 Go API 与临时 SQLite。

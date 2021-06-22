@@ -15,12 +15,14 @@ import (
 // 派生摘要所用密钥环密钥，密钥轮换后旧会话仍按原 key_id 验证，直到被撤销或
 // 到期。RequiredSteps 与 Session.RequiredSteps 一致。
 type Record struct {
-	ID                string
-	UserID            string
-	AppID             string
-	Kind              Kind
-	Reason            Reason
-	RequiredSteps     []authn.Step
+	ID            string
+	UserID        string
+	AppID         string
+	Kind          Kind
+	Reason        Reason
+	RequiredSteps []authn.Step
+	// AuthMethods 是登录时真实完成的认证方法稳定标识，用于 OIDC amr/acr。
+	AuthMethods       []authn.Method
 	SecurityVersion   int64
 	SecretDigest      []byte
 	CSRFDigest        []byte

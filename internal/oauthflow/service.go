@@ -17,6 +17,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 )
 
@@ -31,15 +32,14 @@ type Options struct {
 	Tokens     TokenIssuer
 	// Reauth 是步骤 39 敏感操作收敛入口；nil 时授权确认拒绝。
 	Reauth reauth.OperationRunner
-	// AllowConfidentialWithoutPKCE 允许保密客户端在既未登记 RequirePKCE、也未收到
-	// code_challenge 时省略 PKCE；默认 false（所有客户端强制 S256）。任何情况下都
-	// 不接受 plain challenge method。
-	AllowConfidentialWithoutPKCE bool
-	RequestTTL                   time.Duration
-	CodeTTL                      time.Duration
-	Now                          func() time.Time
-	Random                       io.Reader
-	Logger                       *slog.Logger
+	// OIDC 是 ID Token 签发契约；nil 表示未启用 OIDC：授权请求中的 openid scope
+	// 一律拒绝，兑换响应不含 ID Token（fail-closed，不声明未实现能力）。
+	OIDC       IDTokenIssuer
+	RequestTTL time.Duration
+	CodeTTL    time.Duration
+	Now        func() time.Time
+	Random     io.Reader
+	Logger     *slog.Logger
 }
 
 // Service 是授权确认与授权码兑换服务。构造后不可变、可并发使用；不提供页面/HTTP。
@@ -145,9 +145,8 @@ func (s *Service) BeginAuthorization(ctx context.Context, sessionSecret string,
 			client.ClientID, "grant_not_allowed", "REQ_INVALID", request.RequestID)
 		return ConsentPrompt{}, oauthUnauthorizedClient().withRedirect(request.RedirectURI, request.State)
 	}
-	// PKCE：公开客户端强制；保密客户端按策略/登记要求；任何情况都不接受 plain。
-	pkceRequired := client.ClientType == oauthclient.ClientTypePublic || client.RequirePKCE ||
-		!s.opts.AllowConfidentialWithoutPKCE
+	// PKCE：所有授权码客户端强制 S256（与 0031 授权码表非空约束一致），任何情况
+	// 都不接受 plain/missing；步骤 51 遗留的“保密客户端可配置免 PKCE”已移除。
 	if request.CodeChallenge != "" || request.CodeChallengeMethod != "" {
 		if request.CodeChallengeMethod != "S256" {
 			s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.authorize.begin_denied",
@@ -157,16 +156,21 @@ func (s *Service) BeginAuthorization(ctx context.Context, sessionSecret string,
 		if !validPKCEChallenge(request.CodeChallenge) {
 			return ConsentPrompt{}, redirectErr("code_challenge 格式无效")
 		}
-	} else if pkceRequired {
+	} else {
 		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.authorize.begin_denied",
 			client.ClientID, "pkce_required", "REQ_INVALID", request.RequestID)
-		return ConsentPrompt{}, redirectErr("该客户端必须使用 PKCE S256")
+		return ConsentPrompt{}, redirectErr("必须使用 PKCE S256")
 	}
 	scopes, scopeErr := normalizeScopes(request.Scope, client.Scopes)
 	if scopeErr != nil {
 		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.authorize.begin_denied",
 			client.ClientID, "invalid_scope", "REQ_INVALID", request.RequestID)
 		return ConsentPrompt{}, scopeErr.withRedirect(request.RedirectURI, request.State)
+	}
+	if containsString(scopes, ScopeOpenID) && isNilInterface(s.opts.OIDC) {
+		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.authorize.begin_denied",
+			client.ClientID, "oidc_not_configured", "REQ_INVALID", request.RequestID)
+		return ConsentPrompt{}, oauthInvalidScope().withRedirect(request.RedirectURI, request.State)
 	}
 	audiences, audienceErr := normalizeAudiences(request.Resource, client.Audiences)
 	if audienceErr != nil {
@@ -249,6 +253,7 @@ func (s *Service) BeginAuthorization(ctx context.Context, sessionSecret string,
 		Audiences: audiences, State: request.State, Nonce: request.Nonce,
 		CodeChallenge: request.CodeChallenge, CodeChallengeMethod: request.CodeChallengeMethod,
 		SessionID: userSession.ID, SecurityVersion: userSession.SecurityVersion,
+		AuthTime: userSession.CreatedAt, AuthMethods: authMethodsOf(userSession),
 		Status: "pending", RequestID: request.RequestID, CreatedAt: now,
 		ExpiresAt: now.Add(s.requestTTL),
 	}
@@ -325,6 +330,18 @@ func (s *Service) DecideAuthorization(ctx context.Context, sessionSecret string,
 		return AuthorizationResult{}, oauthAccessDeniedRedirect("账户状态或安全版本已变化，请重新登录",
 			record.RedirectURI, record.State)
 	}
+	// 重新读取客户端登记：确认前应用/客户端可能已停用或移除 authorization_code，
+	// 不能沿用发起授权时的旧快照。
+	currentClient, clientFound, clientErr := s.opts.Clients.LoadClient(ctx, record.ClientID)
+	if clientErr != nil {
+		return AuthorizationResult{}, oauthTemporarilyUnavailable()
+	}
+	if !clientFound || !currentClient.Active() || !currentClient.GrantsAuthorizationCode() {
+		s.failure(ctx, sessionActor(record.UserID), "oauth.authorize.decide_denied",
+			record.ClientID, "client_no_longer_eligible", "CLIENT_DISABLED", request.DecisionRequestID)
+		return AuthorizationResult{}, oauthAccessDeniedRedirect("应用授权配置已变化",
+			record.RedirectURI, record.State)
+	}
 	member, err := s.opts.Store.MembershipActive(ctx, record.UserID, record.ClientID)
 	if err != nil {
 		return AuthorizationResult{}, oauthTemporarilyUnavailable()
@@ -351,9 +368,9 @@ func (s *Service) DecideAuthorization(ctx context.Context, sessionSecret string,
 		}); err != nil {
 			return AuthorizationResult{}, mapCriticalProtocolError(err)
 		}
-		redirectURL, _ := oauthAccessDeniedRedirect("", record.RedirectURI, record.State).RedirectLocation()
-		return AuthorizationResult{RequestID: record.ID, Approved: false, RedirectURL: redirectURL,
-			State: record.State}, nil
+		redirectValue, _ := oauthAccessDeniedRedirect("", record.RedirectURI, record.State).RedirectLocation()
+		return AuthorizationResult{RequestID: record.ID, Approved: false,
+			RedirectURL: RedirectURL{value: redirectValue}, State: record.State}, nil
 	}
 	// 批准前的近期认证/敏感策略（fail-closed：未接线或拒绝则不发码）。
 	authorization, reauthErr := s.authorizeConsent(ctx, record, request.DecisionRequestID)
@@ -378,8 +395,9 @@ func (s *Service) DecideAuthorization(ctx context.Context, sessionSecret string,
 		Audiences: append([]string(nil), record.Audiences...),
 		Nonce:     record.Nonce, CodeChallenge: record.CodeChallenge,
 		CodeChallengeMethod: record.CodeChallengeMethod, SessionID: record.SessionID,
-		SecurityVersion: record.SecurityVersion, RequestRef: record.ID,
-		IssuedAt: now, ExpiresAt: now.Add(s.codeTTL),
+		SecurityVersion: record.SecurityVersion,
+		AuthTime:        record.AuthTime, AuthMethods: append([]string(nil), record.AuthMethods...),
+		RequestRef: record.ID, IssuedAt: now, ExpiresAt: now.Add(s.codeTTL),
 	}
 	critical := s.criticalEvent("oauth.authorize.approved", sessionActor(record.UserID),
 		record.ClientID, "oauth_authorization_request", record.ID, request.DecisionRequestID,
@@ -405,7 +423,8 @@ func (s *Service) DecideAuthorization(ctx context.Context, sessionSecret string,
 	redirectURL := buildSuccessRedirect(record.RedirectURI, code, record.State)
 	s.notifyConsent(ctx, authorization)
 	return AuthorizationResult{
-		RequestID: record.ID, Approved: true, Code: code, RedirectURL: redirectURL,
+		RequestID: record.ID, Approved: true,
+		Code: AuthorizationCode{value: code}, RedirectURL: redirectURL,
 		State: record.State, CodeExpiresAt: codeRecord.ExpiresAt,
 	}, nil
 }
@@ -496,20 +515,21 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 			"binding_mismatch", "AUTH_FAILED", request.RequestID)
 		return TokenResponse{}, oauthInvalidGrant("授权码绑定信息不匹配")
 	}
-	pkceRequired := client.ClientType == oauthclient.ClientTypePublic || client.RequirePKCE ||
-		!s.opts.AllowConfidentialWithoutPKCE
-	if code.CodeChallenge != "" {
-		if !validPKCEVerifier(request.CodeVerifier) ||
-			subtle.ConstantTimeCompare([]byte(pkceS256(request.CodeVerifier)),
-				[]byte(code.CodeChallenge)) != 1 {
-			s.failure(ctx, actor, "oauth.token.exchange_denied", code.ClientID,
-				"pkce_mismatch", "AUTH_FAILED", request.RequestID)
-			return TokenResponse{}, oauthInvalidGrant("PKCE 校验失败")
-		}
-	} else if pkceRequired {
+	// 按客户端**当前登记**重新做精确回调匹配，防止授权的回调在签发后被移除。
+	if _, matchErr := oauthclient.MatchRedirectURI(client.RedirectURIs,
+		request.RedirectURI, client.ClientType); matchErr != nil {
 		s.failure(ctx, actor, "oauth.token.exchange_denied", code.ClientID,
-			"pkce_missing", "AUTH_FAILED", request.RequestID)
-		return TokenResponse{}, oauthInvalidGrant("缺少 PKCE 绑定")
+			"redirect_no_longer_allowed", "AUTH_FAILED", request.RequestID)
+		return TokenResponse{}, oauthInvalidGrant("回调地址已不再允许")
+	}
+	// 所有授权码都必须带 S256 PKCE 绑定并在兑换时校验（与 0031 表约束一致）。
+	if code.CodeChallenge == "" || code.CodeChallengeMethod != "S256" ||
+		!validPKCEVerifier(request.CodeVerifier) ||
+		subtle.ConstantTimeCompare([]byte(pkceS256(request.CodeVerifier)),
+			[]byte(code.CodeChallenge)) != 1 {
+		s.failure(ctx, actor, "oauth.token.exchange_denied", code.ClientID,
+			"pkce_mismatch", "AUTH_FAILED", request.RequestID)
+		return TokenResponse{}, oauthInvalidGrant("PKCE 校验失败")
 	}
 	userState, found, err := s.opts.Store.UserState(ctx, code.UserID)
 	if err != nil {
@@ -558,16 +578,32 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 			{Field: "scope", After: truncateAudit(joinScopes(scopes), 160)},
 			{Field: "audience", After: truncateAudit(strings.Join(code.Audiences, " "), 160)},
 		})
+	consumeLost := false
 	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
 		consumed, consumeErr := s.opts.Store.ConsumeAuthorizationCodeTx(txCtx, tx, code.ID, now)
 		if consumeErr != nil {
 			return consumeErr
 		}
 		if !consumed {
+			consumeLost = true
 			return ErrConsentNotFound
 		}
 		return nil
 	}); err != nil {
+		// 并发兑换失败方也记录重放探测（独立事务，避免在已回滚事务内写）：
+		// 条件消费失败本身是重放信号；若事务因锁竞争回滚，重新读取授权码确认它
+		// 已被其他请求消费后再记录，不把普通存储故障误记成重放。
+		shouldMark := consumeLost
+		if !shouldMark {
+			if refreshed, found, readErr := s.opts.Store.GetAuthorizationCodeByHash(
+				context.WithoutCancel(ctx), digest); readErr == nil && found &&
+				!refreshed.ConsumedAt.IsZero() {
+				shouldMark = true
+			}
+		}
+		if shouldMark {
+			_ = s.opts.Store.MarkAuthorizationCodeReplayed(context.WithoutCancel(ctx), code.ID, now)
+		}
 		s.failure(ctx, actor, "oauth.token.exchange_denied", code.ClientID,
 			"code_consume_conflict", "AUTH_FAILED", request.RequestID)
 		return TokenResponse{}, oauthInvalidGrant("授权码已被使用")
@@ -605,6 +641,29 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 		}
 		return TokenResponse{}, oauthServerError()
 	}
+	var idToken token.Token
+	if containsString(scopes, ScopeOpenID) {
+		if isNilInterface(s.opts.OIDC) {
+			s.failure(ctx, actor, "oauth.token.exchange_denied", code.ClientID,
+				"oidc_not_configured", "INTERNAL_ERROR", request.RequestID)
+			return TokenResponse{}, oauthServerError()
+		}
+		idRequestID, idErr := s.newID(tokenRequestPrefix)
+		if idErr != nil {
+			return TokenResponse{}, oauthServerError()
+		}
+		issuedID, idErr := s.opts.OIDC.IssueLoginIDToken(ctx, LoginIDTokenRequest{
+			ClientID: code.ClientID, UserID: code.UserID, Nonce: code.Nonce,
+			AuthTime: code.AuthTime, AuthMethods: append([]string(nil), code.AuthMethods...),
+			Scopes: append([]string(nil), scopes...), RequestID: idRequestID,
+		})
+		if idErr != nil {
+			s.failure(ctx, actor, "oauth.token.exchange_denied", code.ClientID,
+				"id_token_issuance_failed", "INTERNAL_ERROR", request.RequestID)
+			return TokenResponse{}, oauthServerError()
+		}
+		idToken = issuedID.Token
+	}
 	// 协议成功事件；令牌服务已独立写签发审计，这里失败只记录日志（不重复宣称成功）。
 	successEvent := audit.Event{
 		Actor: actor, AppID: code.ClientID, Action: "oauth.token.exchanged",
@@ -628,8 +687,9 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 		expiresIn = int64(s.opts.Now().UTC().Unix()) // 防御性兜底：正常情况下 Token 服务返回正数
 		expiresIn = 0
 	}
-	return TokenResponse{AccessToken: issued.Token, TokenType: "Bearer", ExpiresIn: expiresIn,
-		Scope: joinScopes(scopes), RequestID: request.RequestID, CodeID: code.ID}, nil
+	return TokenResponse{AccessToken: issued.Token, IDToken: idToken, TokenType: "Bearer",
+		ExpiresIn: expiresIn, Scope: joinScopes(scopes), RequestID: request.RequestID,
+		CodeID: code.ID}, nil
 }
 
 // ===== 内部辅助 =====
@@ -781,10 +841,10 @@ func oauthAccessDeniedRedirect(description, redirectURI, state string) *OAuthErr
 }
 
 // buildSuccessRedirect 构造带 code+state 的授权成功重定向 URL。
-func buildSuccessRedirect(redirectURI, code, state string) string {
+func buildSuccessRedirect(redirectURI, code, state string) RedirectURL {
 	parsed, err := url.Parse(redirectURI)
 	if err != nil {
-		return redirectURI
+		return RedirectURL{}
 	}
 	values := parsed.Query()
 	values.Set("code", code)
@@ -792,7 +852,16 @@ func buildSuccessRedirect(redirectURI, code, state string) string {
 		values.Set("state", state)
 	}
 	parsed.RawQuery = values.Encode()
-	return parsed.String()
+	return RedirectURL{value: parsed.String()}
+}
+
+// authMethodsOf 把会话中真实完成的认证方法转为稳定字符串（用于 OIDC amr）。
+func authMethodsOf(userSession session.Session) []string {
+	methods := make([]string, 0, len(userSession.AuthMethods))
+	for _, method := range userSession.AuthMethods {
+		methods = append(methods, string(method))
+	}
+	return methods
 }
 
 // scopesSubset 报告 scopes 是否为 allowed 的子集。

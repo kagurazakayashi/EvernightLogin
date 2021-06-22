@@ -303,17 +303,22 @@ type AccessClaims struct {
 
 // IDTokenClaims 是已验证通过的 ID Token 声明（不含原始令牌）。
 type IDTokenClaims struct {
-	Issuer    string
-	Subject   string
-	Audience  string
-	ClientID  string
-	TokenID   string
-	TokenUse  string
-	Nonce     string
-	AuthTime  time.Time
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-	KeyID     string
+	Issuer   string
+	Subject  string
+	Audience string
+	ClientID string
+	TokenID  string
+	TokenUse string
+	Nonce    string
+	AuthTime time.Time
+	// AMR/ACR 是认证方法引用与认证上下文（来自服务端真实认证事实）。
+	AMR []string
+	ACR string
+	// AuthorizedParty 是授权方客户端（azp）；aud 多值时必填，本流程恒为 client_id。
+	AuthorizedParty string
+	IssuedAt        time.Time
+	ExpiresAt       time.Time
+	KeyID           string
 }
 
 // Token 是签发结果中的令牌原文。默认字符串化/格式化/JSON/slog 全部脱敏；调用方

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	oauthclientsqlite "github.com/kagurazakayashi/EvernightLogin/internal/oauthclient/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	oauthflowsqlite "github.com/kagurazakayashi/EvernightLogin/internal/oauthflow/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/oidc"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
@@ -105,6 +107,8 @@ type testEnv struct {
 	session       *session.Service
 	tokens        *token.Service
 	flow          *oauthflow.Service
+	flowStore     *oauthflowsqlite.Store
+	source        oauthflow.ClientSource
 	oauthStore    *oauthclientsqlite.Store
 	now           time.Time
 	userID        string
@@ -195,7 +199,8 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 		Issuer: "https://issuer.example.test", Clients: tokenClients,
 		Authorizer: token.IssuanceAuthorizerFunc(func(_ context.Context, _ token.Caller,
 			request token.IssuanceRequest) error {
-			if request.GrantType == token.GrantAuthorizationCode && request.TokenKind == "access" {
+			// Access Token 与 OIDC ID Token 均来自已完成的授权码流程。
+			if request.GrantType == token.GrantAuthorizationCode {
 				return nil
 			}
 			return token.ErrAccessDenied
@@ -214,6 +219,8 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 	if err != nil {
 		t.Fatalf("授权客户端来源: %v", err)
 	}
+	environment.flowStore = flowStore
+	environment.source = source
 	environment.flow, err = oauthflow.New(oauthflow.Options{
 		Store: flowStore, Audit: environment.audit, Clients: source,
 		ClientAuth: environment.clientAuth, Sessions: environment.session,
@@ -252,6 +259,13 @@ row_version,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,1,1,?,?)`,
 		`["authorization_code"]`, `["`+testRedirect+`"]`, `[]`,
 		`["profile.read","email.read"]`, `["`+testAudience+`"]`, authMethods,
 		e.now.UnixMilli(), e.now.UnixMilli())
+}
+
+// enableOpenIDForTestClient 把测试客户端的 Scope 扩展为含 openid 并授权 issuer 作为
+// UserInfo 资源受众（模拟生产登记）。
+func (e *testEnv) enableOpenIDForTestClient() {
+	e.exec(`UPDATE oauth_clients SET scopes_json='["openid","profile","email"]',
+audiences_json='["https://issuer.example.test","https://api.example.test"]' WHERE client_id=?`, testAppID)
 }
 
 // registerSecondClient 登记第二个公开客户端（用于跨客户端兑换测试）。
@@ -362,29 +376,29 @@ func TestAuthorizationCodeHappyPath(t *testing.T) {
 		t.Fatalf("确认请求状态 = %q，期望 pending", status)
 	}
 	result := env.approve(prompt)
-	if !result.Approved || result.Code == "" {
+	if !result.Approved || result.Code.Reveal() == "" {
 		t.Fatalf("批准后应返回授权码: %+v", result)
 	}
-	redirect, err := url.Parse(result.RedirectURL)
-	if err != nil || redirect.Query().Get("code") != result.Code ||
+	redirect, err := url.Parse(result.RedirectURL.Reveal())
+	if err != nil || redirect.Query().Get("code") != result.Code.Reveal() ||
 		redirect.Query().Get("state") != "opaque-state-123" {
-		t.Fatalf("授权成功重定向不正确: %s err=%v", result.RedirectURL, err)
+		t.Fatalf("授权成功重定向不正确: %s err=%v", result.RedirectURL.Reveal(), err)
 	}
 	// 数据库/审计不得保存授权码明文，只保存摘要。
-	digest := sha256.Sum256([]byte(result.Code))
+	digest := sha256.Sum256([]byte(result.Code.Reveal()))
 	if got := env.queryInt(`SELECT COUNT(*) FROM oauth_authorization_codes WHERE code_sha256=?`,
 		digest[:]); got != 1 {
 		t.Fatalf("缺少授权码摘要记录")
 	}
 	if got := env.queryInt(`SELECT COUNT(*) FROM audit_events WHERE detail_json LIKE ?`,
-		"%"+result.Code+"%"); got != 0 {
+		"%"+result.Code.Reveal()+"%"); got != 0 {
 		t.Fatalf("审计泄露授权码明文")
 	}
 	// nonce 保存供后续 OIDC 使用。
 	if nonce := env.queryString(`SELECT nonce FROM oauth_authorization_codes`); nonce != "nonce-abc" {
 		t.Fatalf("授权码未保存 nonce: %q", nonce)
 	}
-	response, err := env.exchangeAccess(result.Code)
+	response, err := env.exchangeAccess(result.Code.Reveal())
 	if err != nil {
 		t.Fatalf("兑换授权码: %v", err)
 	}
@@ -410,7 +424,7 @@ func TestAuthorizationCodeHappyPath(t *testing.T) {
 		t.Fatalf("审计泄露 Access Token")
 	}
 	// 重复兑换：拒绝且记录重放。
-	if _, err := env.exchangeAccess(result.Code); !isOAuthCode(err, "invalid_grant") {
+	if _, err := env.exchangeAccess(result.Code.Reveal()); !isOAuthCode(err, "invalid_grant") {
 		t.Fatalf("重复兑换应 invalid_grant，实际 %v", err)
 	}
 	if got := env.queryInt(`SELECT COUNT(*) FROM oauth_authorization_codes WHERE replayed_at_ms IS NOT NULL`); got != 1 {
@@ -430,13 +444,13 @@ func TestAuthorizationDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("拒绝授权不应返回内部错误: %v", err)
 	}
-	if result.Approved || result.Code != "" {
+	if result.Approved || result.Code.Reveal() != "" {
 		t.Fatalf("拒绝不应签发授权码: %+v", result)
 	}
-	redirect, parseErr := url.Parse(result.RedirectURL)
+	redirect, parseErr := url.Parse(result.RedirectURL.Reveal())
 	if parseErr != nil || redirect.Query().Get("error") != "access_denied" ||
 		redirect.Query().Get("state") != "opaque-state-123" {
-		t.Fatalf("拒绝重定向不正确: %s err=%v", result.RedirectURL, parseErr)
+		t.Fatalf("拒绝重定向不正确: %s err=%v", result.RedirectURL.Reveal(), parseErr)
 	}
 	if got := env.queryInt(`SELECT COUNT(*) FROM oauth_authorization_codes`); got != 0 {
 		t.Fatalf("拒绝后不应存在授权码")
@@ -590,7 +604,7 @@ func TestTokenExchangeValidation(t *testing.T) {
 
 	// 错误 verifier 不消费授权码；修正后可成功。
 	_, err := env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "authorization_code", Code: result.Code, RedirectURI: testRedirect,
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
 		ClientID: testAppID, CodeVerifier: strings.Repeat("A", 43), RequestID: "req_bad_verifier"})
 	if !isOAuthCode(err, "invalid_grant") {
 		t.Fatalf("PKCE 不符应 invalid_grant，实际 %v", err)
@@ -600,14 +614,14 @@ func TestTokenExchangeValidation(t *testing.T) {
 	}
 	// redirect_uri 替换。
 	_, err = env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "authorization_code", Code: result.Code, RedirectURI: testRedirect2,
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect2,
 		ClientID: testAppID, CodeVerifier: pkceVerifier, RequestID: "req_bad_redirect"})
 	if !isOAuthCode(err, "invalid_grant") {
 		t.Fatalf("回调替换应 invalid_grant，实际 %v", err)
 	}
 	// 错误 grant type。
 	_, err = env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "password", Code: result.Code, RedirectURI: testRedirect,
+		GrantType: "password", Code: result.Code.Reveal(), RedirectURI: testRedirect,
 		ClientID: testAppID, CodeVerifier: pkceVerifier})
 	if !isOAuthCode(err, "unsupported_grant_type") {
 		t.Fatalf("password 授权应 unsupported_grant_type，实际 %v", err)
@@ -625,7 +639,7 @@ func TestTokenExchangeValidation(t *testing.T) {
 		t.Fatalf("错误不是标准 OAuth 格式: %v", err)
 	}
 	// 正确的兑换仍成功。
-	response, err := env.exchangeAccess(result.Code)
+	response, err := env.exchangeAccess(result.Code.Reveal())
 	if err != nil {
 		t.Fatalf("正确兑换失败: %v", err)
 	}
@@ -639,14 +653,14 @@ func TestExchangeCrossClientAndClientState(t *testing.T) {
 	result := env.approve(prompt)
 	// 跨客户端兑换：使用另一个已登记公开客户端的 client_id。
 	_, err := env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "authorization_code", Code: result.Code, RedirectURI: testRedirect,
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
 		ClientID: testAppID2, CodeVerifier: pkceVerifier})
 	if !isOAuthCode(err, "invalid_grant") {
 		t.Fatalf("跨客户端兑换应 invalid_grant，实际 %v", err)
 	}
 	// 应用停用后兑换：客户端配置不可用，按 invalid_client 拒绝。
 	env.exec(`UPDATE applications SET status='disabled' WHERE id=?`, testAppID)
-	_, err = env.exchangeAccess(result.Code)
+	_, err = env.exchangeAccess(result.Code.Reveal())
 	if !isOAuthCode(err, "invalid_client") {
 		t.Fatalf("客户端停用后兑换应 invalid_client，实际 %v", err)
 	}
@@ -661,7 +675,7 @@ func TestExchangeSessionInvalidated(t *testing.T) {
 		session.RevokeReasonUserSessions); err != nil {
 		t.Fatalf("撤销会话: %v", err)
 	}
-	_, err := env.exchangeAccess(result.Code)
+	_, err := env.exchangeAccess(result.Code.Reveal())
 	if !isOAuthCode(err, "invalid_grant") {
 		t.Fatalf("会话失效后兑换应 invalid_grant，实际 %v", err)
 	}
@@ -681,7 +695,7 @@ func TestExchangeConcurrentSingleWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := env.exchangeAccess(result.Code)
+			_, err := env.exchangeAccess(result.Code.Reveal())
 			results <- err
 		}()
 	}
@@ -706,6 +720,12 @@ func TestExchangeConcurrentSingleWinner(t *testing.T) {
 	if got := env.queryInt(`SELECT COUNT(*) FROM oauth_authorization_codes WHERE consumed_at_ms IS NOT NULL`); got != 1 {
 		t.Fatalf("授权码应恰好消费一次")
 	}
+	// 步骤 51 遗留 (d)：并发兑换失败方也记录重放探测时间戳。SQLite 单写者下并发
+	// 标记是尽力而为（锁竞争可能让个别标记失败），顺序重放必须恰好记录一次
+	// （TestTokenExchangeValidation 已断言）。
+	if got := env.queryInt(`SELECT COUNT(*) FROM oauth_authorization_codes WHERE replayed_at_ms IS NOT NULL`); got < 1 {
+		t.Fatal("并发失败方未记录重放时间戳")
+	}
 }
 
 func TestExchangeExpiredCode(t *testing.T) {
@@ -713,7 +733,7 @@ func TestExchangeExpiredCode(t *testing.T) {
 	prompt := env.begin()
 	result := env.approve(prompt)
 	env.now = env.now.Add(oauthflow.DefaultCodeTTL + time.Minute)
-	_, err := env.exchangeAccess(result.Code)
+	_, err := env.exchangeAccess(result.Code.Reveal())
 	if !isOAuthCode(err, "invalid_grant") {
 		t.Fatalf("过期授权码应 invalid_grant，实际 %v", err)
 	}
@@ -727,21 +747,21 @@ func TestConfidentialClientAuthentication(t *testing.T) {
 	result := env.approve(prompt)
 	// 缺少客户端认证。
 	_, err := env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "authorization_code", Code: result.Code, RedirectURI: testRedirect,
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
 		ClientID: testAppID, CodeVerifier: pkceVerifier})
 	if !isOAuthCode(err, "invalid_client") {
 		t.Fatalf("缺少客户端认证应 invalid_client，实际 %v", err)
 	}
 	// 错误 secret。
 	_, err = env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "authorization_code", Code: result.Code, RedirectURI: testRedirect,
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
 		ClientID: testAppID, ClientSecret: "wrong", CodeVerifier: pkceVerifier})
 	if !isOAuthCode(err, "invalid_client") {
 		t.Fatalf("错误客户端 secret 应 invalid_client，实际 %v", err)
 	}
 	// 正确 secret 成功。
 	response, err := env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "authorization_code", Code: result.Code, RedirectURI: testRedirect,
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
 		ClientID: testAppID, ClientSecret: "confidential-secret", CodeVerifier: pkceVerifier})
 	if err != nil {
 		t.Fatalf("保密客户端兑换失败: %v", err)
@@ -753,7 +773,7 @@ func TestConfidentialClientAuthentication(t *testing.T) {
 	prompt = env.begin()
 	result = env.approve(prompt)
 	response, err = env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
-		GrantType: "authorization_code", Code: result.Code, RedirectURI: testRedirect,
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
 		ClientID: testAppID, ClientCertificatePEM: "valid-client-certificate-pem",
 		CodeVerifier: pkceVerifier})
 	if err != nil {
@@ -772,4 +792,234 @@ func isOAuthCode(err error, code string) bool {
 		return false
 	}
 	return protocolError.Code == code
+}
+
+// ===== OIDC 接线（步骤 52） =====
+
+// fakeIDTokenIssuer 记录 oauthflow 交给 OIDC 的签发请求并可注入错误。
+type fakeIDTokenIssuer struct {
+	requests []oauthflow.LoginIDTokenRequest
+	err      error
+}
+
+func (f *fakeIDTokenIssuer) IssueLoginIDToken(_ context.Context,
+	request oauthflow.LoginIDTokenRequest) (token.IssuedToken, error) {
+	f.requests = append(f.requests, request)
+	if f.err != nil {
+		return token.IssuedToken{}, f.err
+	}
+	return token.IssuedToken{}, nil
+}
+
+// TestOpenIDScopeRequiresConfiguredOIDC 验证未配置 OIDC 时 openid scope 在授权请求
+// 阶段即被拒绝（不声明未实现能力，也不在兑换时静默忽略）。
+func TestOpenIDScopeRequiresConfiguredOIDC(t *testing.T) {
+	env := newTestEnv(t, oauthclient.ClientTypePublic)
+	env.enableOpenIDForTestClient()
+	request := env.authorizeRequest()
+	request.Scope = []string{"openid", "profile", "email"}
+	request.Resource = []string{"https://issuer.example.test"}
+	_, err := env.flow.BeginAuthorization(env.ctx, env.sessionSecret, request)
+	var protocolErr *oauthflow.OAuthError
+	if !errors.As(err, &protocolErr) || protocolErr.Code != "invalid_scope" {
+		t.Fatalf("未配置 OIDC 时 openid 错误 = %v，期望 invalid_scope", err)
+	}
+	if protocolErr.RedirectURI != testRedirect {
+		t.Errorf("协议错误应附带已验证回调: %+v", protocolErr)
+	}
+}
+
+// TestOIDCAuthFactsBoundIntoIDToken 验证 openid 授权码兑换会把 nonce 与会话真实认证
+// 时间/方法交给 OIDC 签发，且响应保留 Access Token；未请求 openid 时不调用 OIDC。
+func TestOIDCAuthFactsBoundIntoIDToken(t *testing.T) {
+	env := newTestEnv(t, oauthclient.ClientTypePublic)
+	env.enableOpenIDForTestClient()
+	issuer := &fakeIDTokenIssuer{}
+	flow, err := oauthflow.New(oauthflow.Options{
+		Store: env.flowStore, Audit: env.audit, Clients: env.source,
+		ClientAuth: env.clientAuth, Sessions: env.session, Tokens: env.tokens,
+		Reauth: env.reAuth, OIDC: issuer,
+		Now: func() time.Time { return env.now },
+	})
+	if err != nil {
+		t.Fatalf("构造 OIDC 授权流程: %v", err)
+	}
+	env.flow = flow
+	request := env.authorizeRequest()
+	request.Scope = []string{"openid", "profile", "email"}
+	request.Resource = []string{"https://issuer.example.test"}
+	prompt, err := env.flow.BeginAuthorization(env.ctx, env.sessionSecret, request)
+	if err != nil {
+		t.Fatalf("发起 openid 授权: %v", err)
+	}
+	result := env.approve(prompt)
+	response, err := env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
+		ClientID: testAppID, CodeVerifier: pkceVerifier, RequestID: "req_exchange_oidc"})
+	if err != nil {
+		t.Fatalf("兑换 openid 授权码: %v", err)
+	}
+	if !response.AccessToken.IsSet() {
+		t.Error("缺少 Access Token")
+	}
+	if len(issuer.requests) != 1 {
+		t.Fatalf("ID Token 签发调用数 = %d，期望 1", len(issuer.requests))
+	}
+	bound := issuer.requests[0]
+	if bound.Nonce != "nonce-abc" || bound.ClientID != testAppID || bound.UserID != testUserID {
+		t.Errorf("ID Token 绑定异常: %+v", bound)
+	}
+	if !bound.AuthTime.Equal(env.now) || len(bound.AuthMethods) != 1 ||
+		bound.AuthMethods[0] != string(authn.MethodPassword) {
+		t.Errorf("认证事实未正确传递: %+v", bound)
+	}
+	if strings.Join(bound.Scopes, " ") != "email openid profile" {
+		t.Errorf("Scope 传递异常: %v", bound.Scopes)
+	}
+}
+
+// TestAuthorizationArtifactsRedacted 验证授权码与重定向地址使用脱敏类型：默认格式化/
+// 字符串化不泄露明文，只有显式 Reveal() 才得到可用于传输的值。
+func TestAuthorizationArtifactsRedacted(t *testing.T) {
+	env := newTestEnv(t, oauthclient.ClientTypePublic)
+	result := env.approve(env.begin())
+	if !result.Code.IsSet() || !result.RedirectURL.IsSet() {
+		t.Fatal("批准结果缺少授权码/重定向")
+	}
+	if result.Code.String() != "[REDACTED]" || result.RedirectURL.String() != "[REDACTED]" {
+		t.Errorf("授权码/重定向默认未脱敏: %q %q", result.Code.String(), result.RedirectURL.String())
+	}
+	if strings.Contains(fmt.Sprintf("%v", result.Code), result.Code.Reveal()) ||
+		strings.Contains(fmt.Sprintf("%s", result.RedirectURL), result.Code.Reveal()) {
+		t.Error("格式化输出泄露授权码")
+	}
+	if !strings.Contains(result.RedirectURL.Reveal(), "code="+result.Code.Reveal()) {
+		t.Error("显式 Reveal 的重定向应包含授权码")
+	}
+}
+
+// fakeOIDCUsers 是 OIDC UserInfo 的用户资料来源测试替身。
+type fakeOIDCUsers struct{}
+
+func (f *fakeOIDCUsers) LoadUserInfo(_ context.Context,
+	userID string) (oidc.UserInfoRecord, bool, error) {
+	if userID != testUserID {
+		return oidc.UserInfoRecord{}, false, nil
+	}
+	return oidc.UserInfoRecord{UserID: userID, Username: "alice", Nickname: "Alice",
+		Language: "zh-CN", Timezone: "Asia/Shanghai", Status: "active",
+		Email: "alice@example.test", EmailVerified: true,
+		UpdatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}, true, nil
+}
+
+// TestOIDCExchangeEndToEnd 覆盖 openid 授权码完整链路：授权请求 -> 确认 -> 兑换返回
+// 真实签名 ID Token（nonce/auth_time/amr/sub）并用标准 JOSE/本项目验证器校验；
+// UserInfo 验证 Access Token 且 sub 与 ID Token 一致、按 scope 返回字段。
+func TestOIDCExchangeEndToEnd(t *testing.T) {
+	env := newTestEnv(t, oauthclient.ClientTypePublic)
+	env.enableOpenIDForTestClient()
+	oidcService, err := oidc.New(oidc.Options{
+		Issuer:                "https://issuer.example.test",
+		AuthorizationEndpoint: "https://issuer.example.test/oauth/authorize",
+		TokenEndpoint:         "https://issuer.example.test/oauth/token",
+		UserInfoEndpoint:      "https://issuer.example.test/oidc/userinfo",
+		JWKSURI:               "https://issuer.example.test/oidc/jwks",
+		Tokens:                env.tokens,
+		Users:                 &fakeOIDCUsers{},
+		SubjectSecret:         []byte("0123456789abcdef0123456789abcdef"),
+		Now:                   func() time.Time { return env.now },
+	})
+	if err != nil {
+		t.Fatalf("构造 OIDC 服务: %v", err)
+	}
+	flow, err := oauthflow.New(oauthflow.Options{
+		Store: env.flowStore, Audit: env.audit, Clients: env.source,
+		ClientAuth: env.clientAuth, Sessions: env.session, Tokens: env.tokens,
+		Reauth: env.reAuth, OIDC: oidcService,
+		Now: func() time.Time { return env.now },
+	})
+	if err != nil {
+		t.Fatalf("构造 OIDC 授权流程: %v", err)
+	}
+	env.flow = flow
+	request := env.authorizeRequest()
+	request.Scope = []string{"openid", "profile", "email"}
+	request.Resource = []string{"https://issuer.example.test"}
+	prompt, err := env.flow.BeginAuthorization(env.ctx, env.sessionSecret, request)
+	if err != nil {
+		t.Fatalf("发起 openid 授权: %v", err)
+	}
+	result := env.approve(prompt)
+	response, err := env.flow.Exchange(env.ctx, oauthflow.ExchangeRequest{
+		GrantType: "authorization_code", Code: result.Code.Reveal(), RedirectURI: testRedirect,
+		ClientID: testAppID, CodeVerifier: pkceVerifier, RequestID: "req_exchange_oidc_e2e"})
+	if err != nil {
+		t.Fatalf("兑换 openid 授权码: %v", err)
+	}
+	if !response.IDToken.IsSet() {
+		t.Fatal("openid 兑换缺少 ID Token")
+	}
+	if response.IDToken.String() != "[REDACTED]" {
+		t.Error("ID Token 默认未脱敏")
+	}
+	claims, err := env.tokens.VerifyIDToken(env.ctx, response.IDToken.Reveal(), testAppID)
+	if err != nil {
+		t.Fatalf("验证兑换返回的 ID Token: %v", err)
+	}
+	if claims.Nonce != "nonce-abc" || !claims.AuthTime.Equal(env.now) ||
+		!containsValue(claims.AMR, "pwd") || claims.Subject == testUserID ||
+		claims.Audience != testAppID {
+		t.Fatalf("ID Token 声明异常: %+v", claims)
+	}
+	// UserInfo：Access Token audience 必须包含 issuer；sub 与 ID Token 一致。
+	env.flow = flow
+	userInfo, err := oidcService.UserInfo(env.ctx, response.AccessToken.Reveal())
+	if err != nil {
+		t.Fatalf("UserInfo: %v", err)
+	}
+	if userInfo.Subject != claims.Subject {
+		t.Errorf("UserInfo sub = %q，与 ID Token %q 不一致", userInfo.Subject, claims.Subject)
+	}
+	if userInfo.Email != "alice@example.test" || userInfo.Name != "Alice" {
+		t.Errorf("UserInfo 字段裁剪异常: %+v", userInfo)
+	}
+}
+
+func containsValue(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestExchangeRejectsRedirectRemovedFromRegistration 覆盖步骤 51 遗留 (b)：兑换时按
+// 客户端当前登记重新做精确回调匹配，授权后移除的回调不能继续兑换。
+func TestExchangeRejectsRedirectRemovedFromRegistration(t *testing.T) {
+	env := newTestEnv(t, oauthclient.ClientTypePublic)
+	result := env.approve(env.begin())
+	env.exec(`UPDATE oauth_clients SET redirect_uris_json='["https://other.example.test/cb"]'
+WHERE client_id=?`, testAppID)
+	_, err := env.exchangeAccess(result.Code.Reveal())
+	if !isOAuthCode(err, "invalid_grant") {
+		t.Fatalf("移除回调后兑换错误 = %v，期望 invalid_grant", err)
+	}
+}
+
+// TestDecideRejectsDisabledClient 覆盖步骤 51 遗留 (e)：确认前重读客户端，应用停用
+// 后不得批准授权（返回 access_denied 重定向，不签发授权码）。
+func TestDecideRejectsDisabledClient(t *testing.T) {
+	env := newTestEnv(t, oauthclient.ClientTypePublic)
+	prompt := env.begin()
+	env.exec(`UPDATE applications SET status='disabled' WHERE id=?`, testAppID)
+	_, err := env.flow.DecideAuthorization(env.ctx, env.sessionSecret, oauthflow.DecideRequest{
+		RequestID: prompt.RequestID, Approve: true, DecisionRequestID: "req_decide_disabled"})
+	var protocolErr *oauthflow.OAuthError
+	if !errors.As(err, &protocolErr) || protocolErr.Code != "access_denied" {
+		t.Fatalf("停用应用后确认错误 = %v，期望 access_denied", err)
+	}
+	if got := env.queryInt(`SELECT COUNT(*) FROM oauth_authorization_codes`); got != 0 {
+		t.Fatalf("停用应用后不应签发授权码: %d", got)
+	}
 }

@@ -28,6 +28,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -248,6 +249,95 @@ func (e *OAuthError) withRedirect(redirectURI, state string) *OAuthError {
 	return e
 }
 
+// AuthorizationCode 是一次性授权码明文。String/Format 全部脱敏，宿主必须在生成
+// 重定向 URL 时显式 Reveal()，不得把它写入日志、审计或普通存储。
+type AuthorizationCode struct{ value string }
+
+// Reveal 返回授权码原文（只用于写入重定向 URL）。
+func (c AuthorizationCode) Reveal() string { return c.value }
+
+// IsSet 报告是否已生成授权码；不暴露内容。
+func (c AuthorizationCode) IsSet() bool { return c.value != "" }
+
+// String 实现 fmt.Stringer，固定脱敏。
+func (c AuthorizationCode) String() string {
+	if c.value == "" {
+		return "[UNSET]"
+	}
+	return "[REDACTED]"
+}
+
+// GoString 实现 fmt.GoStringer。
+func (c AuthorizationCode) GoString() string { return c.String() }
+
+// Format 实现 fmt.Formatter，避免 %v/%s 泄露授权码。
+func (c AuthorizationCode) Format(f fmt.State, _ rune) {
+	if c.value == "" {
+		_, _ = f.Write([]byte("[UNSET]"))
+		return
+	}
+	_, _ = f.Write([]byte("[REDACTED]"))
+}
+
+// RedirectURL 是含授权码/错误参数的授权响应重定向地址。默认脱敏；宿主渲染 HTTP
+// 响应时必须显式 Reveal()，不得整体写入日志。
+type RedirectURL struct{ value string }
+
+// Reveal 返回重定向地址原文（只用于传输层重定向）。
+func (u RedirectURL) Reveal() string { return u.value }
+
+// IsSet 报告是否有重定向地址。
+func (u RedirectURL) IsSet() bool { return u.value != "" }
+
+// String 实现 fmt.Stringer，固定脱敏。
+func (u RedirectURL) String() string {
+	if u.value == "" {
+		return "[UNSET]"
+	}
+	return "[REDACTED]"
+}
+
+// GoString 实现 fmt.GoStringer。
+func (u RedirectURL) GoString() string { return u.String() }
+
+// Format 实现 fmt.Formatter，避免泄露授权码。
+func (u RedirectURL) Format(f fmt.State, _ rune) {
+	if u.value == "" {
+		_, _ = f.Write([]byte("[UNSET]"))
+		return
+	}
+	_, _ = f.Write([]byte("[REDACTED]"))
+}
+
+// LoginIDTokenRequest 是授权码兑换成功后申请 OIDC ID Token 的请求。所有认证事实
+// （AuthTime/AuthMethods）来自授权确认时保存的会话快照，不能由调用方自述或伪造。
+type LoginIDTokenRequest struct {
+	ClientID    string
+	UserID      string
+	Nonce       string
+	AuthTime    time.Time
+	AuthMethods []string
+	Scopes      []string
+	RequestID   string
+}
+
+// IDTokenIssuer 是 OIDC ID Token 签发契约；生产实现为 *internal/oidc.Service。
+// 未接入时不得签发 ID Token（openid scope 在授权请求阶段即被拒绝）。
+type IDTokenIssuer interface {
+	IssueLoginIDToken(ctx context.Context, request LoginIDTokenRequest) (token.IssuedToken, error)
+}
+
+// 常用 Scope 标识。openid 是 OIDC 登录能力的开关：未配置 OIDC 时授权请求中的
+// openid 一律拒绝，兑换也不会签发 ID Token。
+const (
+	// ScopeOpenID 表示请求 OIDC 身份令牌。
+	ScopeOpenID = "openid"
+	// ScopeProfile 表示允许返回基础资料字段（昵称/语言/时区等）。
+	ScopeProfile = "profile"
+	// ScopeEmail 表示允许返回已验证邮箱与验证状态。
+	ScopeEmail = "email"
+)
+
 // ClientInfo 是授权流程需要的客户端登记配置快照（来自 internal/oauthclient）。
 type ClientInfo struct {
 	ClientID     string
@@ -343,8 +433,8 @@ type DecideRequest struct {
 type AuthorizationResult struct {
 	RequestID     string
 	Approved      bool
-	Code          string
-	RedirectURL   string
+	Code          AuthorizationCode
+	RedirectURL   RedirectURL
 	State         string
 	CodeExpiresAt time.Time
 }
@@ -366,9 +456,11 @@ type ExchangeRequest struct {
 // Reveal() 后渲染 JSON，不得记录到日志/审计。
 type TokenResponse struct {
 	AccessToken token.Token
-	TokenType   string
-	ExpiresIn   int64
-	Scope       string
+	// IDToken 仅在授权请求包含 openid scope 时签发；默认脱敏，宿主显式 Reveal()。
+	IDToken   token.Token
+	TokenType string
+	ExpiresIn int64
+	Scope     string
 	// RequestID/CodeID 是内部关联标识（不含秘密）。
 	RequestID string
 	CodeID    string

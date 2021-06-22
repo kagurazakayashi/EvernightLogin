@@ -307,6 +307,7 @@ type authnSpec struct {
 	kind            Kind
 	reason          Reason
 	steps           []authn.Step
+	methods         []authn.Method
 	strongAuthAt    time.Time
 }
 
@@ -326,10 +327,12 @@ func sessionSpecFromAuth(result authn.AuthenticateResult) (authnSpec, error) {
 	if len(result.CompletedMethods) == 0 {
 		return authnSpec{}, fmt.Errorf("%w: 认证结果没有已完成方法", ErrInvalidRequest)
 	}
+	methods := make([]authn.Method, 0, len(result.CompletedMethods))
 	for _, method := range result.CompletedMethods {
 		if !method.Valid() {
 			return authnSpec{}, fmt.Errorf("%w: 认证方法标识未知", ErrInvalidRequest)
 		}
+		methods = append(methods, method)
 	}
 	reason, err := reasonFromAuthn(result)
 	if err != nil {
@@ -367,6 +370,7 @@ func sessionSpecFromAuth(result authn.AuthenticateResult) (authnSpec, error) {
 		kind:            kind,
 		reason:          reason,
 		steps:           append([]authn.Step(nil), result.RequiredSteps...),
+		methods:         append([]authn.Method(nil), methods...),
 		strongAuthAt:    result.StrongAuthCompletedAt,
 	}, nil
 }
@@ -434,6 +438,7 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 		Kind:              spec.kind,
 		Reason:            spec.reason,
 		RequiredSteps:     spec.steps,
+		AuthMethods:       spec.methods,
 		SecurityVersion:   spec.securityVersion,
 		SecretDigest:      secretDigest,
 		CSRFDigest:        csrfDigest,
@@ -1791,6 +1796,7 @@ func (r Record) session() Session {
 		Reason:               r.Reason,
 		SecurityVersion:      r.SecurityVersion,
 		RequiredSteps:        append([]authn.Step(nil), r.RequiredSteps...),
+		AuthMethods:          append([]authn.Method(nil), r.AuthMethods...),
 		StrongAuthVerifiedAt: r.StrongAuthAt,
 		CreatedAt:            r.CreatedAt,
 		LastSeenAt:           r.LastSeenAt,

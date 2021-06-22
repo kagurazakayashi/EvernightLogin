@@ -409,6 +409,26 @@
 // CLIENT_AUTH_FAILED 并写审计。private_key_jwt、授权端点/令牌签发、PKCE 实际
 // 校验、Device Flow、数据范围细粒度接线与 HTTP 管理接口留后续步骤；真实 mTLS
 // 握手/CA 链、过期凭证清理、多实例限流与 race/非 Windows 未验证。
+//
+// internal/oidc 已实现 OIDC 登录能力（步骤 52）：发现文档、ID Token 与 UserInfo。
+// 迁移 0032 为 sessions 增加 auth_methods_json（登录时真实完成的认证方法），并为
+// oauth_authorization_requests/codes 增加 auth_time_ms/auth_methods_json；授权确认
+// 时保存会话真实认证事实，兑换时用于 ID Token 的 auth_time 与 amr/acr
+// （internal/authfact 映射），调用方不能自述强度；升级前旧记录无事实时 fail-closed。
+// 只有授权请求包含 openid 且装配了 OIDC 时才签发 ID Token；未配置 OIDC 时 openid
+// 在授权请求阶段按 invalid_scope 拒绝。ID Token 的 aud 为单一 client_id、azp 一致、
+// nonce 原样回传，sub 为按客户端配对的稳定假名（HMAC-SHA256(主机秘密,
+// client_id|user_id)），同一用户不同客户端不可关联；iss/exp/iat/类型由 internal/token
+// 固定签发方与 ES256 保证。发现文档使用固定公开 issuer（无尾斜杠、端点同源且位于
+// issuer 路径前缀），只声明真实实现的 authorization_code + PKCE S256 + ES256 +
+// pairwise 与已实现端点/Scope/Claims，不声明 refresh/device/撤销/结束会话等能力。
+// UserInfo 验证 Access Token（以 issuer 为资源受众、要求 openid scope），按 profile/
+// email scope 裁剪字段，email_verified 如实反映数据库验证状态，sub 与 ID Token 一致，
+// 不输出密码/MFA/凭证/会话材料。步骤 51 遗留已收口：统一强制 PKCE、Exchange 按当前
+// 登记重匹配回调、授权码/重定向脱敏类型、并发兑换失败方记录重放、确认前重读客户端。
+// 互操作验证使用独立 go-jose 校验流程（非仅自签自验），真实第三方 OIDC 客户端未实测；
+// HTTP 端点/页面、刷新令牌/设备码/撤销/结束会话、subject 秘密轮换与 race/非 Windows
+// 未验证。
 // internal/oauthflow 与 internal/oauthflow/sqlite 已实现 OAuth 2.0 授权码 + PKCE
 // 的授权请求、用户确认、授权码发行与 Token 端点兑换（步骤 51，不建浏览器 UI、
 // 不暴露 HTTP 路由、不签发刷新令牌）。授权端点校验客户端登记、逐字节精确回调

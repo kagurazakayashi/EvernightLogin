@@ -26,7 +26,7 @@ const (
 	selectSessionColumns = `id,user_id,COALESCE(app_id,''),kind,restricted_reason,required_steps_json,
 security_version,secret_digest,csrf_digest,key_id,strong_auth_verified_at_ms,row_version,
 created_at_ms,last_seen_at_ms,idle_expires_at_ms,absolute_expires_at_ms,revoked_at_ms,revoked_reason,
-remember_me,client_user_agent,client_address`
+remember_me,client_user_agent,client_address,auth_methods_json`
 
 	selectSessionByIDSQL = `SELECT ` + selectSessionColumns + ` FROM sessions WHERE id=?`
 
@@ -35,8 +35,8 @@ remember_me,client_user_agent,client_address`
 id,user_id,app_id,kind,restricted_reason,required_steps_json,security_version,
 secret_digest,csrf_digest,key_id,strong_auth_verified_at_ms,row_version,
 created_at_ms,last_seen_at_ms,idle_expires_at_ms,absolute_expires_at_ms,request_id,
-remember_me,client_user_agent,client_address
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+remember_me,client_user_agent,client_address,auth_methods_json
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 	// touchSessionSQL 条件续期：只有未撤销且未到期时才更新最后活动与空闲到期。
 	touchSessionSQL = `UPDATE sessions
@@ -105,6 +105,10 @@ func (s *Store) Insert(ctx context.Context, tx audit.Tx, record session.Record) 
 	if err != nil {
 		return err
 	}
+	methods, err := encodeMethods(record.AuthMethods)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, insertSessionSQL,
 		record.ID,
 		record.UserID,
@@ -126,6 +130,7 @@ func (s *Store) Insert(ctx context.Context, tx audit.Tx, record session.Record) 
 		boolInt(record.RememberMe),
 		record.ClientUserAgent,
 		record.ClientAddress,
+		methods,
 	)
 	if err != nil {
 		return storeError("写入会话", err)
@@ -422,6 +427,7 @@ func scanRecordRow(rows *sql.Rows) (session.Record, bool, error) {
 		revokedMS         sql.NullInt64
 		revokeReason      string
 		rememberMe        int
+		methodsJSON       string
 	)
 	if err := rows.Scan(
 		&record.ID,
@@ -445,6 +451,7 @@ func scanRecordRow(rows *sql.Rows) (session.Record, bool, error) {
 		&rememberMe,
 		&record.ClientUserAgent,
 		&record.ClientAddress,
+		&methodsJSON,
 	); err != nil {
 		return session.Record{}, false, storeError("读取会话", err)
 	}
@@ -459,6 +466,11 @@ func scanRecordRow(rows *sql.Rows) (session.Record, bool, error) {
 		return session.Record{}, false, err
 	}
 	record.RequiredSteps = steps
+	authMethods, err := decodeMethods(methodsJSON)
+	if err != nil {
+		return session.Record{}, false, err
+	}
+	record.AuthMethods = authMethods
 	record.CreatedAt = fromUnixMilli(createdMS)
 	record.LastSeenAt = fromUnixMilli(lastSeenMS)
 	record.IdleExpiresAt = fromUnixMilli(idleExpiresMS)
@@ -487,6 +499,45 @@ func scanSingleValue(rows *sql.Rows, value *int64) error {
 		return storeError("读取统计结果", err)
 	}
 	return nil
+}
+
+// encodeMethods 把登录时真实完成的认证方法编码为稳定 JSON 数组；不保存秘密。
+func encodeMethods(methods []authn.Method) (string, error) {
+	if len(methods) == 0 {
+		return "[]", nil
+	}
+	values := make([]string, 0, len(methods))
+	for _, method := range methods {
+		if !method.Valid() {
+			return "", fmt.Errorf("%w: 认证方法标识未知", session.ErrOptionsInvalid)
+		}
+		values = append(values, string(method))
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("%w: 无法编码认证方法", session.ErrStoreUnavailable)
+	}
+	return string(encoded), nil
+}
+
+// decodeMethods 解码认证方法；损坏或未知标识按存储不一致 fail-closed。
+func decodeMethods(encoded string) ([]authn.Method, error) {
+	if encoded == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
+		return nil, fmt.Errorf("%w: 认证方法不是合法 JSON", session.ErrStoreUnavailable)
+	}
+	methods := make([]authn.Method, 0, len(values))
+	for _, value := range values {
+		method := authn.Method(value)
+		if !method.Valid() {
+			return nil, fmt.Errorf("%w: 认证方法标识未知", session.ErrStoreUnavailable)
+		}
+		methods = append(methods, method)
+	}
+	return methods, nil
 }
 
 // encodeSteps 把仍需完成的认证步骤编码为稳定 JSON 数组；不保存任何秘密。

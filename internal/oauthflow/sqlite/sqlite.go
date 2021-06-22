@@ -19,18 +19,19 @@ import (
 
 const requestColumns = `id,user_id,client_id,redirect_uri,response_type,scope,audience_json,
 state,nonce,code_challenge,code_challenge_method,session_id,security_version,status,
-request_id,created_at_ms,expires_at_ms,COALESCE(decided_at_ms,0)`
+request_id,created_at_ms,expires_at_ms,COALESCE(decided_at_ms,0),auth_time_ms,auth_methods_json`
 
 const codeColumns = `id,code_sha256,authorization_request_id,user_id,client_id,redirect_uri,
 scope,audience_json,nonce,code_challenge,code_challenge_method,session_id,security_version,
-request_id,issued_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),COALESCE(replayed_at_ms,0)`
+request_id,issued_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),COALESCE(replayed_at_ms,0),
+auth_time_ms,auth_methods_json`
 
 const (
 	insertRequestSQL = `INSERT INTO oauth_authorization_requests(
 id,user_id,client_id,redirect_uri,response_type,scope,audience_json,state,nonce,
 code_challenge,code_challenge_method,session_id,security_version,status,request_id,
-created_at_ms,expires_at_ms,decided_at_ms
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,NULL)`
+created_at_ms,expires_at_ms,decided_at_ms,auth_time_ms,auth_methods_json
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,NULL,?,?)`
 
 	selectRequestSQL = `SELECT ` + requestColumns + ` FROM oauth_authorization_requests WHERE id=?`
 
@@ -40,8 +41,8 @@ WHERE id=? AND status='pending' AND expires_at_ms>?`
 	insertCodeSQL = `INSERT INTO oauth_authorization_codes(
 id,code_sha256,authorization_request_id,user_id,client_id,redirect_uri,scope,audience_json,
 nonce,code_challenge,code_challenge_method,session_id,security_version,request_id,
-issued_at_ms,expires_at_ms,consumed_at_ms,replayed_at_ms
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)`
+issued_at_ms,expires_at_ms,consumed_at_ms,replayed_at_ms,auth_time_ms,auth_methods_json
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)`
 
 	selectCodeByHashSQL = `SELECT ` + codeColumns + ` FROM oauth_authorization_codes
 WHERE code_sha256=?`
@@ -59,7 +60,7 @@ WHERE user_id=? AND app_id=? AND status='active'`
 
 	sessionSnapshotSQL = `SELECT id,user_id,COALESCE(app_id,''),kind,security_version,
 COALESCE(strong_auth_verified_at_ms,0),idle_expires_at_ms,absolute_expires_at_ms,
-COALESCE(revoked_at_ms,0) FROM sessions WHERE id=?`
+COALESCE(revoked_at_ms,0),created_at_ms,auth_methods_json FROM sessions WHERE id=?`
 )
 
 // Store 是 oauthflow.Store 的 SQLite 实现。
@@ -95,7 +96,9 @@ func (s *Store) CreateAuthorizationRequestTx(ctx context.Context, tx audit.Tx,
 		request.ResponseType, joinScopes(request.Scopes), string(audience),
 		request.State, request.Nonce, request.CodeChallenge, request.CodeChallengeMethod,
 		request.SessionID, request.SecurityVersion, request.RequestID,
-		request.CreatedAt.UTC().UnixMilli(), request.ExpiresAt.UTC().UnixMilli()); err != nil {
+		request.CreatedAt.UTC().UnixMilli(), request.ExpiresAt.UTC().UnixMilli(),
+		authTimeMillis(request.AuthTime), string(mustJSON(request.AuthMethods, "[]")),
+	); err != nil {
 		return fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
 	}
 	return nil
@@ -161,7 +164,9 @@ func (s *Store) CreateAuthorizationCodeTx(ctx context.Context, tx audit.Tx,
 		code.ID, digest[:], code.RequestRef, code.UserID, code.ClientID, code.RedirectURI,
 		joinScopes(code.Scopes), string(audience), code.Nonce, code.CodeChallenge,
 		code.CodeChallengeMethod, code.SessionID, code.SecurityVersion, code.RequestID,
-		code.IssuedAt.UTC().UnixMilli(), code.ExpiresAt.UTC().UnixMilli()); err != nil {
+		code.IssuedAt.UTC().UnixMilli(), code.ExpiresAt.UTC().UnixMilli(),
+		authTimeMillis(code.AuthTime), string(mustJSON(code.AuthMethods, "[]")),
+	); err != nil {
 		return fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
 	}
 	return nil
@@ -275,14 +280,22 @@ func (s *Store) SessionSnapshot(ctx context.Context,
 		idleMS       int64
 		absoluteMS   int64
 		revokedMS    int64
+		createdMS    int64
+		methodsJSON  string
 	)
 	if err := rows.Scan(&snapshot.ID, &snapshot.UserID, &snapshot.AppID, &snapshot.Kind,
-		&snapshot.SecurityVersion, &strongAuthMS, &idleMS, &absoluteMS, &revokedMS); err != nil {
+		&snapshot.SecurityVersion, &strongAuthMS, &idleMS, &absoluteMS, &revokedMS,
+		&createdMS, &methodsJSON); err != nil {
 		return oauthflow.SessionSnapshot{}, false, fmt.Errorf("%w: %w",
 			oauthflow.ErrStoreUnavailable, err)
 	}
 	if strongAuthMS > 0 {
 		snapshot.StrongAuthAt = time.UnixMilli(strongAuthMS).UTC()
+	}
+	snapshot.AuthTime = time.UnixMilli(createdMS).UTC()
+	if err := json.Unmarshal([]byte(methodsJSON), &snapshot.AuthMethods); err != nil {
+		return oauthflow.SessionSnapshot{}, false, fmt.Errorf("%w: 认证方法不是合法 JSON",
+			oauthflow.ErrStoreUnavailable)
 	}
 	snapshot.IdleExpiresAt = time.UnixMilli(idleMS).UTC()
 	snapshot.AbsoluteExpiresAt = time.UnixMilli(absoluteMS).UTC()
@@ -306,12 +319,14 @@ func scanRequest(rows rowScanner) (oauthflow.AuthorizationRequestRecord, error) 
 		createdMS   int64
 		expiresMS   int64
 		decidedMS   int64
+		authTimeMS  int64
+		methodsJSON string
 	)
 	if err := rows.Scan(&record.ID, &record.UserID, &record.ClientID, &record.RedirectURI,
 		&record.ResponseType, &scope, &audienceRaw, &record.State, &record.Nonce,
 		&record.CodeChallenge, &record.CodeChallengeMethod, &record.SessionID,
 		&record.SecurityVersion, &record.Status, &record.RequestID, &createdMS, &expiresMS,
-		&decidedMS); err != nil {
+		&decidedMS, &authTimeMS, &methodsJSON); err != nil {
 		return oauthflow.AuthorizationRequestRecord{}, err
 	}
 	record.Scopes = parseScopes(scope)
@@ -322,6 +337,12 @@ func scanRequest(rows rowScanner) (oauthflow.AuthorizationRequestRecord, error) 
 	record.ExpiresAt = time.UnixMilli(expiresMS).UTC()
 	if decidedMS > 0 {
 		record.DecidedAt = time.UnixMilli(decidedMS).UTC()
+	}
+	if authTimeMS > 0 {
+		record.AuthTime = time.UnixMilli(authTimeMS).UTC()
+	}
+	if err := json.Unmarshal([]byte(methodsJSON), &record.AuthMethods); err != nil {
+		return oauthflow.AuthorizationRequestRecord{}, err
 	}
 	return record, nil
 }
@@ -336,11 +357,13 @@ func scanCode(rows rowScanner) (oauthflow.AuthorizationCodeRecord, error) {
 		expiresMS   int64
 		consumedMS  int64
 		replayedMS  int64
+		authTimeMS  int64
+		methodsJSON string
 	)
 	if err := rows.Scan(&code.ID, &digest, &code.RequestRef, &code.UserID, &code.ClientID,
 		&code.RedirectURI, &scope, &audienceRaw, &code.Nonce, &code.CodeChallenge,
 		&code.CodeChallengeMethod, &code.SessionID, &code.SecurityVersion, &code.RequestID,
-		&issuedMS, &expiresMS, &consumedMS, &replayedMS); err != nil {
+		&issuedMS, &expiresMS, &consumedMS, &replayedMS, &authTimeMS, &methodsJSON); err != nil {
 		return oauthflow.AuthorizationCodeRecord{}, err
 	}
 	if len(digest) != 32 {
@@ -359,7 +382,33 @@ func scanCode(rows rowScanner) (oauthflow.AuthorizationCodeRecord, error) {
 	if replayedMS > 0 {
 		code.ReplayedAt = time.UnixMilli(replayedMS).UTC()
 	}
+	if authTimeMS > 0 {
+		code.AuthTime = time.UnixMilli(authTimeMS).UTC()
+	}
+	if err := json.Unmarshal([]byte(methodsJSON), &code.AuthMethods); err != nil {
+		return oauthflow.AuthorizationCodeRecord{}, err
+	}
 	return code, nil
+}
+
+// authTimeMillis 把认证时间转为毫秒；零值写 0（表示无可用认证事实）。
+func authTimeMillis(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.UTC().UnixMilli()
+}
+
+// mustJSON 编码稳定字符串数组；编码失败返回 fallback（仅接受静态合法值）。
+func mustJSON(values []string, fallback string) []byte {
+	if values == nil {
+		return []byte(fallback)
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return []byte(fallback)
+	}
+	return encoded
 }
 
 func joinScopes(scopes []string) string { return strings.Join(scopes, " ") }

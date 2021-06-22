@@ -206,6 +206,9 @@ type Session struct {
 	SecurityVersion int64
 	// RequiredSteps 是受限会话仍需完成的认证步骤。
 	RequiredSteps []authn.Step
+	// AuthMethods 是登录时真实完成的认证方法（来自服务端认证结果，只存稳定标识）。
+	// OIDC ID Token 的 amr/acr 必须由它映射，不能由调用方自述；不包含秘密。
+	AuthMethods []authn.Method
 	// StrongAuthVerifiedAt 是强认证完成时间；零值表示尚未完成强认证。管理访问
 	// 由 Service.AuthorizeManagement 按 Options.StrongAuthMaxAge 校验新鲜度，本字段
 	// 只表达“最近一次强认证时间”，不是永久授权。

@@ -23,11 +23,15 @@ type AuthorizationRequestRecord struct {
 	CodeChallengeMethod string
 	SessionID           string
 	SecurityVersion     int64
-	Status              string
-	RequestID           string
-	CreatedAt           time.Time
-	ExpiresAt           time.Time
-	DecidedAt           time.Time
+	// AuthTime 是授权确认时会话的真实登录时间；AuthMethods 是当时真实完成的认证
+	// 方法（稳定标识），供 ID Token 的 auth_time/amr/acr 使用，不能事后伪造。
+	AuthTime    time.Time
+	AuthMethods []string
+	Status      string
+	RequestID   string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+	DecidedAt   time.Time
 }
 
 // AuthorizationCodeRecord 是授权码记录；只保存摘要 CodeSHA256，不保存明文。兑换时
@@ -46,11 +50,14 @@ type AuthorizationCodeRecord struct {
 	CodeChallengeMethod string
 	SessionID           string
 	SecurityVersion     int64
-	RequestRef          string
-	IssuedAt            time.Time
-	ExpiresAt           time.Time
-	ConsumedAt          time.Time
-	ReplayedAt          time.Time
+	// AuthTime/AuthMethods 来自授权确认时的会话真实认证事实。
+	AuthTime    time.Time
+	AuthMethods []string
+	RequestRef  string
+	IssuedAt    time.Time
+	ExpiresAt   time.Time
+	ConsumedAt  time.Time
+	ReplayedAt  time.Time
 }
 
 // UserState 是授权/兑换时重新读取的账户状态快照。
@@ -67,11 +74,14 @@ func (u UserState) Active() bool { return u.Status == "active" }
 // SessionSnapshot 是授权码兑换时校验的会话快照（不含秘密）：授权码绑定的会话必须
 // 仍然有效、属于同一用户、安全版本一致且未被撤销。
 type SessionSnapshot struct {
-	ID                string
-	UserID            string
-	AppID             string
-	Kind              string
-	SecurityVersion   int64
+	ID              string
+	UserID          string
+	AppID           string
+	Kind            string
+	SecurityVersion int64
+	// AuthTime 是会话建立（真实认证完成）时间；AuthMethods 是当时完成的方法。
+	AuthTime          time.Time
+	AuthMethods       []string
 	StrongAuthAt      time.Time
 	IdleExpiresAt     time.Time
 	AbsoluteExpiresAt time.Time

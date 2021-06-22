@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,16 +45,19 @@ type accessTokenClaims struct {
 
 // idTokenClaims 是 ID Token 的声明集合（OIDC 子集）。
 type idTokenClaims struct {
-	Issuer    string `json:"iss"`
-	Subject   string `json:"sub"`
-	Audience  string `json:"aud"`
-	ClientID  string `json:"client_id"`
-	TokenUse  string `json:"token_use"`
-	Nonce     string `json:"nonce,omitempty"`
-	AuthTime  int64  `json:"auth_time,omitempty"`
-	IssuedAt  int64  `json:"iat"`
-	ExpiresAt int64  `json:"exp"`
-	TokenID   string `json:"jti"`
+	Issuer          string   `json:"iss"`
+	Subject         string   `json:"sub"`
+	Audience        string   `json:"aud"`
+	ClientID        string   `json:"client_id"`
+	AuthorizedParty string   `json:"azp,omitempty"`
+	TokenUse        string   `json:"token_use"`
+	Nonce           string   `json:"nonce,omitempty"`
+	AuthTime        int64    `json:"auth_time,omitempty"`
+	AMR             []string `json:"amr,omitempty"`
+	ACR             string   `json:"acr,omitempty"`
+	IssuedAt        int64    `json:"iat"`
+	ExpiresAt       int64    `json:"exp"`
+	TokenID         string   `json:"jti"`
 }
 
 // IssueAccessTokenRequest 是签发 Access Token 的请求。调用者不能自述身份：
@@ -71,9 +75,18 @@ type IssueAccessTokenRequest struct {
 type IssueIDTokenRequest struct {
 	ClientID      string
 	SubjectUserID string
-	Nonce         string
-	AuthTime      time.Time
-	RequestID     string
+	// Subject 是写入 ID Token 的 `sub` 声明；为空时使用 SubjectUserID。OIDC 流程可
+	// 传按客户端配对的稳定假名（pairwise），此时 SubjectUserID 仍是真实用户 ID，
+	// 用于审计与授权判定，不会写进令牌。
+	Subject string
+	Nonce   string
+	// AuthTime 是本次认证真实发生时间（会话登录时间），不得由客户端自述。
+	AuthTime time.Time
+	// AMR/ACR 是来自服务端真实认证事实的方法引用与认证上下文，不得伪造强度；
+	// 为空时 ID Token 不声明对应字段。
+	AMR       []string
+	ACR       string
+	RequestID string
 }
 
 // IssueAccessToken 签发 Access Token。签发前校验调用者可信身份、客户端登记配置
@@ -209,6 +222,23 @@ func (s *Service) IssueIDToken(ctx context.Context, caller Caller, request Issue
 		s.denyIssuance(ctx, caller, "oauth_client", request.ClientID, "invalid_nonce", ErrInvalidRequest)
 		return IssuedToken{}, fmt.Errorf("%w: nonce 非法", ErrInvalidRequest)
 	}
+	claimSubject := request.SubjectUserID
+	if request.Subject != "" {
+		if !validPairwiseSubject(request.Subject) {
+			s.denyIssuance(ctx, caller, "oauth_client", request.ClientID, "invalid_claim_subject", ErrInvalidRequest)
+			return IssuedToken{}, fmt.Errorf("%w: ID Token 主体声明无效", ErrInvalidRequest)
+		}
+		claimSubject = request.Subject
+	}
+	amr, err := normalizeAMR(request.AMR)
+	if err != nil {
+		s.denyIssuance(ctx, caller, "oauth_client", request.ClientID, "invalid_amr", ErrInvalidRequest)
+		return IssuedToken{}, err
+	}
+	if err := validACR(request.ACR); err != nil {
+		s.denyIssuance(ctx, caller, "oauth_client", request.ClientID, "invalid_acr", ErrInvalidRequest)
+		return IssuedToken{}, err
+	}
 	client, err := s.loadClient(ctx, request.ClientID)
 	if err != nil {
 		s.denyIssuance(ctx, caller, "oauth_client", request.ClientID, "client_unavailable", err)
@@ -239,8 +269,9 @@ func (s *Service) IssueIDToken(ctx context.Context, caller Caller, request Issue
 		return IssuedToken{}, err
 	}
 	claims := idTokenClaims{
-		Issuer: s.opts.Issuer, Subject: request.SubjectUserID, Audience: client.ClientID,
-		ClientID: client.ClientID, TokenUse: TokenUseID, Nonce: request.Nonce,
+		Issuer: s.opts.Issuer, Subject: claimSubject, Audience: client.ClientID,
+		ClientID: client.ClientID, AuthorizedParty: client.ClientID, TokenUse: TokenUseID,
+		Nonce: request.Nonce, AMR: amr, ACR: request.ACR,
 		IssuedAt: now.Unix(), ExpiresAt: now.Add(s.idTokenTTL).Unix(), TokenID: tokenID,
 	}
 	if !request.AuthTime.IsZero() {
@@ -256,7 +287,7 @@ func (s *Service) IssueIDToken(ctx context.Context, caller Caller, request Issue
 	}
 	issued := IssuedToken{
 		Token: Token{value: compact}, TokenID: tokenID, KeyID: key.Kid,
-		IssuedAt: now, ExpiresAt: now.Add(s.idTokenTTL), Subject: request.SubjectUserID,
+		IssuedAt: now, ExpiresAt: now.Add(s.idTokenTTL), Subject: claimSubject,
 		Audience: []string{client.ClientID},
 	}
 	idAuditChanges := []audit.FieldChange{
@@ -334,7 +365,13 @@ func (s *Service) VerifyIDToken(ctx context.Context, raw, clientID string) (IDTo
 	if idToken.Audience != clientID {
 		return IDTokenClaims{}, ErrAudienceMismatch
 	}
-	if !account.ValidUserID(idToken.Subject) || idToken.TokenID == "" || idToken.ClientID == "" {
+	// aud 为单一 client_id；若声明 azp，必须与 client_id 一致（多值 aud 时必填）。
+	if idToken.AuthorizedParty != "" && idToken.AuthorizedParty != clientID {
+		return IDTokenClaims{}, ErrAudienceMismatch
+	}
+	// sub 允许真实用户 ID（public 约定）或按客户端配对的稳定假名（pairwise）。
+	if (!account.ValidUserID(idToken.Subject) && !validPairwiseSubject(idToken.Subject)) ||
+		idToken.TokenID == "" || idToken.ClientID == "" {
 		return IDTokenClaims{}, ErrMissingClaims
 	}
 	if idToken.ExpiresAt <= 0 {
@@ -349,8 +386,10 @@ func (s *Service) VerifyIDToken(ctx context.Context, raw, clientID string) (IDTo
 	}
 	claims := IDTokenClaims{
 		Issuer: idToken.Issuer, Subject: idToken.Subject, Audience: idToken.Audience,
-		ClientID: idToken.ClientID, TokenID: idToken.TokenID, TokenUse: idToken.TokenUse,
-		Nonce: idToken.Nonce, IssuedAt: time.Unix(idToken.IssuedAt, 0).UTC(),
+		ClientID: idToken.ClientID, AuthorizedParty: idToken.AuthorizedParty,
+		TokenID: idToken.TokenID, TokenUse: idToken.TokenUse,
+		Nonce: idToken.Nonce, AMR: append([]string(nil), idToken.AMR...), ACR: idToken.ACR,
+		IssuedAt:  time.Unix(idToken.IssuedAt, 0).UTC(),
 		ExpiresAt: time.Unix(idToken.ExpiresAt, 0).UTC(), KeyID: verified.kid,
 	}
 	if idToken.AuthTime > 0 {
@@ -667,6 +706,65 @@ func (s *Service) newTokenID() (string, error) {
 }
 
 // validNonce 校验 OIDC nonce：可选、长度有界、仅可见 ASCII。
+// validPairwiseSubject 校验 ID Token 的 sub 假名：base64url（无填充）稳定标识。
+func validPairwiseSubject(subject string) bool {
+	if len(subject) < 16 || len(subject) > 128 {
+		return false
+	}
+	for index := 0; index < len(subject); index++ {
+		character := subject[index]
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '-' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// normalizeAMR 校验并去重 OIDC amr 取值（RFC 8176 稳定方法引用）。
+func normalizeAMR(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > 10 {
+		return nil, fmt.Errorf("%w: amr 数量过多", ErrInvalidRequest)
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) == 0 || len(value) > 32 {
+			return nil, fmt.Errorf("%w: amr 取值无效", ErrInvalidRequest)
+		}
+		for index := 0; index < len(value); index++ {
+			character := value[index]
+			if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' {
+				continue
+			}
+			return nil, fmt.Errorf("%w: amr 取值无效", ErrInvalidRequest)
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+// validACR 校验内部稳定性 ACR 标识（不宣称外部认证等级承诺）。
+func validACR(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 128 || !strings.HasPrefix(value, "urn:evernight:acr:") {
+		return fmt.Errorf("%w: acr 取值无效", ErrInvalidRequest)
+	}
+	return nil
+}
+
 func validNonce(nonce string) bool {
 	if nonce == "" {
 		return true
