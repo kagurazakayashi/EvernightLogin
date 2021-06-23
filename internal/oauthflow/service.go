@@ -429,12 +429,18 @@ func (s *Service) DecideAuthorization(ctx context.Context, sessionSecret string,
 	}, nil
 }
 
-// Exchange 在 Token 端点用授权码兑换 Access Token。全部错误返回 *OAuthError（标准
-// error/error_description 与 HTTP 状态），不使用项目业务响应格式。授权码原子消费，
-// 并发/重放只有一方成功；重复兑换记录 replayed_at_ms 并按无效授权拒绝。
+// Exchange 在 Token 端点处理 authorization_code 与 client_credentials 两种授权。
+// 全部错误返回 *OAuthError（标准 error/error_description 与 HTTP 状态），不使用项目
+// 业务响应格式。授权码原子消费，并发/重放只有一方成功；服务身份令牌只签发给完成
+// 客户端认证且显式登记 client_credentials 的保密客户端，主体固定为 client_id。
 func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenResponse, error) {
 	ctx = normalizeContext(ctx)
-	if request.GrantType != "authorization_code" {
+	switch request.GrantType {
+	case "authorization_code":
+		// 继续下方授权码兑换流程。
+	case "client_credentials":
+		return s.exchangeClientCredentials(ctx, request)
+	default:
 		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.token.exchange_denied",
 			request.ClientID, "unsupported_grant_type", "REQ_INVALID", request.RequestID)
 		return TokenResponse{}, oauthUnsupportedGrantType()
@@ -690,6 +696,168 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 	return TokenResponse{AccessToken: issued.Token, IDToken: idToken, TokenType: "Bearer",
 		ExpiresIn: expiresIn, Scope: joinScopes(scopes), RequestID: request.RequestID,
 		CodeID: code.ID}, nil
+}
+
+// exchangeClientCredentials 处理 client_credentials：只允许保密客户端、显式登记该
+// 授权方式并通过客户端 secret/证书认证后签发服务身份 Access Token。服务主体固定为
+// client_id，不借用负责人/root 用户身份；Scope/audience 只能在客户端登记范围内缩减。
+// 默认不签发 ID Token 或 Refresh Token。
+func (s *Service) exchangeClientCredentials(ctx context.Context,
+	request ExchangeRequest) (TokenResponse, error) {
+	if request.ClientID == "" || len(request.ClientID) > 128 {
+		return TokenResponse{}, oauthInvalidRequest("客户端标识无效")
+	}
+	if err := validRequestID(request.RequestID); err != nil {
+		return TokenResponse{}, oauthInvalidRequest("请求编号无效")
+	}
+	client, found, err := s.opts.Clients.LoadClient(ctx, request.ClientID)
+	if err != nil {
+		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.service_token.denied",
+			request.ClientID, "client_source_unavailable", "DB_UNAVAILABLE", request.RequestID)
+		return TokenResponse{}, oauthTemporarilyUnavailable()
+	}
+	if !found || !client.Active() {
+		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.service_token.denied",
+			request.ClientID, "invalid_client", "CLIENT_AUTH_FAILED", request.RequestID)
+		return TokenResponse{}, oauthInvalidClient()
+	}
+	// 公开客户端即使数据库被错误配置了 client_credentials 也必须拒绝；服务身份
+	// 只能来自具备合规客户端认证方式的保密客户端。
+	if client.ClientType != oauthclient.ClientTypeConfidential ||
+		!client.GrantsClientCredentials() {
+		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.service_token.denied",
+			client.ClientID, "grant_not_allowed", "CLIENT_AUTH_FAILED", request.RequestID)
+		return TokenResponse{}, oauthUnauthorizedClient()
+	}
+	if request.ClientSecret == "" && request.ClientCertificatePEM == "" {
+		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.service_token.denied",
+			client.ClientID, "missing_client_auth", "CLIENT_AUTH_FAILED", request.RequestID)
+		return TokenResponse{}, oauthInvalidClient()
+	}
+	if request.ClientSecret != "" {
+		identity, authErr := s.opts.ClientAuth.VerifyClientSecret(ctx, client.ClientID,
+			request.ClientSecret)
+		if authErr != nil || identity.ClientID != client.ClientID {
+			s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.service_token.denied",
+				client.ClientID, "client_auth_failed", "CLIENT_AUTH_FAILED", request.RequestID)
+			return TokenResponse{}, oauthInvalidClient()
+		}
+	} else {
+		identity, authErr := s.opts.ClientAuth.VerifyClientCertificate(ctx, client.ClientID,
+			request.ClientCertificatePEM)
+		if authErr != nil || identity.ClientID != client.ClientID {
+			s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.service_token.denied",
+				client.ClientID, "client_cert_auth_failed", "CLIENT_AUTH_FAILED", request.RequestID)
+			return TokenResponse{}, oauthInvalidClient()
+		}
+	}
+	scopes, scopeErr := normalizeScopes(request.Scope, client.Scopes)
+	if scopeErr != nil {
+		s.failure(ctx, serviceAuditActor(), "oauth.service_token.denied", client.ClientID,
+			"invalid_scope", "REQ_INVALID", request.RequestID)
+		return TokenResponse{}, scopeErr
+	}
+	audiences, audienceErr := normalizeAudiences(request.Resource, client.Audiences)
+	if audienceErr != nil {
+		s.failure(ctx, serviceAuditActor(), "oauth.service_token.denied", client.ClientID,
+			"invalid_audience", "REQ_INVALID", request.RequestID)
+		return TokenResponse{}, audienceErr
+	}
+	if len(audiences) == 0 {
+		// 与授权码流程一致：仅当客户端只登记一个目标资源时使用该默认值，否则必须
+		// 显式指定 resource，避免隐式扩大服务令牌可访问资源。
+		if len(client.Audiences) == 1 {
+			audiences = []string{client.Audiences[0]}
+		} else {
+			s.failure(ctx, serviceAuditActor(), "oauth.service_token.denied", client.ClientID,
+				"audience_required", "REQ_INVALID", request.RequestID)
+			return TokenResponse{}, oauthInvalidRequest("必须显式指定目标资源（resource）")
+		}
+	}
+	caller, callerErr := token.SystemCaller(serviceComponentID)
+	if callerErr != nil {
+		return TokenResponse{}, oauthServerError()
+	}
+	issueRequestID, idErr := s.newID(tokenRequestPrefix)
+	if idErr != nil {
+		return TokenResponse{}, oauthServerError()
+	}
+	issued, issueErr := s.opts.Tokens.IssueAccessToken(ctx, caller, token.IssueAccessTokenRequest{
+		ClientID: client.ClientID, SubjectUserID: "",
+		GrantType: token.GrantClientCredentials, Scopes: scopes,
+		Audiences: append([]string(nil), audiences...), RequestID: issueRequestID,
+	})
+	if issueErr != nil {
+		reason := "token_issuance_failed"
+		switch {
+		case errors.Is(issueErr, token.ErrScopeNotAllowed):
+			reason = "scope_not_allowed"
+		case errors.Is(issueErr, token.ErrAudienceNotAllowed):
+			reason = "audience_not_allowed"
+		case errors.Is(issueErr, token.ErrGrantNotAllowed):
+			reason = "grant_not_allowed"
+		case errors.Is(issueErr, token.ErrClientInactive), errors.Is(issueErr, token.ErrClientNotFound):
+			reason = "client_unavailable"
+		case errors.Is(issueErr, token.ErrAccessDenied):
+			reason = "issuance_not_authorized"
+		case errors.Is(issueErr, token.ErrStoreUnavailable):
+			reason = "token_store_unavailable"
+		}
+		s.failure(ctx, serviceAuditActor(), "oauth.service_token.denied", client.ClientID,
+			reason, "INTERNAL_ERROR", request.RequestID)
+		switch reason {
+		case "scope_not_allowed":
+			return TokenResponse{}, oauthInvalidScope()
+		case "audience_not_allowed":
+			return TokenResponse{}, oauthInvalidRequest("目标资源不在客户端登记范围内")
+		case "grant_not_allowed", "client_unavailable":
+			return TokenResponse{}, oauthUnauthorizedClient()
+		case "issuance_not_authorized":
+			return TokenResponse{}, newOAuthError("access_denied", "服务身份签发未获授权", 400)
+		case "token_store_unavailable":
+			return TokenResponse{}, oauthTemporarilyUnavailable()
+		default:
+			return TokenResponse{}, oauthServerError()
+		}
+	}
+	// 服务主体审计：actor_type=system 与用户兑换事件明确区分；不含 secret/token 原文。
+	successEvent := audit.Event{
+		Actor: serviceAuditActor(), AppID: client.ClientID,
+		Action:  "oauth.service_token.issued",
+		Target:  audit.Target{Type: "oauth_client", ID: client.ClientID},
+		Outcome: audit.OutcomeSuccess, RequestID: request.RequestID,
+		Changes: []audit.FieldChange{
+			{Field: "grant_type", After: "client_credentials"},
+			{Field: "subject", After: client.ClientID},
+			{Field: "subject_type", After: token.TokenSubjectTypeService},
+			{Field: "client_id", After: client.ClientID},
+			{Field: "scope", After: truncateAudit(joinScopes(scopes), 160)},
+			{Field: "audience", After: truncateAudit(strings.Join(audiences, " "), 160)},
+			{Field: "jti", After: issued.TokenID},
+			{Field: "kid", After: issued.KeyID},
+			{Field: "expires_at", After: issued.ExpiresAt.UTC().Format(time.RFC3339)},
+		},
+	}
+	if err := s.opts.Audit.Record(ctx, successEvent); err != nil {
+		s.opts.Logger.Warn("服务身份令牌签发审计写入失败，按 fail-closed 拒绝返回令牌",
+			"reason", "audit_unavailable")
+		return TokenResponse{}, oauthServerError()
+	}
+	s.opts.Logger.Info("服务身份 Access Token 已签发",
+		"grant_type", "client_credentials", "client_id", client.ClientID,
+		"subject_type", token.TokenSubjectTypeService, "jti", issued.TokenID, "kid", issued.KeyID)
+	expiresIn := int64(issued.ExpiresAt.Sub(issued.IssuedAt).Seconds())
+	if expiresIn <= 0 {
+		expiresIn = 0
+	}
+	return TokenResponse{AccessToken: issued.Token, TokenType: "Bearer", ExpiresIn: expiresIn,
+		Scope: joinScopes(scopes), RequestID: request.RequestID}, nil
+}
+
+// serviceAuditActor 是服务身份签发审计的稳定系统主体；日志/审计可据此区分程序
+// 自身行为与用户代表行为（不含任何客户端 secret）。
+func serviceAuditActor() audit.Actor {
+	return audit.Actor{Type: audit.ActorSystem, ID: serviceComponentID}
 }
 
 // ===== 内部辅助 =====

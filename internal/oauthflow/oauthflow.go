@@ -80,6 +80,8 @@ const (
 	operationAuthorizationApprove = "oauth.authorization.approve"
 	// tokenRequestPrefix 是内部请求编号前缀。
 	tokenRequestPrefix = "otr_"
+	// serviceComponentID 是服务身份签发/审计使用的稳定系统组件标识。
+	serviceComponentID = "oauthflow"
 )
 
 // 领域错误（宿主可据此写失败审计/诊断）。协议错误另外用 *OAuthError 表达。
@@ -363,6 +365,16 @@ func (c ClientInfo) GrantsAuthorizationCode() bool {
 	return false
 }
 
+// GrantsClientCredentials 报告客户端是否显式登记 client_credentials 服务身份模式。
+func (c ClientInfo) GrantsClientCredentials() bool {
+	for _, grant := range c.GrantTypes {
+		if grant == oauthclient.GrantClientCredentials {
+			return true
+		}
+	}
+	return false
+}
+
 // ClientSource 读取客户端登记配置；不存在返回 found=false。实现必须 fail-closed。
 type ClientSource interface {
 	LoadClient(ctx context.Context, clientID string) (ClientInfo, bool, error)
@@ -442,6 +454,7 @@ type AuthorizationResult struct {
 // ExchangeRequest 是 Token 端点授权码兑换请求。ClientSecret 与 ClientCertificatePEM
 // 只用于客户端认证；公开客户端必须提供 code_verifier。
 type ExchangeRequest struct {
+	// GrantType 是 authorization_code 或 client_credentials；其余拒绝。
 	GrantType            string
 	Code                 string
 	RedirectURI          string
@@ -449,7 +462,11 @@ type ExchangeRequest struct {
 	ClientSecret         string
 	ClientCertificatePEM string
 	CodeVerifier         string
-	RequestID            string
+	// Scope/Resource 只用于 client_credentials：请求的服务身份 Scope 与目标资源
+	// 必须缩减在客户端登记范围之内；授权码流程使用授权码绑定的范围。
+	Scope     []string
+	Resource  []string
+	RequestID string
 }
 
 // TokenResponse 是 Token 端点成功响应。AccessToken 是脱敏类型，宿主必须显式

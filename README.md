@@ -572,6 +572,17 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## Client Credentials 服务身份授权（步骤 53）
+
+在既有 `internal/oauthflow` Token 端点增加 `client_credentials` 分支，并扩展 `internal/token` 的 Access Token 声明；**无新增迁移**（复用 0029 客户端登记、0030 签名密钥、0031 授权码表与 0032 认证事实），不另写签名算法。本步只签发服务身份 Access Token，不提供 HTTP 路由/管理 API，也不自动向管理接口开放服务身份。
+
+- **仅保密客户端且显式登记**：Token 端点只接受 `grant_type=client_credentials`；公开客户端即使数据库被错误配置该 grant 也拒绝（`unauthorized_client`），保密客户端必须在登记项中显式包含 `client_credentials`，并必须通过 `oauthclient.VerifyClientSecret`/`VerifyClientCertificate` 认证。缺失/错误凭证统一 `invalid_client`（401），不泄露客户端是否存在或凭证轮换细节。普通用户会话不能调用 Token 服务内部接口为客户铸造服务令牌（`internal/token` 拒绝 user Caller 的 `client_credentials` 签发请求）。
+- **服务主体不借用用户身份**：服务身份令牌 `sub=client_id`、`client_id=client_id`，新增声明 `subject_type=service`；用户授权码/设备码令牌为 `subject_type=user`。旧令牌缺失该声明按 user 解释，验证器对 `service` 强制 `sub==client_id`，未知值拒绝。不读取应用负责人/root 用户身份，也不为其签发用户 ID Token 或 Refresh Token；管理 API 是否接受服务身份由后续明确委托策略决定，本步不自动全开放。
+- **范围只能缩减**：请求 `scope`/`resource` 必须属于客户端登记集合（`invalid_scope`/`invalid_request` 拒绝），resource 省略时仅在客户端只登记一个目标资源时使用默认值；服务令牌只包含请求的 Scope 与 audience，受资源 audience 限制。不得通过 client_credentials 获得用户 Scope、用户 ID Token 或刷新令牌。
+- **状态变化**：应用停用、客户端未登记该授权类型、客户端凭证轮换/撤销都会使**后续** Token 请求失败（凭证轮换后旧 secret 立即 invalid_client、新 secret 生效）；已签发未过期 Access Token 为无状态 JWT，本步无撤销列表，不能即时吊销（步骤 54 处理刷新/撤销），不宣称已撤销既有令牌。
+- **协议与审计**：成功响应为标准 `access_token`/`token_type=Bearer`/`expires_in`/`scope`，错误为标准 OAuth `error`/`error_description` 与 HTTP 状态；签发成功写 `oauth.service_token.issued` 审计（`actor_type=system`、`actor_id=oauthflow`，含 client_id/scope/audience/jti/kid，不含 secret/token 原文），失败写 `oauth.service_token.denied`；`internal/token` 自身签发审计同样以系统主体记录，运行日志包含 grant_type/subject_type 以便区分程序自身行为与用户代表行为。
+- **已知限制**：无 HTTP Token 端点/限流/管理 API 服务身份策略（后续装配与明确委托策略决定）；已签发令牌无撤销列表；服务身份当前没有独立的权限存储，资源侧需按 Scope/audience + 后续服务权限策略联合判定，不能把持有服务令牌当成自动获得管理权限；HTTP/页面、非 Windows/race 未验证。
+
 ## OIDC 身份令牌、发现文档与 UserInfo（步骤 52）
 
 新增内部 `internal/oidc` 与只读仓储 `internal/oidc/sqlite`（UserInfo 用户来源），迁移 `0032_oidc.sql` 扩展 `sessions.auth_methods_json` 与授权请求/授权码的 `auth_time_ms`/`auth_methods_json`。本步**不暴露 HTTP 路由、不装配 `cmd/login-server`**，验收走可信内部 Go API；互操作验证使用独立 go-jose 校验流程，**真实第三方 OIDC 客户端未实测**。

@@ -410,6 +410,19 @@
 // 校验、Device Flow、数据范围细粒度接线与 HTTP 管理接口留后续步骤；真实 mTLS
 // 握手/CA 链、过期凭证清理、多实例限流与 race/非 Windows 未验证。
 //
+// internal/oauthflow 的 Token 端点已增加 client_credentials 服务身份分支（步骤 53），
+// 并扩展 internal/token 的 Access Token 声明：只允许显式登记 client_credentials 且
+// 通过 secret/证书认证的保密客户端，公开客户端/未登记 grant 一律拒绝；服务主体固定
+// 为 client_id（不借用负责人/root 用户），新增 subject_type 声明区分 user/service，
+// 旧令牌缺失按 user 解释且 service 强制 sub==client_id；请求 Scope/audience 只能缩减
+// 在客户端登记范围内，默认不发用户 ID Token/Refresh Token；成功返回标准 Token 响应
+// 并写系统主体审计（oauth.service_token.issued，actor_type=system/actor_id=oauthflow），
+// 不记录 secret/token。内部 token 服务拒绝普通用户 Caller 签发 client_credentials，
+// 避免用户会话为客户铸造服务令牌。已签发无状态 Access Token 无撤销列表，应用停用/
+// 凭证轮换只影响后续签发（步骤 54 处理撤销）；管理 API 是否接受服务身份由后续明确
+// 委托策略决定，本步不自动开放；无新增迁移；HTTP 路由/限流、服务权限存储、非
+// Windows/race 未验证。
+//
 // internal/oidc 已实现 OIDC 登录能力（步骤 52）：发现文档、ID Token 与 UserInfo。
 // 迁移 0032 为 sessions 增加 auth_methods_json（登录时真实完成的认证方法），并为
 // oauth_authorization_requests/codes 增加 auth_time_ms/auth_methods_json；授权确认

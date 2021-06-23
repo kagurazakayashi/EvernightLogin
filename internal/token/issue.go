@@ -31,16 +31,19 @@ const (
 
 // accessTokenClaims 是 Access Token 的声明集合（RFC 9068 子集）。
 type accessTokenClaims struct {
-	Issuer    string   `json:"iss"`
-	Subject   string   `json:"sub"`
-	Audience  []string `json:"aud"`
-	ClientID  string   `json:"client_id"`
-	Scope     string   `json:"scope,omitempty"`
-	TokenUse  string   `json:"token_use"`
-	IssuedAt  int64    `json:"iat"`
-	NotBefore int64    `json:"nbf,omitempty"`
-	ExpiresAt int64    `json:"exp"`
-	TokenID   string   `json:"jti"`
+	Issuer   string   `json:"iss"`
+	Subject  string   `json:"sub"`
+	Audience []string `json:"aud"`
+	ClientID string   `json:"client_id"`
+	Scope    string   `json:"scope,omitempty"`
+	TokenUse string   `json:"token_use"`
+	// SubjectType 区分代表用户的访问令牌（user）与代表应用/服务自身的令牌
+	// （service，仅 client_credentials）；旧令牌缺失该声明按 user 解释。
+	SubjectType string `json:"subject_type,omitempty"`
+	IssuedAt    int64  `json:"iat"`
+	NotBefore   int64  `json:"nbf,omitempty"`
+	ExpiresAt   int64  `json:"exp"`
+	TokenID     string `json:"jti"`
 }
 
 // idTokenClaims 是 ID Token 的声明集合（OIDC 子集）。
@@ -162,10 +165,15 @@ func (s *Service) IssueAccessToken(ctx context.Context, caller Caller, request I
 	if err != nil {
 		return IssuedToken{}, err
 	}
+	subjectType := TokenSubjectTypeUser
+	if request.GrantType == GrantClientCredentials {
+		subjectType = TokenSubjectTypeService
+	}
 	claims := accessTokenClaims{
 		Issuer: s.opts.Issuer, Subject: subject, Audience: audiences,
 		ClientID: client.ClientID, Scope: strings.Join(scopes, " "), TokenUse: TokenUseAccess,
-		IssuedAt: now.Unix(), NotBefore: now.Unix(), ExpiresAt: now.Add(s.accessTTL).Unix(),
+		SubjectType: subjectType,
+		IssuedAt:    now.Unix(), NotBefore: now.Unix(), ExpiresAt: now.Add(s.accessTTL).Unix(),
 		TokenID: tokenID,
 	}
 	payload, err := json.Marshal(claims)
@@ -330,7 +338,8 @@ func (s *Service) VerifyAccessToken(ctx context.Context, raw, expectedAudience s
 		Issuer: access.Issuer, Subject: access.Subject, Audience: access.Audience,
 		ClientID: access.ClientID, Scopes: strings.Fields(access.Scope),
 		TokenID: access.TokenID, TokenUse: access.TokenUse,
-		IssuedAt: time.Unix(access.IssuedAt, 0).UTC(),
+		SubjectType: access.SubjectType,
+		IssuedAt:    time.Unix(access.IssuedAt, 0).UTC(),
 		NotBefore: func() time.Time {
 			if access.NotBefore == 0 {
 				return time.Time{}
@@ -564,6 +573,17 @@ func (s *Service) validateAccessClaims(claims accessTokenClaims, expectedAudienc
 	if claims.Subject == "" || claims.ClientID == "" || claims.TokenID == "" || len(claims.Audience) == 0 {
 		return ErrMissingClaims
 	}
+	switch claims.SubjectType {
+	case "", TokenSubjectTypeUser:
+		// 旧令牌缺失 subject_type 按用户令牌解释。
+	case TokenSubjectTypeService:
+		// 服务身份令牌的 subject 必须就是客户端自身，绝不能是用户/root。
+		if claims.Subject != claims.ClientID {
+			return ErrMissingClaims
+		}
+	default:
+		return ErrMissingClaims
+	}
 	if claims.ExpiresAt <= 0 {
 		return ErrMissingClaims
 	}
@@ -648,6 +668,13 @@ func grantAllowed(client ClientInfo, grant GrantType) bool {
 // IssuanceAuthorizer（在调用方之后单独判定）。
 func (s *Service) resolveSubject(ctx context.Context, caller Caller, request IssueAccessTokenRequest, client ClientInfo) (string, error) {
 	if request.GrantType == GrantClientCredentials {
+		// 服务身份令牌只能由受信系统/本地管理员通道（完成客户端认证后的编排层）
+		// 签发；普通用户会话不能替客户端铸造服务令牌，不借用负责人或 root 身份。
+		if caller.IsUser() {
+			s.denyIssuance(ctx, caller, "oauth_client", client.ClientID,
+				"client_credentials_user_caller", ErrAccessDenied)
+			return "", ErrAccessDenied
+		}
 		clientType := strings.ToLower(strings.TrimSpace(client.ClientType))
 		if clientType != "confidential" {
 			s.denyIssuance(ctx, caller, "oauth_client", client.ClientID, "client_credentials_requires_confidential", ErrGrantNotAllowed)

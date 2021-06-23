@@ -199,8 +199,13 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 		Issuer: "https://issuer.example.test", Clients: tokenClients,
 		Authorizer: token.IssuanceAuthorizerFunc(func(_ context.Context, _ token.Caller,
 			request token.IssuanceRequest) error {
-			// Access Token 与 OIDC ID Token 均来自已完成的授权码流程。
-			if request.GrantType == token.GrantAuthorizationCode {
+			// 测试装配：Access Token 来自授权码或服务身份流程，ID Token 来自授权码流程。
+			if request.TokenKind == "access" &&
+				(request.GrantType == token.GrantAuthorizationCode ||
+					request.GrantType == token.GrantClientCredentials) {
+				return nil
+			}
+			if request.TokenKind == "id" && request.GrantType == token.GrantAuthorizationCode {
 				return nil
 			}
 			return token.ErrAccessDenied
@@ -249,14 +254,16 @@ VALUES(?,?, 'active',1,?,?)`, testAppID, testUserID, e.now.UnixMilli(), e.now.Un
 // 服务完成，本步验证协议读取真实登记配置）。
 func (e *testEnv) seedClients() {
 	authMethods := `[]`
+	grantTypes := `["authorization_code"]`
 	if e.clientType == oauthclient.ClientTypeConfidential {
 		authMethods = `["client_secret_basic"]`
+		grantTypes = `["authorization_code","client_credentials"]`
 	}
 	e.exec(`INSERT INTO oauth_clients(client_id,client_type,grant_types_json,redirect_uris_json,
 post_logout_redirect_uris_json,scopes_json,audiences_json,auth_methods_json,require_pkce,
 row_version,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,1,1,?,?)`,
 		testAppID, string(e.clientType),
-		`["authorization_code"]`, `["`+testRedirect+`"]`, `[]`,
+		grantTypes, `["`+testRedirect+`"]`, `[]`,
 		`["profile.read","email.read"]`, `["`+testAudience+`"]`, authMethods,
 		e.now.UnixMilli(), e.now.UnixMilli())
 }

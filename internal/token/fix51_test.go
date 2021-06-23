@@ -90,6 +90,53 @@ func TestIDTokenRequiresAuthorizationCodeGrant(t *testing.T) {
 	}
 }
 
+// TestClientCredentialsServicePrincipal 验证服务身份签发：普通用户调用者不能替客户端
+// 铸造服务令牌；受信系统通道签发的令牌主体固定为 client_id 且 subject_type=service，
+// 与用户 Access Token（user）清晰区分。
+func TestClientCredentialsServicePrincipal(t *testing.T) {
+	env := newTestEnv(t, nil)
+	serviceRequest := IssueAccessTokenRequest{
+		ClientID: testClientB, GrantType: GrantClientCredentials,
+		Scopes: []string{"service.read"}, Audiences: []string{testAudience},
+		RequestID: "req-service-token",
+	}
+	if _, err := env.service.IssueAccessToken(env.ctx, env.caller(testUserA),
+		serviceRequest); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("普通用户调用者签发服务令牌应拒绝，得到 %v", err)
+	}
+	issued, err := env.service.IssueAccessToken(env.ctx, env.systemCaller(), serviceRequest)
+	if err != nil {
+		t.Fatalf("系统通道签发服务令牌: %v", err)
+	}
+	claims, err := env.service.VerifyAccessToken(env.ctx, issued.Token.Reveal(), testAudience)
+	if err != nil {
+		t.Fatalf("验证服务令牌: %v", err)
+	}
+	if claims.Subject != testClientB || claims.ClientID != testClientB {
+		t.Fatalf("服务主体必须为 client_id: sub=%q client=%q", claims.Subject, claims.ClientID)
+	}
+	if claims.SubjectType != TokenSubjectTypeService {
+		t.Fatalf("subject_type = %q，期望 service", claims.SubjectType)
+	}
+	// 用户 Access Token 必须是 user 类型。
+	userIssued := env.issueAccess()
+	userClaims, err := env.service.VerifyAccessToken(env.ctx, userIssued.Token.Reveal(), testAudience)
+	if err != nil {
+		t.Fatalf("验证用户令牌: %v", err)
+	}
+	if userClaims.SubjectType != TokenSubjectTypeUser {
+		t.Fatalf("用户令牌 subject_type = %q，期望 user", userClaims.SubjectType)
+	}
+	// 服务身份请求不得携带用户主体。
+	badRequest := serviceRequest
+	badRequest.SubjectUserID = testUserA
+	badRequest.RequestID = "req-service-token-bad-subject"
+	if _, err := env.service.IssueAccessToken(env.ctx, env.systemCaller(),
+		badRequest); !errors.Is(err, ErrSubjectNotAllowed) {
+		t.Fatalf("服务身份携带用户主体应拒绝，得到 %v", err)
+	}
+}
+
 // barrierKeyStore 让两个并发轮换都基于同一旧 active 快照进入事务，从而确定性地
 // 验证“并发轮换只有一个成功”。
 type barrierKeyStore struct {

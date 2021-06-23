@@ -216,6 +216,11 @@ const (
 	// TokenUseAccess / TokenUseID 是令牌用途声明，防止 Access/ID Token 混用。
 	TokenUseAccess = "access"
 	TokenUseID     = "id"
+	// TokenSubjectTypeUser / TokenSubjectTypeService 是 Access Token 主体类型：
+	// user 表示代表真实用户（授权码/设备码），service 表示应用自身服务身份
+	// （client_credentials）。资源服务据此区分程序自身行为与代表用户行为。
+	TokenSubjectTypeUser    = "user"
+	TokenSubjectTypeService = "service"
 	// KeyUseSignature 是 JWK use 值。
 	KeyUseSignature = "sig"
 	// keyIDPrefix 是签名密钥公开标识前缀。
@@ -288,17 +293,19 @@ func (f IssuanceAuthorizerFunc) AuthorizeIssuance(ctx context.Context, caller Ca
 
 // AccessClaims 是已验证通过的 Access Token 声明（不含原始令牌）。
 type AccessClaims struct {
-	Issuer    string
-	Subject   string
-	Audience  []string
-	ClientID  string
-	Scopes    []string
-	TokenID   string
-	TokenUse  string
-	IssuedAt  time.Time
-	NotBefore time.Time
-	ExpiresAt time.Time
-	KeyID     string
+	Issuer   string
+	Subject  string
+	Audience []string
+	ClientID string
+	Scopes   []string
+	TokenID  string
+	TokenUse string
+	// SubjectType 是 user/service；空值（旧令牌）按 user 解释。
+	SubjectType string
+	IssuedAt    time.Time
+	NotBefore   time.Time
+	ExpiresAt   time.Time
+	KeyID       string
 }
 
 // IDTokenClaims 是已验证通过的 ID Token 声明（不含原始令牌）。
