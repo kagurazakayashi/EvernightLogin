@@ -572,6 +572,19 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 刷新令牌轮换、重放检测与令牌状态查询（步骤 54）
+
+扩展 `internal/oauthflow` 的 Token 端点，新增 `grant_type=refresh_token` 轮换与标准风格令牌状态查询；迁移 `0033_refresh_tokens.sql` 落地 `refresh_token_families`（令牌族：客户端/用户主体/授权请求/Scope/audience/安全版本快照/绝对有效期）与 `refresh_tokens`（只存 32 字节 SHA-256 摘要、active/used/revoked/expired、空闲/绝对到期、替换关系）。刷新令牌是高熵不透明秘密（32 字节随机 + 前缀），明文只在签发/轮换响应返回一次，不写入数据库、日志或审计。本步**不开放 HTTP 路由**，协议端点实现为内部 Go API，由后续装配步骤接线。
+
+- **签发条件**：只有 `authorization_code`（用户）流程且客户端登记 `refresh_token`、授权 Scope 含 `offline_access` 时才签发刷新令牌族；`client_credentials` 服务令牌流程从不创建刷新令牌族，服务令牌也不能用于刷新（无 refresh 授权的客户端请求刷新返回 `unauthorized_client`）。
+- **原子轮换**：刷新请求校验客户端身份与登记配置后，在同一审计事务内条件把旧令牌 `active→used` 并插入新令牌（高熵新值+新摘要）；并发刷新同一令牌只有一方成功。先签发新 Access Token、后提交刷新轮换事务：事务失败时旧令牌保持 active，调用方可安全重试（失败路径不误触发重放撤销）。
+- **重放检测与遏制**：旧值再次使用（包括并发刷新失败方与网络重试）按重放处理，撤销整个令牌族（族 revoked + 全部 active 后代令牌 revoked），并写 `oauth.refresh.replayed` 审计；不设无限宽限期，族撤销后所有后代刷新令牌失效。
+- **生命周期与主体状态**：族有绝对有效期（默认 30 天，1 小时～90 天），单个刷新令牌有独立空闲有效期（默认 7 天，且不超过绝对有效期）；空闲到期标记 expired 并拒绝。刷新时重新校验用户 active、安全版本与令牌族快照一致、应用成员仍 active；任一变化撤销族并拒绝（真实业务状态变化影响令牌 active 与后续刷新）。
+- **Scope 与 audience 不扩大**：刷新请求只能请求原授权 Scope/audience 的子集（缺省沿用原授权）；扩大返回 `invalid_scope`/`invalid_request`；客户端错配返回 `invalid_grant`；客户端当前登记 Scope/audience 收窄后拒绝刷新，不静默放宽。
+- **令牌状态查询**：`Service.InspectToken` 要求资源服务经客户端身份验证（`ResourceServerClientID`）并经注入的 `InspectAuthorizer` 授权查询指定 audience；无效/过期/撤销 Access Token 统一返回 `Active=false`（不提供区别化探测细节），刷新令牌按摘要查询族/令牌状态。披露字段默认只含 token_type/client_id/scope/audience/时间；**用户主体仅在授权器显式 `ShowSubject` 时返回**，避免其他应用探测用户身份；`active` 只表示令牌当前有效，**不等于**可执行任意业务动作（联合权限判断属下一阶段）。
+- **审计与错误**：刷新签发/轮换/重放/拒绝/族撤销、状态查询成功与拒绝均写审计（真实主体/资源服务身份、族/令牌稳定 ID、原因码），不含刷新令牌明文/摘要以外秘密；协议错误遵循既有 RFC 6749 `error` 约定（invalid_request/invalid_client/unauthorized_client/invalid_grant/invalid_scope/temporarily_unavailable/server_error），不新增项目错误码。
+- **已知限制**：HTTP Token/Introspection 路由/装配、Device Flow、授权码流程之外的刷新令牌签发、Access Token 撤销列表（无状态 JWT 在到期前仍有效，族撤销只阻止后续刷新）、多实例限流/清理任务、真实业务资源服务联调、race/非 Windows 未验证；`active` 不代表权限。
+
 ## Client Credentials 服务身份授权（步骤 53）
 
 在既有 `internal/oauthflow` Token 端点增加 `client_credentials` 分支，并扩展 `internal/token` 的 Access Token 声明；**无新增迁移**（复用 0029 客户端登记、0030 签名密钥、0031 授权码表与 0032 认证事实），不另写签名算法。本步只签发服务身份 Access Token，不提供 HTTP 路由/管理 API，也不自动向管理接口开放服务身份。

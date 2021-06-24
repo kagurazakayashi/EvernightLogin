@@ -95,6 +95,47 @@ func (s SessionSnapshot) ActiveAt(now time.Time) bool {
 		now.Before(s.IdleExpiresAt) && now.Before(s.AbsoluteExpiresAt)
 }
 
+// RefreshFamilyRecord 是刷新令牌族：绑定客户端、用户主体、授权请求、Scope、
+// 资源 audience 与用户安全版本快照；绝对有效期固定在族上。
+type RefreshFamilyRecord struct {
+	ID                string
+	ClientID          string
+	SubjectUserID     string
+	AuthorizationID   string
+	Scopes            []string
+	Audiences         []string
+	SecurityVersion   int64
+	CreatedAt         time.Time
+	AbsoluteExpiresAt time.Time
+	IdleTimeout       time.Duration
+	RevokedAt         time.Time
+	RevokeReason      string
+}
+
+// ActiveAt 报告族在 now 时刻是否仍有效（未撤销、未超绝对有效期）。
+func (f RefreshFamilyRecord) ActiveAt(now time.Time) bool {
+	return f.RevokedAt.IsZero() && now.Before(f.AbsoluteExpiresAt)
+}
+
+// RefreshTokenRecord 是刷新令牌持久化记录：只保存 SHA-256 验证摘要，不保存明文。
+type RefreshTokenRecord struct {
+	ID            string
+	FamilyID      string
+	TokenSHA256   [32]byte
+	Status        string
+	IssuedAt      time.Time
+	IdleExpiresAt time.Time
+	ExpiresAt     time.Time
+	UsedAt        time.Time
+	RevokedAt     time.Time
+	RevokeReason  string
+	ReplacedByID  string
+	RequestID     string
+}
+
+// RefreshStatusActive 是刷新令牌唯一可用于轮换的状态。
+const RefreshStatusActive = "active"
+
 // Store 是 OAuth 授权确认与授权码的持久化契约，由 internal/oauthflow/sqlite 提供
 // SQLite 实现。变更类方法必须在调用方审计事务内执行，失败整体回滚。
 type Store interface {
@@ -121,4 +162,22 @@ type Store interface {
 	MembershipActive(ctx context.Context, userID, appID string) (bool, error)
 	// SessionSnapshot 读取授权码绑定会话的服务端快照。
 	SessionSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, bool, error)
+
+	// CreateRefreshFamilyTx 在审计事务内创建刷新令牌族与首个刷新令牌。
+	CreateRefreshFamilyTx(ctx context.Context, tx audit.Tx, family RefreshFamilyRecord,
+		token RefreshTokenRecord) error
+	// GetRefreshTokenByHash 按摘要读取刷新令牌记录。
+	GetRefreshTokenByHash(ctx context.Context, digest [32]byte) (RefreshTokenRecord, bool, error)
+	// GetRefreshFamily 按 ID 读取刷新令牌族。
+	GetRefreshFamily(ctx context.Context, familyID string) (RefreshFamilyRecord, bool, error)
+	// ConsumeRefreshTokenTx 条件把 active 刷新令牌消费为 used（匹配未过期）；
+	// 并发/重放只有一方成功。
+	ConsumeRefreshTokenTx(ctx context.Context, tx audit.Tx, tokenID string, now time.Time) (bool, error)
+	// InsertRefreshTokenTx 在审计事务内插入轮换产生的新刷新令牌。
+	InsertRefreshTokenTx(ctx context.Context, tx audit.Tx, token RefreshTokenRecord) error
+	// ExpireRefreshTokenTx 条件把 active 但空闲到期的刷新令牌标记为 expired。
+	ExpireRefreshTokenTx(ctx context.Context, tx audit.Tx, tokenID string, now time.Time) (bool, error)
+	// RevokeRefreshFamilyTx 撤销整族：族置 revoked 并撤销其全部 active 令牌；
+	// 返回被撤销令牌数（重放检测/账户失效遏制）。
+	RevokeRefreshFamilyTx(ctx context.Context, tx audit.Tx, familyID, reason string, now time.Time) (int64, error)
 }

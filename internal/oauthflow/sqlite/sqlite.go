@@ -419,3 +419,187 @@ func parseScopes(value string) []string {
 	}
 	return strings.Fields(value)
 }
+
+// ===== 刷新令牌（步骤 54） =====
+
+const insertRefreshFamilySQL = `INSERT INTO refresh_token_families(
+id,client_id,subject_user_id,authorization_id,scope,audiences_json,security_version,
+created_at_ms,absolute_expires_at_ms,idle_timeout_ms,revoked_at_ms,revoke_reason)
+VALUES(?,?,?,?,?,?,?,?,?,?,NULL,NULL)`
+
+const insertRefreshTokenSQL = `INSERT INTO refresh_tokens(
+id,family_id,token_sha256,status,issued_at_ms,idle_expires_at_ms,expires_at_ms,
+used_at_ms,revoked_at_ms,revoke_reason,replaced_by_id,request_id)
+VALUES(?,?,?,?,?,?,?,NULL,NULL,NULL,?,?)`
+
+const selectRefreshTokenSQL = `SELECT id,family_id,token_sha256,status,issued_at_ms,
+idle_expires_at_ms,expires_at_ms,COALESCE(used_at_ms,0),COALESCE(revoked_at_ms,0),
+COALESCE(revoke_reason,''),COALESCE(replaced_by_id,''),COALESCE(request_id,'')
+FROM refresh_tokens WHERE token_sha256=?`
+
+const selectRefreshFamilySQL = `SELECT id,client_id,subject_user_id,authorization_id,scope,
+audiences_json,security_version,created_at_ms,absolute_expires_at_ms,idle_timeout_ms,
+COALESCE(revoked_at_ms,0),COALESCE(revoke_reason,'')
+FROM refresh_token_families WHERE id=?`
+
+const consumeRefreshTokenSQL = `UPDATE refresh_tokens SET status='used',used_at_ms=?
+WHERE id=? AND status='active' AND idle_expires_at_ms>?`
+
+const expireRefreshTokenSQL = `UPDATE refresh_tokens SET status='expired',revoked_at_ms=?,
+revoke_reason='idle_expired' WHERE id=? AND status='active'`
+
+const revokeRefreshFamilySQL = `UPDATE refresh_token_families SET revoked_at_ms=?,
+revoke_reason=? WHERE id=? AND revoked_at_ms IS NULL`
+
+const revokeRefreshFamilyTokensSQL = `UPDATE refresh_tokens SET status='revoked',
+revoked_at_ms=?,revoke_reason=? WHERE family_id=? AND status='active'`
+
+// CreateRefreshFamilyTx 在审计事务内创建刷新令牌族与首个令牌。
+func (s *Store) CreateRefreshFamilyTx(ctx context.Context, tx audit.Tx, family oauthflow.RefreshFamilyRecord,
+	refreshToken oauthflow.RefreshTokenRecord) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", oauthflow.ErrOptionsInvalid)
+	}
+	if _, err := tx.ExecContext(ctx, insertRefreshFamilySQL, family.ID, family.ClientID,
+		family.SubjectUserID, family.AuthorizationID, joinScopes(family.Scopes),
+		string(mustJSON(family.Audiences, "[]")), family.SecurityVersion,
+		family.CreatedAt.UnixMilli(), family.AbsoluteExpiresAt.UnixMilli(),
+		family.IdleTimeout.Milliseconds()); err != nil {
+		return oauthflow.ErrStoreUnavailable
+	}
+	return s.InsertRefreshTokenTx(ctx, tx, refreshToken)
+}
+
+// GetRefreshTokenByHash 按摘要读取刷新令牌记录。
+func (s *Store) GetRefreshTokenByHash(ctx context.Context, digest [32]byte) (oauthflow.RefreshTokenRecord, bool, error) {
+	rows, err := s.store.QueryContext(ctx, selectRefreshTokenSQL, digest[:])
+	if err != nil {
+		return oauthflow.RefreshTokenRecord{}, false, oauthflow.ErrStoreUnavailable
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return oauthflow.RefreshTokenRecord{}, false, rows.Err()
+	}
+	var record oauthflow.RefreshTokenRecord
+	var digestBytes []byte
+	var status string
+	var issuedMS, idleMS, expiresMS, usedMS, revokedMS int64
+	if err := rows.Scan(&record.ID, &record.FamilyID, &digestBytes, &status, &issuedMS,
+		&idleMS, &expiresMS, &usedMS, &revokedMS, &record.RevokeReason,
+		&record.ReplacedByID, &record.RequestID); err != nil {
+		return oauthflow.RefreshTokenRecord{}, false, oauthflow.ErrStoreUnavailable
+	}
+	if len(digestBytes) != 32 {
+		return oauthflow.RefreshTokenRecord{}, false, oauthflow.ErrStoreUnavailable
+	}
+	copy(record.TokenSHA256[:], digestBytes)
+	record.Status = status
+	record.IssuedAt = time.UnixMilli(issuedMS).UTC()
+	record.IdleExpiresAt = time.UnixMilli(idleMS).UTC()
+	record.ExpiresAt = time.UnixMilli(expiresMS).UTC()
+	if usedMS != 0 {
+		record.UsedAt = time.UnixMilli(usedMS).UTC()
+	}
+	if revokedMS != 0 {
+		record.RevokedAt = time.UnixMilli(revokedMS).UTC()
+	}
+	return record, true, nil
+}
+
+// GetRefreshFamily 按 ID 读取刷新令牌族。
+func (s *Store) GetRefreshFamily(ctx context.Context, familyID string) (oauthflow.RefreshFamilyRecord, bool, error) {
+	rows, err := s.store.QueryContext(ctx, selectRefreshFamilySQL, familyID)
+	if err != nil {
+		return oauthflow.RefreshFamilyRecord{}, false, oauthflow.ErrStoreUnavailable
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return oauthflow.RefreshFamilyRecord{}, false, rows.Err()
+	}
+	var record oauthflow.RefreshFamilyRecord
+	var scope, audiencesJSON, revokeReason string
+	var createdMS, absoluteMS, revokedMS, idleTimeoutMS int64
+	if err := rows.Scan(&record.ID, &record.ClientID, &record.SubjectUserID,
+		&record.AuthorizationID, &scope, &audiencesJSON, &record.SecurityVersion,
+		&createdMS, &absoluteMS, &idleTimeoutMS, &revokedMS, &revokeReason); err != nil {
+		return oauthflow.RefreshFamilyRecord{}, false, oauthflow.ErrStoreUnavailable
+	}
+	record.Scopes = parseScopes(scope)
+	if err := json.Unmarshal([]byte(audiencesJSON), &record.Audiences); err != nil {
+		return oauthflow.RefreshFamilyRecord{}, false, oauthflow.ErrStoreUnavailable
+	}
+	record.CreatedAt = time.UnixMilli(createdMS).UTC()
+	record.AbsoluteExpiresAt = time.UnixMilli(absoluteMS).UTC()
+	record.IdleTimeout = time.Duration(idleTimeoutMS) * time.Millisecond
+	if revokedMS != 0 {
+		record.RevokedAt = time.UnixMilli(revokedMS).UTC()
+	}
+	record.RevokeReason = revokeReason
+	return record, true, nil
+}
+
+// ConsumeRefreshTokenTx 条件消费 active 刷新令牌。
+func (s *Store) ConsumeRefreshTokenTx(ctx context.Context, tx audit.Tx, tokenID string,
+	now time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, consumeRefreshTokenSQL, now.UnixMilli(), tokenID, now.UnixMilli())
+	if err != nil {
+		return false, oauthflow.ErrStoreUnavailable
+	}
+	return refreshRowsAffected(result)
+}
+
+// InsertRefreshTokenTx 在审计事务内插入轮换产生的新刷新令牌。
+func (s *Store) InsertRefreshTokenTx(ctx context.Context, tx audit.Tx,
+	refreshToken oauthflow.RefreshTokenRecord) error {
+	_, err := tx.ExecContext(ctx, insertRefreshTokenSQL, refreshToken.ID, refreshToken.FamilyID,
+		refreshToken.TokenSHA256[:], refreshToken.Status, refreshToken.IssuedAt.UnixMilli(),
+		refreshToken.IdleExpiresAt.UnixMilli(), refreshToken.ExpiresAt.UnixMilli(),
+		nullIfEmpty(refreshToken.ReplacedByID), nullIfEmpty(refreshToken.RequestID))
+	if err != nil {
+		return oauthflow.ErrStoreUnavailable
+	}
+	return nil
+}
+
+// ExpireRefreshTokenTx 条件标记空闲到期的刷新令牌。
+func (s *Store) ExpireRefreshTokenTx(ctx context.Context, tx audit.Tx, tokenID string,
+	now time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, expireRefreshTokenSQL, now.UnixMilli(), tokenID)
+	if err != nil {
+		return false, oauthflow.ErrStoreUnavailable
+	}
+	return refreshRowsAffected(result)
+}
+
+// RevokeRefreshFamilyTx 撤销整族及其全部 active 令牌。
+func (s *Store) RevokeRefreshFamilyTx(ctx context.Context, tx audit.Tx, familyID, reason string,
+	now time.Time) (int64, error) {
+	if _, err := tx.ExecContext(ctx, revokeRefreshFamilySQL, now.UnixMilli(), reason, familyID); err != nil {
+		return 0, oauthflow.ErrStoreUnavailable
+	}
+	result, err := tx.ExecContext(ctx, revokeRefreshFamilyTokensSQL, now.UnixMilli(), reason, familyID)
+	if err != nil {
+		return 0, oauthflow.ErrStoreUnavailable
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, oauthflow.ErrStoreUnavailable
+	}
+	return affected, nil
+}
+
+// refreshRowsAffected 把条件更新结果转换为“恰好一行生效”。
+func refreshRowsAffected(result interface{ RowsAffected() (int64, error) }) (bool, error) {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, oauthflow.ErrStoreUnavailable
+	}
+	return affected == 1, nil
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}

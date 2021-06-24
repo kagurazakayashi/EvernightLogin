@@ -333,6 +333,10 @@ type IDTokenClaims struct {
 // 内存清零承诺，也不应当被复制到不受控位置。
 type Token struct{ value string }
 
+// NewTokenValue 把已签发/不透明令牌原文包装为默认脱敏的类型（用于刷新令牌等
+// 高熵秘密在服务间传递）；调用方只应在投递时 Reveal()，不得写入日志/审计。
+func NewTokenValue(value string) Token { return Token{value: value} }
+
 // Reveal 返回令牌原文副本（只用于投递给调用方/HTTP 传输层）。
 func (t Token) Reveal() string { return t.value }
 

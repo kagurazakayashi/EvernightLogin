@@ -52,6 +52,17 @@ const (
 	MaxRequestTTL = 15 * time.Minute
 	// DefaultCodeTTL 是授权码默认有效期。
 	DefaultCodeTTL = 5 * time.Minute
+	// ScopeOfflineAccess 是 OIDC 离线访问 scope；只有客户端登记 refresh_token
+	// 且授权包含该 scope 时才签发刷新令牌（不凭默认猜测用户需要离线访问）。
+	ScopeOfflineAccess = "offline_access"
+	// DefaultRefreshAbsoluteTTL/MaxRefreshAbsoluteTTL 是刷新令牌族的绝对有效期。
+	DefaultRefreshAbsoluteTTL = 30 * 24 * time.Hour
+	MinRefreshAbsoluteTTL     = time.Hour
+	MaxRefreshAbsoluteTTL     = 90 * 24 * time.Hour
+	// DefaultRefreshIdleTTL/MaxRefreshIdleTTL 是单个刷新令牌的空闲有效期。
+	DefaultRefreshIdleTTL = 7 * 24 * time.Hour
+	MinRefreshIdleTTL     = time.Hour
+	MaxRefreshIdleTTL     = 30 * 24 * time.Hour
 	// MinCodeTTL/MaxCodeTTL 是授权码有效期边界（规范建议不超过 10 分钟）。
 	MinCodeTTL = time.Minute
 	MaxCodeTTL = 10 * time.Minute
@@ -375,6 +386,16 @@ func (c ClientInfo) GrantsClientCredentials() bool {
 	return false
 }
 
+// GrantsRefreshToken 报告客户端是否登记 refresh_token（只能与授权码/设备码组合）。
+func (c ClientInfo) GrantsRefreshToken() bool {
+	for _, grant := range c.GrantTypes {
+		if grant == oauthclient.GrantRefreshToken {
+			return true
+		}
+	}
+	return false
+}
+
 // ClientSource 读取客户端登记配置；不存在返回 found=false。实现必须 fail-closed。
 type ClientSource interface {
 	LoadClient(ctx context.Context, clientID string) (ClientInfo, bool, error)
@@ -400,6 +421,32 @@ type AuditRecorder interface {
 }
 
 // TokenIssuer 是 Access Token 签发契约；生产实现为 *internal/token.Service。
+// TokenVerifier 是 Access Token 验证契约；生产实现为 *internal/token.Service。
+type TokenVerifier interface {
+	VerifyAccessToken(ctx context.Context, raw, expectedAudience string) (token.AccessClaims, error)
+}
+
+// InspectPermission 是令牌状态查询的披露裁剪决定：Allowed 为假时拒绝查询；
+// ShowSubject 为真时才允许返回用户主体标识（其他应用默认看不到用户身份）。
+type InspectPermission struct {
+	Allowed     bool
+	ShowSubject bool
+}
+
+// InspectAuthorizer 判定资源服务调用者能否查询指定 audience 的令牌状态。
+// 实现必须 fail-closed；未注入时状态查询一律拒绝。
+type InspectAuthorizer interface {
+	AuthorizeInspection(ctx context.Context, resourceServerClientID, audience string) (InspectPermission, error)
+}
+
+// InspectClientAuthorizer 判定资源服务调用者与指定 OAuth 客户端/令牌族之间的关系，
+// 用于刷新令牌元数据查询（资源服务只能查询自己有权服务的客户端令牌）。未注入时
+// 刷新令牌元数据查询 fail-closed（不披露 ClientID/Scope/Audience/主体）。
+type InspectClientAuthorizer interface {
+	AuthorizeClientInspection(ctx context.Context, resourceServerClientID, clientID, audience string,
+	) error
+}
+
 type TokenIssuer interface {
 	IssueAccessToken(ctx context.Context, caller token.Caller, request token.IssueAccessTokenRequest) (token.IssuedToken, error)
 }
@@ -462,11 +509,14 @@ type ExchangeRequest struct {
 	ClientSecret         string
 	ClientCertificatePEM string
 	CodeVerifier         string
-	// Scope/Resource 只用于 client_credentials：请求的服务身份 Scope 与目标资源
-	// 必须缩减在客户端登记范围之内；授权码流程使用授权码绑定的范围。
+	// Scope/Resource 只用于 client_credentials 或 refresh_token：请求的服务身份
+	// Scope 与目标资源必须缩减在已登记/原授权范围之内；授权码流程使用授权码绑定
+	// 的范围。
 	Scope     []string
 	Resource  []string
 	RequestID string
+	// RefreshToken 是 refresh_token 授权类型的不透明刷新令牌。
+	RefreshToken string
 }
 
 // TokenResponse 是 Token 端点成功响应。AccessToken 是脱敏类型，宿主必须显式
@@ -477,7 +527,12 @@ type TokenResponse struct {
 	IDToken   token.Token
 	TokenType string
 	ExpiresIn int64
-	Scope     string
+	// RefreshToken 仅在授权码兑换且客户端登记 refresh_token、授权含
+	// offline_access 时签发；默认脱敏，宿主显式 Reveal()。
+	RefreshToken token.Token
+	// RefreshExpiresAt 是本次刷新令牌的空闲到期时间（族绝对到期更早时取更早者）。
+	RefreshExpiresAt time.Time
+	Scope            string
 	// RequestID/CodeID 是内部关联标识（不含秘密）。
 	RequestID string
 	CodeID    string

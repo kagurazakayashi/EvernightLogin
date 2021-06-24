@@ -34,19 +34,32 @@ type Options struct {
 	Reauth reauth.OperationRunner
 	// OIDC 是 ID Token 签发契约；nil 表示未启用 OIDC：授权请求中的 openid scope
 	// 一律拒绝，兑换响应不含 ID Token（fail-closed，不声明未实现能力）。
-	OIDC       IDTokenIssuer
-	RequestTTL time.Duration
-	CodeTTL    time.Duration
-	Now        func() time.Time
-	Random     io.Reader
-	Logger     *slog.Logger
+	OIDC IDTokenIssuer
+	// TokenVerifier 是 Access Token 验证契约（令牌状态查询用）；nil 时状态查询
+	// 返回 temporarily_unavailable（不声明未装配的能力）。
+	TokenVerifier TokenVerifier
+	// InspectAuthorizer 判定资源服务能否查询令牌状态；nil 时状态查询 fail-closed。
+	InspectAuthorizer InspectAuthorizer
+	// InspectClientAuthorizer 判定资源服务与刷新令牌所属客户端的关系；nil 时
+	// 刷新令牌元数据查询 fail-closed（不披露任何元数据）。
+	InspectClientAuthorizer InspectClientAuthorizer
+	RequestTTL              time.Duration
+	CodeTTL                 time.Duration
+	// RefreshAbsoluteTTL/RefreshIdleTTL 是刷新令牌族绝对有效期与单令牌空闲有效期。
+	RefreshAbsoluteTTL time.Duration
+	RefreshIdleTTL     time.Duration
+	Now                func() time.Time
+	Random             io.Reader
+	Logger             *slog.Logger
 }
 
 // Service 是授权确认与授权码兑换服务。构造后不可变、可并发使用；不提供页面/HTTP。
 type Service struct {
-	opts       Options
-	requestTTL time.Duration
-	codeTTL    time.Duration
+	opts               Options
+	requestTTL         time.Duration
+	codeTTL            time.Duration
+	refreshAbsoluteTTL time.Duration
+	refreshIdleTTL     time.Duration
 }
 
 // New 校验依赖与参数并构造服务。
@@ -79,6 +92,23 @@ func New(options Options) (*Service, error) {
 	if options.CodeTTL == 0 {
 		options.CodeTTL = DefaultCodeTTL
 	}
+	refreshAbsoluteTTL := options.RefreshAbsoluteTTL
+	if refreshAbsoluteTTL == 0 {
+		refreshAbsoluteTTL = DefaultRefreshAbsoluteTTL
+	}
+	if refreshAbsoluteTTL < MinRefreshAbsoluteTTL || refreshAbsoluteTTL > MaxRefreshAbsoluteTTL {
+		return nil, fmt.Errorf("%w: 刷新令牌绝对有效期必须在 %s～%s 之间",
+			ErrOptionsInvalid, MinRefreshAbsoluteTTL, MaxRefreshAbsoluteTTL)
+	}
+	refreshIdleTTL := options.RefreshIdleTTL
+	if refreshIdleTTL == 0 {
+		refreshIdleTTL = DefaultRefreshIdleTTL
+	}
+	if refreshIdleTTL < MinRefreshIdleTTL || refreshIdleTTL > MaxRefreshIdleTTL ||
+		refreshIdleTTL > refreshAbsoluteTTL {
+		return nil, fmt.Errorf("%w: 刷新令牌空闲有效期必须在 %s～%s 之间且不超过绝对有效期",
+			ErrOptionsInvalid, MinRefreshIdleTTL, MaxRefreshIdleTTL)
+	}
 	if options.CodeTTL < MinCodeTTL || options.CodeTTL > MaxCodeTTL {
 		return nil, fmt.Errorf("%w: 授权码有效期必须在 %s～%s 之间",
 			ErrOptionsInvalid, MinCodeTTL, MaxCodeTTL)
@@ -92,7 +122,8 @@ func New(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Service{opts: options, requestTTL: options.RequestTTL, codeTTL: options.CodeTTL}, nil
+	return &Service{opts: options, requestTTL: options.RequestTTL, codeTTL: options.CodeTTL,
+		refreshAbsoluteTTL: refreshAbsoluteTTL, refreshIdleTTL: refreshIdleTTL}, nil
 }
 
 // BeginAuthorization 校验授权请求并创建待用户确认的授权确认请求。
@@ -440,6 +471,8 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 		// 继续下方授权码兑换流程。
 	case "client_credentials":
 		return s.exchangeClientCredentials(ctx, request)
+	case "refresh_token":
+		return s.exchangeRefreshToken(ctx, request)
 	default:
 		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.token.exchange_denied",
 			request.ClientID, "unsupported_grant_type", "REQ_INVALID", request.RequestID)
@@ -670,6 +703,15 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 		}
 		idToken = issuedID.Token
 	}
+	// 刷新令牌：仅授权码（用户）流程 + 客户端登记 refresh_token + 授权含
+	// offline_access 时签发；客户端凭据流程永远不会创建刷新令牌族。
+	refreshToken, refreshExpiresAt, refreshErr := s.issueRefreshTokenForCode(ctx, code, client,
+		scopes, actor, request.RequestID)
+	if refreshErr != nil {
+		s.failure(ctx, actor, "oauth.token.exchange_denied", code.ClientID,
+			"refresh_token_issue_failed", "INTERNAL_ERROR", request.RequestID)
+		return TokenResponse{}, oauthServerError()
+	}
 	// 协议成功事件；令牌服务已独立写签发审计，这里失败只记录日志（不重复宣称成功）。
 	successEvent := audit.Event{
 		Actor: actor, AppID: code.ClientID, Action: "oauth.token.exchanged",
@@ -694,8 +736,8 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 		expiresIn = 0
 	}
 	return TokenResponse{AccessToken: issued.Token, IDToken: idToken, TokenType: "Bearer",
-		ExpiresIn: expiresIn, Scope: joinScopes(scopes), RequestID: request.RequestID,
-		CodeID: code.ID}, nil
+		ExpiresIn: expiresIn, RefreshToken: refreshToken, RefreshExpiresAt: refreshExpiresAt,
+		Scope: joinScopes(scopes), RequestID: request.RequestID, CodeID: code.ID}, nil
 }
 
 // exchangeClientCredentials 处理 client_credentials：只允许保密客户端、显式登记该

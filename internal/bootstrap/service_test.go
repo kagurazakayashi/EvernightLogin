@@ -301,12 +301,15 @@ func TestInitializeCreatesSinglePendingRoot(t *testing.T) {
 	if got := env.queryInt(`SELECT COUNT(*) FROM password_credentials`); got != 0 {
 		t.Errorf("root 初始化写入了密码凭证行数 = %d，期望 0", got)
 	}
-	// root 初始化不得写入会话行（会话表由后续步骤的迁移建立，例如步骤 30 的
-	// sessions），也不得提前创建令牌表。
-	for _, table := range []string{"refresh_tokens", "oauth_grants"} {
-		if got := env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table); got != 0 {
-			t.Errorf("提前创建了表 %s", table)
+	// root 初始化不得写入会话行；令牌/会话表由后续步骤迁移合法建立，但初始化
+	// 必须保持这些表为空（不签发/不初始化任何令牌或会话）。
+	for _, table := range []string{"refresh_token_families", "refresh_tokens", "token_signing_keys"} {
+		if got := env.queryInt(`SELECT COUNT(*) FROM ` + table); got != 0 {
+			t.Errorf("root 初始化写入令牌表 %s 行数 = %d", table, got)
 		}
+	}
+	if got := env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='oauth_grants'`); got != 0 {
+		t.Error("提前创建了表 oauth_grants")
 	}
 	if got := env.queryInt(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'`); got == 1 {
 		if rows := env.queryInt(`SELECT COUNT(*) FROM sessions`); rows != 0 {
