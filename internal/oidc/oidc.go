@@ -130,6 +130,13 @@ type UserInfoRecord struct {
 // Active 报告账户是否可用于 UserInfo。
 func (r UserInfoRecord) Active() bool { return r.Status == "active" }
 
+// RevocationChecker 是在线撤销检查契约：OIDC UserInfo 在使用 Access Token 前
+// 必须查询该令牌是否被撤销（步骤 55）。生产实现为 *oauthflow.Service 的
+// AccessTokenRevoked；未注入时不检查（装配层应注入，README 记录失效延迟边界）。
+type RevocationChecker interface {
+	AccessTokenRevoked(ctx context.Context, claims token.AccessClaims) (bool, error)
+}
+
 // UserInfoSource 读取用户资料与已验证邮箱状态；实现必须 fail-closed。
 type UserInfoSource interface {
 	LoadUserInfo(ctx context.Context, userID string) (UserInfoRecord, bool, error)
@@ -152,6 +159,9 @@ type Options struct {
 	JWKSURI               string
 	Tokens                TokenService
 	Users                 UserInfoSource
+	// RevocationChecker 是在线撤销检查，必填：撤销/退出后 UserInfo 必须能拒绝
+	// 未过期 Access Token；nil 时 New 直接拒绝构造（fail-closed）。
+	RevocationChecker RevocationChecker
 	// SubjectSecret 是按客户端配对 subject 的 HMAC 秘密（至少 32 字节）；宿主必须
 	// 持久保存，轮换会使既有 subject 变化（本步不实现轮换）。
 	SubjectSecret []byte
@@ -195,6 +205,10 @@ func New(options Options) (*Service, error) {
 	}
 	if len(options.SubjectSecret) < 32 {
 		return nil, fmt.Errorf("%w: subject 秘密至少 32 字节", ErrOptionsInvalid)
+	}
+	if isNilInterface(options.RevocationChecker) {
+		return nil, fmt.Errorf("%w: 未注入在线撤销检查器（撤回授权/退出应用后 UserInfo 必须 fail-closed）",
+			ErrOptionsInvalid)
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -358,6 +372,19 @@ func (s *Service) UserInfo(ctx context.Context, accessToken string) (UserInfoRes
 	}
 	if !containsScope(claims.Scopes, ScopeOpenID) {
 		return UserInfoResponse{}, insufficientScopeError("访问令牌缺少 openid scope")
+	}
+	// 步骤 55：撤回授权/退出应用/安全事件后的未过期 Access Token 必须经在线撤销
+	// 检查拒绝（自包含 JWT 离线副本不能即时感知，任何声明都不应夸大）。
+	if isNilInterface(s.opts.RevocationChecker) {
+		// 构造时已拒绝；这里再次 fail-closed，绝不静默跳过撤销检查。
+		return UserInfoResponse{}, fmt.Errorf("%w: 未配置在线撤销检查器", ErrOptionsInvalid)
+	}
+	revoked, checkErr := s.opts.RevocationChecker.AccessTokenRevoked(ctx, claims)
+	if checkErr != nil {
+		return UserInfoResponse{}, fmt.Errorf("%w: %w", ErrStoreUnavailable, checkErr)
+	}
+	if revoked {
+		return UserInfoResponse{}, tokenInvalidError("访问令牌已撤销")
 	}
 	record, found, err := s.opts.Users.LoadUserInfo(ctx, claims.Subject)
 	if err != nil {
@@ -524,3 +551,17 @@ func isNil(value any) bool {
 
 // 编译期确认实现 internal/oauthflow 的 ID Token 签发契约。
 var _ oauthflow.IDTokenIssuer = (*Service)(nil)
+
+// isNilInterface 检测 nil 接口与 typed nil，避免把不可用依赖当成已装配。
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}

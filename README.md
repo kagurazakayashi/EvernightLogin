@@ -572,6 +572,17 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 授权撤回、令牌撤销与退出状态联动（步骤 55）
+
+新增 `internal/oauthflow/revocation.go` 与迁移 `0034_oauth_revocation.sql`（未兑换授权码 `revoked_at_ms`、（用户,客户端）/用户级在线撤销标记、访问令牌 jti 撤销记录），复用步骤 45 的 `oauth_revocation_events` outbox 与步骤 54 刷新族/状态查询。本步只提供可信 Go API 与标准撤销端点语义，不建 HTTP 路由/页面；Webhook 通知应用自身会话留步骤 59。
+
+- **四种退出范围明确区分**：`LogoutCurrentSession` 只撤销当前会话；`LogoutAllSessions` 撤销该用户全部身份会话；`RevokeAuthorization` 撤回某次应用授权（撤销该授权下未兑换授权码与刷新令牌族，写（用户,客户端）在线撤销标记）；`LogoutApplication` 退出某应用（该用户在该应用下未兑换授权码、全部刷新族、应用会话与在线撤销标记）。删除浏览器 Cookie 不等于调用本服务；业务应用自身会话通知不属于本步。
+- **标准撤销端点（RFC 7009）**：`RevokeToken` 要求保密客户端 secret/证书认证（公开客户端凭 client_id 撤销自己的令牌），只撤销属于已认证客户端的 refresh/access 令牌；未知、已撤销、属于其他客户端的令牌**静默按成功处理**，避免存在性/归属枚举；重复撤销幂等。`token_type_hint` 只是提示，错误 hint 会被忽略并回退尝试另一种类型。撤销刷新令牌按族撤销（含全部 active 后代）**并在同一事务写（用户,客户端）在线撤销标记**，使该用户对该应用已签发的未过期 Access Token 在在线校验/状态查询与 OIDC UserInfo 中失效；这是保守的粗粒度边界，可能同时使同应用其他授权的 AT 在线失效（离线 JWT 副本仍不能即时感知）。撤销访问令牌按 jti 记录并保留到令牌自然到期。
+- **撤销状态联动**：`InspectToken` 的 Access Token 分支增加在线撤销检查（jti 精确撤销 + 用户/应用级撤销时间不早于令牌签发时间即 inactive）；OIDC `UserInfo` 使用 Access Token 时接入同一在线撤销检查（`RevocationChecker` 为构造必填依赖，未注入时 `oidc.New` fail-closed 拒绝，绝不跳过检查）；刷新令牌族撤销后状态查询 `active=false`。**失效延迟约定**：访问令牌是自包含 JWT，离线验签副本无法感知撤销；资源服务必须使用本服务状态查询/在线校验或依赖短 Access Token 有效期，**不得宣称所有离线副本立即失效**。旧刷新凭证在族撤销后一律无效。
+- **既有可靠事件接入**：`ApplySecurityEvent` 支持改密、恢复完成、账户禁用（用户级撤销全部刷新族/未兑换授权码并写用户级在线标记）与成员移除（按用户+客户端收敛）；`ConsumeOAuthRevocationEvents` 消费步骤 45 `oauth_revocation_events` outbox，逐事件幂等撤销并标记 processed；单事件失败累计 attempt_count 且保留 pending，可安全重试。安全版本/会话撤销仍是原有第一道失效线，不因本消费者缺失而失效。
+- **审计与边界**：撤回/撤销/退出/事件消费均写审计（不记录 access/refresh token、授权码、secret 明文）；客户端认证失败 `invalid_client`，内部协议错误复用既有 46 码。`SessionRevoker` 未装配时 `Logout` fail-closed，不影响授权码/令牌端点。无令牌撤销列表对外查询、无 Webhook/应用会话通知、无 HTTP 路由/限流；离线副本即时失效、跨实例撤销推送/事务外副作用恰好一次未实现。
+- **已知限制/装配前置**：宿主必须在改密/恢复完成/禁用/成员移除等既有可靠事件提交后调用 `ApplySecurityEvent`（或运行 outbox 消费者），否则仅依赖安全版本/会话失效的既有延迟；HTTP 撤销/退出端点、传输层限流、Webhook 与页面属后续步骤；非 Windows/race/多实例未验证。
+
 ## 刷新令牌轮换、重放检测与令牌状态查询（步骤 54）
 
 扩展 `internal/oauthflow` 的 Token 端点，新增 `grant_type=refresh_token` 轮换与标准风格令牌状态查询；迁移 `0033_refresh_tokens.sql` 落地 `refresh_token_families`（令牌族：客户端/用户主体/授权请求/Scope/audience/安全版本快照/绝对有效期）与 `refresh_tokens`（只存 32 字节 SHA-256 摘要、active/used/revoked/expired、空闲/绝对到期、替换关系）。刷新令牌是高熵不透明秘密（32 字节随机 + 前缀），明文只在签发/轮换响应返回一次，不写入数据库、日志或审计。本步**不开放 HTTP 路由**，协议端点实现为内部 Go API，由后续装配步骤接线。

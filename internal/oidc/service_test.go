@@ -42,6 +42,16 @@ func (f *fakeTokenClients) LoadClient(_ context.Context, clientID string) (token
 	return client, nil
 }
 
+// fakeRevocationChecker 是步骤 55 在线撤销检查测试替身。
+type fakeRevocationChecker struct {
+	revoked bool
+	err     error
+}
+
+func (f *fakeRevocationChecker) AccessTokenRevoked(context.Context, token.AccessClaims) (bool, error) {
+	return f.revoked, f.err
+}
+
 type testEnv struct {
 	t       *testing.T
 	ctx     context.Context
@@ -49,6 +59,7 @@ type testEnv struct {
 	tokens  *token.Service
 	service *oidc.Service
 	raw     *storagesqlite.Store
+	checker *fakeRevocationChecker
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -71,7 +82,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("审计存储: %v", err)
 	}
-	env := &testEnv{t: t, ctx: ctx, now: now, raw: raw}
+	env := &testEnv{t: t, ctx: ctx, now: now, raw: raw,
+		checker: &fakeRevocationChecker{}}
 	recorder, err := audit.New(auditStore, audit.Options{Now: func() time.Time { return env.now }})
 	if err != nil {
 		t.Fatalf("审计: %v", err)
@@ -147,6 +159,7 @@ VALUES(?,?,?,?,?,?)`, "alice@example.test", testUser, "alice@example.test",
 		JWKSURI:               testIssuer + "/oidc/jwks",
 		Tokens:                tokens,
 		Users:                 userStore,
+		RevocationChecker:     env.checker,
 		SubjectSecret:         bytesOf('s', 32),
 		Now:                   func() time.Time { return env.now },
 	})
@@ -415,6 +428,7 @@ func TestConfigurationValidation(t *testing.T) {
 		TokenEndpoint: testIssuer + "/oauth/token", UserInfoEndpoint: testIssuer + "/oidc/userinfo",
 		JWKSURI: testIssuer + "/oidc/jwks", Tokens: env.tokens,
 		Users: &fakeUsers{}, SubjectSecret: bytesOf('k', 32),
+		RevocationChecker: &fakeRevocationChecker{},
 	}
 	if _, err := oidc.New(base); err != nil {
 		t.Fatalf("合法配置构造失败: %v", err)
@@ -431,6 +445,7 @@ func TestConfigurationValidation(t *testing.T) {
 		{"未实现 Scope", func(o *oidc.Options) { o.SupportedScopes = []string{"openid", "admin"} }},
 		{"无令牌服务", func(o *oidc.Options) { o.Tokens = nil }},
 		{"无用户来源", func(o *oidc.Options) { o.Users = nil }},
+		{"无在线撤销检查器", func(o *oidc.Options) { o.RevocationChecker = nil }},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

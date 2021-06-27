@@ -603,3 +603,254 @@ func nullIfEmpty(value string) any {
 	}
 	return value
 }
+
+// ===== 步骤 55：授权撤回、令牌撤销与退出联动 =====
+
+const selectRefreshFamiliesFilterSQL = `SELECT id,client_id,subject_user_id,authorization_id,
+scope,audiences_json,security_version,created_at_ms,absolute_expires_at_ms,idle_timeout_ms,
+COALESCE(revoked_at_ms,0),COALESCE(revoke_reason,'')
+FROM refresh_token_families
+WHERE (?='' OR subject_user_id=?) AND (?='' OR client_id=?) AND (?='' OR authorization_id=?)
+ORDER BY created_at_ms`
+
+const revokeAuthorizationCodesSQL = `UPDATE oauth_authorization_codes SET revoked_at_ms=?
+WHERE consumed_at_ms IS NULL AND revoked_at_ms IS NULL
+  AND (?='' OR user_id=?) AND (?='' OR client_id=?) AND (?='' OR authorization_request_id=?)`
+
+const upsertClientUserRevocationSQL = `INSERT INTO oauth_client_user_revocations(
+user_id,client_id,revoked_at_ms,reason,request_id) VALUES(?,?,?,?,?)
+ON CONFLICT(user_id,client_id) DO UPDATE SET revoked_at_ms=excluded.revoked_at_ms,
+reason=excluded.reason,request_id=excluded.request_id`
+
+const upsertUserRevocationSQL = `INSERT INTO oauth_user_revocations(
+user_id,revoked_at_ms,reason,request_id) VALUES(?,?,?,?)
+ON CONFLICT(user_id) DO UPDATE SET revoked_at_ms=excluded.revoked_at_ms,
+reason=excluded.reason,request_id=excluded.request_id`
+
+const insertAccessTokenRevocationSQL = `INSERT INTO oauth_access_token_revocations(
+jti,client_id,user_id,subject_type,revoked_at_ms,expires_at_ms,reason,request_id)
+VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(jti) DO NOTHING`
+
+const selectAccessTokenRevocationSQL = `SELECT COUNT(*) FROM oauth_access_token_revocations WHERE jti=?`
+
+const selectRevocationTimesSQL = `SELECT COALESCE((SELECT revoked_at_ms FROM oauth_user_revocations WHERE user_id=?),0),
+COALESCE((SELECT revoked_at_ms FROM oauth_client_user_revocations WHERE user_id=? AND client_id=?),0)`
+
+const selectActiveAppSessionsSQL = `SELECT id FROM sessions
+WHERE user_id=? AND app_id=? AND revoked_at_ms IS NULL
+  AND idle_expires_at_ms>? AND absolute_expires_at_ms>?`
+
+const pendingRevocationEventsSQL = `SELECT id,user_id,reason,created_at_ms,attempt_count
+FROM oauth_revocation_events WHERE processed_at_ms IS NULL ORDER BY created_at_ms LIMIT ?`
+
+const markRevocationEventProcessedSQL = `UPDATE oauth_revocation_events
+SET processed_at_ms=?, reason=COALESCE(NULLIF(?,''),reason) WHERE id=? AND processed_at_ms IS NULL`
+
+const markRevocationEventFailedSQL = `UPDATE oauth_revocation_events
+SET attempt_count=attempt_count+1 WHERE id=? AND processed_at_ms IS NULL`
+
+// ListRefreshFamilies 列出匹配条件的刷新令牌族。
+func (s *Store) ListRefreshFamilies(ctx context.Context, userID, clientID,
+	authorizationID string) ([]oauthflow.RefreshFamilyRecord, error) {
+	rows, err := s.store.QueryContext(ctx, selectRefreshFamiliesFilterSQL,
+		userID, userID, clientID, clientID, authorizationID, authorizationID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	families := make([]oauthflow.RefreshFamilyRecord, 0, 4)
+	for rows.Next() {
+		var family oauthflow.RefreshFamilyRecord
+		var scope, audiencesJSON, revokeReason string
+		var createdMS, absoluteMS, idleTimeoutMS, revokedMS int64
+		if err := rows.Scan(&family.ID, &family.ClientID, &family.SubjectUserID,
+			&family.AuthorizationID, &scope, &audiencesJSON, &family.SecurityVersion,
+			&createdMS, &absoluteMS, &idleTimeoutMS, &revokedMS, &revokeReason); err != nil {
+			return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+		}
+		family.Scopes = parseScopes(scope)
+		if err := json.Unmarshal([]byte(audiencesJSON), &family.Audiences); err != nil {
+			return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+		}
+		family.CreatedAt = time.UnixMilli(createdMS).UTC()
+		family.AbsoluteExpiresAt = time.UnixMilli(absoluteMS).UTC()
+		family.IdleTimeout = time.Duration(idleTimeoutMS) * time.Millisecond
+		if revokedMS != 0 {
+			family.RevokedAt = time.UnixMilli(revokedMS).UTC()
+		}
+		family.RevokeReason = revokeReason
+		families = append(families, family)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return families, nil
+}
+
+// RevokeUnconsumedAuthorizationCodesTx 撤销未兑换授权码。
+func (s *Store) RevokeUnconsumedAuthorizationCodesTx(ctx context.Context, tx audit.Tx,
+	userID, clientID, authorizationID string, now time.Time) (int64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("%w: 审计事务为空", oauthflow.ErrOptionsInvalid)
+	}
+	result, err := tx.ExecContext(ctx, revokeAuthorizationCodesSQL, now.UTC().UnixMilli(),
+		userID, userID, clientID, clientID, authorizationID, authorizationID)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return affected, nil
+}
+
+// UpsertClientUserRevocationTx 记录（用户,客户端）撤销标记。
+func (s *Store) UpsertClientUserRevocationTx(ctx context.Context, tx audit.Tx,
+	userID, clientID, reason, requestID string, now time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", oauthflow.ErrOptionsInvalid)
+	}
+	if _, err := tx.ExecContext(ctx, upsertClientUserRevocationSQL, userID, clientID,
+		now.UTC().UnixMilli(), reason, requestID); err != nil {
+		return fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return nil
+}
+
+// UpsertUserRevocationTx 记录用户级撤销标记。
+func (s *Store) UpsertUserRevocationTx(ctx context.Context, tx audit.Tx,
+	userID, reason, requestID string, now time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", oauthflow.ErrOptionsInvalid)
+	}
+	if _, err := tx.ExecContext(ctx, upsertUserRevocationSQL, userID,
+		now.UTC().UnixMilli(), reason, requestID); err != nil {
+		return fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return nil
+}
+
+// InsertAccessTokenRevocationTx 记录访问令牌 jti 撤销。
+func (s *Store) InsertAccessTokenRevocationTx(ctx context.Context, tx audit.Tx,
+	record oauthflow.AccessTokenRevocationRecord) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", oauthflow.ErrOptionsInvalid)
+	}
+	if _, err := tx.ExecContext(ctx, insertAccessTokenRevocationSQL, record.JTI,
+		record.ClientID, record.UserID, record.SubjectType, record.RevokedAt.UTC().UnixMilli(),
+		record.ExpiresAt.UTC().UnixMilli(), record.Reason, record.RequestID); err != nil {
+		return fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return nil
+}
+
+// AccessTokenRevocation 报告 jti 是否已撤销。
+func (s *Store) AccessTokenRevocation(ctx context.Context, jti string) (bool, error) {
+	rows, err := s.store.QueryContext(ctx, selectAccessTokenRevocationSQL, jti)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, nil
+	}
+	var count int64
+	if err := rows.Scan(&count); err != nil {
+		return false, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return count > 0, nil
+}
+
+// RevocationTimes 返回用户级与客户端级在线撤销时间。
+func (s *Store) RevocationTimes(ctx context.Context, userID,
+	clientID string) (time.Time, time.Time, error) {
+	rows, err := s.store.QueryContext(ctx, selectRevocationTimesSQL, userID, userID, clientID)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return time.Time{}, time.Time{}, nil
+	}
+	var userMS, clientMS int64
+	if err := rows.Scan(&userMS, &clientMS); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	var userSince, clientSince time.Time
+	if userMS > 0 {
+		userSince = time.UnixMilli(userMS).UTC()
+	}
+	if clientMS > 0 {
+		clientSince = time.UnixMilli(clientMS).UTC()
+	}
+	return userSince, clientSince, nil
+}
+
+// ListActiveAppSessionIDs 列出用户在某应用上的活动会话 ID。
+func (s *Store) ListActiveAppSessionIDs(ctx context.Context, userID, clientID string,
+	now time.Time) ([]string, error) {
+	nowMS := now.UTC().UnixMilli()
+	rows, err := s.store.QueryContext(ctx, selectActiveAppSessionsSQL, userID, clientID, nowMS, nowMS)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0, 4)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ListPendingOAuthRevocationEvents 读取待处理撤销事件。
+func (s *Store) ListPendingOAuthRevocationEvents(ctx context.Context,
+	limit int) ([]oauthflow.OAuthRevocationEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.store.QueryContext(ctx, pendingRevocationEventsSQL, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	events := make([]oauthflow.OAuthRevocationEvent, 0, limit)
+	for rows.Next() {
+		var event oauthflow.OAuthRevocationEvent
+		var createdMS int64
+		if err := rows.Scan(&event.ID, &event.UserID, &event.Reason, &createdMS,
+			&event.Attempts); err != nil {
+			return nil, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+		}
+		event.CreatedAt = time.UnixMilli(createdMS).UTC()
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+// MarkOAuthRevocationEventProcessedTx 标记事件已处理。
+func (s *Store) MarkOAuthRevocationEventProcessedTx(ctx context.Context, tx audit.Tx,
+	eventID, reason string, now time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", oauthflow.ErrOptionsInvalid)
+	}
+	if _, err := tx.ExecContext(ctx, markRevocationEventProcessedSQL, now.UTC().UnixMilli(),
+		reason, eventID); err != nil {
+		return fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return nil
+}
+
+// MarkOAuthRevocationEventFailed 累计消费失败次数，保留 pending 供重试。
+func (s *Store) MarkOAuthRevocationEventFailed(ctx context.Context, eventID string,
+	now time.Time) error {
+	_ = now
+	if _, err := s.store.ExecContext(ctx, markRevocationEventFailedSQL, eventID); err != nil {
+		return fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return nil
+}

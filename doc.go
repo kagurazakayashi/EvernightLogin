@@ -423,6 +423,21 @@
 // 委托策略决定，本步不自动开放；无新增迁移；HTTP 路由/限流、服务权限存储、非
 // Windows/race 未验证。
 //
+// internal/oauthflow 的授权撤回/令牌撤销与退出联动（步骤 55）：新增 revocation.go
+// 与迁移 0034（未兑换授权码 revoked_at_ms、oauth_client_user_revocations、
+// oauth_user_revocations、oauth_access_token_revocations）。区分四种范围：退出当前
+// 会话、退出全部身份会话、撤回某次应用授权、退出某应用；撤回授权/退出应用在同一
+// 审计事务内撤销该范围内未兑换授权码与刷新令牌族并写（用户,客户端）在线撤销标记；
+// 标准 RevokeToken 端点要求客户端认证、只撤销自己的 refresh/access 令牌，未知/重复/
+// 归属他人一律静默成功以避免枚举与保证幂等，刷新令牌按族撤销，访问令牌按 jti 记录；
+// InspectToken 在线检查 jti 与用户/应用级撤销时间，active=false。改密/恢复/禁用/
+// 成员移除经 ApplySecurityEvent 接入（用户级或用户+客户端收敛），并消费步骤 45
+// oauth_revocation_events outbox（失败累计 attempt_count 保留 pending 可重试）。
+// 访问令牌是自包含 JWT，离线副本无法即时感知撤销，必须在线校验或依赖短有效期，
+// 不宣称所有离线副本立即失效；SessionRevoker 未装配时 Logout fail-closed。HTTP
+// 路由/限流、Webhook/应用会话通知（步骤 59）、撤销列表查询、非 Windows/race/
+// 多实例未验证。
+//
 // internal/oidc 已实现 OIDC 登录能力（步骤 52）：发现文档、ID Token 与 UserInfo。
 // 迁移 0032 为 sessions 增加 auth_methods_json（登录时真实完成的认证方法），并为
 // oauth_authorization_requests/codes 增加 auth_time_ms/auth_methods_json；授权确认

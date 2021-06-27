@@ -32,6 +32,9 @@ type Options struct {
 	Tokens     TokenIssuer
 	// Reauth 是步骤 39 敏感操作收敛入口；nil 时授权确认拒绝。
 	Reauth reauth.OperationRunner
+	// SessionRevoker 是退出服务需要的会话撤销能力（步骤 55）；nil 时 Logout 一律
+	// fail-closed 拒绝，不影响授权码/令牌端点。
+	SessionRevoker SessionRevoker
 	// OIDC 是 ID Token 签发契约；nil 表示未启用 OIDC：授权请求中的 openid scope
 	// 一律拒绝，兑换响应不含 ID Token（fail-closed，不声明未实现能力）。
 	OIDC IDTokenIssuer

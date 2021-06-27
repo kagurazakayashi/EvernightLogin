@@ -97,6 +97,20 @@ func (f *fakeClientAuth) VerifyClientCertificate(_ context.Context, clientID,
 	return oauthclient.ClientIdentity{}, oauthclient.ErrClientAuthFailed
 }
 
+// allowInspectAuthorizer / allowInspectClientAuthorizer 是步骤 54/55 状态查询测试替身：
+// 生产必须由真实资源服务授权器注入（fail-closed）。
+type allowInspectAuthorizer struct{}
+
+func (allowInspectAuthorizer) AuthorizeInspection(context.Context, string, string) (oauthflow.InspectPermission, error) {
+	return oauthflow.InspectPermission{Allowed: true, ShowSubject: true}, nil
+}
+
+type allowInspectClientAuthorizer struct{}
+
+func (allowInspectClientAuthorizer) AuthorizeClientInspection(context.Context, string, string, string) error {
+	return nil
+}
+
 type testEnv struct {
 	t             *testing.T
 	ctx           context.Context
@@ -229,8 +243,12 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 	environment.flow, err = oauthflow.New(oauthflow.Options{
 		Store: flowStore, Audit: environment.audit, Clients: source,
 		ClientAuth: environment.clientAuth, Sessions: environment.session,
-		Tokens: environment.tokens, Reauth: environment.reAuth,
-		Now: func() time.Time { return environment.now },
+		SessionRevoker: environment.session,
+		Tokens:         environment.tokens, Reauth: environment.reAuth,
+		TokenVerifier:           environment.tokens,
+		InspectAuthorizer:       allowInspectAuthorizer{},
+		InspectClientAuthorizer: allowInspectClientAuthorizer{},
+		Now:                     func() time.Time { return environment.now },
 	})
 	if err != nil {
 		t.Fatalf("授权流程服务: %v", err)
@@ -919,6 +937,14 @@ func (f *fakeOIDCUsers) LoadUserInfo(_ context.Context,
 		UpdatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}, true, nil
 }
 
+// allowOIDCRevocationChecker 供 OIDC 构造使用（步骤 55 必填依赖）；本测试不断言撤销。
+type allowOIDCRevocationChecker struct{}
+
+func (allowOIDCRevocationChecker) AccessTokenRevoked(context.Context,
+	token.AccessClaims) (bool, error) {
+	return false, nil
+}
+
 // TestOIDCExchangeEndToEnd 覆盖 openid 授权码完整链路：授权请求 -> 确认 -> 兑换返回
 // 真实签名 ID Token（nonce/auth_time/amr/sub）并用标准 JOSE/本项目验证器校验；
 // UserInfo 验证 Access Token 且 sub 与 ID Token 一致、按 scope 返回字段。
@@ -933,6 +959,7 @@ func TestOIDCExchangeEndToEnd(t *testing.T) {
 		JWKSURI:               "https://issuer.example.test/oidc/jwks",
 		Tokens:                env.tokens,
 		Users:                 &fakeOIDCUsers{},
+		RevocationChecker:     allowOIDCRevocationChecker{},
 		SubjectSecret:         []byte("0123456789abcdef0123456789abcdef"),
 		Now:                   func() time.Time { return env.now },
 	})

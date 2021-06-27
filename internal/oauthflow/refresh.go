@@ -542,6 +542,17 @@ func (s *Service) InspectToken(ctx context.Context, request TokenInspectRequest)
 		s.recordInspection(ctx, request, false, reason)
 		return TokenInspection{Active: false}, nil
 	}
+	// 步骤 55：访问令牌在线撤销联动。自包含 JWT 的离线验证无法感知撤销，资源服务
+	// 使用状态查询/在线校验时按 jti 与用户/应用级撤销标记判无效；撤销标记只对签发
+	// 时间不晚于撤销时间的令牌生效。
+	revoked, revokeErr := s.accessTokenRevokedOnline(ctx, claims)
+	if revokeErr != nil {
+		return TokenInspection{}, oauthTemporarilyUnavailable()
+	}
+	if revoked {
+		s.recordInspection(ctx, request, false, "revoked_access_token")
+		return TokenInspection{Active: false}, nil
+	}
 	inspection := TokenInspection{
 		Active: true, TokenType: "access_token", ClientID: claims.ClientID,
 		Scope: strings.Join(claims.Scopes, " "), Audience: append([]string(nil), claims.Audience...),

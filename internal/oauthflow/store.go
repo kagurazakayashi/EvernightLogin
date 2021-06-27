@@ -180,4 +180,55 @@ type Store interface {
 	// RevokeRefreshFamilyTx 撤销整族：族置 revoked 并撤销其全部 active 令牌；
 	// 返回被撤销令牌数（重放检测/账户失效遏制）。
 	RevokeRefreshFamilyTx(ctx context.Context, tx audit.Tx, familyID, reason string, now time.Time) (int64, error)
+
+	// ===== 步骤 55：授权撤回、令牌撤销与退出联动 =====
+
+	// ListRefreshFamilies 列出匹配条件的刷新令牌族；空参数表示不限制该维度。
+	ListRefreshFamilies(ctx context.Context, userID, clientID, authorizationID string) ([]RefreshFamilyRecord, error)
+	// RevokeUnconsumedAuthorizationCodesTx 撤销未兑换授权码；空参数表示不限制。
+	RevokeUnconsumedAuthorizationCodesTx(ctx context.Context, tx audit.Tx,
+		userID, clientID, authorizationID string, now time.Time) (int64, error)
+	// UpsertClientUserRevocationTx 记录（用户,客户端）授权撤回/退出应用在线撤销标记。
+	UpsertClientUserRevocationTx(ctx context.Context, tx audit.Tx, userID, clientID,
+		reason, requestID string, now time.Time) error
+	// UpsertUserRevocationTx 记录用户级安全事件（改密/恢复）在线撤销标记。
+	UpsertUserRevocationTx(ctx context.Context, tx audit.Tx, userID, reason, requestID string,
+		now time.Time) error
+	// InsertAccessTokenRevocationTx 按 jti 记录访问令牌撤销（保留到令牌自然到期）。
+	InsertAccessTokenRevocationTx(ctx context.Context, tx audit.Tx,
+		record AccessTokenRevocationRecord) error
+	// AccessTokenRevocation 报告 jti 是否已被撤销。
+	AccessTokenRevocation(ctx context.Context, jti string) (bool, error)
+	// RevocationTimes 返回用户级与（用户,客户端）级在线撤销时间；零值表示无标记。
+	RevocationTimes(ctx context.Context, userID, clientID string) (userSince, clientSince time.Time, err error)
+	// ListActiveAppSessionIDs 列出用户在某应用上的活动会话 ID（退出应用时撤销）。
+	ListActiveAppSessionIDs(ctx context.Context, userID, clientID string, now time.Time) ([]string, error)
+	// ListPendingOAuthRevocationEvents 读取未处理的 OAuth 撤销可靠事件（outbox）。
+	ListPendingOAuthRevocationEvents(ctx context.Context, limit int) ([]OAuthRevocationEvent, error)
+	// MarkOAuthRevocationEventProcessedTx 在审计事务内标记事件已处理。
+	MarkOAuthRevocationEventProcessedTx(ctx context.Context, tx audit.Tx, eventID, reason string,
+		now time.Time) error
+	// MarkOAuthRevocationEventFailed 记录消费失败并保留 pending 供重试。
+	MarkOAuthRevocationEventFailed(ctx context.Context, eventID string, now time.Time) error
+}
+
+// AccessTokenRevocationRecord 是按 jti 撤销访问令牌的持久化记录。
+type AccessTokenRevocationRecord struct {
+	JTI         string
+	ClientID    string
+	UserID      string
+	SubjectType string
+	RevokedAt   time.Time
+	ExpiresAt   time.Time
+	Reason      string
+	RequestID   string
+}
+
+// OAuthRevocationEvent 是步骤 45 写入的 OAuth 撤销可靠事件（outbox）。
+type OAuthRevocationEvent struct {
+	ID        string
+	UserID    string
+	Reason    string
+	CreatedAt time.Time
+	Attempts  int64
 }
