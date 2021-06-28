@@ -572,6 +572,18 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## Token 与应用权限联合校验（步骤 56）
+
+新增 `internal/tokenauthz`：面向可信资源服务/宿主上下文的联合授权判定服务与同等 HTTP 端点。**无新增迁移、无新增依赖、无新增错误码**（复用既有 46 码并核对注册表/手册映射）；不建立 HTTP 全局路由、不启动监听、不缓存权限。
+
+- **可信调用者与 audience 映射**：`ResourceService` 只能由可信边界（mTLS 映射、客户端认证或嵌入代码）通过 `NewResourceService(serviceID, applicationID, audience)` 构造并显式声明资源所属应用与资源 audience；HTTP 端点必须注入 `ResourceServiceAuthenticator`（缺失拒绝构造），绝不接受请求体/查询参数自称的 `app_id`/audience。请求体为严格白名单 JSON（`access_token`/`permissions`/`mode`/`resource_id`），未知字段或尾随内容直接 400。
+- **校验顺序**：访问凭证（类型/签名/签发方/有效期/audience，由 `internal/token` 成熟实现）→ 在线撤销状态（`RevocationChecker`，生产为 `*oauthflow.Service.AccessTokenRevoked`；未注入拒绝构造）→ 客户端登记与 `client_id`→资源应用/audience 映射（跨应用令牌 `APP_SCOPE_MISMATCH`、应用停用 `CLIENT_DISABLED`、audience 已从登记移除 `TOKEN_AUDIENCE_MISMATCH`、客户端注销 `TOKEN_INVALID`）→ 主体模型（`subject_type=user` 走 `internal/authz` 实时权限；`subject_type=service` 走注入的 `ServicePrincipalAuthorizer`）→ all/any 权限组合 → 可选数据范围资源检查。
+- **权限与 scope 分开但取交集**：令牌 `scope` 只表达 OAuth 令牌授权范围，绝不映射为角色权限；业务可额外传 `required_scopes`（可选）要求令牌授权范围覆盖指定 scope，缺少时返回 `ACCESS_DENIED`（原因 `insufficient_scope`），再由当前角色权限判定业务操作权——令牌授权范围与当前权限两者任一不满足即拒绝。所需权限由业务服务端路由/可信策略确定，列表必须非空（空要求按 `REQ_INVALID` 拒绝，避免业务漏配权限要求时静默放行），上限 32 项，all 为默认、any 需显式指定；未知/停用/root_only/跨应用权限与成员缺失/账户禁用分别返回 `PERMISSION_UNKNOWN`/`PERMISSION_DISABLED`/`ACCESS_DENIED`/`APP_MEMBERSHIP_REQUIRED`/`USER_DISABLED`。
+- **服务主体独立模型**：`client_credentials` 令牌不借用用户身份、不查用户权限；服务身份没有独立权限存储，必须由宿主注入策略显式判定，未注入时权限要求一律 `PERMISSION_REQUIRED`（拒绝），不能把持有服务令牌当成自动获得管理权限。
+- **响应与错误码**：已成功处理的判定返回 HTTP 200 + `allow` 字段；业务拒绝为 `allow=false` + 稳定 `code`/`message`/`reason`/`request_id`（令牌验证失败时不披露主体），成功结果按需披露主体类型/主体/客户端/应用范围/scope。调用者认证失败 401 `CLIENT_AUTH_FAILED`，参数错误 400 `REQ_INVALID`，不可信调用者 403 `ACCESS_DENIED`，依赖不可用 503 `AUTHZ_UNAVAILABLE`；每次业务拒绝写受限失败审计（真实资源服务主体、稳定目标 ID、`request_id`，不含令牌原文），精确原因只向受信调用者披露。
+- **无缓存与失效语义**：每次判定实时读取账户/成员/角色/权限/客户端登记与在线撤销状态，无权限或令牌状态缓存；权限撤销、成员移除、应用停用后下一次判定立即生效。依赖（令牌存储、客户端登记、撤销存储、权限存储）不可用时返回错误，业务必须默认拒绝。
+- **已知限制**：业务资源归属/对象状态不能由权限名推断，可选 `resource_id` 只按已配置数据范围判定（undefined/none 拒绝），归属需业务服务或可信扩展另行校验；ID Token/Refresh Token/会话秘密不能作为业务 Access Token；HTTP 端点的限流、传输层装配与 `cmd/login-server` 路由留后续步骤（本包由宿主挂载并用其认证/限流中间件）；无多实例/race/非 Windows 实测。
+
 ## 授权撤回、令牌撤销与退出状态联动（步骤 55）
 
 新增 `internal/oauthflow/revocation.go` 与迁移 `0034_oauth_revocation.sql`（未兑换授权码 `revoked_at_ms`、（用户,客户端）/用户级在线撤销标记、访问令牌 jti 撤销记录），复用步骤 45 的 `oauth_revocation_events` outbox 与步骤 54 刷新族/状态查询。本步只提供可信 Go API 与标准撤销端点语义，不建 HTTP 路由/页面；Webhook 通知应用自身会话留步骤 59。
