@@ -572,6 +572,18 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 设备码授权（Device Authorization Grant，步骤 57）
+
+扩展 `internal/oauthflow` 实现标准 OAuth 2.0 设备授权（RFC 8628），迁移 `0035_oauth_device_authorization.sql` 落地 `oauth_device_authorizations`（高熵设备码只存无密钥 SHA-256 摘要；低熵人工短码只存**带密钥 HMAC-SHA256 摘要 + `user_code_key_id`**（密钥环缺失/不可用 fail-closed）、客户端与 Scope/audience 绑定、pending/approved/denied/cancelled/consumed 状态机、用户/会话/安全版本快照、服务端轮询间隔）。本步只提供可信 Go API，不建页面/HTTP 路由，二维码由页面层用 `verification_uri_complete` 渲染。
+
+- **申请（设备侧）**：`BeginDeviceAuthorization` 校验客户端已登记 `urn:ietf:params:oauth:grant-type:device_code` 且应用启用；保密客户端必须完成 secret/证书认证，公开客户端只需 `client_id`；Scope/audience 必须属于客户端登记范围（audience 省略时仅唯一目标资源可默认）。返回 `device_code`（32 字节高熵，库里只存无密钥 SHA-256 摘要：256 bit 熵不可枚举）、8 字符 base20 人工短码（20^8 ≈ 34.6 bit，显示形如 `ABCD-EFGH`；低熵值**只存带密钥 HMAC-SHA256 摘要**并记录 `user_code_key_id`，密钥由宿主 `Options.DeviceUserCodeKeyring` 注入、支持密钥环轮换，绝不使用无密钥摘要）、`verification_uri`、可渲染为二维码的 `verification_uri_complete`、`expires_in`（默认 600 秒）与 `interval`（默认 5 秒）。未配置 `Options.DeviceVerificationURI` 时 fail-closed 返回 `temporarily_unavailable`，不创建无法确认的请求；启用设备流但缺少短码密钥环时 `New` 直接拒绝构造（fail-closed）。
+- **确认（另一台设备浏览器）**：`DescribeDeviceAuthorization` 必须使用真实完整普通会话按短码查询，返回可信应用、Scope、audience 与有效期（应用展示名由页面层补充）；`DecideDeviceAuthorization` 显式批准或拒绝，批准前经 `internal/reauth` 敏感操作 `oauth.device.authorization.approve`（默认近期主认证 300 秒，未接线 fail-closed），批准绑定用户+会话+安全版本快照并为 `approved`；拒绝不签发任何令牌。短码输入大小写/连字符不敏感。
+- **猜码限流**：无效短码查询/决定按用户维度固定窗口限流（默认 10 次/10 分钟），超限返回 `RATE_LIMITED`；短码错误统一返回 `REQ_INVALID`，不区分不存在/已决定/已过期。
+- **轮询领取**：Token 端点支持 `grant_type=urn:ietf:params:oauth:grant-type:device_code`。等待返回 `authorization_pending`；快于服务端间隔返回 `slow_down` 并按上限增大间隔（持久化，`OAuthError.RetryAfter` 供宿主设置 `Retry-After`）；过期 `expired_token`；拒绝/取消 `access_denied`；设备码不存在/换客户端/已领取/确认后状态变化 `invalid_grant`。成功领取在审计事务内条件迁移 `approved→consumed`（并发单赢家，只签发一次），领取前重检用户 active、安全版本、应用成员、批准会话与客户端登记范围；客户端登记 `refresh_token` 且 Scope 含 `offline_access` 时按既有刷新族语义签发刷新令牌（族绑定设备授权请求 ID）。
+- **设备取消**：`CancelDeviceAuthorization` 允许发起设备凭 `device_code`+原 `client_id`（保密客户端需客户端认证）取消仍 pending 的请求，只影响该请求本身。
+- **安全边界**：设备码/短码/令牌明文不进入数据库、日志、审计或错误（低熵短码仅存带密钥 HMAC 摘要，`key_id` 随行支持密钥环轮换；短码查找按密钥环全部 key_id 计算候选摘要并对命中行做常量时间复核，密钥缺失/不可用 fail-closed）；二维码只含短码不含任何长期秘密，打开后仍需登录与显式批准，绝不自动批准；`openid` scope 在设备流中明确 `invalid_scope` 拒绝（OIDC 设备码 ID Token 未在本步实现，Discovery 不声明设备端点）。
+- **装配前置与已知限制**：生产装配必须配置 `DeviceVerificationURI`（https，或回环 http）、注入 `DeviceUserCodeKeyring`（低熵短码 HMAC 摘要密钥环，需含当前写密钥与轮换期历史读密钥）与 `Reauth`，且 `token.IssuanceAuthorizer` 必须放行 `GrantDeviceCode`（`internal/token.GrantDeviceCode` 已对齐 RFC 8628 URN）；纯设备码客户端按 RFC 8628 可不登记回调地址（`internal/oauthclient` 仅对含授权码模式的客户端要求回调）。HTTP 路由/传输层限流/确认页与二维码渲染（步骤 65）、短码限流跨实例共享、过期记录清理任务、真实电视/CLI 互操作与 race/非 Windows 未验证。
+
 ## Token 与应用权限联合校验（步骤 56）
 
 新增 `internal/tokenauthz`：面向可信资源服务/宿主上下文的联合授权判定服务与同等 HTTP 端点。**无新增迁移、无新增依赖、无新增错误码**（复用既有 46 码并核对注册表/手册映射）；不建立 HTTP 全局路由、不启动监听、不缓存权限。
@@ -631,7 +643,7 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **错误与审计**：openid 未配置/端点配置非法/认证事实缺失 fail-closed；UserInfo 协议错误使用标准 `invalid_token`/`insufficient_scope`/`invalid_request` 与 401/403，不泄露令牌细节；令牌、声明原文与用户秘密不进入日志/审计。
 - **步骤 51 遗留收口**：(a) 移除 `AllowConfidentialWithoutPKCE`，所有授权码统一强制 PKCE S256（与 0031 表非空约束一致）；(b) `Exchange` 按客户端**当前登记**重新精确匹配回调；(c) 授权码/重定向地址改为脱敏类型（默认格式化输出 `[REDACTED]`，仅显式 `Reveal()` 可用于传输）；(d) 并发兑换失败方补写 `replayed_at_ms`；(e) `DecideAuthorization` 前重读客户端，应用停用或移除 authorization_code 时拒绝确认。
 - **错误码**：复用既有 46 码（参数 `REQ_INVALID`、令牌 `TOKEN_INVALID`、越权/scope `ACCESS_DENIED`、账户 `USER_DISABLED`、存储 `DB_UNAVAILABLE`、内部 `INTERNAL_ERROR`），不新增设计码；协议层使用标准 OAuth/OIDC error。
-- **已知限制**：只有授权码流程可选 ID Token；刷新令牌/设备码/结束会话/撤销端点/动态注册未实现；`private_key_jwt` 等未选择；Authorization Endpoint/Token Endpoint/UserInfo 的 HTTP 路由与页面、真实第三方 OIDC 客户端互操作、subject 秘密轮换、方法级 UV 细分 amr（passkey UV 的 `user` 取值）与 race/非 Windows 未验证。
+- **已知限制**：只有授权码流程可选 ID Token；OIDC 设备码 ID Token/结束会话/撤销端点/动态注册未实现（设备码授权本身由步骤 57 实现）；`private_key_jwt` 等未选择；Authorization Endpoint/Token Endpoint/UserInfo 的 HTTP 路由与页面、真实第三方 OIDC 客户端互操作、subject 秘密轮换、方法级 UV 细分 amr（passkey UV 的 `user` 取值）与 race/非 Windows 未验证。
 
 ## OAuth 授权码、PKCE 与授权确认（步骤 51）
 
@@ -642,7 +654,7 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **用户确认**：`BeginAuthorization` 必须绑定真实完整用户会话（`internal/session.Validate`，受限/跨应用作用域拒绝），不接受客户端自报用户；同时复核账户 active、应用成员关系与安全版本。确认请求默认 10 分钟有效，`DecideAuthorization` 重新校验同一会话/账户/成员后，按新增敏感操作 `oauth.authorization.approve` 经 `internal/reauth` 要求近期认证；未接线/拒绝时 fail-closed 不发码，**没有任何自动批准路径**。拒绝返回标准 `access_denied` 重定向且不签发授权码。
 - **授权码**：确认通过后在单一审计事务内条件迁移 pending→approved 并写入授权码摘要；默认 5 分钟（上限 10 分钟）、高熵随机、一次性，绑定 user+client+精确 redirect_uri+PKCE challenge+scope+audience+会话安全版本快照。明文授权码只在确认响应/重定向中出现一次，数据库只存 SHA-256 摘要，日志与审计不含授权码/令牌。
 - **Token 端点兑换**：标准 `authorization_code` 请求，保密客户端必须通过 `oauthclient.VerifyClientSecret` 或 `VerifyClientCertificate` 认证，公开客户端必须 PKCE；逐项校验绑定（client、精确 redirect_uri、code_verifier 的 S256 恒定比较、用户/会话/成员仍有效、客户端 Scope/audience 未被收紧），随后用审计事务条件消费授权码（**并发兑换单赢家**），再由 `internal/token` 以用户身份签发 Access Token。重复/并发兑换返回标准 `invalid_grant` 并记录 `replayed_at_ms`；过期、跨客户端、回调替换、错误/缺失 verifier 均按标准错误拒绝。错误响应使用 OAuth `error`/`error_description` 与规范 HTTP 状态（`invalid_client` 401，其余 400/500/503），不是项目通用业务响应格式。
-- **边界与已知限制**：访问令牌是无状态 JWT，本步**没有令牌撤销列表/刷新家族**（步骤 54），因此重复兑换只记录重放，不宣称撤销已签发令牌；PKCE/回调不匹配时不消费授权码（允许客户端用正确参数重试，verifier 高熵），成功兑换后令牌签发失败会保留已消费状态（fail-closed，需重新授权）；不支持 password/implicit/设备码/刷新；无 HTTP 路由、传输层限流、确认页 UI（步骤 65）、过期请求/授权码清理任务；确认页数据只含 client_id、Scope、audience、回调与有效期，应用展示名需页面层按受控资料补充；非 Windows/race 未验证。
+- **边界与已知限制**：访问令牌是无状态 JWT，本步**没有令牌撤销列表/刷新家族**（步骤 54），因此重复兑换只记录重放，不宣称撤销已签发令牌；PKCE/回调不匹配时不消费授权码（允许客户端用正确参数重试，verifier 高熵），成功兑换后令牌签发失败会保留已消费状态（fail-closed，需重新授权）；本步不支持 password/implicit/刷新（设备码在步骤 57 独立实现）；无 HTTP 路由、传输层限流、确认页 UI（步骤 65）、过期请求/授权码清理任务；确认页数据只含 client_id、Scope、audience、回调与有效期，应用展示名需页面层按受控资料补充；非 Windows/race 未验证。
 - **步骤 50 遗留收口**：明确“撤销 active 密钥后下一次签发自动引导全新 active”的语义（不降级复用 revoked 密钥，暂停签发由装配层负责）；说明 `next` 当前是轮换事务中间态、JWKS 保留 next 为未来预发布预留；签发成功审计失败改为 fail-closed（不返回令牌）；JWS 头/声明集严格拒绝重复 JSON 字段；补并发轮换单赢家测试；ID Token 增加“客户端必须登记 authorization_code/device_code grant”校验（步骤 52 使用）。
 - **错误码**：协议错误使用标准 OAuth `error` 值；内部诊断只复用既有 46 码，不新增设计码。
 

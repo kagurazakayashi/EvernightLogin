@@ -162,7 +162,9 @@ type GrantType string
 
 const (
 	GrantAuthorizationCode GrantType = "authorization_code"
-	GrantDeviceCode        GrantType = "device_code"
+	// GrantDeviceCode 必须与 OAuth 客户端登记的授权类型一致（RFC 8628 的 URN），
+	// 否则 token 服务的 grantAllowed 与 oauthclient 登记值永远不匹配。
+	GrantDeviceCode        GrantType = "urn:ietf:params:oauth:grant-type:device_code"
 	GrantClientCredentials GrantType = "client_credentials"
 )
 

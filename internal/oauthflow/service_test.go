@@ -129,6 +129,8 @@ type testEnv struct {
 	sessionSecret string
 	appID         string
 	clientType    oauthclient.ClientType
+	// deviceKeyring 是设备短码 HMAC 摘要使用的密钥环（步骤 57 B1）。
+	deviceKeyring *secrets.Keyring
 }
 
 func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
@@ -171,6 +173,12 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 	if err != nil {
 		t.Fatalf("会话密钥环: %v", err)
 	}
+	// 设备短码 HMAC 摘要密钥环（低熵短码不得使用无密钥摘要）。
+	deviceKeyring, err := secrets.GenerateKeyring("device-code-k1", now)
+	if err != nil {
+		t.Fatalf("设备短码密钥环: %v", err)
+	}
+	environment.deviceKeyring = deviceKeyring
 	sessionStore, err := sessionsqlite.New(raw)
 	if err != nil {
 		t.Fatalf("会话存储: %v", err)
@@ -213,9 +221,11 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 		Issuer: "https://issuer.example.test", Clients: tokenClients,
 		Authorizer: token.IssuanceAuthorizerFunc(func(_ context.Context, _ token.Caller,
 			request token.IssuanceRequest) error {
-			// 测试装配：Access Token 来自授权码或服务身份流程，ID Token 来自授权码流程。
+			// 测试装配：Access Token 来自授权码/设备码或服务身份流程，ID Token 来自
+			// 授权码流程。
 			if request.TokenKind == "access" &&
 				(request.GrantType == token.GrantAuthorizationCode ||
+					request.GrantType == token.GrantDeviceCode ||
 					request.GrantType == token.GrantClientCredentials) {
 				return nil
 			}
@@ -248,7 +258,10 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 		TokenVerifier:           environment.tokens,
 		InspectAuthorizer:       allowInspectAuthorizer{},
 		InspectClientAuthorizer: allowInspectClientAuthorizer{},
-		Now:                     func() time.Time { return environment.now },
+		// 设备码（步骤 57）测试地址与短码 HMAC 密钥环：https 合法验证地址，默认可直接申请。
+		DeviceVerificationURI: "https://login.example.test/device",
+		DeviceUserCodeKeyring: deviceKeyring,
+		Now:                   func() time.Time { return environment.now },
 	})
 	if err != nil {
 		t.Fatalf("授权流程服务: %v", err)

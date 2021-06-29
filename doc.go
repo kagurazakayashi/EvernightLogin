@@ -407,7 +407,8 @@
 // 摘要，拒绝路径写审计；修改使用行版本条件更新。客户端身份验证成功只代表客户端
 // 身份，不代表该客户端用户已认证；应用停用返回 CLIENT_DISABLED，其余失败统一
 // CLIENT_AUTH_FAILED 并写审计。private_key_jwt、授权端点/令牌签发、PKCE 实际
-// 校验、Device Flow、数据范围细粒度接线与 HTTP 管理接口留后续步骤；真实 mTLS
+// 校验、Device Flow（步骤 57 已实现设备授权）、数据范围细粒度接线与 HTTP 管理
+// 接口留后续步骤；真实 mTLS
 // 握手/CA 链、过期凭证清理、多实例限流与 race/非 Windows 未验证。
 //
 // internal/oauthflow 的 Token 端点已增加 client_credentials 服务身份分支（步骤 53），
@@ -437,6 +438,36 @@
 // 不宣称所有离线副本立即失效；SessionRevoker 未装配时 Logout fail-closed。HTTP
 // 路由/限流、Webhook/应用会话通知（步骤 59）、撤销列表查询、非 Windows/race/
 // 多实例未验证。
+//
+// internal/oauthflow 已实现 OAuth 2.0 设备授权（Device Authorization Grant，
+// RFC 8628，步骤 57）：迁移 0035 落地 oauth_device_authorizations（高熵设备码只存
+// 无密钥 SHA-256 摘要；低熵 8 字符 base20 短码按 AGENTS §10 只存带密钥 HMAC-SHA256
+// 摘要与 user_code_key_id、绑定登记客户端与 Scope/audience、pending/approved/denied/
+// cancelled/consumed 状态机、用户+会话+安全版本快照、服务端轮询间隔）。
+// BeginDeviceAuthorization 生成高熵 device_code 与 8 字符 base20 人工短码
+// （20^8 ≈ 34.6 bit），只有配置了 Options.DeviceVerificationURI（https 或回环 http）
+// 与短码 HMAC 密钥环 Options.DeviceUserCodeKeyring 才启用，否则 fail-closed（缺少
+// 密钥环时拒绝构造，绝不退化为无密钥摘要）；保密
+// 客户端在申请/轮询两端都要求 client secret/证书认证，公开客户端只需要 client_id。
+// Describe/DecideDeviceAuthorization 必须使用真实完整普通会话按短码定位——查找时按
+// 密钥环全部 key_id 计算候选 HMAC 摘要并对命中行做常量时间复核（旧密钥仍在密钥环中
+// 时支持历史记录，移除后 fail-closed），批准经
+// internal/reauth 敏感操作 oauth.device.authorization.approve（未接线 fail-closed）
+// 并绑定用户/会话/安全版本快照；短码无效查询按用户维度固定窗口限流，超限
+// RATE_LIMITED，错误统一 REQ_INVALID 不泄露请求状态。Token 端点的
+// urn:ietf:params:oauth:grant-type:device_code 分支按标准状态返回
+// authorization_pending/slow_down（持久化增大间隔）/access_denied/expired_token/
+// invalid_grant；领取前重检用户 active、安全版本、成员、批准会话与客户端登记范围，
+// 审计事务内条件迁移 approved→consumed 保证并发单赢家，只签发一次 Access Token，
+// 客户端登记 refresh_token 且含 offline_access 时按既有刷新族语义签发刷新令牌。
+// 设备可凭 device_code+原 client_id 取消 pending 请求。二维码只承载短码，打开仍需
+// 登录并显式批准，绝不自动批准；openid scope 在设备流中明确拒绝（OIDC 设备码 ID
+// Token 未实现，Discovery 不声明设备端点）。装配前置：生产必须配置
+// DeviceVerificationURI、DeviceUserCodeKeyring、Reauth 并让 IssuanceAuthorizer
+// 放行 GrantDeviceCode（internal/token.GrantDeviceCode 已对齐 RFC 8628 URN）；
+// 纯设备码客户端允许不登记回调地址。HTTP 路由/传输层限流/确认页与二维码渲染
+// （步骤 65）、过期记录清理、跨实例限流、真实电视/CLI 互操作与 race/非 Windows
+// 未验证。
 //
 // internal/oidc 已实现 OIDC 登录能力（步骤 52）：发现文档、ID Token 与 UserInfo。
 // 迁移 0032 为 sessions 增加 auth_methods_json（登录时真实完成的认证方法），并为

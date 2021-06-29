@@ -878,8 +878,14 @@ func validateClientSettings(clientType ClientType, grantRaw, redirectRaw, logout
 		return nil, nil, nil, nil, nil, nil, false, err
 	}
 	redirects, err := normalizeStrings(redirectRaw, MaxRedirectURIs, func(value string) bool { return true })
-	if err != nil || len(redirects) == 0 {
-		return nil, nil, nil, nil, nil, nil, false, fmt.Errorf("%w: 至少登记一个回调地址", ErrInvalidRequest)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, false, fmt.Errorf("%w: 回调地址列表无效", ErrInvalidRequest)
+	}
+	// 只有登记授权码模式的客户端才需要回调地址；纯设备码客户端（电视、CLI）按
+	// RFC 8628 不使用回调，允许不登记，避免为了通过校验伪造无法使用的回调。
+	if len(redirects) == 0 && containsGrant(grants, GrantAuthorizationCode) {
+		return nil, nil, nil, nil, nil, nil, false, fmt.Errorf("%w: 授权码客户端必须至少登记一个回调地址",
+			ErrInvalidRequest)
 	}
 	for _, redirect := range redirects {
 		if err := ValidateRedirectURI(redirect, clientType); err != nil {

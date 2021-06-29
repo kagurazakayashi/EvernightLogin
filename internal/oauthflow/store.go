@@ -210,6 +210,34 @@ type Store interface {
 		now time.Time) error
 	// MarkOAuthRevocationEventFailed 记录消费失败并保留 pending 供重试。
 	MarkOAuthRevocationEventFailed(ctx context.Context, eventID string, now time.Time) error
+
+	// ===== 步骤 57：设备授权申请、确认与轮询领取 =====
+
+	// CreateDeviceAuthorizationTx 在审计事务内创建 pending 设备授权申请。
+	CreateDeviceAuthorizationTx(ctx context.Context, tx audit.Tx,
+		record DeviceAuthorizationRecord) error
+	// GetDeviceAuthorizationByDeviceCodeHash 按 device_code 摘要读取申请。
+	GetDeviceAuthorizationByDeviceCodeHash(ctx context.Context, digest [32]byte,
+	) (DeviceAuthorizationRecord, bool, error)
+	// GetDeviceAuthorizationByUserCodeDigest 按 user_code 的带密钥 HMAC 摘要读取申请。
+	GetDeviceAuthorizationByUserCodeDigest(ctx context.Context, digest [32]byte,
+	) (DeviceAuthorizationRecord, bool, error)
+	// ClaimDevicePollSlot 条件更新轮询时间：只有距上次轮询已满服务端间隔（或从未
+	// 轮询）且请求仍待批准/已批准的调用方成功；返回是否赢得本次轮询槽位。
+	ClaimDevicePollSlot(ctx context.Context, recordID string, now time.Time) (bool, error)
+	// IncreaseDevicePollInterval 在过快轮询（slow_down）时按上限增大间隔。
+	IncreaseDevicePollInterval(ctx context.Context, recordID string, now time.Time) (int, error)
+	// DecideDeviceAuthorizationTx 条件把 pending 迁移为 approved/denied 并写入真实
+	// 用户/会话/安全版本快照；已决定/已过期/不存在时返回 false。
+	DecideDeviceAuthorizationTx(ctx context.Context, tx audit.Tx, recordID, status,
+		userID, sessionID string, securityVersion int64, now time.Time) (bool, error)
+	// CancelDeviceAuthorizationTx 条件把 pending 迁移为 cancelled（发起设备取消）。
+	CancelDeviceAuthorizationTx(ctx context.Context, tx audit.Tx, recordID string,
+		now time.Time) (bool, error)
+	// ConsumeDeviceAuthorizationTx 条件把 approved 迁移为 consumed；并发领取只有
+	// 一方成功，保证设备码只能兑换一次。
+	ConsumeDeviceAuthorizationTx(ctx context.Context, tx audit.Tx, recordID string,
+		now time.Time) (bool, error)
 }
 
 // AccessTokenRevocationRecord 是按 jti 撤销访问令牌的持久化记录。

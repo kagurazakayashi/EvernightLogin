@@ -113,6 +113,8 @@ const (
 	CodeAccessDenied     ErrorCode = "ACCESS_DENIED"
 	CodeReauthRequired   ErrorCode = "REAUTH_REQUIRED"
 	CodeMFARequired      ErrorCode = "MFA_REQUIRED"
+	CodeChallengeInvalid ErrorCode = "CHALLENGE_INVALID"
+	CodeRateLimited      ErrorCode = "RATE_LIMITED"
 	CodeConflict         ErrorCode = "CONFLICT"
 	CodeDBUnavailable    ErrorCode = "DB_UNAVAILABLE"
 	CodeAuditWriteFailed ErrorCode = "AUDIT_WRITE_FAILED"
@@ -125,10 +127,21 @@ func CodeOf(err error) ErrorCode {
 	case err == nil:
 		return ""
 	case errors.Is(err, ErrOptionsInvalid), errors.Is(err, ErrInvalidRequest),
-		errors.Is(err, ErrConsentNotFound):
+		errors.Is(err, ErrConsentNotFound), errors.Is(err, ErrDeviceAuthorizationInvalid),
+		errors.Is(err, ErrDeviceAuthorizationNotFound):
 		return CodeReqInvalid
-	case errors.Is(err, ErrStoreUnavailable):
+	case errors.Is(err, ErrDeviceAuthorizationRateLimited):
+		return CodeRateLimited
+	case errors.Is(err, ErrDeviceAuthorizationAccessDenied):
+		return CodeAccessDenied
+	case errors.Is(err, ErrDeviceAuthorizationReauthRequired):
+		return CodeReauthRequired
+	case errors.Is(err, ErrDeviceAuthorizationConflict):
+		return CodeConflict
+	case errors.Is(err, ErrStoreUnavailable), errors.Is(err, ErrDeviceUserCodeKeyUnavailable):
 		return CodeDBUnavailable
+	case errors.Is(err, ErrDeviceAuthorizationNotConfigured):
+		return CodeInternalError
 	case errors.Is(err, ErrAuditUnavailable):
 		return CodeAuditWriteFailed
 	default:
@@ -152,6 +165,9 @@ type OAuthError struct {
 	// 用 RedirectLocation 生成标准错误重定向。为空表示禁止重定向。
 	RedirectURI string
 	State       string
+	// RetryAfter 是建议的重试等待时间（仅 slow_down 等流程状态使用）；标准 OAuth
+	// 错误体不包含该字段，宿主可据此设置 HTTP Retry-After 或提示设备增大轮询间隔。
+	RetryAfter time.Duration
 }
 
 // Error 实现 error；只输出协议错误码与安全描述，不含秘密。
@@ -241,7 +257,9 @@ func oauthInvalidGrant(description string) *OAuthError {
 }
 
 func oauthUnsupportedGrantType() *OAuthError {
-	return newOAuthError("unsupported_grant_type", "只支持 authorization_code", 400)
+	return newOAuthError("unsupported_grant_type",
+		"不支持该授权类型（支持 authorization_code/client_credentials/refresh_token/"+
+			"device_code）", 400)
 }
 
 func oauthServerError() *OAuthError {
@@ -396,6 +414,16 @@ func (c ClientInfo) GrantsRefreshToken() bool {
 	return false
 }
 
+// GrantsDeviceCode 报告客户端是否显式登记设备码授权（Device Authorization Grant）。
+func (c ClientInfo) GrantsDeviceCode() bool {
+	for _, grant := range c.GrantTypes {
+		if grant == oauthclient.GrantDeviceCode {
+			return true
+		}
+	}
+	return false
+}
+
 // ClientSource 读取客户端登记配置；不存在返回 found=false。实现必须 fail-closed。
 type ClientSource interface {
 	LoadClient(ctx context.Context, clientID string) (ClientInfo, bool, error)
@@ -501,7 +529,8 @@ type AuthorizationResult struct {
 // ExchangeRequest 是 Token 端点授权码兑换请求。ClientSecret 与 ClientCertificatePEM
 // 只用于客户端认证；公开客户端必须提供 code_verifier。
 type ExchangeRequest struct {
-	// GrantType 是 authorization_code 或 client_credentials；其余拒绝。
+	// GrantType 是 authorization_code、client_credentials、refresh_token 或
+	// urn:ietf:params:oauth:grant-type:device_code；其余拒绝。
 	GrantType            string
 	Code                 string
 	RedirectURI          string
@@ -509,6 +538,8 @@ type ExchangeRequest struct {
 	ClientSecret         string
 	ClientCertificatePEM string
 	CodeVerifier         string
+	// DeviceCode 是设备码授权类型的设备码明文（仅 Token 端点轮询使用）。
+	DeviceCode string
 	// Scope/Resource 只用于 client_credentials 或 refresh_token：请求的服务身份
 	// Scope 与目标资源必须缩减在已登记/原授权范围之内；授权码流程使用授权码绑定
 	// 的范围。

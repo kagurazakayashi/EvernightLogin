@@ -468,6 +468,14 @@ func defaultOperations() []Operation {
 			Implemented:   true,
 		},
 		{
+			ID: "oauth.device.authorization.approve", Domain: DomainApplication,
+			Name:          "批准设备码授权请求",
+			Description:   "电视或无浏览器 CLI 展示短码后，用户在另一台设备登录并核对短码，批准该设备以本人身份访问其账户数据；必须绑定真实完整会话并完成近期身份验证，确认页清晰显示应用与请求范围，等待/过期/拒绝/取消是流程状态而非系统故障；二维码只辅助打开确认页，绝不自动批准。",
+			Default:       oauthConsent,
+			PermissionKey: "",
+			Implemented:   true,
+		},
+		{
 			ID: "oauth.client.settings.change", Domain: DomainApplication, Name: "修改 OAuth 客户端安全设置",
 			Description:   "修改已登记客户端的授权类型、回调、Scope、允许目标资源与 PKCE 要求；必须强认证与确认并告知，回调精确匹配、禁止通配与开放重定向，不能借修改安全设置转移应用权限。",
 			Default:       strongReauth,

@@ -16,7 +16,9 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
+	"github.com/kagurazakayashi/EvernightLogin/internal/ratelimit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 )
@@ -51,9 +53,25 @@ type Options struct {
 	// RefreshAbsoluteTTL/RefreshIdleTTL 是刷新令牌族绝对有效期与单令牌空闲有效期。
 	RefreshAbsoluteTTL time.Duration
 	RefreshIdleTTL     time.Duration
-	Now                func() time.Time
-	Random             io.Reader
-	Logger             *slog.Logger
+	// DeviceVerificationURI 是设备码确认页的验证地址（https，或回环 http）；为空表示
+	// 未启用设备码能力：申请一律 fail-closed 返回 temporarily_unavailable。
+	DeviceVerificationURI string
+	// DeviceAuthorizationTTL 是设备码/短码有效期；0 使用默认值。
+	DeviceAuthorizationTTL time.Duration
+	// DevicePollInterval 是服务端强制的最小轮询间隔；0 使用默认值。
+	DevicePollInterval time.Duration
+	// DeviceUserCodeKeyring 是低熵设备短码 HMAC-SHA256 摘要使用的密钥环（宿主 secrets
+	// 配置提供，需含当前写密钥与轮换期间的历史读密钥）。启用设备流
+	// （DeviceVerificationURI 非空）时必填：缺失即拒绝构造，绝不把 8 字符短码保存为
+	// 无密钥摘要（AGENTS §10「低熵验证码不可仅用无密钥摘要存库」）。
+	DeviceUserCodeKeyring *secrets.Keyring
+	// DeviceUserCodeMaxAttempts/DeviceUserCodeWindow 是短码验证尝试的按用户限流；
+	// MaxAttempts 为 0 时使用默认值（不能设为 0 表示禁用；防止在线猜解）。
+	DeviceUserCodeMaxAttempts int
+	DeviceUserCodeWindow      time.Duration
+	Now                       func() time.Time
+	Random                    io.Reader
+	Logger                    *slog.Logger
 }
 
 // Service 是授权确认与授权码兑换服务。构造后不可变、可并发使用；不提供页面/HTTP。
@@ -63,6 +81,10 @@ type Service struct {
 	codeTTL            time.Duration
 	refreshAbsoluteTTL time.Duration
 	refreshIdleTTL     time.Duration
+	// 设备码（步骤 57）参数与短码防猜解限流器。
+	deviceTTL          time.Duration
+	devicePollInterval time.Duration
+	userCodeLimiter    *ratelimit.Limiter
 }
 
 // New 校验依赖与参数并构造服务。
@@ -125,8 +147,67 @@ func New(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	// 设备码（步骤 57）参数校验：验证地址可为空（表示能力未启用），非空时必须安全。
+	deviceTTL := options.DeviceAuthorizationTTL
+	if deviceTTL == 0 {
+		deviceTTL = DefaultDeviceAuthorizationTTL
+	}
+	if deviceTTL < MinDeviceAuthorizationTTL || deviceTTL > MaxDeviceAuthorizationTTL {
+		return nil, fmt.Errorf("%w: 设备码有效期必须在 %s～%s 之间",
+			ErrOptionsInvalid, MinDeviceAuthorizationTTL, MaxDeviceAuthorizationTTL)
+	}
+	devicePollInterval := options.DevicePollInterval
+	if devicePollInterval == 0 {
+		devicePollInterval = DefaultDevicePollInterval
+	}
+	if devicePollInterval < MinDevicePollInterval || devicePollInterval > MaxDevicePollInterval {
+		return nil, fmt.Errorf("%w: 设备码轮询间隔必须在 %s～%s 之间",
+			ErrOptionsInvalid, MinDevicePollInterval, MaxDevicePollInterval)
+	}
+	if devicePollInterval >= deviceTTL {
+		return nil, fmt.Errorf("%w: 设备码轮询间隔必须小于有效期", ErrOptionsInvalid)
+	}
+	if err := validateDeviceVerificationURI(options.DeviceVerificationURI); err != nil {
+		return nil, err
+	}
+	// 启用设备流时必须提供短码 HMAC 密钥环：低熵短码不允许退化为无密钥摘要。
+	if options.DeviceVerificationURI != "" {
+		if isNilInterface(options.DeviceUserCodeKeyring) {
+			return nil, fmt.Errorf("%w: 启用设备流必须提供 DeviceUserCodeKeyring（短码摘要密钥）",
+				ErrOptionsInvalid)
+		}
+		currentKeyID := options.DeviceUserCodeKeyring.CurrentKeyID()
+		if currentKeyID == "" || !options.DeviceUserCodeKeyring.HasKey(currentKeyID) {
+			return nil, fmt.Errorf("%w: 设备短码密钥环缺少当前写密钥", ErrOptionsInvalid)
+		}
+	}
+	userCodeAttempts := options.DeviceUserCodeMaxAttempts
+	if userCodeAttempts == 0 {
+		userCodeAttempts = DefaultDeviceUserCodeAttempts
+	}
+	if userCodeAttempts < minDeviceUserCodeAttempts || userCodeAttempts > maxDeviceUserCodeAttempts {
+		return nil, fmt.Errorf("%w: 短码验证尝试上限必须在 %d～%d 之间",
+			ErrOptionsInvalid, minDeviceUserCodeAttempts, maxDeviceUserCodeAttempts)
+	}
+	userCodeWindow := options.DeviceUserCodeWindow
+	if userCodeWindow == 0 {
+		userCodeWindow = DefaultDeviceUserCodeWindow
+	}
+	if userCodeWindow < minDeviceUserCodeWindow || userCodeWindow > maxDeviceUserCodeWindow {
+		return nil, fmt.Errorf("%w: 短码验证限流窗口必须在 %s～%s 之间",
+			ErrOptionsInvalid, minDeviceUserCodeWindow, maxDeviceUserCodeWindow)
+	}
+	userCodeLimiter, err := ratelimit.New(ratelimit.Options{
+		Policy: ratelimit.Policy{Limit: userCodeAttempts, Window: userCodeWindow},
+		Now:    options.Now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: 短码验证限流参数无效", ErrOptionsInvalid)
+	}
 	return &Service{opts: options, requestTTL: options.RequestTTL, codeTTL: options.CodeTTL,
-		refreshAbsoluteTTL: refreshAbsoluteTTL, refreshIdleTTL: refreshIdleTTL}, nil
+		refreshAbsoluteTTL: refreshAbsoluteTTL, refreshIdleTTL: refreshIdleTTL,
+		deviceTTL: deviceTTL, devicePollInterval: devicePollInterval,
+		userCodeLimiter: userCodeLimiter}, nil
 }
 
 // BeginAuthorization 校验授权请求并创建待用户确认的授权确认请求。
@@ -476,6 +557,8 @@ func (s *Service) Exchange(ctx context.Context, request ExchangeRequest) (TokenR
 		return s.exchangeClientCredentials(ctx, request)
 	case "refresh_token":
 		return s.exchangeRefreshToken(ctx, request)
+	case AccessTokenGrantDeviceCode:
+		return s.exchangeDeviceCode(ctx, request)
 	default:
 		s.failure(ctx, audit.Actor{Type: audit.ActorAnonymous}, "oauth.token.exchange_denied",
 			request.ClientID, "unsupported_grant_type", "REQ_INVALID", request.RequestID)

@@ -51,15 +51,61 @@ func (s *Service) createRefreshToken() (string, [32]byte, error) {
 // hashRefreshToken 计算提交值的 SHA-256 摘要。
 func hashRefreshToken(value string) [32]byte { return sha256.Sum256([]byte(value)) }
 
+// refreshFamilyInput 是创建刷新令牌族与首个令牌所需的已校验参数。授权码与设备码
+// 流程共用同一族语义（绑定客户端/用户/授权/Scope/audience/安全版本快照）。
+type refreshFamilyInput struct {
+	ClientID        string
+	SubjectUserID   string
+	AuthorizationID string
+	Scopes          []string
+	Audiences       []string
+	SecurityVersion int64
+	// GrantType 是签发来源（authorization_code 或 device_code），只写入审计。
+	GrantType string
+	Actor     audit.Actor
+	RequestID string
+}
+
 // issueRefreshTokenForCode 在授权码兑换成功时按策略创建刷新令牌族与首个令牌。
 // 仅当客户端登记 refresh_token 且授权 scope 含 offline_access 才签发；客户端凭据
 // 流程从不创建刷新令牌族（服务令牌不得用于刷新）。
 func (s *Service) issueRefreshTokenForCode(ctx context.Context, code AuthorizationCodeRecord,
-	client ClientInfo, scopes []string, actor audit.Actor, requestID string) (token.Token, time.Time, error) {
+	client ClientInfo, scopes []string, actor audit.Actor,
+	requestID string) (token.Token, time.Time, error) {
 	if !client.GrantsRefreshToken() || !client.GrantsAuthorizationCode() ||
 		!containsString(scopes, ScopeOfflineAccess) {
 		return token.Token{}, time.Time{}, nil
 	}
+	return s.issueRefreshTokenFamily(ctx, refreshFamilyInput{
+		ClientID: code.ClientID, SubjectUserID: code.UserID,
+		AuthorizationID: code.RequestRef, Scopes: scopes, Audiences: code.Audiences,
+		SecurityVersion: code.SecurityVersion, GrantType: "authorization_code",
+		Actor: actor, RequestID: requestID,
+	})
+}
+
+// issueRefreshTokenForDevice 在设备码领取成功时按策略创建刷新令牌族与首个令牌。
+// 要求客户端登记 refresh_token 与设备码授权，且授权 scope 含 offline_access；
+// 族绑定设备授权请求 ID 作为授权来源。
+func (s *Service) issueRefreshTokenForDevice(ctx context.Context,
+	record DeviceAuthorizationRecord, client ClientInfo, scopes []string, actor audit.Actor,
+	requestID string) (token.Token, time.Time, error) {
+	if !client.GrantsRefreshToken() || !client.GrantsDeviceCode() ||
+		!containsString(scopes, ScopeOfflineAccess) {
+		return token.Token{}, time.Time{}, nil
+	}
+	return s.issueRefreshTokenFamily(ctx, refreshFamilyInput{
+		ClientID: record.ClientID, SubjectUserID: record.UserID,
+		AuthorizationID: record.ID, Scopes: scopes, Audiences: record.Audiences,
+		SecurityVersion: record.SecurityVersion, GrantType: "device_code",
+		Actor: actor, RequestID: requestID,
+	})
+}
+
+// issueRefreshTokenFamily 生成刷新令牌族与首个令牌；审计事务内原子写入，失败整体
+// 回滚（不留下“已签发但未记录”的令牌）。
+func (s *Service) issueRefreshTokenFamily(ctx context.Context,
+	input refreshFamilyInput) (token.Token, time.Time, error) {
 	familyID, err := s.newID(refreshFamilyIDPrefix)
 	if err != nil {
 		return token.Token{}, time.Time{}, err
@@ -79,23 +125,25 @@ func (s *Service) issueRefreshTokenForCode(ctx context.Context, code Authorizati
 		idleExpiresAt = absoluteExpiresAt
 	}
 	family := RefreshFamilyRecord{
-		ID: familyID, ClientID: code.ClientID, SubjectUserID: code.UserID,
-		AuthorizationID: code.RequestRef, Scopes: append([]string(nil), scopes...),
-		Audiences: append([]string(nil), code.Audiences...), SecurityVersion: code.SecurityVersion,
-		CreatedAt: now, AbsoluteExpiresAt: absoluteExpiresAt, IdleTimeout: s.refreshIdleTTL,
+		ID: familyID, ClientID: input.ClientID, SubjectUserID: input.SubjectUserID,
+		AuthorizationID: input.AuthorizationID,
+		Scopes:          append([]string(nil), input.Scopes...),
+		Audiences:       append([]string(nil), input.Audiences...),
+		SecurityVersion: input.SecurityVersion,
+		CreatedAt:       now, AbsoluteExpiresAt: absoluteExpiresAt, IdleTimeout: s.refreshIdleTTL,
 	}
 	refreshToken := RefreshTokenRecord{
 		ID: tokenID, FamilyID: familyID, TokenSHA256: digest,
 		Status: RefreshStatusActive, IssuedAt: now, IdleExpiresAt: idleExpiresAt,
-		ExpiresAt: absoluteExpiresAt, RequestID: validRequestIDString(requestID),
+		ExpiresAt: absoluteExpiresAt, RequestID: validRequestIDString(input.RequestID),
 	}
-	critical := s.criticalEvent(ActionRefreshFamilyCreated, actor, code.ClientID,
-		"oauth_refresh_family", familyID, requestID, []audit.FieldChange{
+	critical := s.criticalEvent(ActionRefreshFamilyCreated, input.Actor, input.ClientID,
+		"oauth_refresh_family", familyID, input.RequestID, []audit.FieldChange{
 			{Field: "family_id", After: familyID},
 			{Field: "token_id", After: tokenID},
-			{Field: "grant_type", After: "authorization_code"},
-			{Field: "scope", After: truncateAudit(joinScopes(scopes), 160)},
-			{Field: "audience", After: truncateAudit(strings.Join(code.Audiences, " "), 160)},
+			{Field: "grant_type", After: input.GrantType},
+			{Field: "scope", After: truncateAudit(joinScopes(input.Scopes), 160)},
+			{Field: "audience", After: truncateAudit(strings.Join(input.Audiences, " "), 160)},
 			{Field: "idle_expires_at", After: idleExpiresAt.UTC().Format(time.RFC3339)},
 			{Field: "absolute_expires_at", After: absoluteExpiresAt.UTC().Format(time.RFC3339)},
 		})
