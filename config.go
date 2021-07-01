@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/proxytrust"
@@ -113,6 +114,9 @@ type Config struct {
 	// Passkey 是 WebAuthn/Passkey 依赖方配置（步骤 42）。默认关闭；启用时
 	// RP ID、允许来源与用户验证策略必须显式配置，非法值拒绝启动。
 	Passkey PasskeyConfig
+	// AppQRLogin 是已登录 APP 扫码登录网页请求的配置（步骤 58）。默认关闭；
+	// 启用时必须显式配置应用白名单，未列入的应用一律拒绝。
+	AppQRLogin AppQRLoginConfig
 }
 
 // ServerConfig 是独立服务与嵌入模式共用的监听配置。
@@ -312,6 +316,57 @@ func passkeyConfigProblem(c PasskeyConfig) string {
 	return ""
 }
 
+// AppQRLoginConfig 是"已登录 APP 扫码确认网页登录"的配置（步骤 58）。
+//
+// 安全边界：默认关闭；全局开关与应用白名单是两道独立开关，二者都满足才允许
+// 创建/批准/领取。白名单为空且启用时按配置错误拒绝启动（避免"全开"误解）。
+// 领取绑定、二维码内容与确认页展示信息都不是这里的配置字段。
+// 修改后需要重启服务。
+type AppQRLoginConfig struct {
+	// Enabled 是扫码登录总开关，默认 false（默认拒绝）。
+	Enabled bool
+	// AllowedClientIDs 是允许使用扫码登录的应用白名单（应用 ID = OAuth client_id）。
+	// 启用时必须非空；未列入的应用一律拒绝。
+	AllowedClientIDs []string
+	// RequestTTLSeconds 是扫码请求有效期（秒），默认 120，允许 30～300。
+	RequestTTLSeconds int
+	// ClaimIntervalSeconds 是发起端查询/领取的最小间隔（秒），默认 1，允许 1～5。
+	ClaimIntervalSeconds int
+}
+
+// MaxAppQRLoginClients 是应用白名单上限。
+const MaxAppQRLoginClients = 200
+
+// appQRLoginConfigProblem 校验扫码登录配置；返回空字符串表示合法。
+func appQRLoginConfigProblem(c AppQRLoginConfig) string {
+	if c.RequestTTLSeconds < 30 || c.RequestTTLSeconds > 300 {
+		return "扫码登录请求有效期必须是 30～300 秒"
+	}
+	if c.ClaimIntervalSeconds < 1 || c.ClaimIntervalSeconds > 5 {
+		return "扫码登录查询间隔必须是 1～5 秒"
+	}
+	if len(c.AllowedClientIDs) > MaxAppQRLoginClients {
+		return fmt.Sprintf("扫码登录应用白名单最多 %d 个", MaxAppQRLoginClients)
+	}
+	if !c.Enabled {
+		return ""
+	}
+	if len(c.AllowedClientIDs) == 0 {
+		return "启用扫码登录时必须配置至少一个允许的应用"
+	}
+	seen := make(map[string]struct{}, len(c.AllowedClientIDs))
+	for _, clientID := range c.AllowedClientIDs {
+		if !app.ValidApplicationID(clientID) {
+			return "扫码登录应用白名单包含非法应用 ID"
+		}
+		if _, duplicated := seen[clientID]; duplicated {
+			return "扫码登录应用白名单不能重复"
+		}
+		seen[clientID] = struct{}{}
+	}
+	return ""
+}
+
 // SecretsConfig 保存从受保护来源解析出的秘密。秘密值不会出现在 YAML 中，
 // 只能来自环境变量、受保护文件或宿主显式选项。
 type SecretsConfig struct {
@@ -432,6 +487,10 @@ const (
 	envPasskeyRPName         = EnvVarPrefix + "PASSKEY_RP_DISPLAY_NAME"
 	envPasskeyOrigins        = EnvVarPrefix + "PASSKEY_ALLOWED_ORIGINS"
 	envPasskeyUserVerify     = EnvVarPrefix + "PASSKEY_USER_VERIFICATION"
+	envAppQRLoginEnabled     = EnvVarPrefix + "APP_QR_LOGIN_ENABLED"
+	envAppQRLoginClients     = EnvVarPrefix + "APP_QR_LOGIN_ALLOWED_CLIENT_IDS"
+	envAppQRLoginTTL         = EnvVarPrefix + "APP_QR_LOGIN_REQUEST_TTL_SECONDS"
+	envAppQRLoginInterval    = EnvVarPrefix + "APP_QR_LOGIN_CLAIM_INTERVAL_SECONDS"
 	envSecretsMasterKey      = EnvVarPrefix + "SECRETS_MASTER_KEY"
 	envSecretsTLSPFXPassword = EnvVarPrefix + "SECRETS_TLS_PFX_PASSWORD"
 )
@@ -470,6 +529,10 @@ var configFields = []FieldInfo{
 	{Field: "passkey.rp_display_name", Env: envPasskeyRPName, Class: ReloadRestartRequired},
 	{Field: "passkey.allowed_origins", Env: envPasskeyOrigins, Class: ReloadRestartRequired},
 	{Field: "passkey.user_verification", Env: envPasskeyUserVerify, Class: ReloadRestartRequired},
+	{Field: "app_qr_login.enabled", Env: envAppQRLoginEnabled, Class: ReloadRestartRequired},
+	{Field: "app_qr_login.allowed_client_ids", Env: envAppQRLoginClients, Class: ReloadRestartRequired},
+	{Field: "app_qr_login.request_ttl_seconds", Env: envAppQRLoginTTL, Class: ReloadRestartRequired},
+	{Field: "app_qr_login.claim_interval_seconds", Env: envAppQRLoginInterval, Class: ReloadRestartRequired},
 	{Field: "secrets.master_key", Env: envSecretsMasterKey, Class: ReloadRestartRequired, Secret: true},
 	{Field: "secrets.tls_pfx_password", Env: envSecretsTLSPFXPassword, Class: ReloadRestartRequired, Secret: true},
 }
@@ -523,6 +586,12 @@ func Default() Config {
 		Passkey: PasskeyConfig{
 			Enabled:          false,
 			UserVerification: "required",
+		},
+		AppQRLogin: AppQRLoginConfig{
+			Enabled:              false,
+			AllowedClientIDs:     nil,
+			RequestTTLSeconds:    120,
+			ClaimIntervalSeconds: 1,
 		},
 	}
 }
@@ -1120,6 +1189,9 @@ func validateMerged(c Config) ConfigErrors {
 	}
 	if problem := passkeyConfigProblem(c.Passkey); problem != "" {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "passkey", 0, problem))
+	}
+	if problem := appQRLoginConfigProblem(c.AppQRLogin); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "app_qr_login", 0, problem))
 	}
 
 	// 非法组合：公开地址使用明文 http 时，服务不得监听非回环接口（主地址或额外

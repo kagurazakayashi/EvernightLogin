@@ -517,6 +517,10 @@ func TestEnvFieldMetadataStable(t *testing.T) {
 		{Field: "passkey.rp_display_name", Env: "LOGIN_PASSKEY_RP_DISPLAY_NAME", Class: ReloadRestartRequired},
 		{Field: "passkey.allowed_origins", Env: "LOGIN_PASSKEY_ALLOWED_ORIGINS", Class: ReloadRestartRequired},
 		{Field: "passkey.user_verification", Env: "LOGIN_PASSKEY_USER_VERIFICATION", Class: ReloadRestartRequired},
+		{Field: "app_qr_login.enabled", Env: "LOGIN_APP_QR_LOGIN_ENABLED", Class: ReloadRestartRequired},
+		{Field: "app_qr_login.allowed_client_ids", Env: "LOGIN_APP_QR_LOGIN_ALLOWED_CLIENT_IDS", Class: ReloadRestartRequired},
+		{Field: "app_qr_login.request_ttl_seconds", Env: "LOGIN_APP_QR_LOGIN_REQUEST_TTL_SECONDS", Class: ReloadRestartRequired},
+		{Field: "app_qr_login.claim_interval_seconds", Env: "LOGIN_APP_QR_LOGIN_CLAIM_INTERVAL_SECONDS", Class: ReloadRestartRequired},
 		{Field: "secrets.master_key", Env: "LOGIN_SECRETS_MASTER_KEY", Class: ReloadRestartRequired, Secret: true},
 		{Field: "secrets.tls_pfx_password", Env: "LOGIN_SECRETS_TLS_PFX_PASSWORD", Class: ReloadRestartRequired, Secret: true},
 	}

@@ -439,6 +439,22 @@
 // 路由/限流、Webhook/应用会话通知（步骤 59）、撤销列表查询、非 Windows/race/
 // 多实例未验证。
 //
+// internal/qrlogin 已实现"已登录 APP 扫网页二维码确认登录"的自定义流程（步骤 58，
+// 与步骤 57 设备码分别命名/存储）：迁移 0036 落地 app_qr_login_requests（二维码只
+// 含一次性请求标识；领取绑定只存 keyring HMAC-SHA256 摘要与 claim_key_id；
+// pending/approved/denied/cancelled/claimed 状态机、请求版本、用户+会话+安全版本+
+// 认证方法快照、发起端展示信息、服务端查询间隔）。发起端 Begin 创建短时请求并
+// 一次性获得领取绑定；二维码载荷固定 scheme/host/version 且严格解析，APP 不信任
+// 载荷中的主机。确认端 Describe/Approve/Deny 使用真实完整普通会话（受限会话与
+// 跨应用作用域拒绝），Approve 经 internal/reauth 的 app.qr_login.approve 要求近期
+// 认证并在审计事务内条件绑定批准。领取 Status/Claim/Cancel/Regenerate 需请求标识+
+// 领取绑定并强制最小查询间隔；Claim 重检账户/成员/客户端/应用白名单与确认端会话，
+// 由门控原子消费批准后经 internal/session.IssueLoginGrantSession 签发目标应用会话
+// （不签发任何 Token）。领取绑定/二维码/会话秘密不进入日志与审计；错误码复用既有
+// 46 码。装配前置：配置 app_qr_login 全局开关与应用白名单、注入真实 Reauth 与
+// keyring；HTTP 路由/限流/页面（步骤 65）、过期清理、多实例与 race/非 Windows
+// 未验证。
+//
 // internal/oauthflow 已实现 OAuth 2.0 设备授权（Device Authorization Grant，
 // RFC 8628，步骤 57）：迁移 0035 落地 oauth_device_authorizations（高熵设备码只存
 // 无密钥 SHA-256 摘要；低熵 8 字符 base20 短码按 AGENTS §10 只存带密钥 HMAC-SHA256

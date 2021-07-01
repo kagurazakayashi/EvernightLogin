@@ -8,6 +8,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 )
 
@@ -50,6 +51,7 @@ type Overrides struct {
 	Secrets      SecretsOverrides
 	Registration RegistrationOverrides
 	Passkey      PasskeyOverrides
+	AppQRLogin   AppQRLoginOverrides
 }
 
 // ServerOverrides 是 ServerConfig 的显式覆盖项。
@@ -108,6 +110,14 @@ type PasskeyOverrides struct {
 	RPDisplayName    *string
 	AllowedOrigins   *[]string
 	UserVerification *string
+}
+
+// AppQRLoginOverrides 是 AppQRLoginConfig 的显式覆盖项。
+type AppQRLoginOverrides struct {
+	Enabled              *bool
+	AllowedClientIDs     *[]string
+	RequestTTLSeconds    *int
+	ClaimIntervalSeconds *int
 }
 
 // Load 按“内置默认值 < YAML < 环境变量 < 显式代码选项”的顺序合并并校验配置。
@@ -258,6 +268,10 @@ type configOverrides struct {
 	passkeyRPName         *string
 	passkeyOrigins        *[]string
 	passkeyUserVerify     *string
+	appQRLoginEnabled     *bool
+	appQRLoginClients     *[]string
+	appQRLoginTTL         *int
+	appQRLoginInterval    *int
 	secretSource          *SecretSource
 	secretValue           *Secret
 	secretPFXSource       *SecretSource
@@ -360,6 +374,18 @@ func (ov *configOverrides) apply(cfg *Config) {
 	if ov.passkeyUserVerify != nil {
 		cfg.Passkey.UserVerification = *ov.passkeyUserVerify
 	}
+	if ov.appQRLoginEnabled != nil {
+		cfg.AppQRLogin.Enabled = *ov.appQRLoginEnabled
+	}
+	if ov.appQRLoginClients != nil {
+		cfg.AppQRLogin.AllowedClientIDs = append([]string(nil), (*ov.appQRLoginClients)...)
+	}
+	if ov.appQRLoginTTL != nil {
+		cfg.AppQRLogin.RequestTTLSeconds = *ov.appQRLoginTTL
+	}
+	if ov.appQRLoginInterval != nil {
+		cfg.AppQRLogin.ClaimIntervalSeconds = *ov.appQRLoginInterval
+	}
 }
 
 // readConfigFile 读取 YAML 配置文件，并限制文件大小与文件类型。
@@ -392,6 +418,7 @@ type yamlConfig struct {
 	Secrets      *yamlSecrets      `yaml:"secrets"`
 	Registration *yamlRegistration `yaml:"registration"`
 	Passkey      *yamlPasskey      `yaml:"passkey"`
+	AppQRLogin   *yamlAppQRLogin   `yaml:"app_qr_login"`
 }
 
 type yamlServer struct {
@@ -444,6 +471,14 @@ type yamlRegistration struct {
 	DefaultRoleIDs           *[]string `yaml:"default_role_ids"`
 }
 
+// yamlAppQRLogin 是 YAML 中的扫码登录配置段（步骤 58）。
+type yamlAppQRLogin struct {
+	Enabled              *bool     `yaml:"enabled"`
+	AllowedClientIDs     *[]string `yaml:"allowed_client_ids"`
+	RequestTTLSeconds    *int      `yaml:"request_ttl_seconds"`
+	ClaimIntervalSeconds *int      `yaml:"claim_interval_seconds"`
+}
+
 // yamlPasskey 是 YAML 中的 Passkey 依赖方配置段（步骤 42）。
 type yamlPasskey struct {
 	Enabled          *bool     `yaml:"enabled"`
@@ -471,7 +506,7 @@ type yamlLeafSpec struct {
 }
 
 var (
-	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration", "passkey"}
+	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration", "passkey", "app_qr_login"}
 
 	yamlSectionFields = map[string][]yamlLeafSpec{
 		"server": {
@@ -506,6 +541,11 @@ var (
 			{name: "rp_display_name", tag: "!!str"},
 			{name: "user_verification", tag: "!!str"},
 		},
+		"app_qr_login": {
+			{name: "enabled", tag: "!!bool"},
+			{name: "request_ttl_seconds", tag: "!!int"},
+			{name: "claim_interval_seconds", tag: "!!int"},
+		},
 	}
 
 	// yamlSectionListFields 描述字符串列表字段；值是该列表元素允许的 YAML 标签。
@@ -523,6 +563,9 @@ var (
 		},
 		"passkey": {
 			"allowed_origins": "!!str",
+		},
+		"app_qr_login": {
+			"allowed_client_ids": "!!str",
 		},
 	}
 
@@ -944,6 +987,12 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.passkeyOrigins = doc.Passkey.AllowedOrigins
 		ov.passkeyUserVerify = doc.Passkey.UserVerification
 	}
+	if doc.AppQRLogin != nil {
+		ov.appQRLoginEnabled = doc.AppQRLogin.Enabled
+		ov.appQRLoginClients = doc.AppQRLogin.AllowedClientIDs
+		ov.appQRLoginTTL = doc.AppQRLogin.RequestTTLSeconds
+		ov.appQRLoginInterval = doc.AppQRLogin.ClaimIntervalSeconds
+	}
 	if doc.Secrets != nil {
 		if doc.Secrets.MasterKey != nil {
 			source, sourceErr := convertYAMLSecretSource("secrets.master_key", doc.Secrets.MasterKey)
@@ -1191,6 +1240,38 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 	if value, ok := lookup(envPasskeyUserVerify); ok {
 		ov.passkeyUserVerify = Ptr(value)
 	}
+	if value, ok := lookup(envAppQRLoginEnabled); ok {
+		flag, err := parseEnvBool(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "app_qr_login.enabled", 0, err.Error()))
+		} else {
+			ov.appQRLoginEnabled = &flag
+		}
+	}
+	if value, ok := lookup(envAppQRLoginClients); ok {
+		items, err := parseEnvList(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "app_qr_login.allowed_client_ids", 0, err.Error()))
+		} else {
+			ov.appQRLoginClients = &items
+		}
+	}
+	if value, ok := lookup(envAppQRLoginTTL); ok {
+		number, err := parseEnvInt(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "app_qr_login.request_ttl_seconds", 0, err.Error()))
+		} else {
+			ov.appQRLoginTTL = &number
+		}
+	}
+	if value, ok := lookup(envAppQRLoginInterval); ok {
+		number, err := parseEnvInt(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "app_qr_login.claim_interval_seconds", 0, err.Error()))
+		} else {
+			ov.appQRLoginInterval = &number
+		}
+	}
 	if value, ok := lookup(envSecretsMasterKey); ok {
 		if value == "" {
 			errs = append(errs, configErr(ConfigErrorValue, "env", "secrets.master_key", 0,
@@ -1255,6 +1336,10 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 		passkeyRPName:         options.Passkey.RPDisplayName,
 		passkeyOrigins:        options.Passkey.AllowedOrigins,
 		passkeyUserVerify:     options.Passkey.UserVerification,
+		appQRLoginEnabled:     options.AppQRLogin.Enabled,
+		appQRLoginClients:     options.AppQRLogin.AllowedClientIDs,
+		appQRLoginTTL:         options.AppQRLogin.RequestTTLSeconds,
+		appQRLoginInterval:    options.AppQRLogin.ClaimIntervalSeconds,
 		secretValue:           options.Secrets.MasterKey,
 	}
 	errs := validateOverrides(&ov, "options")
@@ -1435,6 +1520,25 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 		!passkey.UserVerification(*ov.passkeyUserVerify).Valid() {
 		add(ConfigErrorValue, "passkey.user_verification",
 			"用户验证策略必须是 required、preferred 或 discouraged")
+	}
+	if ov.appQRLoginTTL != nil && (*ov.appQRLoginTTL < 30 || *ov.appQRLoginTTL > 300) {
+		add(ConfigErrorRange, "app_qr_login.request_ttl_seconds", "扫码登录请求有效期必须是 30～300 秒")
+	}
+	if ov.appQRLoginInterval != nil && (*ov.appQRLoginInterval < 1 || *ov.appQRLoginInterval > 5) {
+		add(ConfigErrorRange, "app_qr_login.claim_interval_seconds", "扫码登录查询间隔必须是 1～5 秒")
+	}
+	if ov.appQRLoginClients != nil {
+		if len(*ov.appQRLoginClients) > MaxAppQRLoginClients {
+			add(ConfigErrorRange, "app_qr_login.allowed_client_ids",
+				fmt.Sprintf("扫码登录应用白名单最多 %d 个", MaxAppQRLoginClients))
+		}
+		for _, clientID := range *ov.appQRLoginClients {
+			if !app.ValidApplicationID(clientID) {
+				add(ConfigErrorValue, "app_qr_login.allowed_client_ids",
+					"扫码登录应用白名单包含非法应用 ID")
+				break
+			}
+		}
 	}
 	if ov.secretValue != nil {
 		if !ov.secretValue.IsSet() {

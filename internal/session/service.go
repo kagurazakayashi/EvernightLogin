@@ -396,12 +396,148 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 	if request.RequestID != "" && !validRequestID(request.RequestID) {
 		return IssuedSession{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
 	}
-	client := sanitizeClientInfo(request.Client)
-	now := s.clockNow()
 	if err := s.checkEligibility(ctx, spec, request.AppID); err != nil {
 		return IssuedSession{}, err
 	}
-	existing, err := s.loadRevocableSession(ctx, request.ExistingSession)
+	return s.issueSessionRecord(ctx, spec, issueParams{
+		appID:           request.AppID,
+		existingSession: request.ExistingSession,
+		requestID:       request.RequestID,
+		rememberMe:      request.RememberMe,
+		client:          request.Client,
+		action:          ActionSessionIssue,
+	})
+}
+
+// IssueLoginGrantSession 把一次**已经由可信登录确认流程批准**的登录请求转换为
+// 目标应用会话（步骤 58 扫码登录使用）。它与普通登录的区别只在“认证事实来源”：
+//   - 不接收客户端伪造的 authn.AuthenticateResult，而是接收服务端批准事实；
+//   - 必须先调用 gate 原子验证并消费批准记录（并发领取单赢家），gate 缺失即拒绝；
+//   - 只签发普通会话，不支持 RememberMe，不继承确认端强认证时间；管理访问仍按本
+//     会话自己的强认证闸门判断；
+//   - AppID 必填（扫码登录必须绑定目标应用），签发前重新核对账户/应用/成员状态。
+//
+// 调用方必须是可信登录确认流程（如 internal/qrlogin）；本方法不校验调用者身份，
+// 与 Login 同属内部可信 API。gate 消费批准后若会话写入失败，批准不会回退（只能
+// 重新发起登录），失败写失败审计，绝不返回“已签发”的假结果。
+func (s *Service) IssueLoginGrantSession(ctx context.Context, request LoginGrantRequest,
+	gate LoginGrantGate) (IssuedSession, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return IssuedSession{}, err
+	}
+	request.GrantID = strings.TrimSpace(request.GrantID)
+	if !validGrantID(request.GrantID) {
+		return IssuedSession{}, fmt.Errorf("%w: 登录批准标识无效", ErrInvalidRequest)
+	}
+	if !account.ValidUserID(request.UserID) {
+		return IssuedSession{}, fmt.Errorf("%w: 用户 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.SecurityVersion <= 0 {
+		return IssuedSession{}, fmt.Errorf("%w: 缺少账户安全版本", ErrInvalidRequest)
+	}
+	if !validAppID(request.AppID) {
+		return IssuedSession{}, fmt.Errorf("%w: 目标应用 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.RequestID != "" && !validRequestID(request.RequestID) {
+		return IssuedSession{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
+	}
+	if len(request.AuthMethods) == 0 || len(request.AuthMethods) > 10 {
+		return IssuedSession{}, fmt.Errorf("%w: 登录批准缺少有效认证方法", ErrInvalidRequest)
+	}
+	methods := make([]authn.Method, 0, len(request.AuthMethods))
+	seenMethods := make(map[authn.Method]struct{}, len(request.AuthMethods))
+	for _, method := range request.AuthMethods {
+		if !method.Valid() {
+			return IssuedSession{}, fmt.Errorf("%w: 认证方法标识未知", ErrInvalidRequest)
+		}
+		if _, duplicated := seenMethods[method]; duplicated {
+			continue
+		}
+		seenMethods[method] = struct{}{}
+		methods = append(methods, method)
+	}
+	spec := authnSpec{
+		userID: request.UserID, securityVersion: request.SecurityVersion,
+		kind: KindNormal, reason: ReasonNone, methods: methods,
+	}
+	// 先复核账户/应用/成员资格，再消费一次性批准：不能把批准消耗在必然失败的签发上。
+	if err := s.checkEligibility(ctx, spec, request.AppID); err != nil {
+		s.recordIssuanceRejection(ctx, spec, request.AppID, "login_grant_account_ineligible")
+		return IssuedSession{}, err
+	}
+	if isNilInterface(gate) {
+		s.recordIssuanceRejection(ctx, spec, request.AppID, "login_grant_gate_missing")
+		return IssuedSession{}, ErrLoginGrantDenied
+	}
+	if err := gate.AuthorizeLoginGrant(ctx, request); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return IssuedSession{}, ctxErr
+		}
+		s.recordIssuanceRejection(ctx, spec, request.AppID, "login_grant_not_authorized")
+		return IssuedSession{}, ErrLoginGrantDenied
+	}
+	return s.issueSessionRecord(ctx, spec, issueParams{
+		appID:           request.AppID,
+		existingSession: request.ExistingSession,
+		requestID:       request.RequestID,
+		client:          request.Client,
+		action:          ActionSessionLoginGrantIssued,
+		extraChanges: []audit.FieldChange{
+			{Field: "login_grant", After: request.GrantID},
+		},
+	})
+}
+
+// VerifyActiveSession 校验指定用户的会话 ID 是否仍然有效：会话存在且归属该用户、
+// 未撤销、未空闲/绝对到期，且账户状态/安全版本、应用与成员状态仍满足。它只返回
+// 校验结论，不返回会话秘密/CSRF，也不延长会话；供可信登录确认流程在领取结果前
+// 复核确认端会话（撤销/过期/账户变化即拒绝）。失败统一 ErrSessionInvalid，不泄露
+// 具体原因。
+func (s *Service) VerifyActiveSession(ctx context.Context, userID, sessionID string) error {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !account.ValidUserID(userID) || !validSessionID(sessionID) {
+		return fmt.Errorf("%w: 会话或用户标识格式无效", ErrInvalidRequest)
+	}
+	record, found, err := s.store.Load(ctx, sessionID)
+	if err != nil {
+		return s.storeFailure(ctx, "读取确认端会话", err)
+	}
+	if !found || record.UserID != userID {
+		return ErrSessionInvalid
+	}
+	if reason := invalidReason(record, s.clockNow()); reason != "" {
+		s.logger.Info("确认端会话校验未通过", "session_id", record.ID, "reason", reason)
+		return ErrSessionInvalid
+	}
+	if err := s.checkCurrentState(ctx, record); err != nil {
+		return err
+	}
+	return nil
+}
+
+// issueParams 是已通过资格复核的会话签发参数。
+type issueParams struct {
+	appID           string
+	existingSession string
+	requestID       string
+	rememberMe      bool
+	client          ClientInfo
+	action          Action
+	extraChanges    []audit.FieldChange
+}
+
+// issueSessionRecord 在已完成认证事实与资格复核后签发会话记录：会话材料/摘要、
+// 防会话固定轮换、并发配额、成功审计与插入在同一事务提交。调用方必须先完成
+// checkEligibility（普通登录取自认证结果，登录批准由可信 gate 决定）。
+func (s *Service) issueSessionRecord(ctx context.Context, spec authnSpec,
+	params issueParams) (IssuedSession, error) {
+	client := sanitizeClientInfo(params.client)
+	now := s.clockNow()
+	existing, err := s.loadRevocableSession(ctx, params.existingSession)
 	if err != nil {
 		return IssuedSession{}, err
 	}
@@ -423,7 +559,7 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 	// “记住我”只延长本次会话的绝对到期，且受服务端配置上限约束；空闲到期与
 	// 续期规则不变（续期永不超过绝对到期）。
 	absoluteTimeout := s.absoluteTimeout
-	if request.RememberMe {
+	if params.rememberMe {
 		absoluteTimeout = s.rememberTimeout
 	}
 	absoluteExpiresAt := now.Add(absoluteTimeout)
@@ -434,7 +570,7 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 	record := Record{
 		ID:                material.id,
 		UserID:            spec.userID,
-		AppID:             request.AppID,
+		AppID:             params.appID,
 		Kind:              spec.kind,
 		Reason:            spec.reason,
 		RequiredSteps:     spec.steps,
@@ -449,8 +585,8 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 		LastSeenAt:        now,
 		IdleExpiresAt:     idleExpiresAt,
 		AbsoluteExpiresAt: absoluteExpiresAt,
-		RequestID:         request.RequestID,
-		RememberMe:        request.RememberMe,
+		RequestID:         params.requestID,
+		RememberMe:        params.rememberMe,
 		ClientUserAgent:   client.UserAgent,
 		ClientAddress:     client.Address,
 	}
@@ -468,12 +604,13 @@ func (s *Service) Login(ctx context.Context, request LoginRequest) (IssuedSessio
 	if existing != nil {
 		changes = append(changes, audit.FieldChange{Field: "session_rotation", After: "previous_session_revoked"})
 	}
+	changes = append(changes, params.extraChanges...)
 	event := audit.Event{
 		Actor:     audit.Actor{Type: audit.ActorUser, ID: spec.userID},
-		AppID:     request.AppID,
-		Action:    string(ActionSessionIssue),
+		AppID:     params.appID,
+		Action:    string(params.action),
 		Target:    audit.Target{Type: "session", ID: record.ID},
-		RequestID: request.RequestID,
+		RequestID: params.requestID,
 		Changes:   changes,
 	}
 	critical := audit.CriticalRequest{
@@ -1990,6 +2127,19 @@ func validAppID(appID string) bool {
 	}
 	for index := 0; index < len(appID); index++ {
 		if appID[index] < 0x21 || appID[index] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// validGrantID 校验可信登录批准记录标识的保守格式（可见 ASCII、长度受限）。
+func validGrantID(grantID string) bool {
+	if len(grantID) < 8 || len(grantID) > 128 {
+		return false
+	}
+	for index := 0; index < len(grantID); index++ {
+		if grantID[index] < 0x21 || grantID[index] > 0x7e {
 			return false
 		}
 	}

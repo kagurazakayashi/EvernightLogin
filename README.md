@@ -83,6 +83,10 @@ fmt.Print(cfg.Diagnostic()) // 已脱敏；秘密只显示 [REDACTED]/[UNSET]
 | passkey.rp_display_name | LOGIN_PASSKEY_RP_DISPLAY_NAME | 需重启 |
 | passkey.allowed_origins | LOGIN_PASSKEY_ALLOWED_ORIGINS | 需重启 |
 | passkey.user_verification | LOGIN_PASSKEY_USER_VERIFICATION | 需重启 |
+| app_qr_login.enabled | LOGIN_APP_QR_LOGIN_ENABLED | 需重启 |
+| app_qr_login.allowed_client_ids | LOGIN_APP_QR_LOGIN_ALLOWED_CLIENT_IDS | 需重启 |
+| app_qr_login.request_ttl_seconds | LOGIN_APP_QR_LOGIN_REQUEST_TTL_SECONDS | 需重启 |
+| app_qr_login.claim_interval_seconds | LOGIN_APP_QR_LOGIN_CLAIM_INTERVAL_SECONDS | 需重启 |
 | secrets.master_key | LOGIN_SECRETS_MASTER_KEY | 需重启 |
 | secrets.tls_pfx_password | LOGIN_SECRETS_TLS_PFX_PASSWORD | 需重启 |
 
@@ -571,6 +575,18 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **防枚举与失败语义**：用户名或邮箱占用统一返回 `CONFLICT`，验证失败统一返回 `CHALLENGE_INVALID`，重发冷却返回 `RATE_LIMITED`；创建、验证入口签发与验证完成均与审计同事务，审计不可用 fail-closed。邮件发送失败只记录 `MAIL_DELIVERY_FAILED` 状态、不回滚账户或票据，可在冷却后重发；验证令牌不写入日志、审计或数据库明文。注意：注册成功与用户名/邮箱冲突在接口层仍是二值结果，HTTP 层暴露前必须让两者在响应形状、状态码与耗时上不可区分，并叠加 IP 限流/验证码/邮件频率限制（本步均未实现）。凭证消费发生在完成邮箱验证的审计事务之外：若邮箱行条件更新或审计失败，已消费的一次性令牌不会恢复，只能重新发送验证入口（fail-closed，不会误报已验证）。
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
+
+## 已登录 APP 扫码确认网页登录（步骤 58）
+
+新增 `internal/qrlogin`（含 `sqlite/`）与迁移 `0036_app_qr_login.sql`；这是与标准设备码授权（步骤 57）**分别命名、分别存储**的自定义登录流程。新增根配置 `app_qr_login.*`（默认关闭，启用时必须显式配置应用白名单）。**无新增错误码**（复用既有 46 码）；不启动监听、不注册 HTTP 全局路由、不渲染页面/二维码图片（HTTP/页面属后续装配步骤）。
+
+- **发起端（网页）**：`Begin` 创建短时请求，返回一次性高熵领取绑定（`ClaimSecret`，库中只存 keyring HMAC-SHA256 摘要+key_id）与二维码载荷；二维码只含一次性请求标识 `evernight-login://app-qr?v=1&r=qrl_...`，**不含任何长期 Token/密码/会话秘密/领取绑定**。`ParseQRPayload` 严格校验固定 scheme/host/version 与唯一参数，拒绝 URL 主机、额外参数、userinfo/fragment/重复参数；APP 永远调用宿主配置的固定签发方地址，不信任二维码里的主机。
+- **确认端（APP）**：`Describe`/`Approve`/`Deny` 必须出示真实完整普通会话（`internal/session.Validate`，受限会话拒绝）；应用作用域会话只能确认本应用请求（跨应用 `ACCESS_DENIED`）。`Approve` 按步骤 39 敏感策略经 `internal/reauth.OperationRunner`（新操作 `app.qr_login.approve`，默认近期密码认证 300 秒）要求近期认证，未接线/拒绝一律拒绝；批准在审计事务内条件更新（版本匹配、未过期、pending），绑定用户+会话+安全版本+认证方法快照，并发批准单赢家。`Deny` 不要求再次认证。
+- **确认页上下文**：展示可信应用名/ID、客户端类型、请求 scope（仅展示，不是 Token 授权）、发起端 UA/地址/创建时间、有效期与固定风险提醒（"只确认本人正在登录的浏览器，不要确认他人发来的二维码"）；不展示任何秘密。
+- **领取与状态**：`Status`/`Claim`/`Cancel`/`Regenerate` 均需同时提交请求标识与领取绑定；服务端强制最小查询间隔（默认 1 秒）。`Claim` 只允许 approved 且未过期：重新核对客户端/应用启用、应用白名单、账户 active 与安全版本快照、目标应用成员状态、**确认端会话仍有效**（`session.VerifyActiveSession`，撤销/过期/账户变化即拒绝），再由门控原子消费批准（approved→claimed，并发单赢家）并调用 `internal/session` 的受门控登录批准签发**目标应用会话**（只发会话，不发 Access/ID/Refresh Token，不创造通用 Token 交换后门）。重复领取返回已领取；拒绝/取消/过期分别返回稳定错误码。
+- **状态与错误码**：请求状态 pending/approved/denied/cancelled/claimed，过期由 `expires_at` 惰性派生（不作为系统故障）；业务拒绝复用 `ACCESS_DENIED`/`CHALLENGE_INVALID`/`CONFLICT`/`AUTH_FAILED`/`RATE_LIMITED`/`CLIENT_DISABLED`/`DB_UNAVAILABLE`/`AUDIT_WRITE_FAILED` 等既有码，错误领取凭据与不存在统一为 `CHALLENGE_INVALID`，避免状态探测。所有创建/批准/拒绝/取消/重新生成/领取/失败均写安全审计（真实用户/系统主体、稳定 ID、request_id，不含领取绑定/二维码/会话秘密）；状态变更与成功审计同事务。
+- **取消与重新生成**：`Cancel` 使 pending/approved 请求失效；`Regenerate` 在同一审计事务内取消旧请求并创建新请求（新请求标识与新领取绑定），旧二维码/旧领取绑定立即不可用。过期/终态请求惰性处理；本步不实现后台清理任务（后续维护任务可补充批量清理入口）。
+- **已知限制**：①不做完整二维码钓鱼防护（任何扫码登录都要求用户核对发起端上下文并只确认本人操作，提醒文案已内置，残余社会工程风险如实声明）；②APP 与会话的绑定沿用步骤 57 语义：应用作用域会话需匹配目标应用，未绑定应用的全局普通会话可确认（用户身份来自真实会话，不由请求参数自称）；③本步只交付 Go API + 测试 + 可运行示例，HTTP 路由/传输层限流/页面（步骤 65）与 `cmd/login-server` 装配未做；④未做多实例/race/非 Windows 运行验证；⑤扫码登录不会签发 Token，后续访问令牌仍需标准 OAuth 授权流程。
 
 ## 设备码授权（Device Authorization Grant，步骤 57）
 

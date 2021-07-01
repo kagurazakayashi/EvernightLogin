@@ -89,6 +89,14 @@ func (c Config) fieldValueString(field string) string {
 		return formatStringList(c.Passkey.AllowedOrigins)
 	case "passkey.user_verification":
 		return strconv.Quote(c.Passkey.UserVerification)
+	case "app_qr_login.enabled":
+		return strconv.FormatBool(c.AppQRLogin.Enabled)
+	case "app_qr_login.allowed_client_ids":
+		return formatStringList(c.AppQRLogin.AllowedClientIDs)
+	case "app_qr_login.request_ttl_seconds":
+		return strconv.Itoa(c.AppQRLogin.RequestTTLSeconds)
+	case "app_qr_login.claim_interval_seconds":
+		return strconv.Itoa(c.AppQRLogin.ClaimIntervalSeconds)
 	case "secrets.master_key":
 		return c.Secrets.MasterKey.String()
 	case "secrets.tls_pfx_password":

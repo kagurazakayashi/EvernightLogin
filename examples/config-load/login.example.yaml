@@ -69,6 +69,15 @@ database:
 #     # - "https://auth.login.example.com"
 #   user_verification: "required"
 
+# 已登录 APP 扫码确认网页登录（步骤 58）。默认关闭；启用时必须显式配置允许的
+# 应用白名单（应用 ID = OAuth client_id），未列入的应用一律拒绝。
+# app_qr_login:
+#   enabled: true
+#   allowed_client_ids:
+#     - "app_00000000000000000000000000000001"
+#   request_ttl_seconds: 120
+#   claim_interval_seconds: 1
+
 # 秘密不能直接写在本文件里，只能引用受保护来源。取消注释后可直接使用：
 # secrets:
 #   master_key:

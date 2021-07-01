@@ -362,6 +362,43 @@ type LoginRequest struct {
 	Client ClientInfo
 }
 
+// LoginGrantRequest 是一次已由可信登录确认流程批准登录的**服务端事实**。它只能由
+// 可信流程（如扫码登录领取）在验证一次性批准记录并原子消费后构造；客户端参数不能
+// 直接填充这些字段。
+//
+// 安全边界：AuthMethods 必须来自确认端真实会话的认证方法快照；本类型不携带强认证
+// 时间，领取登录结果不会继承确认端的强认证新鲜度（管理访问仍需本会话自己的强认证）。
+type LoginGrantRequest struct {
+	// GrantID 是服务端批准记录标识（如扫码请求 ID），用于审计关联与防重放。
+	GrantID string
+	// UserID 是批准用户的稳定 ID（来自确认端真实会话，不是客户端自述）。
+	UserID string
+	// SecurityVersion 是批准时账户安全版本快照；签发前重新核对。
+	SecurityVersion int64
+	// AppID 是登录结果的目标应用（必须与批准记录一致且非空）。
+	AppID string
+	// AuthMethods 是确认端会话真实完成的认证方法快照。
+	AuthMethods []authn.Method
+	// ExistingSession 是浏览器旧会话秘密（可选，用于防会话固定轮换）；
+	// 领取流程通常不带旧会话。
+	ExistingSession string
+	// RequestID 是领取请求编号（用于审计关联）。
+	RequestID string
+	// Client 是设备列表展示用描述，不参与授权。
+	Client ClientInfo
+}
+
+// LoginGrantGate 判定一次登录批准是否仍然有效并授权本次领取。实现必须：
+//   - 重新读取服务端批准记录并核对 UserID/SecurityVersion/AppID/认证方法快照；
+//   - 校验记录状态为已批准、未过期、未被领取/取消/拒绝；
+//   - 复核确认端会话仍然有效（撤销/过期/账户/应用/成员变化即拒绝）；
+//   - 以条件更新**原子消费**批准（并发领取只允许一个成功），并写安全审计。
+//
+// gate 返回非 nil 时签发一律拒绝；未提供 gate 时同样拒绝（fail-closed）。
+type LoginGrantGate interface {
+	AuthorizeLoginGrant(ctx context.Context, request LoginGrantRequest) error
+}
+
 // ClientInfo 是设备列表展示用的客户端描述。
 //
 // 安全边界：UserAgent 完全由客户端控制、可任意伪造，不能当作可信设备身份、设备
@@ -456,6 +493,9 @@ type Action string
 const (
 	// ActionSessionIssue 是普通/受限会话签发（含登录轮换）。
 	ActionSessionIssue Action = "session.issue"
+	// ActionSessionLoginGrantIssued 是可信登录确认流程（如扫码登录）批准后签发会话。
+	// 记录批准来源 ID 与用户/应用稳定 ID，不记录任何秘密。
+	ActionSessionLoginGrantIssued Action = "session.login_grant_issued"
 	// ActionSessionRevoke 是退出当前会话。
 	ActionSessionRevoke Action = "session.revoke"
 	// ActionSessionRevokeOwn 是用户指定退出自己的其他会话或退出全部自己的会话。
@@ -474,9 +514,9 @@ const (
 // Valid 报告动作是否已定义。
 func (a Action) Valid() bool {
 	switch a {
-	case ActionSessionIssue, ActionSessionRevoke, ActionSessionRevokeOwn,
-		ActionSessionAdminRevoke, ActionSessionEviction, ActionSessionAccountDisabledRevoke,
-		ActionSessionRestrictedDenied:
+	case ActionSessionIssue, ActionSessionLoginGrantIssued, ActionSessionRevoke,
+		ActionSessionRevokeOwn, ActionSessionAdminRevoke, ActionSessionEviction,
+		ActionSessionAccountDisabledRevoke, ActionSessionRestrictedDenied:
 		return true
 	default:
 		return false
@@ -512,6 +552,9 @@ var (
 	// ErrRecoveryNotAllowed 表示受限恢复会话签发被拒绝（未装配恢复流程、
 	// 恢复尝试无效/过期/已绑定会话，或账户不允许恢复）。
 	ErrRecoveryNotAllowed = errors.New("不允许签发受限恢复会话")
+	// ErrLoginGrantDenied 表示登录批准缺失、已失效、已被领取或未通过验证；
+	// 对外与普通登录失败一致（ACCESS_DENIED），不泄露批准记录状态细节。
+	ErrLoginGrantDenied = errors.New("登录批准无效或已失效")
 	// ErrStoreUnavailable 表示会话存储暂时不可用。
 	ErrStoreUnavailable = errors.New("会话存储暂时不可用")
 	// ErrAuditUnavailable 表示安全审计未能可靠写入，操作被拒绝。
@@ -551,7 +594,8 @@ func CodeOf(err error) ErrorCode {
 		errors.Is(err, ErrRotationFailed), errors.Is(err, ErrConcurrentLimit):
 		return CodeAuthFailed
 	case errors.Is(err, ErrRestrictedSession), errors.Is(err, ErrStrongAuthRequired),
-		errors.Is(err, ErrAccessDenied), errors.Is(err, ErrRecoveryNotAllowed):
+		errors.Is(err, ErrAccessDenied), errors.Is(err, ErrRecoveryNotAllowed),
+		errors.Is(err, ErrLoginGrantDenied):
 		return CodeAccessDenied
 	case errors.Is(err, ErrStoreUnavailable):
 		return CodeDBUnavailable
