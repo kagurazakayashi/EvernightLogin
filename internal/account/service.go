@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 )
 
 // AuditRecorder 是账户服务依赖的安全审计写入契约；生产实现为 *audit.Recorder。
@@ -90,6 +91,9 @@ type Options struct {
 	// 每次校验重读 users.status 的兜底失效（立即拒绝后续请求），但不会主动缩短
 	// 客户端持有会话秘密的窗口。撤销失败不回滚已提交的账户禁用，只写运行日志。
 	SessionRevoker SessionRevoker
+	// Events 是可选的安全事件通知契约（步骤 59 Webhook）；nil 表示未启用通知，
+	// 不影响账户状态变更与审计。事件在业务/审计事务提交后调用，失败只记日志。
+	Events securityevent.Emitter
 	// Now 是可注入时钟；nil 使用 time.Now。用户时间统一 UTC 毫秒。
 	Now func() time.Time
 	// Random 是安全随机源；nil 使用 crypto/rand.Reader。用于生成用户 ID。
@@ -111,6 +115,7 @@ type SessionRevoker interface {
 // Service 是账户领域服务。构造后不可变，可被多个 goroutine 并发使用；它不启动
 // 后台协程、不提供 HTTP 端点，也不缓存用户数据。
 type Service struct {
+	events         securityevent.Emitter
 	store          Store
 	audit          AuditRecorder
 	authorizer     Authorizer
@@ -149,6 +154,7 @@ func New(options Options) (*Service, error) {
 		audit:          options.Audit,
 		authorizer:     options.Authorizer,
 		sessionRevoker: options.SessionRevoker,
+		events:         options.Events,
 		now:            now,
 		random:         random,
 		logger:         logger,
@@ -495,6 +501,29 @@ func (s *Service) applyStateCommand(ctx context.Context, caller Caller, request 
 			s.logger.Warn("账户禁用后的会话撤销失败", "user_id", request.UserID, "error_category", "session_revoke_failed")
 		} else {
 			s.logger.Info("账户禁用后的会话已撤销", "user_id", request.UserID, "revoked", revoked)
+		}
+	}
+	// 安全事件通知（步骤 59）：仅在状态真实变化且提交后发出；失败不回滚禁用/启用。
+	if s.events != nil {
+		eventType := securityevent.TypeUserEnabled
+		if nextStatus == StatusDisabled {
+			eventType = securityevent.TypeUserDisabled
+		}
+		key := fmt.Sprintf("%s:%s:%s", eventType, request.UserID, caller.requestID)
+		if caller.requestID == "" {
+			key = fmt.Sprintf("%s:%s:%d", eventType, request.UserID, securityVersion)
+		}
+		emitErr := s.events.Emit(ctx, securityevent.Event{
+			Type: eventType, UserID: request.UserID, IdempotencyKey: key,
+			OccurredAt: now, RequestID: caller.requestID,
+			Data: map[string]string{
+				"status": string(nextStatus), "previous_status": string(snapshot.User.Status),
+				"security_version": strconv.FormatInt(securityVersion, 10),
+			},
+		})
+		if emitErr != nil {
+			s.logger.Warn("账户安全事件通知失败", "user_id", request.UserID,
+				"error_category", "webhook_emit_failed")
 		}
 	}
 	return StateChangeResult{User: updated, PreviousStatus: snapshot.User.Status, Changed: true}, nil

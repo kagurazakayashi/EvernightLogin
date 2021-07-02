@@ -484,6 +484,22 @@ func defaultOperations() []Operation {
 			Implemented:   true,
 		},
 		{
+			ID: "application.webhook.endpoint.change", Domain: DomainApplication,
+			Name:          "登记或修改应用安全事件 Webhook 端点",
+			Description:   "为应用登记/修改/启停签名 Webhook 端点（URL、描述、状态）；必须强认证与确认，地址经出站安全策略校验（仅 https、拒绝回环/内网/保留地址、默认不跟随重定向），变更与拒绝写审计；不能把 Webhook 当作 OIDC 标准退出来声明。",
+			Default:       strongReauth,
+			PermissionKey: "applications.credentials.manage",
+			Implemented:   true,
+		},
+		{
+			ID: "application.webhook.secret.rotate", Domain: DomainApplication,
+			Name:          "轮换或撤销应用 Webhook 签名密钥",
+			Description:   "创建/轮换/撤销应用 Webhook 的 HMAC 签名密钥；必须强认证与确认，密钥明文只返回一次、库里只存认证加密密文，轮换保留明确过渡期（旧密钥过渡期内仍参与多签），撤销后立即失效，变更写审计且不记录密钥明文。",
+			Default:       strongReauth,
+			PermissionKey: "applications.credentials.manage",
+			Implemented:   true,
+		},
+		{
 			ID: "oauth.client.settings.change", Domain: DomainApplication, Name: "修改 OAuth 客户端安全设置",
 			Description:   "修改已登记客户端的授权类型、回调、Scope、允许目标资源与 PKCE 要求；必须强认证与确认并告知，回调精确匹配、禁止通配与开放重定向，不能借修改安全设置转移应用权限。",
 			Default:       strongReauth,

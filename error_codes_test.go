@@ -18,8 +18,8 @@ type manualErrorRow struct {
 
 func TestErrorCodeRegistryUnique(t *testing.T) {
 	definitions := RegisteredErrorCodes()
-	if len(definitions) != 46 {
-		t.Fatalf("错误码数量 = %d，期望 46 个设计码", len(definitions))
+	if len(definitions) != 48 {
+		t.Fatalf("错误码数量 = %d，期望 48 个设计码", len(definitions))
 	}
 	seen := make(map[ErrorCode]bool, len(definitions))
 	for _, definition := range definitions {
@@ -88,8 +88,8 @@ func TestErrorCodeDocumentationMatches(t *testing.T) {
 	}
 
 	rows := parseManualErrorRows(t, string(data))
-	if len(rows) != 46 {
-		t.Fatalf("手册错误码数量 = %d，期望 46", len(rows))
+	if len(rows) != 48 {
+		t.Fatalf("手册错误码数量 = %d，期望 48", len(rows))
 	}
 
 	definitions := RegisteredErrorCodes()

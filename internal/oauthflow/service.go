@@ -19,6 +19,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/ratelimit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 )
@@ -34,6 +35,8 @@ type Options struct {
 	Tokens     TokenIssuer
 	// Reauth 是步骤 39 敏感操作收敛入口；nil 时授权确认拒绝。
 	Reauth reauth.OperationRunner
+	// Events 是可选的安全事件通知契约（步骤 59 Webhook）；nil 表示未启用通知。
+	Events securityevent.Emitter
 	// SessionRevoker 是退出服务需要的会话撤销能力（步骤 55）；nil 时 Logout 一律
 	// fail-closed 拒绝，不影响授权码/令牌端点。
 	SessionRevoker SessionRevoker

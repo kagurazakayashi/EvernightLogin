@@ -14,6 +14,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
+	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 )
 
 // AuditRecorder 是应用服务依赖的安全审计写入契约，生产实现为 *audit.Recorder。
@@ -99,14 +100,18 @@ type Options struct {
 	Audit      AuditRecorder
 	Authorizer Authorizer
 	Transfers  delegation.Guard
-	Now        func() time.Time
-	Random     io.Reader
-	Logger     *slog.Logger
+	// Events 是可选的安全事件通知契约（步骤 59 Webhook）；nil 表示未启用通知，
+	// 不影响成员关系变更。事件在审计事务提交后发出，失败只记日志。
+	Events securityevent.Emitter
+	Now    func() time.Time
+	Random io.Reader
+	Logger *slog.Logger
 }
 
 // Service 是应用领域服务。构造后不可变，可被多个 goroutine 并发使用；不启动
 // 后台协程、不提供 HTTP 端点。
 type Service struct {
+	events     securityevent.Emitter
 	store      Store
 	audit      AuditRecorder
 	authorizer Authorizer
@@ -143,7 +148,8 @@ func New(options Options) (*Service, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
-		transfers: options.Transfers, now: now, random: random, logger: logger}, nil
+		transfers: options.Transfers, events: options.Events, now: now, random: random,
+		logger: logger}, nil
 }
 
 // CreateApplication 登记应用，并在同一审计事务中创建唯一对应的应用作用范围。

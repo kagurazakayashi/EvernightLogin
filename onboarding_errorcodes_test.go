@@ -44,7 +44,7 @@ func TestOnboardingErrorCodesRegistered(t *testing.T) {
 			}
 		})
 	}
-	if len(RegisteredErrorCodes()) != 46 {
-		t.Errorf("错误码注册表数量 = %d，期望 46（入驻模块不新增错误码）", len(RegisteredErrorCodes()))
+	if len(RegisteredErrorCodes()) != 48 {
+		t.Errorf("错误码注册表数量 = %d，期望 48（入驻模块不新增错误码）", len(RegisteredErrorCodes()))
 	}
 }

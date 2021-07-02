@@ -23,6 +23,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 )
 
 // MaxCleanupRetention 是过期会话清理允许保留的最长时间。
@@ -97,6 +98,9 @@ type Options struct {
 	// Authorizer 判定管理员能否在给定范围强制下线；nil 时管理强制下线一律拒绝
 	// （fail-closed）。用户本人退出自己的会话不依赖它。
 	Authorizer ScopeAuthorizer
+	// Events 是可选的安全事件通知契约（步骤 59 Webhook）；nil 表示未启用通知，
+	// 不影响会话撤销。事件在撤销审计事务提交后发出，失败只记日志。
+	Events securityevent.Emitter
 	// Sensitive 是敏感操作收敛入口（步骤 39）。默认 nil 时管理访问由既有强认证
 	// 闸门 fail-closed（MFA 未实现前始终拒绝）；显式 AllowLegacyWithoutSensitive
 	// 才允许仅靠旧闸门。接线后管理访问额外经敏感策略判定，要求强认证而未实现时
@@ -132,6 +136,7 @@ type Service struct {
 	strongAuthAge     time.Duration
 	authorizer        ScopeAuthorizer
 	sensitive         SensitiveRunner
+	events            securityevent.Emitter
 	allowLegacy       bool
 	recoveryGate      RecoverySessionGate
 	recoveryTTL       time.Duration
@@ -256,6 +261,7 @@ func New(store Store, options Options) (*Service, error) {
 		strongAuthAge:     strongAuthAge,
 		authorizer:        options.Authorizer,
 		sensitive:         options.Sensitive,
+		events:            options.Events,
 		allowLegacy:       options.AllowLegacyWithoutSensitive,
 		recoveryGate:      options.RecoveryGate,
 		recoveryTTL:       recoveryTTL,
@@ -1052,6 +1058,12 @@ func (s *Service) Logout(ctx context.Context, secret string) error {
 		return s.mapCriticalError(ctx, err)
 	}
 	s.logger.Info("会话已撤销", "session_id", record.ID, "user_id", record.UserID, "reason", RevokeReasonLogout)
+	s.emitSessionEvent(ctx, securityevent.Event{
+		Type: securityevent.TypeSessionLoggedOut, ApplicationID: record.AppID,
+		UserID: record.UserID, IdempotencyKey: "session.logged_out:" + record.ID,
+		RequestID: "session_logout",
+		Data:      map[string]string{"scope": "current_session"},
+	})
 	return nil
 }
 
@@ -1115,7 +1127,30 @@ func (s *Service) revokeAllForUser(ctx context.Context, userID, reason string, a
 		return 0, s.mapCriticalError(ctx, err)
 	}
 	s.logger.Info("账户会话已批量撤销", "user_id", userID, "reason", reason, "revoked", revoked, "action", string(action))
+	if action != ActionSessionAccountDisabledRevoke && revoked > 0 {
+		s.emitSessionEvent(ctx, securityevent.Event{
+			Type: securityevent.TypeSessionAllRevoked, UserID: userID,
+			IdempotencyKey: fmt.Sprintf("session.all_revoked:%s:%d", userID, now.UnixNano()),
+			RequestID:      "session_bulk_revoke",
+			Data: map[string]string{"revoked": strconv.FormatInt(revoked, 10),
+				"reason_class": "bulk_revoke"},
+		})
+	}
 	return revoked, nil
+}
+
+// emitSessionEvent 在撤销事务提交后把安全事件交给可选通知实现；失败只记运行日志，
+// 不回滚已完成撤销（通知正确性不构成会话安全前置条件）。
+func (s *Service) emitSessionEvent(ctx context.Context, event securityevent.Event) {
+	if s.events == nil {
+		return
+	}
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = s.clockNow()
+	}
+	if err := s.events.Emit(context.WithoutCancel(ctx), event); err != nil {
+		s.logger.Warn("会话安全事件通知失败", "error_category", "webhook_emit_failed")
+	}
 }
 
 // ListSessions 列出调用方本人当前活动会话（含当前会话），用于设备列表。它必须

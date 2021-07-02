@@ -485,6 +485,28 @@
 // （步骤 65）、过期记录清理、跨实例限流、真实电视/CLI 互操作与 race/非 Windows
 // 未验证。
 //
+// internal/webhook 已实现应用安全事件签名 Webhook（步骤 59）：迁移 0037 落地
+// webhook_endpoints/webhook_endpoint_secrets/webhook_events/webhook_deliveries。
+// 端点与签名密钥按应用受控管理（Authorizer + 敏感操作 application.webhook.endpoint.change /
+// application.webhook.secret.rotate，reauth 缺失 fail-closed）；签名密钥只存
+// secrets.Sealer 认证加密密文+前缀+key_id，明文只在创建/轮换响应出现一次，轮换保留
+// 有限过渡期并以多个 v1 签名共存；签名覆盖 "<t>."+实际传输字节（HMAC-SHA256），
+// 消费方按时间窗+事件 ID 去重（至少一次语义，examples/webhookverify 提供自包含示例）。
+// internal/securityevent 定义最小事件模型；account/session/oauthflow/app 在业务/审计
+// 事务提交后经可选 Emitter 发出禁用/启用、会话退出/批量撤销、授权撤回、退出应用、
+// 应用成员变更事件（失败只记日志、不回滚已完成操作；用户级事件按 active 成员应用
+// 扇出，上限 100 端点）。投递由 internal/task 承载（可重试分类、指数退避、尝试上限、
+// 取消与失败查询）；单次 HTTP 请求超时自动推导为严格小于任务墙钟（使慢端点以网络
+// 超时进入可重试失败，超时记 TASK_TIMEOUT、未耗尽回 queued、耗尽 failed 且可受控
+// 重试；仅明确取消写 cancelled），事件+投递在同一 DB 事务内幂等创建；internal/netguard 提供出站
+// SSRF 防护（仅 https/默认端口、DNS 全量公网校验并直连固定 IP、拒绝环回/私有/
+// 链路本地/CGNAT/保留地址、默认不跟随重定向、禁用代理与解压、响应上限）。本包不建
+// HTTP 路由/页面、不启动协程、不真实外发；不实现 OIDC RP-Initiated/Back-Channel
+// Logout 标准协议，也不得把自定义 Webhook 冒称标准 OIDC 退出。错误码新增
+// WEBHOOK_DELIVERY_FAILED/WEBHOOK_ENDPOINT_BLOCKED 并同步手册（46→48）。宿主需把
+// Handler 注册为 webhook.delivery 任务、注入 Emitter 到产生方；跨实例投递/清理/真实
+// 外网端点与 race/非 Windows 未验证。
+//
 // internal/oidc 已实现 OIDC 登录能力（步骤 52）：发现文档、ID Token 与 UserInfo。
 // 迁移 0032 为 sessions 增加 auth_methods_json（登录时真实完成的认证方法），并为
 // oauth_authorization_requests/codes 增加 auth_time_ms/auth_methods_json；授权确认

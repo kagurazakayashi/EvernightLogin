@@ -43,7 +43,7 @@ func TestPasswordResetErrorCodesRegistered(t *testing.T) {
 			}
 		})
 	}
-	if len(RegisteredErrorCodes()) != 46 {
-		t.Errorf("错误码数量 = %d，期望 46", len(RegisteredErrorCodes()))
+	if len(RegisteredErrorCodes()) != 48 {
+		t.Errorf("错误码数量 = %d，期望 48", len(RegisteredErrorCodes()))
 	}
 }

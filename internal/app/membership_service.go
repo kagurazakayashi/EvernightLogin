@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
+	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 )
 
 // memberTransferRefs 在调用方事务内把该用户在本应用范围内当前会生效的权限转换
@@ -114,6 +116,7 @@ func (s *Service) AddApplicationMember(ctx context.Context, caller Caller, reque
 	s.logger.Info("应用成员已加入",
 		"application_id", membership.ApplicationID, "user_id", membership.UserID,
 		"status", string(membership.Status))
+	s.emitMembershipEvent(ctx, membership.ApplicationID, request.UserID, "active", caller.requestID)
 	return membership, nil
 }
 
@@ -366,6 +369,8 @@ func (s *Service) applyMemberStatus(ctx context.Context, caller Caller, request 
 	s.logger.Info("应用成员状态已变更",
 		"application_id", updated.ApplicationID, "user_id", updated.UserID,
 		"status", string(target))
+	s.emitMembershipEvent(ctx, updated.ApplicationID, updated.UserID, string(target),
+		caller.requestID)
 	return MemberStatusResult{Membership: updated, Changed: true}, nil
 }
 
@@ -426,7 +431,30 @@ func (s *Service) RemoveApplicationMember(ctx context.Context, caller Caller, re
 	}
 	s.logger.Info("应用成员已移除",
 		"application_id", application.ID, "user_id", request.UserID)
+	s.emitMembershipEvent(ctx, application.ID, request.UserID, "removed", caller.requestID)
 	return nil
+}
+
+// emitMembershipEvent 在成员关系审计事务提交后通知可选 Webhook；失败只记运行日志，
+// 不回滚已完成的成员变更（通知不是权限正确性的前置条件）。
+func (s *Service) emitMembershipEvent(ctx context.Context, applicationID, userID, status,
+	requestID string) {
+	if s.events == nil {
+		return
+	}
+	key := "app.membership.changed:" + applicationID + ":" + userID + ":" + requestID
+	if requestID == "" {
+		key = "app.membership.changed:" + applicationID + ":" + userID + ":" + status + ":" +
+			strconv.FormatInt(s.now().UTC().UnixNano(), 10)
+	}
+	event := securityevent.Event{
+		Type: securityevent.TypeAppMembershipChanged, ApplicationID: applicationID,
+		UserID: userID, IdempotencyKey: key, OccurredAt: s.now(),
+		RequestID: requestID, Data: map[string]string{"status": status},
+	}
+	if err := s.events.Emit(context.WithoutCancel(ctx), event); err != nil {
+		s.logger.Warn("应用成员安全事件通知失败", "error_category", "webhook_emit_failed")
+	}
 }
 
 // loadMemberApplication 读取应用记录并保持领域错误语义；应用不存在返回

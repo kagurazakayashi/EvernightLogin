@@ -1,7 +1,7 @@
 package login
 
 // 本文件是错误码的代码注册表，必须与 docs/requirements/login_错误码与排障手册.md
-// 保持一致。46 个设计码是待实现约定：注册不代表模块已实现，未实现模块不得为了
+// 保持一致。48 个设计码是待实现约定：注册不代表模块已实现，未实现模块不得为了
 // “产生记录”而伪造这些错误码。新增错误码必须同时更新本表、手册和未来的 OpenAPI，
 // 不能改变已发布码的含义。
 //
@@ -69,6 +69,8 @@ const (
 	CategoryConfiguration ErrorCategory = "配置"
 	// CategoryInternal 表示未分类内部故障。
 	CategoryInternal ErrorCategory = "内部故障"
+	// CategoryWebhookTask 表示 Webhook 投递任务失败。
+	CategoryWebhookTask ErrorCategory = "Webhook 任务"
 )
 
 // 错误码常量。字符串值必须与错误码手册完全一致，测试会对照手册核验。
@@ -119,6 +121,8 @@ const (
 	CodeReportAccessDenied         ErrorCode = "REPORT_ACCESS_DENIED"
 	CodeConfigInvalid              ErrorCode = "CONFIG_INVALID"
 	CodeInternalError              ErrorCode = "INTERNAL_ERROR"
+	CodeWebhookDeliveryFailed      ErrorCode = "WEBHOOK_DELIVERY_FAILED"
+	CodeWebhookEndpointBlocked     ErrorCode = "WEBHOOK_ENDPOINT_BLOCKED"
 )
 
 // ErrorCodeDefinition 是一个错误码的机器可读定义。DefaultMessage 是手册中的
@@ -181,6 +185,8 @@ var errorCodeDefinitions = []ErrorCodeDefinition{
 	{CodeReportAccessDenied, CategoryReport, "无权读取此报告", 403},
 	{CodeConfigInvalid, CategoryConfiguration, "配置未通过检查", 0},
 	{CodeInternalError, CategoryInternal, "服务发生未预期错误", 500},
+	{CodeWebhookDeliveryFailed, CategoryWebhookTask, "Webhook 未成功投递", 0},
+	{CodeWebhookEndpointBlocked, CategoryApplication, "Webhook 地址不被允许", 403},
 }
 
 // errorCodeIndex 是查找索引。注册表构造阶段即校验唯一性，重复码会在包初始化

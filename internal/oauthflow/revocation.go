@@ -7,6 +7,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
+	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 )
 
@@ -170,6 +171,17 @@ func (s *Service) RevokeAuthorization(ctx context.Context,
 	}); err != nil {
 		return RevokeResult{}, mapCriticalProtocolError(err)
 	}
+	s.emitSecurityEvent(ctx, securityevent.Event{
+		Type: securityevent.TypeAuthorizationRevoked, ApplicationID: record.ClientID,
+		UserID:         record.UserID,
+		IdempotencyKey: "oauth.authorization.revoked:" + record.ID,
+		RequestID:      request.RequestID,
+		Data: map[string]string{
+			"refresh_families":    fmt.Sprint(result.RefreshFamilies),
+			"refresh_tokens":      fmt.Sprint(result.RefreshTokens),
+			"authorization_codes": fmt.Sprint(result.AuthorizationCodes),
+		},
+	})
 	return result, nil
 }
 
@@ -201,6 +213,12 @@ func (s *Service) Logout(ctx context.Context, request LogoutRequest) (RevokeResu
 		}
 		s.recordLogout(ctx, userSession.UserID, "", "current_session",
 			map[bool]int64{true: 1, false: 0}[revoked], request.RequestID)
+		s.emitSecurityEvent(ctx, securityevent.Event{
+			Type: securityevent.TypeSessionLoggedOut, UserID: userSession.UserID,
+			IdempotencyKey: "oauth.logout.current:" + userSession.ID + ":" + request.RequestID,
+			RequestID:      request.RequestID,
+			Data:           map[string]string{"scope": "current_session"},
+		})
 		return RevokeResult{AppSessions: map[bool]int64{true: 1, false: 0}[revoked]}, nil
 	case LogoutAllSessions:
 		revoked, revokeErr := s.opts.SessionRevoker.RevokeAllOwnSessions(ctx,
@@ -209,6 +227,13 @@ func (s *Service) Logout(ctx context.Context, request LogoutRequest) (RevokeResu
 			return RevokeResult{}, oauthTemporarilyUnavailable()
 		}
 		s.recordLogout(ctx, userSession.UserID, "", "all_sessions", revoked, request.RequestID)
+		s.emitSecurityEvent(ctx, securityevent.Event{
+			Type: securityevent.TypeSessionAllRevoked, UserID: userSession.UserID,
+			IdempotencyKey: "oauth.logout.all:" + userSession.UserID + ":" + request.RequestID,
+			RequestID:      request.RequestID,
+			Data: map[string]string{"revoked": fmt.Sprint(revoked),
+				"reason_class": "all_sessions"},
+		})
 		return RevokeResult{AppSessions: revoked}, nil
 	case LogoutApplication:
 		if strings.TrimSpace(request.ClientID) == "" || len(request.ClientID) > 128 {
@@ -268,6 +293,18 @@ func (s *Service) Logout(ctx context.Context, request LogoutRequest) (RevokeResu
 			}
 			result.AppSessions++
 		}
+		s.emitSecurityEvent(ctx, securityevent.Event{
+			Type: securityevent.TypeAppLogout, ApplicationID: client.ClientID,
+			UserID:         userSession.UserID,
+			IdempotencyKey: "oauth.app.logged_out:" + userSession.UserID + ":" + client.ClientID + ":" + request.RequestID,
+			RequestID:      request.RequestID,
+			Data: map[string]string{
+				"refresh_families":    fmt.Sprint(result.RefreshFamilies),
+				"refresh_tokens":      fmt.Sprint(result.RefreshTokens),
+				"authorization_codes": fmt.Sprint(result.AuthorizationCodes),
+				"app_sessions":        fmt.Sprint(result.AppSessions),
+			},
+		})
 		return result, nil
 	default:
 		return RevokeResult{}, oauthInvalidRequest("退出范围无效")
@@ -580,5 +617,20 @@ func (s *Service) recordLogout(ctx context.Context, userID, clientID, scope stri
 	}
 	if err := s.opts.Audit.Record(ctx, event); err != nil {
 		s.opts.Logger.Warn("退出成功审计写入失败", "reason", "audit_unavailable")
+	}
+}
+
+// emitSecurityEvent 把安全事件交给可选通知实现（步骤 59 Webhook）。调用发生在撤销/
+// 退出审计事务提交之后：通知失败只记运行日志，不回滚已完成的撤销，也不影响令牌/会话
+// 失效语义（端点失效不得回滚已完成撤销）。
+func (s *Service) emitSecurityEvent(ctx context.Context, event securityevent.Event) {
+	if isNilInterface(s.opts.Events) {
+		return
+	}
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = s.now()
+	}
+	if err := s.opts.Events.Emit(context.WithoutCancel(ctx), event); err != nil {
+		s.opts.Logger.Warn("安全事件通知失败", "reason", "webhook_emit_failed")
 	}
 }

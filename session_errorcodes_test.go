@@ -48,8 +48,8 @@ func TestSessionErrorCodesRegistered(t *testing.T) {
 		})
 	}
 	// 不新增注册码：会话模块只复用既有注册表。
-	if len(RegisteredErrorCodes()) != 46 {
-		t.Errorf("错误码注册表数量 = %d，期望 46（会话模块不新增错误码）", len(RegisteredErrorCodes()))
+	if len(RegisteredErrorCodes()) != 48 {
+		t.Errorf("错误码注册表数量 = %d，期望 48（会话模块不新增错误码）", len(RegisteredErrorCodes()))
 	}
 }
 
