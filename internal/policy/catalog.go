@@ -476,6 +476,14 @@ func defaultOperations() []Operation {
 			Implemented:   true,
 		},
 		{
+			ID: "managed_api.policy.manage", Domain: DomainApplication,
+			Name:          "配置应用托管管理 API 委托策略",
+			Description:   "受信管理员为某个应用配置托管管理 API 的允许操作、对象范围、可读/可写字段与分页批量上限；必须近期强认证与确认并告知，策略严格校验（未知操作/字段、系统作用域、硬禁敏感字段与越界上限拒绝），修改与审计同事务并写行版本。",
+			Default:       strongReauth,
+			PermissionKey: "",
+			Implemented:   true,
+		},
+		{
 			ID: "app.qr_login.approve", Domain: DomainApplication,
 			Name:          "批准 APP 扫码登录网页请求",
 			Description:   "已登录 APP 扫描网页二维码后，用户核对发起端信息与应用范围并批准该网页以本人身份登录；必须绑定真实完整会话与近期身份验证，二维码只含一次性请求标识、不自动批准，确认页提醒不要确认他人发来的二维码，拒绝/取消/过期是流程状态而非系统故障。",

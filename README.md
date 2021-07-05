@@ -576,6 +576,20 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+## 业务托管管理 API 的操作、对象与字段授权（步骤 60）
+
+新增 `internal/managedapi`（含 `sqlite/`）与迁移 `0038_managed_api_policies.sql`，把既有用户、应用成员、用户组、角色与权限服务封装为**可委托给业务应用**的受保护管理 Go API。新增敏感操作 `managed_api.policy.manage`（默认近期强认证）。**无新增错误码**（复用既有登记码）；不注册 HTTP 全局路由、不开发页面（HTTP/页面属后续装配步骤），不新增根配置项。
+
+- **应用级委托策略**：每个应用一行策略（默认无策略=关闭）：允许操作集合、服务身份允许操作子集、对象范围（仅应用作用域，`all` 或显式资源 ID 列表）、可读/可写字段白名单、`max_limit`/`max_offset`/`max_batch` 上限。策略由 `SetPolicy` 受信通道写入：必须 root/本地管理员/系统组件白名单 + `managed_api.policy.manage` 近期认证 + 行版本条件更新 + 同事务审计；未知操作/字段/对象类型、硬禁敏感字段、system 作用域与越界上限在写入前拒绝，非法配置不落库。
+- **调用主体**：`UserPrincipal` 必须出示真实完整普通会话秘密（`internal/session` 校验）且目标应用与宿主可信上下文/会话应用一致（不一致 `RESOURCE_FORBIDDEN`）；`ServicePrincipal` 必须通过客户端 secret/证书认证（`internal/oauthclient`），主体是应用自身、不借用用户权限。请求参数不能自称用户/应用/字段权限。
+- **授权流水线**：API 版本（`v1`）与 request_id → 主体/策略/操作允许检查 → 代表用户 `internal/authz` 实时权限（all 模式）与数据范围交集（**数据范围 undefined/none 一律 fail-closed**）→ 对象范围与目标检查（先授权后读目标）→ 写入字段白名单 → 分页/排序/筛选/批量上限 → 调用既有服务（真实用户 Caller 保留 `delegation.Guard` 与既有审计）→ 托管调用审计。所有列表与子资源读取（成员/组/角色/权限列表、角色权限组合、角色分配的用户/组）在投影前同时按对应对象的策略范围与代表用户数据范围过滤；列表所需对象类型未在策略中声明范围时 fail-closed 拒绝（不把"未配置"当"全部可见"）。底层既有服务返回的业务错误码（如 `CONFLICT`/`PERMISSION_REQUIRED`/`APP_MEMBERSHIP_REQUIRED`/`ACCESS_DENIED`）原样映射给调用方，不退化为 `INTERNAL_ERROR`。宿主必须把本包提供的 `DelegatedAuthorizer` 族注入既有服务：无托管 grant 的直接调用一律拒绝，防止绕过托管层。
+- **字段与敏感能力**：应用资料读取（`application.get`）要求代表用户是目标应用的有效成员（非成员按成员关系缺失拒绝，服务身份为应用自身除外）；输出按对象类型固定字段表 + 策略可读白名单投影；密码哈希、MFA/TOTP 种子、恢复代码、Token/会话秘密、私钥、`is_root`、`security_version`、完整邮箱/电话为硬禁字段，永不输出也不能写进策略。写入使用明确请求类型与指针字段区分"未设置"，未授权字段直接 `REQ_INVALID`（不静默丢弃）；应用内成员资料与全局资料分离，成员资料更新只写应用内 profile。
+- **服务身份默认只读**：目录中服务身份允许的操作**仅**为只读查询与"创建全新账户并建立本应用成员关系"（不授予既有权限）；成员资料写入、成员启停/移除、组成员增删、角色/权限变更等任何写操作一律不允许服务身份（`ServiceAllowed=false`，即使策略显式列出也会拒绝），避免借用受信 system 通道绕过委派 Guard 或扩大破坏面。代表用户的权限变更写操作经既有服务真实用户 Caller 走 `delegation.Guard`。
+- **共享账户受控**：创建账户只能创建全新用户名并建立本应用成员关系，同一用户名已存在不会被认领/关联（明确拒绝，不按用户名绑定已有账户）；全局密码重置、MFA 解除、账户删除/禁用、root/系统资格、应用凭证、系统角色/权限、导入导出不在操作目录，直接按未知/越权拒绝。
+- **分页与探测防护**：列表在既有服务作用域内分页（limit/offset 受策略与全局硬上限），排序/筛选字段必须属于对象白名单且可读，未知字段拒绝；结果再按策略对象范围与数据范围过滤；跨应用对象不进入结果；批量成员操作仅使用既有原子服务并受 `max_batch` 限制，超限直接拒绝且无部分写入；`HasMore` 如实返回。
+- **审计**：每次托管调用（成功/拒绝）写 `managed_api.<operation>` 审计：真实操作者（用户或 `managed-service:<client_id>` 系统身份）、调用应用、目标对象、request_id、稳定错误码/内部原因；不记录字段值/秘密；拒绝在调用既有服务前写入。既有服务自身审计保留。策略修改与成功审计同事务。
+- **已知限制**：数据范围写入路径尚未落地，角色分配默认 `{}`（undefined）→ 在托管 API 中 fail-closed（与 authz/delegation 一致），需先为管理员角色配置 `all`/`resources` 数据范围才能使用托管 API；HTTP 路由、传输层限流、OpenAPI 与页面（步骤 70）未做；`users.create_with_membership` 先建账户后建成员关系，非单事务（成员失败会记录并返回错误，不宣称全成功）；未实现多目标非原子批量写、导入导出（步骤 61 独立受控路径）；多实例/race/非 Windows 未验证。
+
 ## 应用安全事件 Webhook、重试与退出通知（步骤 59）
 
 新增 `internal/webhook`（含 `sqlite/`）、`internal/netguard`、`internal/securityevent` 与迁移 `0037_webhook_delivery.sql`（`webhook_endpoints`/`webhook_endpoint_secrets`/`webhook_events`/`webhook_deliveries`）。实现应用级签名 Webhook：端点与签名密钥受控管理、事件幂等落库并按应用扇出、`internal/task` 承载的有界重试与失败查询、取消与受控重试；**不建 HTTP 路由/页面、不启动后台协程、不真实外发**（测试只使用本地 httptest 捕获端）。

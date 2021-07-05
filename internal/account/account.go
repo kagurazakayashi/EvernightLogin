@@ -539,6 +539,19 @@ func SystemCaller(componentID string) (Caller, error) {
 	return Caller{actor: actor}, nil
 }
 
+// UserCaller 构造已认证普通用户操作者（供受保护管理 API 的"代表用户"调用使用）。
+// 它只代表用户身份，不代表系统资格；Authorizer 仍必须显式允许对应动作。
+func UserCaller(userID string) (Caller, error) {
+	if !ValidUserID(userID) {
+		return Caller{}, fmt.Errorf("%w: 用户 ID 格式无效", ErrInvalidRequest)
+	}
+	actor := audit.Actor{Type: audit.ActorUser, ID: userID}
+	if err := actor.Validate(); err != nil {
+		return Caller{}, fmt.Errorf("%w: 用户操作者标识无效", ErrInvalidRequest)
+	}
+	return Caller{actor: actor}, nil
+}
+
 // WithRequestID 返回带请求编号的调用者副本，用于审计关联。非法编号返回
 // ErrInvalidRequest，不会悄悄丢弃。
 func (c Caller) WithRequestID(requestID string) (Caller, error) {
