@@ -521,6 +521,27 @@
 // Handler 注册为 webhook.delivery 任务、注入 Emitter 到产生方；跨实例投递/清理/真实
 // 外网端点与 race/非 Windows 未验证。
 //
+// internal/userbatch 已实现有限规模用户批量导入导出（步骤 61）：迁移 0039 落地
+// user_batch_jobs/user_batch_rows。CSV 导入严格白名单（username/nickname/biography/
+// language/timezone；未知/禁止列整文件拒绝，禁密码哈希/root/管理资格/已验证状态/
+// MFA/角色），只经 internal/account.CreateUser 资料白名单创建；幂等键绑定调用者+
+// 文件摘要，重复用户按规范化用户名 stable 匹配（相同 skipped、不同 conflict、root
+// denied、v1 不更新既有用户）；逐行独立事务分批执行（非全文件原子）、逐行结果 +
+// 汇总计数、每批复验资格（中途撤权 fail-closed 停止）、取消/重启续跑跳过已处理行
+// （(job_id,row_number) 主键）；导出按字段白名单裁剪、逐用户经注入的数据范围判定
+// （fail-closed）、CSV 公式注入防护、文件写入宿主受控目录并记录 SHA-256，报告只含
+// 授权范围内成功/失败与稳定错误码。敏感操作 user.bulk.import/users.create 与
+// user.bulk.export/users.export 默认强认证；错误码复用既有 48 码不新增。不实现
+// 应用成员导入、HTTP/CLI/页面与跨实例互斥。
+//
+// 步骤 61 审计修复：导出 handler 使用任务局部上限（不回写共享 Service 字段，并发
+// 导出互不影响）；逐行结果/报告分页读取真实总数、truncated 按真实总数计算并在报告
+// report_truncated 列标记；导入首行前及每批、导出每页复验权限，撤权 failed/
+// ACCESS_DENIED；failed 保留输入供 Retry 续跑，崩溃遗留 running 由 ReconcileInterrupted
+// 收敛为 failed，墙钟超时 failed/TASK_TIMEOUT（仅取消写 cancelled），提供
+// CleanupExpiredInputs；导出扫描量硬上限；导出能力必须注入数据范围授权器否则拒绝
+// 构造；随机源失败返回错误而非 panic。
+//
 // internal/oidc 已实现 OIDC 登录能力（步骤 52）：发现文档、ID Token 与 UserInfo。
 // 迁移 0032 为 sessions 增加 auth_methods_json（登录时真实完成的认证方法），并为
 // oauth_authorization_requests/codes 增加 auth_time_ms/auth_methods_json；授权确认

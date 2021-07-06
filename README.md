@@ -576,6 +576,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **待审核与默认角色**：`require_review` 为 true 时以 `pending` 创建账户，`internal/authn` 对非 active 账户统一拒绝正常登录（审核执行留给后续步骤）；默认角色只来自宿主可信配置且**只接受 system 作用域**（服务构造时拒绝应用作用域），由存储层校验"存在、已启用、作用域匹配"后直接写入 `user_roles`，**不自动加入任何应用成员**。应用角色作为注册默认角色需要走 `internal/role`/`internal/delegation` 的赋权与委派校验，本步未实现、也不应绕过。
 - **已知限制**：注册/重发的 HTTP 路由、验证入口页面与 `cmd/login-server` 装配尚未实现（`registration.*` 配置目前只被 `Config`/`Load` 校验，没有启动装配消费者）；注册 IP 限流、CAPTCHA、邮件发送频率限制与公开错误不可区分响应未实现；过期 `email_verification_tickets` 的定时清理任务未实现（每用户单行、覆盖写，不会无限增长，但历史行需手动/后续任务清理）；已验证邮箱的变更（个人资料加邮箱）与人工审核执行留给后续步骤；`DefaultRoles` 直写 `user_roles` 仅限 system 作用域可信配置；本包不签发会话或 Token。
 
+
+## 用户批量导入导出、幂等与结果报告（步骤 61）
+
+新增 `internal/userbatch`（含 `sqlite/`）与迁移 `0039_user_batch.sql`（`user_batch_jobs`/`user_batch_rows`），在现有 `internal/account` 创建/查询白名单与 `internal/authz` 数据范围之上实现有限规模 CSV 批量导入导出；**不是任意数据库迁移/备份工具**。不提供 HTTP 路由/页面/CLI，异步执行由宿主把 Handler 注册到 `internal/task` 执行器。
+
+- **导入格式与白名单**：仅 UTF-8 CSV（可选 BOM；拒绝 UTF-16/非法编码/空字符），默认 ≤5 MiB、≤10,000 行（硬上限 50,000）、单字段 ≤2,048 字节；表头严格白名单 `username,nickname,biography,language,timezone`（顺序无关、大小写不敏感）；未知列**整文件拒绝**，`password/password_hash/email/email_verified/phone/status/is_root/security_version/roles/permissions/mfa/totp/passkey/recovery_codes/token/user_id/...` 出现即整文件拒绝（不静默忽略）。导入只调用 `account.CreateUser` 的资料白名单，不导入密码哈希、root、管理资格、已验证状态、MFA 秘密或越权角色；`openid`/应用成员/应用内资料不在本步。
+- **幂等与重复处理**：预检查（`PrecheckImport`）与正式执行分离；幂等键（8～128 可见 ASCII）绑定调用者身份+作用域+请求摘要（文件 SHA-256 + 规范化选项）：同键不同摘要 `CONFLICT`、同键同摘要返回既有任务不重复入队、不同调用者不可复用；重复用户以规范化用户名为稳定匹配键：不存在→`created`，已存在且资料相同→`skipped`，资料不同→`conflict`（**v1 不更新既有用户**），root/受保护账户→`denied`；并发/重复行由用户名唯一约束兜底，不产生第二个用户。
+- **分批策略、取消与续跑**：逐行独立事务（非全文件原子），单行失败只记该行结果；任务状态 `queued/running/succeeded/partial/failed/cancelled`，`succeeded` 只表示执行完成、汇总计数展示真实成功/跳过/冲突/失败/拒绝数；每批（默认 50 行）用注入的 `Authorizer` 复验资格，中途撤权立即停止（`ACCESS_DENIED`，已提交行保留）；`Cancel` 记录真实执行人/原因，`(job_id,row_number)` 主键使重启/受控 `Retry` 续跑跳过已处理行。
+- **导出与隐私**：字段只允许从默认白名单（`user_id,username,nickname,language,timezone,status,created_at,updated_at`）减少；`biography` 等自由文本默认不导出，需显式选项且策略要求近期强认证；**永不导出**邮箱/电话/密码哈希/MFA/恢复码/令牌/会话秘密；逐用户经注入的 `UserScopeAuthorizer`（生产适配 `internal/authz.CheckResourceAccess`）判定数据范围，缺失/失败 fail-closed；默认 ≤10,000 行（硬上限 100,000），超出置 `truncated` + `REPORT_DATA_INCOMPLETE`；导出文件写入宿主 `Options.OutputDir`（绝对、已存在、非符号链接）下服务端生成文件名（`O_EXCL`、0600），返回路径与 SHA-256。
+- **报告与 CSV 防注入**：逐行结果 `row_number/action/error_code/reason_code/username_normalized/user_id`（不含原始行/秘密），明细有上限并标记截断；`ReportCSV` 只有任务所有者/系统可读（跨身份 `REPORT_ACCESS_DENIED`）；导出 CSV 与报告 CSV 全部文本单元格做公式注入防护（首字符 `= + - @` 或 TAB/CR/LF 时前置 `'`）。
+- **权限与错误码**：新增敏感操作 `user.bulk.import`（权限键 `users.create`）/`user.bulk.export`（`users.export`），默认强认证+确认，经 `internal/reauth` 绑定操作参数摘要，拒绝路径写失败审计；错误码复用既有 48 码（`REQ_INVALID/CONFLICT/ACCESS_DENIED/EXPORT_PATH_UNSAFE/REPORT_*/TASK_*/DB_UNAVAILABLE/AUDIT_WRITE_FAILED`），不新增注册码；迁移 `0039` + 结构断言并同步 4 处迁移计数（38→39）。
+- **边界/装配前置与已知限制**：与步骤 60 业务托管管理 API 分离——本步是系统管理侧批量工具，只消费调用者对 `users.create/users.export` 的资格与数据范围，不内建业务应用委托/字段级授权（宿主可用步骤 60 适配器包装）；不实现应用成员/应用内资料/角色导入；不提供 HTTP/CLI/页面、跨实例任务互斥、真实下载分发、导入文件持久化保留策略（导入文件 BLOB 在任务终态后清空）；未做真实大规模文件/race/非 Windows 验证。
+
+- **审计修复语义（2026-11-18）**：导出 handler 使用**任务局部上限**（绝不回写共享 Service 字段，并发导出互不影响；配置保持不变）；逐行结果/报告改为**分页读取到真实总数**（SQL 单页 100、服务端按 `(job_id,row_number)` 拼接，明细上限默认 5000），`truncated` 按真实总数计算，`ListRows` 返回该值、`ReportCSV` 返回 `(CSV, truncated, error)` 并在每行 `report_truncated` 列显式标记；导入在**处理首行前**与每批复验权限、导出**每页**复验 `users.export`，中途撤权 → 任务 `failed`+`ACCESS_DENIED`（不 succeeded/不静默跳过）；`failed` 保留导入输入供受控 `Retry` 真正续跑（`succeeded/partial/cancelled` 才清空），崩溃遗留 `running` 由宿主启动时 `ReconcileInterrupted` 收敛为 `failed`（`TASK_TIMEOUT`）使 Retry 可达，任务墙钟到期 → `failed`+`TASK_TIMEOUT`（取消才写 cancelled），并提供 `CleanupExpiredInputs`；导出扫描量硬上限（任务上限 10 倍、≥1000、≤1,000,000）；构造时若配置导出目录但缺少 `UserScopeAuthorizer` 直接拒绝；`newJobID` 随机源失败返回错误而非 panic。
+
 ## 业务托管管理 API 的操作、对象与字段授权（步骤 60）
 
 新增 `internal/managedapi`（含 `sqlite/`）与迁移 `0038_managed_api_policies.sql`，把既有用户、应用成员、用户组、角色与权限服务封装为**可委托给业务应用**的受保护管理 Go API。新增敏感操作 `managed_api.policy.manage`（默认近期强认证）。**无新增错误码**（复用既有登记码）；不注册 HTTP 全局路由、不开发页面（HTTP/页面属后续装配步骤），不新增根配置项。

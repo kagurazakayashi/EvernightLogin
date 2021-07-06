@@ -460,6 +460,22 @@ func defaultOperations() []Operation {
 			Implemented:   true,
 		},
 		{
+			ID: "user.bulk.import", Domain: DomainApplication,
+			Name:          "批量导入普通用户",
+			Description:   "通过受控 CSV 批量创建普通用户（仅资料白名单：用户名/昵称/简介/语言/时区）；必须强认证与确认，幂等键绑定调用者与文件摘要；禁止导入密码/哈希/root/管理资格/已验证状态/MFA/角色，重复用户按稳定规则跳过或报冲突且不更新既有资料。",
+			Default:       strongReauth,
+			PermissionKey: "users.create",
+			Implemented:   true,
+		},
+		{
+			ID: "user.bulk.export", Domain: DomainApplication,
+			Name:          "批量导出普通用户资料",
+			Description:   "按字段许可与数据范围逐用户判定导出普通用户资料（CSV，防公式注入）；必须强认证与确认，默认不含邮箱/电话/密码哈希/MFA/令牌；报告只含授权范围内成功/失败与稳定错误码，导出文件写入宿主受控目录并记录摘要。",
+			Default:       strongReauth,
+			PermissionKey: "users.export",
+			Implemented:   true,
+		},
+		{
 			ID: "oauth.authorization.approve", Domain: DomainApplication,
 			Name:          "批准 OAuth 应用授权请求",
 			Description:   "用户在授权确认页批准应用以本人身份访问其账户数据；必须绑定真实用户会话并完成近期身份验证，确认页清晰显示应用与请求范围，范围与目标资源不能超出客户端登记；拒绝不签发授权码，取消确认不改变安全状态。",

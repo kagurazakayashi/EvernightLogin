@@ -554,6 +554,13 @@ func UserCaller(userID string) (Caller, error) {
 
 // WithRequestID 返回带请求编号的调用者副本，用于审计关联。非法编号返回
 // ErrInvalidRequest，不会悄悄丢弃。
+// Actor 返回底层审计身份副本（供需要记录/复核调用者身份的受信内部流程使用；
+// 不导出字段，不能由请求参数伪造）。
+func (c Caller) Actor() audit.Actor { return c.actor }
+
+// RequestID 返回调用者绑定的请求编号（可能为空）。
+func (c Caller) RequestID() string { return c.requestID }
+
 func (c Caller) WithRequestID(requestID string) (Caller, error) {
 	if err := ValidateRequestID(requestID); err != nil {
 		return Caller{}, err
