@@ -3,6 +3,8 @@ package session_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
@@ -184,5 +186,54 @@ func TestVerifyActiveSession(t *testing.T) {
 	env.exec(`UPDATE users SET status='disabled',row_version=row_version+1 WHERE id=?`, grantTestUser)
 	if err := env.session.VerifyActiveSession(env.ctx, grantTestUser, issued.Session.ID); !errors.Is(err, session.ErrSessionInvalid) {
 		t.Fatalf("账户禁用后应拒绝，实际 %v", err)
+	}
+}
+
+// TestIssuePageCSRFToken 验证服务端页面 CSRF 令牌：确定性、与既有随机 CSRF 令牌
+// 共存、会话撤销/错会话后失效、非法秘密拒绝。
+func TestIssuePageCSRFToken(t *testing.T) {
+	env := grantTestEnv(t)
+	issued := env.loginComplete(grantTestUser, 1)
+	first, err := env.session.IssuePageCSRFToken(env.ctx, issued.Secret.Reveal())
+	if err != nil {
+		t.Fatalf("签发页面 CSRF 令牌失败: %v", err)
+	}
+	second, err := env.session.IssuePageCSRFToken(env.ctx, issued.Secret.Reveal())
+	if err != nil {
+		t.Fatalf("再次签发页面 CSRF 令牌失败: %v", err)
+	}
+	if first.Reveal() != second.Reveal() {
+		t.Fatal("同一活动会话的页面 CSRF 令牌应稳定（多标签页可用）")
+	}
+	if first.Reveal() == issued.CSRFSecret.Reveal() {
+		t.Fatal("页面 CSRF 令牌不得等于登录时随机 CSRF 令牌")
+	}
+	// 既有随机 CSRF 令牌仍可校验（兼容旧客户端）。
+	requestWith := func(secret, csrf string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		req.AddCookie(&http.Cookie{Name: session.DefaultCookieName, Value: secret})
+		_ = csrf
+		return req
+	}
+	if err := env.session.ValidateCSRFToken(env.ctx, requestWith(issued.Secret.Reveal(), first.Reveal()), first.Reveal()); err != nil {
+		t.Fatalf("页面 CSRF 令牌应通过同一校验器: %v", err)
+	}
+	if err := env.session.ValidateCSRFToken(env.ctx, requestWith(issued.Secret.Reveal(), issued.CSRFSecret.Reveal()), issued.CSRFSecret.Reveal()); err != nil {
+		t.Fatalf("既有随机 CSRF 令牌应继续有效: %v", err)
+	}
+	if err := env.session.ValidateCSRFToken(env.ctx, requestWith(issued.Secret.Reveal(), "wrong"), "wrong"); !errors.Is(err, session.ErrSessionInvalid) {
+		t.Fatalf("错误页面 CSRF 令牌应拒绝，实际 %v", err)
+	}
+	// 另一个会话的秘密不能验证本会话令牌。
+	other := env.loginComplete(grantTestUser, 1)
+	if err := env.session.ValidateCSRFToken(env.ctx, requestWith(other.Secret.Reveal(), first.Reveal()), first.Reveal()); !errors.Is(err, session.ErrSessionInvalid) {
+		t.Fatalf("跨会话页面 CSRF 令牌应拒绝，实际 %v", err)
+	}
+	// 登出后页面令牌失效。
+	if err := env.session.Logout(env.ctx, issued.Secret.Reveal()); err != nil {
+		t.Fatalf("退出失败: %v", err)
+	}
+	if _, err := env.session.IssuePageCSRFToken(env.ctx, issued.Secret.Reveal()); !errors.Is(err, session.ErrSessionInvalid) {
+		t.Fatalf("已撤销会话不应签发页面 CSRF 令牌，实际 %v", err)
 	}
 }

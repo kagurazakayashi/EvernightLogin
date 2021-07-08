@@ -33,6 +33,8 @@ type handler struct {
 	validateRequestID func(string) error
 	openAPIDocument   []byte
 	protection        *protection
+	uiHandler         http.Handler
+	uiCSP             string
 }
 
 // New 构造传输层 Handler。生产实例只注册健康与 OpenAPI 路由，不注册任何测试
@@ -84,6 +86,10 @@ func newHandler(options Options) (*handler, error) {
 		validateRequestID: options.ValidateRequestID,
 		openAPIDocument:   document,
 		protection:        protection,
+	}
+	if options.UI != nil {
+		h.uiHandler = options.UI.Handler
+		h.uiCSP = options.UI.PageContentSecurityPolicy
 	}
 	h.accessLog = newAccessLog(options.AccessLogWriter, func(err error) {
 		if options.OnAccessLogError != nil {
@@ -211,6 +217,28 @@ func (h *handler) serve(ctx context.Context, tracker *responseWriter, request *h
 		http.NotFound(tracker, request)
 		return nil
 	}
+	if h.uiHandler != nil && h.isUIRequestPath(path) {
+		// HTML 页面：复用同一客户端 IP 限流（上方已执行）、CSRF 中间件与请求编号；
+		// 页面自己建立会话，不经过 API IdentityResolver；不使用 API CORS 头，显式
+		// 写入页面 CSP（覆盖 API 默认 CSP）后交给页面处理器。
+		if h.protection != nil {
+			if problem := h.checkRateLimit(h.protection.rateLimits.endpoint,
+				request.Method+" "+path); problem != nil {
+				return problem
+			}
+			if problem := h.protection.csrf.check(ctx, request); problem != nil {
+				return problem
+			}
+		}
+		if h.uiCSP != "" {
+			tracker.Header().Set("Content-Security-Policy", h.uiCSP)
+		}
+		h.uiHandler.ServeHTTP(tracker, request)
+		if ctx.Err() == context.DeadlineExceeded {
+			return timeoutProblem()
+		}
+		return nil
+	}
 	if h.protection != nil {
 		if handled, corsProblem := h.protection.cors.handlePreflight(tracker, request); handled {
 			return corsProblem
@@ -313,4 +341,16 @@ func sanitizeLogPath(path string) string {
 		return "-"
 	}
 	return w3cToken(path, maxAccessLogValueBytes)
+}
+
+// isUIRequestPath 报告路径是否应交给页面处理器：固定 API 路由（健康/OpenAPI 等，
+// 含方法不匹配场景）优先保持 JSON 语义；OAuth/OIDC 保留路径在此之前已返回 404；
+// 其余路径在挂载页面处理器时视为 HTML 路径（未知页面由页面处理器渲染 404）。
+func (h *handler) isUIRequestPath(path string) bool {
+	for index := range h.routes {
+		if h.routes[index].path == path {
+			return false
+		}
+	}
+	return true
 }

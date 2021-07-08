@@ -79,9 +79,11 @@ type CORSConfig struct {
 // CSRFConfig 是未来 Cookie 会话的 CSRF 防护契约。Enabled 为 true 时必须提供
 // 精确来源列表与令牌校验器；校验失败 fail-closed 返回 403。
 type CSRFConfig struct {
-	Enabled          bool
-	CookieName       string
-	TokenHeader      string
+	Enabled     bool
+	CookieName  string
+	TokenHeader string
+	// TokenFormField 是服务端渲染表单的 CSRF 隐藏字段名；空使用默认 csrf_token。
+	TokenFormField   string
 	AllowedOrigins   []string
 	RequireAllUnsafe bool
 	ValidateToken    func(ctx context.Context, request *http.Request, token string) error

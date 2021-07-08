@@ -439,6 +439,16 @@
 // 路由/限流、Webhook/应用会话通知（步骤 59）、撤销列表查询、非 Windows/race/
 // 多实例未验证。
 //
+// 页面阶段已由步骤 62 建立基础：根包公开契约 login.NewWebUI / ui.v1（命名路由、
+// 公开视图模型、模板函数、宿主渲染器/模板覆盖优先级与整体禁用内置页面），web/
+// 内嵌 html/template + 原生 CSS/ES 模块（无 Node/npm、无第三方在线资源），经
+// HTTPOptions.UI 挂到既有传输层并复用请求编号/访问日志/限流/CSRF 与页面 CSP。
+// 会话统一经 UISessionService 建立公开摘要；无 JS 表单使用 internal/session 的
+// 确定性页面 CSRF 令牌（仍由同一 ValidateCSRFToken 校验并保留 Origin/Referer），
+// transport 接受单一 csrf_token 隐藏字段。zh-CN 为唯一完整翻译，其余语言未提供；
+// 真实浏览器视口/读屏未实测。业务页面（登录、资料、管理、审计等）由后续步骤逐页
+// 接入，本步不提前生成空页面。
+//
 // internal/managedapi 已实现业务托管管理 API（步骤 60）：迁移 0038 落地每应用一行
 // 委托策略（允许操作/服务身份允许操作、仅应用作用域的对象范围、可读/可写字段
 // 白名单、分页与批量上限），策略由受信通道 + managed_api.policy.manage 近期认证 +

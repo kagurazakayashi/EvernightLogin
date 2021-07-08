@@ -1,0 +1,5 @@
+{{define "page-title"}}{{t "page.system.error.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.system.error.description"}}</p>
+{{if .RequestID}}<p class="ln-meta">{{t "common.label.request_id"}}: <code>{{.RequestID}}</code></p>{{end}}
+{{end}}

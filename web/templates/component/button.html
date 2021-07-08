@@ -1,0 +1,1 @@
+{{define "component.button"}}<button type="{{if .type}}{{.type}}{{else}}button{{end}}" class="ln-button ln-button--{{if .variant}}{{.variant}}{{else}}primary{{end}}"{{if .disabled}} disabled aria-disabled="true"{{end}}{{if .busy}} aria-busy="true"{{end}}>{{if .label}}{{.label}}{{end}}{{if .busy}} {{t "common.state.loading"}}{{end}}</button>{{end}}

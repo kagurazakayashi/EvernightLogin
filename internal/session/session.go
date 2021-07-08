@@ -99,6 +99,9 @@ const (
 	// 密钥由 internal/secrets.Keyring.HMACDigest 按域派生，本包不自造密码学。
 	secretDigestDomain = "session-v1"
 	csrfDigestDomain   = "session-csrf-v1"
+	// pageCSRFDomain 是"服务端页面表单"所需的确定性 CSRF 令牌派生域；与随机
+	// CSRF 令牌摘要域分开，避免两类令牌互相推导/冒充。
+	pageCSRFDomain = "session-page-csrf-v1"
 
 	// maxRevokeReasonBytes 是撤销原因码长度上限（写入审计与数据库）。
 	maxRevokeReasonBytes = 64

@@ -1,0 +1,83 @@
+/* 设计令牌：原始层 -> 语义层 -> 组件层。页面/模板不得直接写 hex。 */
+:root {
+  --ln-primitive-white: #FFFFFF;
+  --ln-primitive-slate-50: #F8FAFC;
+  --ln-primitive-slate-100: #F1F5F9;
+  --ln-primitive-slate-300: #CBD5E1;
+  --ln-primitive-slate-400: #94A3B8;
+  --ln-primitive-slate-500: #64748B;
+  --ln-primitive-slate-600: #475569;
+  --ln-primitive-slate-700: #334155;
+  --ln-primitive-slate-800: #1E293B;
+  --ln-primitive-slate-900: #0F172A;
+  --ln-primitive-blue-50: #EFF6FF;
+  --ln-primitive-blue-200: #BFDBFE;
+  --ln-primitive-blue-300: #93C5FD;
+  --ln-primitive-blue-700: #1D4ED8;
+  --ln-primitive-blue-800: #1E40AF;
+  --ln-primitive-red-50: #FEF2F2;
+  --ln-primitive-red-300: #FCA5A5;
+  --ln-primitive-red-700: #B91C1C;
+  --ln-primitive-emerald-50: #ECFDF5;
+  --ln-primitive-emerald-700: #047857;
+  --ln-primitive-amber-100: #FEF3C7;
+  --ln-primitive-amber-800: #92400E;
+  --ln-primitive-amber-300: #FCD34D;
+  --ln-color-bg: var(--ln-primitive-slate-50);
+  --ln-color-surface: var(--ln-primitive-white);
+  --ln-color-surface-subtle: var(--ln-primitive-slate-100);
+  --ln-color-text: var(--ln-primitive-slate-900);
+  --ln-color-text-secondary: var(--ln-primitive-slate-700);
+  --ln-color-text-muted: var(--ln-primitive-slate-600);
+  --ln-color-border: var(--ln-primitive-slate-300);
+  --ln-color-border-strong: var(--ln-primitive-slate-500);
+  --ln-color-primary: var(--ln-primitive-blue-700);
+  --ln-color-primary-text: var(--ln-primitive-white);
+  --ln-color-success: var(--ln-primitive-emerald-700);
+  --ln-color-warning: var(--ln-primitive-amber-800);
+  --ln-color-danger: var(--ln-primitive-red-700);
+  --ln-color-focus: var(--ln-primitive-blue-800);
+  --ln-space-1: 4px; --ln-space-2: 8px; --ln-space-3: 12px; --ln-space-4: 16px;
+  --ln-space-5: 20px; --ln-space-6: 24px; --ln-space-8: 32px; --ln-space-10: 40px;
+  --ln-font-sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --ln-font-mono: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  --ln-text-sm: 0.875rem; --ln-text-base: 1rem; --ln-text-lg: 1.125rem;
+  --ln-text-xl: 1.25rem; --ln-text-2xl: 1.5rem;
+  --ln-radius: 6px; --ln-radius-lg: 10px;
+  --ln-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --ln-duration: 120ms;
+  --ln-button-height: 40px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-ln-theme="light"]) {
+    --ln-color-bg: var(--ln-primitive-slate-900);
+    --ln-color-surface: var(--ln-primitive-slate-800);
+    --ln-color-surface-subtle: var(--ln-primitive-slate-700);
+    --ln-color-text: var(--ln-primitive-slate-50);
+    --ln-color-text-secondary: var(--ln-primitive-slate-300);
+    --ln-color-text-muted: var(--ln-primitive-slate-400);
+    --ln-color-border: var(--ln-primitive-slate-600);
+    --ln-color-border-strong: var(--ln-primitive-slate-400);
+    --ln-color-primary: var(--ln-primitive-blue-300);
+    --ln-color-primary-text: var(--ln-primitive-slate-900);
+    --ln-color-success: var(--ln-primitive-emerald-300, #6EE7B7);
+    --ln-color-warning: var(--ln-primitive-amber-300);
+    --ln-color-danger: var(--ln-primitive-red-300);
+    --ln-color-focus: var(--ln-primitive-blue-200);
+  }
+}
+[data-ln-theme="dark"] {
+  --ln-color-bg: var(--ln-primitive-slate-900);
+  --ln-color-surface: var(--ln-primitive-slate-800);
+  --ln-color-surface-subtle: var(--ln-primitive-slate-700);
+  --ln-color-text: var(--ln-primitive-slate-50);
+  --ln-color-text-secondary: var(--ln-primitive-slate-300);
+  --ln-color-text-muted: var(--ln-primitive-slate-400);
+  --ln-color-border: var(--ln-primitive-slate-600);
+  --ln-color-border-strong: var(--ln-primitive-slate-400);
+  --ln-color-primary: var(--ln-primitive-blue-300);
+  --ln-color-primary-text: var(--ln-primitive-slate-900);
+}
+@media (forced-colors: active) {
+  :root { --ln-color-border-strong: CanvasText; --ln-color-focus: Highlight; }
+}

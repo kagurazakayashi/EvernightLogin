@@ -1776,8 +1776,10 @@ func (s *Service) AuthorizeManagement(ctx context.Context, secret string) (Sessi
 // CSRFConfig.ValidateToken / 根包 CSRFValidator 一致，可直接接既有 CSRF 中间件。
 //
 // 它只从请求 Cookie 或 Authorization: Bearer 读取会话秘密（绝不读取 URL/查询
-// 参数），验证会话秘密摘要、会话仍活动且 CSRF 令牌摘要匹配；来源（Origin/
-// Referer）允许列表仍由既有 HTTP 防护中间件负责，两者不可互相替代。
+// 参数），验证会话秘密摘要、会话仍活动，并匹配以下任一令牌：登录时签发的随机
+// CSRF 令牌摘要（既有客户端），或 IssuePageCSRFToken 派生的服务端页面表单令牌
+// （两者都经活动会话/账户/成员状态复核与常数时间比较）。来源（Origin/Referer）
+// 允许列表仍由既有 HTTP 防护中间件负责，两者不可互相替代。
 func (s *Service) ValidateCSRFToken(ctx context.Context, request *http.Request, token string) error {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
@@ -1809,11 +1811,59 @@ func (s *Service) ValidateCSRFToken(ctx context.Context, request *http.Request, 
 		s.logger.Error("CSRF 令牌校验密钥不可用", "session_id", record.ID)
 		return ErrSessionInvalid
 	}
-	if subtle.ConstantTimeCompare(expected, record.CSRFDigest) != 1 {
-		s.logger.Info("CSRF 令牌不匹配", "session_id", record.ID)
+	if subtle.ConstantTimeCompare(expected, record.CSRFDigest) == 1 {
+		return nil
+	}
+	// 兼容服务端渲染页面表单使用的确定性页面 CSRF 令牌（IssuePageCSRFToken）：
+	// 同一活动会话、同一 keyring 下可重复取得且不写库；仍使用常数时间比较。
+	pageToken, err := s.derivePageCSRFToken(record)
+	if err != nil {
+		s.logger.Error("页面 CSRF 令牌派生密钥不可用", "session_id", record.ID)
 		return ErrSessionInvalid
 	}
-	return nil
+	if subtle.ConstantTimeCompare([]byte(pageToken), []byte(trimmed)) == 1 {
+		return nil
+	}
+	s.logger.Info("CSRF 令牌不匹配", "session_id", record.ID)
+	return ErrSessionInvalid
+}
+
+// IssuePageCSRFToken 为服务端渲染的 HTML 表单派生与会话绑定、可重复取得的 CSRF
+// 令牌（同一会话跨标签页稳定；登录轮换/会话撤销/密钥退役后自然失效）。它只返回
+// 脱敏类型，调用方必须仅写入表单隐藏字段或一次性交付给浏览器，不得写入 URL、
+// localStorage、日志或审计。令牌由 keyring 对会话秘密摘要做 HMAC-SHA256 派生，
+// 不写数据库、不新增迁移，也不降低 ValidateCSRFToken 的既有校验强度（随机 CSRF
+// 令牌继续有效，两类令牌都经过活动会话/账户/成员状态复核与常数时间比较）。
+func (s *Service) IssuePageCSRFToken(ctx context.Context, secret string) (Secret, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return Secret{}, err
+	}
+	record, err := s.loadVerifiedRecord(ctx, strings.TrimSpace(secret), "page_csrf")
+	if err != nil {
+		return Secret{}, err
+	}
+	if reason := invalidReason(record, s.clockNow()); reason != "" {
+		s.logger.Info("页面 CSRF 令牌签发未通过", "session_id", record.ID, "reason", reason)
+		return Secret{}, ErrSessionInvalid
+	}
+	if err := s.checkCurrentState(ctx, record); err != nil {
+		return Secret{}, err
+	}
+	token, err := s.derivePageCSRFToken(record)
+	if err != nil {
+		return Secret{}, ErrSessionInvalid
+	}
+	return newSecret(token), nil
+}
+
+// derivePageCSRFToken 由会话记录派生出确定性页面 CSRF 令牌文本。
+func (s *Service) derivePageCSRFToken(record Record) (string, error) {
+	sum, err := s.ring.HMACDigest(record.KeyID, pageCSRFDomain, record.SecretDigest)
+	if err != nil || len(sum) == 0 {
+		return "", ErrSessionInvalid
+	}
+	return base64.RawURLEncoding.EncodeToString(sum), nil
 }
 
 // Cleanup 删除过期或撤销时间早于 retention 的会话记录，返回删除数量。只应在维护

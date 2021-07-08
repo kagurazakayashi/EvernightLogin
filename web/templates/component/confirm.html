@@ -1,0 +1,7 @@
+{{define "component.confirm"}}<div class="ln-confirm" data-ln-component="confirm">
+  <p class="ln-confirm__message">{{.message}}</p>
+  <div class="ln-actions">
+    {{template "component.button" (dict "label" (t "common.action.confirm") "variant" "danger" "type" "submit")}}
+    {{template "component.button" (dict "label" (t "common.action.cancel") "variant" "secondary")}}
+  </div>
+</div>{{end}}

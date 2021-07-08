@@ -1,0 +1,6 @@
+{{define "page-title"}}{{t "page.system.session_expired.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.system.session_expired.description"}}</p>
+<p class="ln-meta">{{t "common.state.session_expired"}}</p>
+{{if .RequestID}}<p class="ln-meta">{{t "common.label.request_id"}}: <code>{{.RequestID}}</code></p>{{end}}
+{{end}}

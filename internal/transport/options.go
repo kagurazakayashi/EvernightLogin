@@ -28,6 +28,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -94,6 +95,18 @@ func (e *IdentityError) Error() string {
 	return e.Message
 }
 
+// UIConfig 是可选的内置 HTML 页面处理器配置。非 nil 时，除固定 API 路由与
+// OAuth/OIDC 保留空间外的请求交给页面处理器；页面请求复用同一请求编号、访问
+// 日志、客户端 IP 限流与 CSRF 中间件，并显式使用页面 CSP。页面处理器自行解析
+// 会话，传输层不为页面建立 API Identity。
+type UIConfig struct {
+	// Handler 是页面处理器；nil 时视为未挂载页面。
+	Handler http.Handler
+	// PageContentSecurityPolicy 是 HTML 页面 CSP；必须包含基线指令且不得包含
+	// unsafe-inline/unsafe-eval，由 validateUIPageContentSecurityPolicy 校验。
+	PageContentSecurityPolicy string
+}
+
 // Options 是构造传输层 Handler 的依赖；由公开包填充，其他包不应直接使用。
 type Options struct {
 	// Prefix 是固定路径前缀：空字符串或 /segment(/segment)*，不允许尾斜杠。
@@ -123,6 +136,8 @@ type Options struct {
 	// Protection 是限流、超时、并发、CORS、CSRF 与安全响应头配置；nil 使用安全
 	// 默认值。公开包负责把 HTTPProtectionOptions 转换成本类型。
 	Protection *ProtectionOptions
+	// UI 是可选的内置页面处理器；nil 表示本 Handler 不服务 HTML 页面。
+	UI *UIConfig
 
 	// extraRoutes 仅由同包测试构造器注入；生产 New 不设置。
 	extraRoutes []route
@@ -143,6 +158,14 @@ func normalizeOptions(options Options) (Options, error) {
 		return Options{}, fmt.Errorf("请求体上限必须在 %d～%d 字节之间", MinMaxBodyBytes, MaxMaxBodyBytes)
 	}
 	options.MaxBodyBytes = maxBody
+	if options.UI != nil {
+		if isNilHandler(options.UI.Handler) {
+			return Options{}, fmt.Errorf("UI 处理器为空")
+		}
+		if err := validateUIPageContentSecurityPolicy(options.UI.PageContentSecurityPolicy); err != nil {
+			return Options{}, err
+		}
+	}
 	if len(options.ErrorCodes) == 0 {
 		return Options{}, fmt.Errorf("错误码注册表投影不能为空")
 	}
@@ -206,4 +229,18 @@ func isASCIIAlnum(character byte) bool {
 	return (character >= 'a' && character <= 'z') ||
 		(character >= 'A' && character <= 'Z') ||
 		(character >= '0' && character <= '9')
+}
+
+// isNilHandler 检测 nil 接口与 typed-nil http.Handler。
+func isNilHandler(handler http.Handler) bool {
+	if handler == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(handler)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }

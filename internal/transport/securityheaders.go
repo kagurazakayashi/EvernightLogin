@@ -3,6 +3,7 @@ package transport
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -54,6 +55,37 @@ func newSecurityHeaders(config SecurityHeaderConfig) (securityHeaders, error) {
 		frameOptions:          frameOptions,
 		enableHSTS:            config.EnableHSTS,
 	}, nil
+}
+
+// validateUIPageContentSecurityPolicy 校验 HTML 页面 CSP：必须保留禁止插件/嵌入/
+// base/跨源表单等基线，且不允许 unsafe-inline/unsafe-eval；不要求与 API 默认值
+// 相同，但不得退化为过宽策略。
+func validateUIPageContentSecurityPolicy(csp string) error {
+	if csp == "" {
+		return fmt.Errorf("HTML 页面必须显式提供内容安全策略")
+	}
+	if len(csp) > maxCSPBytes {
+		return fmt.Errorf("HTML 页面内容安全策略过长")
+	}
+	for _, character := range csp {
+		if character < 0x20 || character == 0x7f {
+			return fmt.Errorf("HTML 页面内容安全策略不能包含控制字符")
+		}
+	}
+	lower := strings.ToLower(csp)
+	required := []string{
+		"default-src 'none'", "script-src 'self'", "object-src 'none'",
+		"base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
+	}
+	for _, directive := range required {
+		if !strings.Contains(lower, directive) {
+			return fmt.Errorf("HTML 页面内容安全策略缺少基线指令 %s", directive)
+		}
+	}
+	if strings.Contains(lower, "unsafe-inline") || strings.Contains(lower, "unsafe-eval") {
+		return fmt.Errorf("HTML 页面内容安全策略不允许 unsafe-inline/unsafe-eval")
+	}
+	return nil
 }
 
 // apply 在响应写出前设置安全头；调用方应在任何处理程序写响应之前调用。

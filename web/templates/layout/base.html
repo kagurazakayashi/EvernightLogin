@@ -1,0 +1,41 @@
+{{define "layout/base"}}<!doctype html>
+<html lang="{{.Locale}}" dir="ltr"{{if .Brand.Theme}} data-ln-theme="{{.Brand.Theme}}"{{end}}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{brand_name}} · {{.RouteName}}</title>
+<link rel="stylesheet" href="{{asset "css/tokens.css"}}">
+<link rel="stylesheet" href="{{asset "css/base.css"}}">
+<link rel="stylesheet" href="{{asset "css/components.css"}}">
+<script type="module" src="{{asset "js/app.mjs"}}"></script>
+</head>
+<body class="ln-app">
+<a class="ln-skip-link" href="#main">{{t "common.action.skip_to_main"}}</a>
+<header class="ln-header" data-ln-component="header">
+  <span class="ln-brand">{{brand_name}}</span>
+  {{if .Session.Authenticated}}<span class="ln-meta">{{t "common.label.current_account"}}: <code>{{mask .Session.UserID}}</code></span>{{end}}
+  {{if .Session.AppID}}<span class="ln-meta">{{t "common.label.current_app"}}: <code>{{mask .Session.AppID}}</code></span>{{end}}
+</header>
+<div class="ln-shell">
+  {{if .Navigation}}
+  <nav class="ln-nav" aria-label="{{t "common.label.navigation"}}">
+    <ul>
+      {{range .Navigation}}
+      {{if .Visible}}
+      <li>
+        {{if .Enabled}}<a href="{{route .RouteName}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>
+        {{else}}<span class="ln-nav__disabled" aria-disabled="true" title="{{.DisabledReason}}">{{.Label}}</span>{{end}}
+      </li>
+      {{end}}
+      {{end}}
+    </ul>
+  </nav>
+  {{end}}
+  <main id="main" class="ln-main" tabindex="-1">
+    <h1>{{template "page-title" .}}</h1>
+    {{template "content" .}}
+  </main>
+</div>
+<footer class="ln-footer"><p class="ln-meta">{{brand_name}} · {{.RequestID}}</p></footer>
+</body>
+</html>{{end}}

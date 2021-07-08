@@ -1,0 +1,4 @@
+{{define "component.error_summary"}}<div class="ln-error-summary" role="alert" tabindex="-1" data-ln-component="error-summary">
+  <h2 class="ln-error-summary__title">{{t "common.state.error"}}</h2>
+  <ul>{{range .}}<li><a href="#{{.field}}">{{.message}}</a></li>{{end}}</ul>
+</div>{{end}}

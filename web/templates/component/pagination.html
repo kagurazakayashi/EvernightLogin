@@ -1,0 +1,5 @@
+{{define "component.pagination"}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}" data-ln-component="pagination">
+  {{if .prev_url}}<a class="ln-button ln-button--secondary" href="{{.prev_url}}" rel="prev">{{t "common.action.previous"}}</a>{{end}}
+  <span class="ln-meta">{{t_fmt "common.pagination.limit" "limit" (format_number .limit)}}</span>
+  {{if .next_url}}<a class="ln-button ln-button--secondary" href="{{.next_url}}" rel="next">{{t "common.action.next"}}</a>{{else}}<span class="ln-meta">{{t "common.pagination.end"}}</span>{{end}}
+</nav>{{end}}

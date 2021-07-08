@@ -1,8 +1,11 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +20,13 @@ const (
 	DefaultCSRFTokenHeader = "X-CSRF-Token"
 	// maxCSRFTokenBytes 是 CSRF 令牌长度上限，避免超长头放大处理开销。
 	maxCSRFTokenBytes = 512
+	// DefaultCSRFFormField 是服务端渲染 HTML 表单的默认 CSRF 隐藏字段名；
+	// 仅用于 application/x-www-form-urlencoded 的不安全请求，仍交给同一
+	// ValidateToken 校验并保留 Origin/Referer 检查。
+	DefaultCSRFFormField = "csrf_token"
+	// maxCSRFBodyBytes 是解析隐藏字段时读取请求体的上限，避免为 CSRF 解析
+	// 放大无界请求体开销。
+	maxCSRFBodyBytes = 64 * 1024
 )
 
 // csrfPolicy 是未来 Cookie 会话的 CSRF 防护契约。启用后，不安全方法（POST/
@@ -32,6 +42,7 @@ type csrfPolicy struct {
 	enabled          bool
 	cookieName       string
 	tokenHeader      string
+	tokenFormField   string
 	origins          map[string]struct{}
 	requireAllUnsafe bool
 	validateToken    func(ctx context.Context, request *http.Request, token string) error
@@ -57,6 +68,13 @@ func newCSRFPolicy(config CSRFConfig) (*csrfPolicy, error) {
 	if !isHTTPToken(tokenHeader) {
 		return nil, fmt.Errorf("CSRF 令牌请求头无效")
 	}
+	tokenFormField := config.TokenFormField
+	if tokenFormField == "" {
+		tokenFormField = DefaultCSRFFormField
+	}
+	if !isHTTPToken(tokenFormField) {
+		return nil, fmt.Errorf("CSRF 表单字段名无效")
+	}
 	if config.ValidateToken == nil {
 		return nil, fmt.Errorf("启用 CSRF 时必须提供令牌校验器")
 	}
@@ -75,6 +93,7 @@ func newCSRFPolicy(config CSRFConfig) (*csrfPolicy, error) {
 		enabled:          true,
 		cookieName:       cookieName,
 		tokenHeader:      tokenHeader,
+		tokenFormField:   tokenFormField,
 		origins:          origins,
 		requireAllUnsafe: config.RequireAllUnsafe,
 		validateToken:    config.ValidateToken,
@@ -103,13 +122,26 @@ func (p *csrfPolicy) check(ctx context.Context, request *http.Request) *problem 
 	if _, allowed := p.origins[origin]; !allowed {
 		return csrfProblem()
 	}
+	// 令牌来源：单一 X-CSRF-Token 头优先；没有头时允许服务端渲染表单提交单一
+	// csrf_token 隐藏字段（application/x-www-form-urlencoded）。两种来源最终都
+	// 交给同一 ValidateToken，不降低校验强度。
 	values := request.Header.Values(p.tokenHeader)
-	if len(values) != 1 {
+	var token string
+	switch {
+	case len(values) > 1:
 		return csrfProblem()
-	}
-	token, ok := trimCSRFToken(values[0])
-	if !ok {
-		return csrfProblem()
+	case len(values) == 1:
+		trimmed, ok := trimCSRFToken(values[0])
+		if !ok {
+			return csrfProblem()
+		}
+		token = trimmed
+	default:
+		formToken, ok := readCSRFFormToken(request, p.tokenFormField)
+		if !ok {
+			return csrfProblem()
+		}
+		token = formToken
 	}
 	if p.validateToken == nil {
 		return csrfProblem()
@@ -192,4 +224,34 @@ func trimCSRFToken(token string) (string, bool) {
 		}
 	}
 	return trimmed, true
+}
+
+// readCSRFFormToken 从 application/x-www-form-urlencoded 请求体的单一隐藏字段读取
+// CSRF 令牌。仅用于不安全方法；读取上限 maxCSRFBodyBytes，读取后恢复请求体供
+// 后续处理器使用；重复字段、空值、非表单类型、解析失败一律 fail-closed。
+func readCSRFFormToken(request *http.Request, field string) (string, bool) {
+	if request == nil || field == "" || request.Body == nil {
+		return "", false
+	}
+	contentType := request.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		return "", false
+	}
+	body, readErr := io.ReadAll(io.LimitReader(request.Body, maxCSRFBodyBytes+1))
+	_ = request.Body.Close()
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+	if readErr != nil || len(body) > maxCSRFBodyBytes {
+		return "", false
+	}
+	values, parseErr := url.ParseQuery(string(body))
+	if parseErr != nil {
+		return "", false
+	}
+	tokens := values[field]
+	if len(tokens) != 1 {
+		return "", false
+	}
+	return trimCSRFToken(tokens[0])
 }

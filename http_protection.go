@@ -125,9 +125,13 @@ func (f CSRFValidatorFunc) ValidateCSRFToken(ctx context.Context, request *http.
 // GET/HEAD/OPTIONS/TRACE 不要求令牌，以兼容扫码与顶层跨站授权跳转；form_post
 // 等跨站写流程必须由协议层显式处理并配置来源，不能借 CORS 或本策略绕过。
 type CSRFPolicy struct {
-	Enabled                     bool
-	CookieName                  string
-	TokenHeader                 string
+	Enabled     bool
+	CookieName  string
+	TokenHeader string
+	// TokenFormField 是服务端渲染 HTML 表单的 CSRF 隐藏字段名（默认 csrf_token）；
+	// 页面框架用它做无 JavaScript 表单提交，仍由同一 TokenValidator 校验并保留
+	// Origin/Referer 检查。空字符串使用默认值。
+	TokenFormField              string
 	AllowedOrigins              []string
 	RequireForAllUnsafeRequests bool
 	TokenValidator              CSRFValidator
@@ -346,6 +350,7 @@ func normalizeHTTPProtection(options *HTTPProtectionOptions) (*transport.Protect
 		Enabled:          options.CSRF.Enabled,
 		CookieName:       options.CSRF.CookieName,
 		TokenHeader:      options.CSRF.TokenHeader,
+		TokenFormField:   options.CSRF.TokenFormField,
 		AllowedOrigins:   append([]string(nil), options.CSRF.AllowedOrigins...),
 		RequireAllUnsafe: options.CSRF.RequireForAllUnsafeRequests,
 	}

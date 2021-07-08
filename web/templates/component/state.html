@@ -1,0 +1,4 @@
+{{define "component.state"}}<div class="ln-state ln-state--{{.state}}" role="status" data-ln-component="state" data-ln-state="{{.state}}">
+  <p class="ln-state__title">{{.title}}</p>
+  {{if .description}}<p class="ln-meta">{{.description}}</p>{{end}}
+</div>{{end}}

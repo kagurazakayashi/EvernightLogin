@@ -1,0 +1,28 @@
+{{define "layout/auth"}}<!doctype html>
+<html lang="{{.Locale}}" dir="ltr"{{if .Brand.Theme}} data-ln-theme="{{.Brand.Theme}}"{{end}}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{brand_name}} · {{if .ErrorSummary}}{{t "common.state.error"}}{{else}}{{t "common.label.status"}}{{end}}</title>
+<link rel="stylesheet" href="{{asset "css/tokens.css"}}">
+<link rel="stylesheet" href="{{asset "css/base.css"}}">
+<link rel="stylesheet" href="{{asset "css/components.css"}}">
+</head>
+<body class="ln-auth">
+<a class="ln-skip-link" href="#main">{{t "common.action.skip_to_main"}}</a>
+<header class="ln-header" data-ln-component="header">
+  <span class="ln-brand">{{brand_name}}</span>
+</header>
+<main id="main" class="ln-main ln-main--auth" tabindex="-1">
+<h1>{{template "page-title" .}}</h1>
+{{if .ErrorSummary}}
+<div class="ln-banner ln-banner--error" role="alert" data-ln-component="banner" data-ln-state="error">
+  <p>{{.ErrorSummary}}</p>
+  {{if .RequestID}}<p class="ln-meta">{{t "common.label.request_id"}}: <code>{{.RequestID}}</code></p>{{end}}
+</div>
+{{end}}
+{{template "content" .}}
+</main>
+<footer class="ln-footer"><p class="ln-meta">{{brand_name}}</p></footer>
+</body>
+</html>{{end}}

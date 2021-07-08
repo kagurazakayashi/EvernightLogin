@@ -1,0 +1,44 @@
+{{define "page-title"}}{{t "page.component_preview.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.component_preview.description"}}</p>
+<section aria-labelledby="preview-states">
+  <h2 id="preview-states">{{t "page.component_preview.states"}}</h2>
+  {{template "component.state" (dict "state" "loading" "title" (t "common.state.loading"))}}
+  {{template "component.state" (dict "state" "empty" "title" (t "common.state.empty"))}}
+  {{template "component.state" (dict "state" "no_results" "title" (t "common.state.no_results"))}}
+  {{template "component.state" (dict "state" "forbidden" "title" (t "common.state.forbidden"))}}
+  {{template "component.state" (dict "state" "session_expired" "title" (t "common.state.session_expired"))}}
+  {{template "component.state" (dict "state" "not_enabled" "title" (t "common.state.not_enabled"))}}
+  {{template "component.state" (dict "state" "offline" "title" (t "common.state.offline"))}}
+  {{template "component.state" (dict "state" "conflict" "title" (t "common.state.conflict"))}}
+</section>
+<section aria-labelledby="preview-banners">
+  <h2 id="preview-banners">{{t "page.component_preview.banners"}}</h2>
+  {{template "component.banner" (dict "tone" "success" "message" (t "common.state.success"))}}
+  {{template "component.banner" (dict "tone" "info" "message" (t "common.state.updating"))}}
+  {{template "component.banner" (dict "tone" "warning" "message" (t "common.state.restricted"))}}
+  {{template "component.banner" (dict "tone" "error" "message" (t "common.state.error"))}}
+</section>
+<section aria-labelledby="preview-form">
+  <h2 id="preview-form">{{t "page.component_preview.form"}}</h2>
+  {{if .ErrorSummary}}{{template "component.error_summary" .FieldErrors}}{{end}}
+  <form method="post" action="{{route "ui.component_preview"}}" data-ln-module="async-form">
+    {{csrf_field}}
+    {{template "component.field" (dict "id" "preview-name" "name" "display_name" "label" (t "page.component_preview.field_label") "help" (t "page.component_preview.field_help") "value" "" "required" true)}}
+    <div class="ln-actions">
+      {{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}
+      {{template "component.button" (dict "label" (t "common.action.cancel") "variant" "secondary")}}
+    </div>
+  </form>
+  {{if .Data}}{{if .Data.submitted}}{{template "component.banner" (dict "tone" "success" "message" (t "common.state.success"))}}{{end}}{{end}}
+</section>
+<section aria-labelledby="preview-table">
+  <h2 id="preview-table">{{t "page.component_preview.table"}}</h2>
+  {{template "component.table" (dict "caption" (t "page.component_preview.table_caption") "headers" (list (t "common.label.name") (t "common.label.status") (t "common.label.scope")) "rows" (list (list "example" (t "common.state.success") "app") (list "sample" (t "common.state.not_enabled") "system")))}}
+  {{template "component.pagination" (dict "limit" 20 "prev_url" "" "next_url" "")}}
+</section>
+<section aria-labelledby="preview-confirm">
+  <h2 id="preview-confirm">{{t "page.component_preview.confirm"}}</h2>
+  {{template "component.confirm" (dict "message" (t "page.component_preview.confirm_message"))}}
+</section>
+{{end}}

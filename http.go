@@ -131,6 +131,19 @@ type HTTPOptions struct {
 	// Protection 是限流、资源预算、请求超时/并发、CORS、安全响应头、Cookie 与
 	// CSRF 契约；nil 使用安全默认值。详见 HTTPProtectionOptions。
 	Protection *HTTPProtectionOptions
+	// UI 是可选的内置 HTML 页面处理器（例如 login.NewWebUI 的返回值）。挂载后
+	// 非 API 路径交给页面处理器，并复用同一请求编号、访问日志、客户端 IP 限流与
+	// CSRF 中间件；页面显式使用 PageContentSecurityPolicy（不再使用 API 的
+	// default-src 'none'）。nil 表示本 Handler 只提供 API，不服务 HTML。
+	UI *UIHTTPOptions
+}
+
+// UIHTTPOptions 是 HTML 页面挂载配置。Handler 由宿主提供（通常为
+// login.NewWebUI 返回值），PageContentSecurityPolicy 必须包含页面安全基线，
+// 可用 DefaultUIPageContentSecurityPolicy。
+type UIHTTPOptions struct {
+	Handler                   http.Handler
+	PageContentSecurityPolicy string
 }
 
 // NewHTTPHandler 构造标准 net/http Handler。生产实例只注册固定预热用的健康
@@ -140,6 +153,15 @@ type HTTPOptions struct {
 //
 // 选项非法时返回 CONFIG_INVALID 统一错误，不创建任何监听、协程或文件。
 // NewHTTPHandler 不创建服务器、不监听端口、不启动后台 goroutine。
+// uiConfigOf 把公开 UI 挂载配置转换为传输层内部配置。
+func uiConfigOf(options *UIHTTPOptions) *transport.UIConfig {
+	if options == nil {
+		return nil
+	}
+	return &transport.UIConfig{Handler: options.Handler,
+		PageContentSecurityPolicy: options.PageContentSecurityPolicy}
+}
+
 func NewHTTPHandler(options HTTPOptions) (http.Handler, error) {
 	protection, err := normalizeHTTPProtection(options.Protection)
 	if err != nil {
@@ -158,6 +180,7 @@ func NewHTTPHandler(options HTTPOptions) (http.Handler, error) {
 		Now:               options.Now,
 		Version:           CurrentBuildInfo().Version,
 		Protection:        protection,
+		UI:                uiConfigOf(options.UI),
 	})
 	if err != nil {
 		return nil, NewAppError(CodeConfigInvalid, "HTTP 处理程序配置无效", WithCause(err))

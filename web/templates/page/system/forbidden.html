@@ -1,0 +1,6 @@
+{{define "page-title"}}{{t "page.system.forbidden.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.system.forbidden.description"}}</p>
+{{if .RequestID}}<p class="ln-meta">{{t "common.label.request_id"}}: <code>{{.RequestID}}</code></p>{{end}}
+<p><a class="ln-button ln-button--secondary" href="{{route "system.not_found"}}">{{t "common.action.back"}}</a></p>
+{{end}}

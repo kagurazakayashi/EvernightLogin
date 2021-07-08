@@ -1,0 +1,3 @@
+{{define "component.banner"}}<div class="ln-banner ln-banner--{{if .tone}}{{.tone}}{{else}}info{{end}}" role="{{if eq .tone "error"}}alert{{else}}status{{end}}" data-ln-component="banner" data-ln-state="{{if .tone}}{{.tone}}{{else}}info{{end}}">
+  <p>{{.message}}</p>
+</div>{{end}}
