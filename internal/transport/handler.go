@@ -226,7 +226,7 @@ func (h *handler) serve(ctx context.Context, tracker *responseWriter, request *h
 				request.Method+" "+path); problem != nil {
 				return problem
 			}
-			if problem := h.protection.csrf.check(ctx, request); problem != nil {
+			if problem := h.protection.csrf.checkPath(ctx, request, path); problem != nil {
 				return problem
 			}
 		}
@@ -293,7 +293,7 @@ func (h *handler) serve(ctx context.Context, tracker *responseWriter, request *h
 		if problem := h.checkIdentityRateLimits(ctx); problem != nil {
 			return problem
 		}
-		if problem := h.protection.csrf.check(ctx, request); problem != nil {
+		if problem := h.protection.csrf.checkPath(ctx, request, path); problem != nil {
 			return problem
 		}
 		if h.protection.isExpensivePath(path) {

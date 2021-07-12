@@ -1,0 +1,46 @@
+{{define "page-title"}}{{t "page.auth.register.title"}}{{end}}
+{{define "content"}}
+{{if not .Data.registrationEnabled}}
+<p>{{t "page.auth.register.disabled"}}</p>
+<p><a href="{{route "auth.login"}}">{{t "common.action.login"}}</a></p>
+{{else}}
+<p>{{t "page.auth.register.description"}}</p>
+{{if .Data.result}}
+<section aria-labelledby="register-result-title">
+  <h2 id="register-result-title">{{t "page.auth.register.result_title"}}</h2>
+  {{if eq .Data.result.status "pending"}}{{template "component.banner" (dict "tone" "info" "message" (t "page.auth.register.result_pending"))}}
+  {{else}}{{template "component.banner" (dict "tone" "success" "message" (t "page.auth.register.result_active"))}}{{end}}
+  {{if .Data.result.verificationSent}}<p>{{t "page.auth.register.result_email_sent"}}</p>{{else if .Data.result.sendErrorCode}}<p>{{t "page.auth.register.result_email_failed"}}: <code>{{.Data.result.sendErrorCode}}</code></p>{{end}}
+  <p><a href="{{route "auth.login"}}">{{t "common.action.login"}}</a></p>
+</section>
+{{else}}
+<form method="post" action="{{route "auth.register.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="register-username">{{t "page.auth.register.username"}}</label>
+    <input class="ln-input" id="register-username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required aria-required="true">
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="register-password">{{t "page.auth.register.password"}}</label>
+    <input class="ln-input" id="register-password" name="password" type="password" autocomplete="new-password" required aria-required="true"{{if field_error "password_confirm"}} aria-invalid="true" aria-describedby="register-password-error"{{end}}>
+    {{with field_error "password_confirm"}}<p class="ln-field__error" id="register-password-error">{{.}}</p>{{end}}
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="register-password-confirm">{{t "page.auth.register.password_confirm"}}</label>
+    <input class="ln-input" id="register-password-confirm" name="password_confirm" type="password" autocomplete="new-password" required aria-required="true">
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="register-nickname">{{t "page.auth.register.nickname"}}</label>
+    <input class="ln-input" id="register-nickname" name="nickname" type="text" autocomplete="nickname">
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="register-email">{{t "page.auth.register.email"}}</label>
+    <input class="ln-input" id="register-email" name="email" type="email" autocomplete="email"{{if .Data.emailRequired}} required aria-required="true"{{end}}{{if not .Data.emailCapability}} disabled aria-disabled="true"{{end}}>
+    <p class="ln-field__help">{{if .Data.emailRequired}}{{t "page.auth.register.email_required_help"}}{{else}}{{t "page.auth.register.email_optional"}}{{end}}</p>
+  </div>
+  <div class="ln-actions">
+    {{template "component.button" (dict "label" (t "page.auth.register.submit") "variant" "primary" "type" "submit")}}
+  </div>
+</form>
+{{end}}{{end}}
+{{end}}

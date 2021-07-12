@@ -1087,3 +1087,22 @@ Python 只用于启动包辅助工具，不是将来 Go 产品的运行依赖。
 - 文件中没有预置秘密、真实用户、远程服务地址或生产邮件配置。
 - 启动包本身不含 go.mod；当前工作区已在步骤 02 建立 `go.mod`/`go.sum` 并锁定已验证依赖。
 - .gitignore 只对未跟踪文件生效；已有仓库中被跟踪的 AI 文件需检查后处理。启动包本身没有创建 Git 仓库，也没有提交或上传代码。
+
+## 账户入口页面（步骤 63）
+
+在步骤 62 页面框架（`ui.v1`）之上新增内置账户入口页，经宿主注入的 `UIPageAuthBackend` 适配器调用真实后端服务（模块内提供 `internal/uiauthadapter` 示例装配；生产 host 按同一公开契约实现）。页面不解析 Cookie 身份、不缓存权限，每次请求重新校验。
+
+- **路由/页面**：`auth.login`（GET/POST `/login`，密码登录；Passkey 仅入口，流程属步骤 64）、`auth.register`（GET/POST `/register`，按开关/邮箱策略展示，保留字段整单拒绝，注册不自动登录）、`auth.registration_status`（GET `/register/status`，仅通用说明，不提供匿名实时状态/存在性查询）、`auth.invitation_accept`（GET/POST `/invitation/accept`，新用户或已登录用户接受，无未消费预览时不伪造应用/角色）、`auth.email_verify`（GET 不消费、POST 才消费；成功/重复/过期统一处理）、`auth.email_verify_resend`（POST `/email/verify/resend`，复用注册服务真实冷却）、`auth.logout`（仅 POST，服务端撤销后才清 Cookie）、`auth.landing`（GET `/home`，登录后临时落地页）。全部为命名路由，BasePath 由框架统一处理。
+- **登录安全语义**：按真实 `authn` 结果分支；只有 `OutcomeComplete && !Restricted && 无剩余步骤` 才签发正常会话并跳转；需要补充验证/强制改密/受限结果**不是登录成功**，页面显示受限状态、不进入业务，必要时仅下发受限会话供步骤 64 继续；公开错误不枚举账户（用户名/密码/禁用统一文案），限流显示等待提示。`return` 仅允许站内相对路径/命名路由白名单，非法值回默认落地页，防开放重定向。
+- **匿名表单 CSRF**：新增 `internal/pagecsrf` 签名双提交方案（`v1:<kid>:<purpose>:<unix>:<nonce>:<sig>`，HMAC-SHA256 绑定用途、短时效默认 15 分钟、Cookie HttpOnly/Secure/SameSite=Lax、隐藏字段与 Cookie 恒时相等），transport `CSRFPolicy` 新增 `PublicFormPaths`/`PublicTokenValidator`：命中公开表单路径时即使无会话 Cookie 也强制 Origin/Referer 精确匹配 + 单一表单字段 + 匿名令牌校验；未列路径与会话 CSRF 语义不变，不全局放宽。令牌只出现在隐藏字段与 Cookie，不放 URL、不写日志；匿名令牌不阻止同一令牌在有效期内重复使用（防重放依赖服务端一次性凭证/条件状态迁移）。
+- **会话/一次性秘密**：会话 Cookie 由真实 `session` 服务生成（Secure/HttpOnly/Lax/Path）；邀请/邮箱验证令牌只在 GET query 与 POST 隐藏字段出现，正文/链接/日志不回显；HTML 统一 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`（transport 已有），访问日志只记路径。
+- **邀请与邮箱验证限制**：invitation 未提供未消费预览接口，GET 显示通用接受表单与说明，接受后展示服务端真实应用/角色；不匿名调用 `GetInvitation`。邮箱验证重发：已登录本人走真实 self Caller；匿名链接携带 uid/cid/token 时由系统组件复用后端发送冷却（传输层 IP 限流尚未接入，属**遗留**，页面如实提示冷却/失败，不宣称已防刷）。注册审核状态无本人实时查询，仅显示本次提交结果/通用说明，不猜测账户状态。
+- **后端接口/错误**：页面只新增公开扩展契约（`UIPageAuthOptions`/`UIPageAuthBackend`/`UIPageHandler`/`UIPageOutcome`/`UIFormTokenProvider`/`UIPageContext.CSRFField`，均为 `ui.v1` 向后兼容新增），未改既有 API/会话语义、未新增错误码/迁移/第三方依赖/YAML 配置。默认落地页 `/home`；管理/个人资料等页面留后续步骤。
+- **验证与限制**：真实 SQLite + 真实 authn/session/registration/onboarding/credential/audit 集成测试（本地捕获邮件，不真实外发）覆盖登录成功/失败/受限分支、注册关闭/无邮箱/保留字段、邮箱验证 GET 不消费与重复拒绝、邀请接受与重复拒绝、匿名 CSRF 缺失/跨源/用途错配/Cookie 不符、落地与 return 白名单、退出；真实浏览器视口/读屏/真机、反向代理部署未实测，以服务端渲染断言 + CSS 断点/人工清单代替，不宣称已通过。
+
+### 步骤 63 审计修复补充（2026-11-18）
+
+- **重发验证邮件（CSRF 用途）**：邮箱验证页的“验证”和“重发”两个表单共用同一页面用途的匿名 CSRF 令牌（`/email/verify` 与 `/email/verify/resend` 均绑定 `auth.email_verify`），GET 签发的单一隐藏字段可同时用于两个 POST，不再出现重发恒 403；模块提供 `UIPageAuthPublicFormPaths` 供宿主接线。
+- **匿名重发绑定校验与统一响应**：匿名声明确认重发前，在 `internal/credential` 新增只读 `Peek`（不消费、不记失败尝试）校验 `uid+cid+token` 与当前 pending 验证票据及一次性凭证绑定（票据存在/未过期/凭证 ID 与 token 恒时匹配）；绑定失败、票据不存在、用户不存在、冷却中、发送失败**对外一律呈现同一“已受理”语义**，差异只写入受限运行日志，避免账户/邮箱状态探测与借用系统身份滥发。已登录用户仍按本人 Caller 重发；后端每用户冷却继续生效，传输层 IP 限流缺失仍登记遗留。
+- **重定向收紧**：`safeRelativePath` 额外拒绝 `.`/`..` 点段，避免点段规范化越过 UI BasePath/路由预期。
+- 新增真实后端用例：GET→重发成功（同页 CSRF 令牌）→冷却不重发→伪造 token/不存在用户/已消费票据均统一受理且不发送；`internal/credential` 新增只读校验不影响既有消费语义。

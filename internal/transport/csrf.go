@@ -39,6 +39,8 @@ const (
 // 与扫码授权页面；协议端点若使用 form_post 等跨站写请求，必须由协议层单独校验
 // 并显式配置来源，不能借 CORS 或本中间件绕过。CORS 允许某个来源不会跳过 CSRF。
 type csrfPolicy struct {
+	publicPaths      map[string]struct{}
+	validatePublic   func(ctx context.Context, request *http.Request, path, token string) error
 	enabled          bool
 	cookieName       string
 	tokenHeader      string
@@ -67,6 +69,20 @@ func newCSRFPolicy(config CSRFConfig) (*csrfPolicy, error) {
 	}
 	if !isHTTPToken(tokenHeader) {
 		return nil, fmt.Errorf("CSRF 令牌请求头无效")
+	}
+	publicPaths := make(map[string]struct{}, len(config.PublicFormPaths))
+	for _, path := range config.PublicFormPaths {
+		if path == "" || path[0] != '/' || strings.Contains(path, "?") ||
+			strings.Contains(path, "#") || strings.Contains(path, "..") {
+			return nil, fmt.Errorf("CSRF 公开表单路径无效")
+		}
+		if _, exists := publicPaths[path]; exists {
+			return nil, fmt.Errorf("CSRF 公开表单路径重复")
+		}
+		publicPaths[path] = struct{}{}
+	}
+	if len(publicPaths) > 0 && config.ValidatePublicToken == nil {
+		return nil, fmt.Errorf("启用公开表单路径时必须提供匿名令牌校验器")
 	}
 	tokenFormField := config.TokenFormField
 	if tokenFormField == "" {
@@ -97,20 +113,34 @@ func newCSRFPolicy(config CSRFConfig) (*csrfPolicy, error) {
 		origins:          origins,
 		requireAllUnsafe: config.RequireAllUnsafe,
 		validateToken:    config.ValidateToken,
+		publicPaths:      publicPaths,
+		validatePublic:   config.ValidatePublicToken,
 	}, nil
 }
 
-// check 对不安全请求执行来源与令牌校验。它只保护 Cookie 会话请求：没有会话
-// Cookie 且未要求全部不安全请求时，令牌认证接口不受影响。任何缺失或失败都
-// fail-closed，返回统一的 403 ACCESS_DENIED，不暴露具体失败原因。
+// check 对不安全请求执行来源与令牌校验（路径取 request.URL.Path；处理器应使用
+// checkPath 传入规范化路径）。任何缺失或失败都 fail-closed。
 func (p *csrfPolicy) check(ctx context.Context, request *http.Request) *problem {
+	if request == nil {
+		return nil
+	}
+	return p.checkPath(ctx, request, request.URL.Path)
+}
+
+// checkPath 是 CSRF 校验主体：公开表单路径即使无会话 Cookie 也要求来源与匿名
+// 令牌；其余不安全请求维持既有“仅保护 Cookie 会话”的语义。
+func (p *csrfPolicy) checkPath(ctx context.Context, request *http.Request, path string) *problem {
 	if p == nil || !p.enabled || request == nil {
 		return nil
 	}
 	if isSafeMethod(request.Method) {
 		return nil
 	}
-	if !p.requireAllUnsafe {
+	publicPath := false
+	if len(p.publicPaths) > 0 {
+		_, publicPath = p.publicPaths[path]
+	}
+	if !publicPath && !p.requireAllUnsafe {
 		if _, err := request.Cookie(p.cookieName); err != nil {
 			return nil
 		}
@@ -124,7 +154,7 @@ func (p *csrfPolicy) check(ctx context.Context, request *http.Request) *problem 
 	}
 	// 令牌来源：单一 X-CSRF-Token 头优先；没有头时允许服务端渲染表单提交单一
 	// csrf_token 隐藏字段（application/x-www-form-urlencoded）。两种来源最终都
-	// 交给同一 ValidateToken，不降低校验强度。
+	// 交给同一校验器，不降低校验强度。
 	values := request.Header.Values(p.tokenHeader)
 	var token string
 	switch {
@@ -142,6 +172,15 @@ func (p *csrfPolicy) check(ctx context.Context, request *http.Request) *problem 
 			return csrfProblem()
 		}
 		token = formToken
+	}
+	if publicPath {
+		if p.validatePublic == nil {
+			return csrfProblem()
+		}
+		if err := p.validatePublic(ctx, request, path, token); err != nil {
+			return csrfProblem()
+		}
+		return nil
 	}
 	if p.validateToken == nil {
 		return csrfProblem()

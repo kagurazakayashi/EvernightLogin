@@ -305,6 +305,60 @@ func (s *Service) VerifyAndConsume(ctx context.Context, request VerifyRequest) (
 	}, nil
 }
 
+// Peek 只校验一次性凭证的绑定、状态、有效期与秘密是否匹配，**不消费、不记录
+// 失败尝试、不改变任何状态**。它用于“持有链接凭证但尚未消费”的受控前置校验
+// （例如步骤 63 邮箱验证页的受控重发），不能替代 VerifyAndConsume 作为一次性
+// 消费/授权证明；调用方对失败必须返回统一通用响应，不得据此暴露凭证/账户状态。
+func (s *Service) Peek(ctx context.Context, request VerifyRequest) (VerifiedCredential, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return VerifiedCredential{}, err
+	}
+	if err := request.validate(); err != nil {
+		return VerifiedCredential{}, err
+	}
+	currentTime := s.clockNow()
+	record, found, err := s.store.LoadByID(ctx, request.ID)
+	if err != nil {
+		return VerifiedCredential{}, s.storeFailure(ctx, "读取凭证", err)
+	}
+	if !found {
+		return VerifiedCredential{}, s.invalid(ReasonNotFound, request.ID, request.Purpose, request.AppID)
+	}
+	recordKind := KindToken
+	if record.KeyID != "" {
+		recordKind = KindCode
+	}
+	if record.Purpose != request.Purpose || record.Target != request.Target ||
+		record.AppID != request.AppID || recordKind != request.Kind {
+		return VerifiedCredential{}, s.invalid(ReasonBindingMismatch, request.ID, request.Purpose, request.AppID)
+	}
+	if record.ConsumedAt != nil {
+		return VerifiedCredential{}, s.invalid(ReasonConsumed, record.ID, record.Purpose, record.AppID)
+	}
+	if record.RevokedAt != nil {
+		return VerifiedCredential{}, s.invalid(ReasonRevoked, record.ID, record.Purpose, record.AppID)
+	}
+	if !record.ExpiresAt.After(currentTime) {
+		return VerifiedCredential{}, s.invalid(ReasonExpired, record.ID, record.Purpose, record.AppID)
+	}
+	var computed []byte
+	if recordKind == KindToken {
+		computed = tokenVerifierHash(record.ID, record.Purpose, record.Target, record.AppID, request.Secret)
+	} else {
+		computed, err = s.ring.HMACDigest(record.KeyID, hmacDomain,
+			codeDigestMessage(record.ID, record.Purpose, record.Target, record.AppID, request.Secret))
+		if err != nil {
+			return VerifiedCredential{}, s.invalid(ReasonKeyUnavailable, record.ID, request.Purpose, request.AppID)
+		}
+	}
+	if subtle.ConstantTimeCompare(computed, record.VerifierHash) != 1 {
+		return VerifiedCredential{}, s.invalid(ReasonSecretMismatch, record.ID, request.Purpose, request.AppID)
+	}
+	return VerifiedCredential{ID: record.ID, Purpose: record.Purpose,
+		Target: record.Target, AppID: record.AppID, ConsumedAt: time.Time{}}, nil
+}
+
 // Cancel 按 ID 与绑定信息撤销仍活动的一次性凭证。已消费、已撤销、过期或绑定
 // 不匹配时返回 ErrInvalidCredential；存储错误返回 ErrStoreUnavailable。
 func (s *Service) Cancel(ctx context.Context, request CancelRequest) error {

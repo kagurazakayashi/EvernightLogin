@@ -1,0 +1,46 @@
+{{define "page-title"}}{{t "page.auth.invitation_accept.title"}}{{end}}
+{{define "content"}}
+{{if .Data.accepted}}
+<section aria-labelledby="invitation-result-title">
+  <h2 id="invitation-result-title">{{t "page.auth.invitation_accept.result_title"}}</h2>
+  {{template "component.banner" (dict "tone" "success" "message" (t "page.auth.invitation_accept.result") )}}
+  <dl>
+    <dt>{{t "page.auth.invitation_accept.app_label"}}</dt><dd><code>{{.Data.appID}}</code></dd>
+    {{if .Data.roles}}<dt>{{t "page.auth.invitation_accept.roles_label"}}</dt><dd>{{range .Data.roles}}<span>{{.}}</span> {{end}}</dd>{{end}}
+  </dl>
+  <p><a href="{{route "auth.login"}}">{{t "common.action.login"}}</a></p>
+</section>
+{{else}}
+<p>{{t "page.auth.invitation_accept.description"}}</p>
+<p class="ln-meta">{{t "page.auth.invitation_accept.no_preview"}}</p>
+<form method="post" action="{{route "auth.invitation_accept.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="iid" value="{{.Data.invitationID}}">
+  <input type="hidden" name="cid" value="{{.Data.credentialID}}">
+  <input type="hidden" name="token" value="{{.Data.token}}">
+  {{if .Data.authenticated}}
+  <p>{{t "page.auth.invitation_accept.existing_user_hint"}}</p>
+  {{else}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="invitation-username">{{t "page.auth.register.username"}}</label>
+    <input class="ln-input" id="invitation-username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required aria-required="true">
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="invitation-password">{{t "page.auth.register.password"}}</label>
+    <input class="ln-input" id="invitation-password" name="password" type="password" autocomplete="new-password" required aria-required="true">
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="invitation-password-confirm">{{t "page.auth.register.password_confirm"}}</label>
+    <input class="ln-input" id="invitation-password-confirm" name="password_confirm" type="password" autocomplete="new-password" required aria-required="true">
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="invitation-nickname">{{t "page.auth.register.nickname"}}</label>
+    <input class="ln-input" id="invitation-nickname" name="nickname" type="text" autocomplete="nickname">
+  </div>
+  {{end}}
+  <div class="ln-actions">
+    {{template "component.button" (dict "label" (t "page.auth.invitation_accept.accept") "variant" "primary" "type" "submit")}}
+  </div>
+</form>
+{{end}}
+{{end}}

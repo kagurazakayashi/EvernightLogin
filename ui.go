@@ -35,6 +35,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -141,6 +142,40 @@ type UISessionService interface {
 	IssueCSRFToken(ctx context.Context, request *http.Request) (string, error)
 }
 
+// UIFormTokenProvider 为公开（匿名）页面表单签发短时效 CSRF 令牌与 Cookie。
+// 生产实现必须使用密钥环签名、绑定表单用途、只放在隐藏字段与 HttpOnly Cookie，
+// 绝不放入 URL；未提供时公开页面 POST 由宿主自行保证同源防护（默认 fail-closed）。
+type UIFormTokenProvider interface {
+	Issue(ctx context.Context, request *http.Request, purpose string) (token string,
+		cookie *http.Cookie, err error)
+}
+
+// UIPageHandler 是命名路由的业务处理器：在框架完成固定前缀、方法匹配、会话级别、
+// CSRF 与请求限流后调用；页面只消费安全摘要并调用真实后端，不解析 Cookie 身份。
+type UIPageHandler interface {
+	HandlePage(ctx context.Context, request *http.Request, page UIPageContext) (UIPageOutcome, error)
+}
+
+// UIPageOutcome 是页面处理器输出。框架负责设置 Cookie/状态码/重定向与模板渲染；
+// 页面处理器不得自行写响应头或响应体。
+type UIPageOutcome struct {
+	// StatusCode 为 0 时保持 200；错误状态由框架统一渲染当前页面错误摘要。
+	StatusCode int
+	Data       any
+	// FieldErrors 是字段级公开错误（键为表单字段名）。
+	FieldErrors map[string]string
+	// ErrorCode/ErrorSummary 作用于错误摘要与页面状态；不包含内部细节。
+	ErrorCode    string
+	ErrorSummary string
+	// RedirectRoute 是命名路由；RedirectPath 是站内相对路径（框架加 BasePath）。
+	// RedirectQuery 只允许白名单键（页面处理器负责校验）。
+	RedirectRoute string
+	RedirectPath  string
+	RedirectQuery url.Values
+	// SetCookies 只用于会话/短期提示 Cookie；框架在写响应前设置。
+	SetCookies []*http.Cookie
+}
+
 // UIBrand 是页面品牌设置（默认仅本地资源）。
 type UIBrand struct {
 	Name      string
@@ -186,12 +221,14 @@ type UIPageContext struct {
 	Brand           UIBrand
 	Navigation      []UINavItem
 	CSRF            string
-	StatusCode      int
-	ErrorCode       string
-	ErrorMessage    string
-	ErrorSummary    string
-	FieldErrors     map[string]string
-	Data            any
+	// CSRFField 是当前框架使用的表单隐藏字段名（与 transport CSRF 契约一致）。
+	CSRFField    string
+	StatusCode   int
+	ErrorCode    string
+	ErrorMessage string
+	ErrorSummary string
+	FieldErrors  map[string]string
+	Data         any
 }
 
 // UIPageResponse 是宿主页面渲染器输出。
@@ -250,6 +287,12 @@ type WebUIOptions struct {
 	AssetOverlays []fs.FS
 	// Translations 是可选的翻译目录来源；默认内置 zh-CN。
 	Translations UICatalogProvider
+	// Handlers 是按命名路由注册的页面处理器（键必须是已注册路由名）。
+	Handlers map[string]UIPageHandler
+	// FormTokens 为公开页面表单签发匿名 CSRF 令牌；nil 时不渲染匿名令牌。
+	FormTokens UIFormTokenProvider
+	// PageAuth 非 nil 时注册步骤 63 账户入口页面（登录/注册/邀请/邮箱验证/退出）。
+	PageAuth *UIPageAuthOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -287,6 +330,7 @@ type WebUI struct {
 	logger              *slog.Logger
 	hostPage            map[string]string
 	builtinPageDisabled bool
+	pageAuth            *pageAuthPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -327,6 +371,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 		byName: map[string]UIRoute{}, byPath: map[string][]UIRoute{},
 		tmpl: map[string]*template.Template{}, assets: map[string]assetEntry{},
 		hostPage: map[string]string{}, builtinPageDisabled: options.DisableBuiltinPages}
+	if options.PageAuth != nil {
+		pages, pageErr := newPageAuthPages(*options.PageAuth)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageAuth = pages
+	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
 		return nil, err
@@ -491,6 +542,9 @@ func (ui *WebUI) registerRoutes() error {
 		}
 	}
 	routes = append(routes, ui.opts.Routes...)
+	if ui.pageAuth != nil {
+		routes = append(routes, ui.pageAuth.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -509,6 +563,19 @@ func (ui *WebUI) registerRoutes() error {
 		ui.byPath[route.Path] = append(ui.byPath[route.Path], route)
 	}
 	ui.routes = routes
+	// 处理器必须指向已注册路由；未知处理器或缺失处理器都拒绝构造，避免静默失效。
+	for name := range ui.opts.Handlers {
+		if _, ok := ui.byName[name]; !ok {
+			return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+		}
+	}
+	if ui.pageAuth != nil {
+		for name := range ui.pageAuth.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
 	return nil
 }
 
@@ -774,6 +841,7 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 		return
 	}
 	csrfToken := ""
+	var issuedCookies []*http.Cookie
 	if route.Access != UIAccessPublic && ui.opts.Session != nil {
 		token, err := ui.opts.Session.IssueCSRFToken(ctx, request)
 		if err != nil {
@@ -784,7 +852,63 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 		}
 		csrfToken = token
 	}
+	if route.Access == UIAccessPublic && ui.opts.FormTokens != nil {
+		if purpose := formPurposeForRoute(route.Name); purpose != "" {
+			token, cookie, err := ui.opts.FormTokens.Issue(ctx, request, purpose)
+			if err == nil {
+				csrfToken = token
+				if cookie != nil {
+					issuedCookies = append(issuedCookies, cookie)
+				}
+			}
+		}
+	}
 	page := ui.pageContext(request, route, session, csrfToken, http.StatusOK, "", "", nil)
+	handler := ui.opts.Handlers[route.Name]
+	if handler == nil && ui.pageAuth != nil {
+		handler = ui.pageAuth.handlers[route.Name]
+	}
+	if handler != nil {
+		outcome, handleErr := handler.HandlePage(ctx, request, page)
+		if handleErr != nil {
+			ui.logger.Warn("页面处理器执行失败", "route", route.Name,
+				"error_category", "ui_page_handler_failed")
+			ui.renderErrorPage(writer, request, requestID, "system.error",
+				http.StatusInternalServerError, "INTERNAL_ERROR",
+				ui.translate("zh-CN", "page.system.error.description", nil), nil)
+			return
+		}
+		for _, cookie := range issuedCookies {
+			http.SetCookie(writer, cookie)
+		}
+		for _, cookie := range outcome.SetCookies {
+			if cookie != nil {
+				http.SetCookie(writer, cookie)
+			}
+		}
+		if target, redirect := ui.redirectTarget(outcome); redirect {
+			http.Redirect(writer, request, target, http.StatusSeeOther)
+			return
+		}
+		if outcome.StatusCode != 0 {
+			page.StatusCode = outcome.StatusCode
+		}
+		page.Data = outcome.Data
+		if len(outcome.FieldErrors) > 0 {
+			page.FieldErrors = outcome.FieldErrors
+		}
+		if outcome.ErrorCode != "" {
+			page.ErrorCode = outcome.ErrorCode
+		}
+		if outcome.ErrorSummary != "" {
+			page.ErrorSummary = outcome.ErrorSummary
+		}
+		ui.renderPage(writer, request, page, route)
+		return
+	}
+	for _, cookie := range issuedCookies {
+		http.SetCookie(writer, cookie)
+	}
 	data := any(nil)
 	if request.Method == http.MethodPost && route.Path == "/_ui/preview" {
 		// 组件预览页的 POST 仅演示“表单通过 CSRF 后渲染成功状态”，不授予业务能力。
@@ -792,6 +916,72 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	page.Data = data
 	ui.renderPage(writer, request, page, route)
+}
+
+// redirectTarget 解析页面处理器输出的重定向目标：命名路由或站内相对路径（加
+// BasePath），仅允许白名单查询键；非法目标回退到默认首页而不是开放重定向。
+func (ui *WebUI) redirectTarget(outcome UIPageOutcome) (string, bool) {
+	if outcome.RedirectRoute != "" {
+		route, ok := ui.byName[outcome.RedirectRoute]
+		if !ok || route.Access == UIAccessManagement {
+			return ui.prefix + "/home", true
+		}
+		target := ui.routeURL(outcome.RedirectRoute)
+		if len(outcome.RedirectQuery) > 0 {
+			values := url.Values{}
+			for key, list := range outcome.RedirectQuery {
+				if !validRedirectQueryKey(key) {
+					continue
+				}
+				for _, value := range list {
+					if len(value) <= 256 {
+						values.Add(key, value)
+					}
+				}
+			}
+			if encoded := values.Encode(); encoded != "" {
+				target += "?" + encoded
+			}
+		}
+		return target, true
+	}
+	if outcome.RedirectPath != "" {
+		if !safeRelativePath(outcome.RedirectPath) {
+			return ui.prefix + "/home", true
+		}
+		return ui.prefix + outcome.RedirectPath, true
+	}
+	return "", false
+}
+
+// validRedirectQueryKey 限制页面处理器可附加的查询键（仅用于提示类参数）。
+func validRedirectQueryKey(key string) bool {
+	switch key {
+	case "status", "next":
+		return true
+	}
+	return false
+}
+
+// safeRelativePath 报告值是否是站内相对路径（拒绝 //host、scheme、反斜杠与控制字符）。
+func safeRelativePath(value string) bool {
+	if value == "" || len(value) > 1024 || !strings.HasPrefix(value, "/") ||
+		strings.HasPrefix(value, "//") || strings.Contains(value, "\\") {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	// 拒绝点段逃逸：浏览器会把 /a/../b 规范化为 /b，可能越过 UI BasePath 或路由预期。
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." || segment == "." {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveSession 按路由访问级别解析并校验会话。
@@ -1033,7 +1223,7 @@ func (ui *WebUI) pageContext(request *http.Request, route *UIRoute, session UISe
 		CanonicalURL: ui.prefix + route.Path, Locale: locale, FallbackLocale: "zh-CN",
 		TimeZone: "UTC", RequestID: transport.RequestIDFromContext(request.Context()),
 		Session: session, Brand: ui.opts.Brand, Navigation: navigation, CSRF: csrfToken,
-		StatusCode: status, ErrorCode: errorCode, ErrorMessage: errorMessage,
+		CSRFField: ui.opts.CSRFField, StatusCode: status, ErrorCode: errorCode, ErrorMessage: errorMessage,
 		FieldErrors: fieldErrors,
 	}
 }

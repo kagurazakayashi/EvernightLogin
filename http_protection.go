@@ -135,7 +135,16 @@ type CSRFPolicy struct {
 	AllowedOrigins              []string
 	RequireForAllUnsafeRequests bool
 	TokenValidator              CSRFValidator
+	// PublicFormPaths 是允许匿名 HTML 表单 POST 的路径（已含部署前缀、规范化）。
+	// 命中时即使无会话 Cookie 也要求 Origin/Referer 与 PublicTokenValidator。
+	PublicFormPaths []string
+	// PublicTokenValidator 校验公开表单匿名令牌（参数含规范化路径用于用途绑定）。
+	PublicTokenValidator PublicFormTokenValidator
 }
+
+// PublicFormTokenValidator 校验公开页面匿名表单令牌。
+type PublicFormTokenValidator func(ctx context.Context, request *http.Request,
+	path, token string) error
 
 // CookiePolicy 是未来会话 Cookie 的安全属性策略。零值不是有效策略；请使用
 // DefaultCookiePolicy 或显式设置。默认 Secure/HttpOnly/Lax/Path=/ 适合同站与
@@ -353,7 +362,9 @@ func normalizeHTTPProtection(options *HTTPProtectionOptions) (*transport.Protect
 		TokenFormField:   options.CSRF.TokenFormField,
 		AllowedOrigins:   append([]string(nil), options.CSRF.AllowedOrigins...),
 		RequireAllUnsafe: options.CSRF.RequireForAllUnsafeRequests,
+		PublicFormPaths:  append([]string(nil), options.CSRF.PublicFormPaths...),
 	}
+	protection.CSRF.ValidatePublicToken = options.CSRF.PublicTokenValidator
 	if options.CSRF.TokenValidator != nil {
 		protection.CSRF.ValidateToken = func(ctx context.Context, request *http.Request, token string) error {
 			return options.CSRF.TokenValidator.ValidateCSRFToken(ctx, request, token)

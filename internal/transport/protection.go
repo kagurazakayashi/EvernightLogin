@@ -87,6 +87,12 @@ type CSRFConfig struct {
 	AllowedOrigins   []string
 	RequireAllUnsafe bool
 	ValidateToken    func(ctx context.Context, request *http.Request, token string) error
+	// PublicFormPaths 是允许匿名 HTML 表单 POST 的路径（必须已含部署前缀、规范化）。
+	// 命中路径时即使没有会话 Cookie 也要求 Origin/Referer 与 ValidatePublicToken；
+	// 未列出的路径行为不变，不全局放宽 CSRF。
+	PublicFormPaths []string
+	// ValidatePublicToken 校验公开表单匿名令牌（path 用于用途绑定）。
+	ValidatePublicToken func(ctx context.Context, request *http.Request, path, token string) error
 }
 
 // SecurityHeaderConfig 是安全响应头配置。ContentSecurityPolicy 为空时使用 API

@@ -1,0 +1,23 @@
+{{define "page-title"}}{{t "page.auth.login.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.auth.login.description"}}</p>
+{{if .Data.registrationEnabled}}<p><a href="{{route "auth.register"}}">{{t "page.auth.login.no_account"}} {{t "page.auth.login.register_link"}}</a></p>{{end}}
+<form method="post" action="{{route "auth.login.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="login-identifier">{{t "page.auth.login.identifier"}}</label>
+    <input class="ln-input" id="login-identifier" name="identifier" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required aria-required="true"{{if field_error "identifier"}} aria-invalid="true" aria-describedby="login-identifier-error"{{end}}>
+    {{with field_error "identifier"}}<p class="ln-field__error" id="login-identifier-error">{{.}}</p>{{end}}
+  </div>
+  <div class="ln-field">
+    <label class="ln-field__label" for="login-password">{{t "page.auth.login.password"}}</label>
+    <input class="ln-input" id="login-password" name="password" type="password" autocomplete="current-password" required aria-required="true">
+  </div>
+  <div class="ln-actions">
+    {{template "component.button" (dict "label" (t "common.action.login") "variant" "primary" "type" "submit")}}
+  </div>
+</form>
+{{if .Data.passkeyPath}}<p><a class="ln-button ln-button--secondary" href="{{.Data.passkeyPath}}">{{t "page.auth.login.passkey_button"}}</a></p>{{else}}<p class="ln-meta">{{t "page.auth.login.passkey_not_enabled"}}</p>{{end}}
+<p><a href="{{route "auth.register"}}">{{t "page.auth.login.no_account"}} {{t "page.auth.login.register_link"}}</a></p>
+<p class="ln-meta">{{t "page.auth.login.return_hint"}}</p>
+{{end}}

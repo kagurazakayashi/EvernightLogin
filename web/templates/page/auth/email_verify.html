@@ -1,0 +1,34 @@
+{{define "page-title"}}{{t "page.auth.email_verify.title"}}{{end}}
+{{define "content"}}
+{{if .Data.verified}}
+<section aria-labelledby="verify-result-title">
+  <h2 id="verify-result-title">{{t "page.auth.email_verify.success_title"}}</h2>
+  {{template "component.banner" (dict "tone" "success" "message" (t "page.auth.email_verify.success"))}}
+  <p><a class="ln-button" href="{{route "auth.login"}}">{{t "common.action.login"}}</a></p>
+</section>
+{{else if .Data.resendAccepted}}
+<section aria-labelledby="resend-result-title">
+  <h2 id="resend-result-title">{{t "page.auth.email_verify.resend_title"}}</h2>
+  {{template "component.banner" (dict "tone" "info" "message" (t "page.auth.email_verify.resend_accepted"))}}
+</section>
+{{else}}
+<p>{{t "page.auth.email_verify.description"}}</p>
+<form method="post" action="{{route "auth.email_verify.submit"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  <input type="hidden" name="uid" value="{{.Data.userID}}">
+  <input type="hidden" name="cid" value="{{.Data.credentialID}}">
+  <input type="hidden" name="token" value="{{.Data.token}}">
+  <div class="ln-actions">
+    {{template "component.button" (dict "label" (t "page.auth.email_verify.confirm") "variant" "primary" "type" "submit")}}
+  </div>
+</form>
+<p class="ln-meta">{{t "page.auth.email_verify.resend_hint"}}</p>
+<form method="post" action="{{route "auth.email_verify_resend"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  <input type="hidden" name="uid" value="{{.Data.userID}}">
+  <input type="hidden" name="cid" value="{{.Data.credentialID}}">
+  <input type="hidden" name="token" value="{{.Data.token}}">
+  {{template "component.button" (dict "label" (t "page.auth.email_verify.resend") "variant" "secondary" "type" "submit")}}
+</form>
+{{end}}
+{{end}}

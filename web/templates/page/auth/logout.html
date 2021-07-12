@@ -1,0 +1,9 @@
+{{define "page-title"}}{{t "page.auth.logout.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.auth.logout.description"}}</p>
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<form method="post" action="{{route "auth.logout"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  {{template "component.button" (dict "label" (t "common.action.logout") "variant" "primary" "type" "submit")}}
+</form>
+{{end}}

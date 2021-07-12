@@ -544,6 +544,23 @@
 // user.bulk.export/users.export 默认强认证；错误码复用既有 48 码不新增。不实现
 // 应用成员导入、HTTP/CLI/页面与跨实例互斥。
 //
+// 步骤 63 审计修复：邮箱验证页验证/重发两表单共用同一匿名 CSRF 页面用途
+// （/email/verify 与 /email/verify/resend），GET 单一令牌可两用；匿名重发前用
+// internal/credential.Peek 只读校验 uid/cid/token 与当前 pending 票据绑定，绑定
+// 失败/票据不存在/用户不存在/冷却/发送失败对外统一“已受理”，差异只入受限日志，
+// 防止系统身份被匿名借用与账户状态探测；safeRelativePath 拒绝点段。
+//
+// internal/userbatch 之后（步骤 63）：根公开 `WebUIOptions.PageAuth`/
+// `UIPageAuthBackend`/`UIPageHandler`/`UIPageOutcome`/`UIFormTokenProvider` 与
+// `UIPageContext.CSRFField` 提供账户入口页（登录/注册/邀请接受/邮箱验证/退出/
+// 临时落地页）。登录按真实 authn Outcome/Restricted/RequiredSteps 分支，不完整
+// 结果不算成功；公开错误不枚举账户；return 仅站内相对路径白名单。匿名表单用
+// `internal/pagecsrf` 签名双提交令牌（用途+短时效，transport 公开表单路径白名单
+// 仍校验 Origin/单一字段）补无会话 CSRF，不改既有会话 CSRF 语义。页面适配器
+// `internal/uiauthadapter` 调真实 authn/session/registration/onboarding；无未消费
+// 邀请预览、无匿名实时审核状态查询、匿名声明确认重发仅复用后端冷却且缺传输层
+// IP 限流（遗留）。未新增错误码/迁移/依赖。
+//
 // 步骤 61 审计修复：导出 handler 使用任务局部上限（不回写共享 Service 字段，并发
 // 导出互不影响）；逐行结果/报告分页读取真实总数、truncated 按真实总数计算并在报告
 // report_truncated 列标记；导入首行前及每批、导出每页复验权限，撤权 failed/

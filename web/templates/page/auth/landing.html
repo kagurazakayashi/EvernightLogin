@@ -1,0 +1,13 @@
+{{define "page-title"}}{{t "page.auth.landing.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.auth.landing.description"}}</p>
+<dl>
+  <dt>{{t "common.label.current_account"}}</dt><dd><code>{{.Data.userID}}</code></dd>
+  {{if .Data.appID}}<dt>{{t "common.label.current_app"}}</dt><dd><code>{{.Data.appID}}</code></dd>{{end}}
+</dl>
+<p class="ln-meta">{{t "page.auth.landing.later_pages"}}</p>
+<form method="post" action="{{route "auth.logout"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  {{template "component.button" (dict "label" (t "common.action.logout") "variant" "secondary" "type" "submit")}}
+</form>
+{{end}}
