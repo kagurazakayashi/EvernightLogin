@@ -1,0 +1,64 @@
+{{define "page-title"}}{{t "page.auth.recovery_rebind.title"}}{{end}}
+{{define "content"}}
+{{with .Data.RecoveryDone}}
+  <div class="ln-banner ln-banner--success" role="status">{{t "page.auth.recovery_rebind.completed"}}</div>
+  <p>{{t "page.auth.recovery_rebind.new_codes_once"}}</p>
+  <ul class="ln-recovery-codes">{{range .Codes}}<li><code>{{.}}</code></li>{{end}}</ul>
+  <p class="ln-meta">{{t "page.auth.recovery_rebind.old_codes_invalid"}}</p>
+  <p><button type="button" class="ln-button ln-button--secondary" data-ln-copy-codes>{{t "common.action.copy"}}</button></p>
+  <a class="ln-button ln-button--primary" href="{{route "auth.login"}}">{{t "common.action.login"}}</a>
+{{else}}
+{{with .Data.Recovery}}
+  <div class="ln-banner ln-banner--warning">{{t "page.auth.recovery_rebind.restricted"}}</div>
+  <p class="ln-meta">{{t "page.auth.recovery_rebind.required_strength"}}: <code>{{.RequiredStrength}}</code></p>
+  <p class="ln-meta">{{t "page.auth.recovery_rebind.expires"}}: {{format_time .ExpiresAt "UTC"}}</p>
+  <p class="ln-meta">{{t "page.auth.recovery_rebind.codes_remaining"}}: {{format_number .CodesRemaining}}</p>
+  {{if .AllowedMethods}}<p class="ln-meta">{{t "page.auth.recovery_rebind.allowed"}}: {{range .AllowedMethods}}<code>{{.}}</code> {{end}}</p>{{end}}
+{{end}}
+{{with .Data.RebindStart}}
+  <div class="ln-banner ln-banner--info" role="status">{{t "page.auth.recovery_rebind.binding_started"}}</div>
+  {{if .PublicData}}
+    {{if eq .Method "totp"}}
+      <p>{{t "page.auth.recovery_rebind.totp_uri"}}</p>
+      <pre class="ln-secret" tabindex="0">{{printf "%s" .PublicData}}</pre>
+      <form method="post" action="{{route "auth.recovery_rebind.complete"}}" data-ln-module="async-form">
+        {{csrf_field}}
+        <input type="hidden" name="binding_id" value="{{.BindingID}}">
+        <input type="hidden" name="method" value="totp">
+        {{template "component.field" (dict "id" "totp-confirm" "name" "response" "type" "text" "label" (t "page.auth.recovery_rebind.totp_confirm") "help" "" "value" "" "required" true)}}
+        <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.verify") "variant" "primary" "type" "submit")}}</div>
+      </form>
+    {{else}}
+      <form method="post" action="{{route "auth.recovery_rebind.complete"}}" data-ln-module="webauthn" data-ln-mode="create" data-ln-options="{{printf "%s" .PublicData}}" data-ln-webauthn-form data-ln-response-field="response">
+        {{csrf_field}}
+        <input type="hidden" name="binding_id" value="{{.BindingID}}">
+        <input type="hidden" name="method" value="passkey">
+        <input type="hidden" name="response" value="">
+        <p class="ln-meta" data-ln-webauthn-status role="status"></p>
+        <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.recovery_rebind.bind_passkey") "variant" "primary" "type" "button")}}</div>
+      </form>
+    {{end}}
+  {{end}}
+{{else}}
+  <div class="ln-actions">
+    {{with .Data.Recovery}}{{range .AllowedMethods}}{{if eq . "totp"}}
+    <form method="post" action="{{route "auth.recovery_rebind.start"}}" data-ln-module="async-form">
+      {{csrf_field}}
+      <input type="hidden" name="method" value="totp">
+      {{template "component.button" (dict "label" (t "page.auth.recovery_rebind.bind_totp") "variant" "secondary" "type" "submit")}}
+    </form>
+    {{end}}{{if eq . "passkey"}}
+    <form method="post" action="{{route "auth.recovery_rebind.start"}}" data-ln-module="async-form">
+      {{csrf_field}}
+      <input type="hidden" name="method" value="passkey">
+      {{template "component.button" (dict "label" (t "page.auth.recovery_rebind.bind_passkey") "variant" "secondary" "type" "submit")}}
+    </form>
+    {{end}}{{end}}{{end}}
+  </div>
+{{end}}
+<form method="post" action="{{route "auth.recovery_cancel"}}" class="ln-actions">
+  {{csrf_field}}
+  {{template "component.button" (dict "label" (t "page.auth.recovery_rebind.cancel") "variant" "secondary" "type" "submit")}}
+</form>
+{{end}}
+{{end}}

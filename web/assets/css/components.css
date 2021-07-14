@@ -38,3 +38,7 @@
 @media (forced-colors: active) {
   .ln-button, .ln-input, .ln-banner, .ln-state, .ln-table-scroll { border: 1px solid CanvasText; }
 }
+
+.ln-recovery-codes { font-family: var(--ln-font-mono); list-style: none; padding: var(--ln-space-3); background: var(--ln-color-surface-subtle); border-radius: var(--ln-radius); overflow-x: auto; }
+.ln-recovery-codes li { padding: var(--ln-space-1) 0; }
+.ln-secret { font-family: var(--ln-font-mono); overflow-x: auto; padding: var(--ln-space-3); background: var(--ln-color-surface-subtle); border-radius: var(--ln-radius); white-space: pre-wrap; overflow-wrap: anywhere; }

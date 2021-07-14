@@ -1,0 +1,55 @@
+{{define "page-title"}}{{t "page.auth.second_factor.title"}}{{end}}
+{{define "content"}}
+{{with .Data.SecondFactor}}
+<p class="ln-meta">{{t "page.auth.second_factor.restricted_hint"}}</p>
+{{if $.Data.Resent}}<div class="ln-banner ln-banner--success" role="status">{{t "page.auth.second_factor.resent"}}</div>{{end}}
+{{if eq .FactorType "email"}}
+<p>{{t "page.auth.second_factor.email_sent"}}</p>
+{{if .MaskedEmail}}<p class="ln-meta">{{t "page.auth.second_factor.masked_email"}}: <code>{{.MaskedEmail}}</code></p>{{end}}
+<form method="post" action="{{route "auth.second_factor.verify"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  <input type="hidden" name="challenge_id" value="{{.ChallengeID}}">
+  <input type="hidden" name="attempt_token" value="{{.AttemptToken}}">
+  {{template "component.field" (dict "id" "otp-code" "name" "code" "type" "text" "label" (t "page.auth.second_factor.code_label") "help" (t "page.auth.second_factor.email_code_help") "value" "" "required" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.verify") "variant" "primary" "type" "submit")}}</div>
+</form>
+<form method="post" action="{{route "auth.second_factor.resend"}}" class="ln-actions">
+  {{csrf_field}}
+  <input type="hidden" name="challenge_id" value="{{.ChallengeID}}">
+  <input type="hidden" name="attempt_token" value="{{.AttemptToken}}">
+  {{template "component.button" (dict "label" (t "page.auth.second_factor.resend") "variant" "secondary" "type" "submit")}}
+</form>
+{{else if eq .FactorType "totp"}}
+<p>{{t "page.auth.second_factor.totp_hint"}}</p>
+<p class="ln-meta">{{t "page.auth.second_factor.totp_no_resend"}}</p>
+<form method="post" action="{{route "auth.second_factor.verify"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  <input type="hidden" name="challenge_id" value="{{.ChallengeID}}">
+  <input type="hidden" name="attempt_token" value="{{.AttemptToken}}">
+  {{template "component.field" (dict "id" "totp-code" "name" "code" "type" "text" "label" (t "page.auth.second_factor.code_label") "help" (t "page.auth.second_factor.totp_code_help") "value" "" "required" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.verify") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{else if eq .FactorType "passkey"}}
+<p>{{t "page.auth.second_factor.passkey_hint"}}</p>
+<form method="post" action="{{route "auth.second_factor.verify"}}" data-ln-module="webauthn" data-ln-mode="get" data-ln-options="{{printf "%s" .PasskeyOptions}}" data-ln-ceremony="{{.PasskeyCeremonyID}}" data-ln-webauthn-form>
+  {{csrf_field}}
+  <input type="hidden" name="challenge_id" value="{{.ChallengeID}}">
+  <input type="hidden" name="attempt_token" value="{{.AttemptToken}}">
+  <input type="hidden" name="passkey_ceremony_id" value="{{.PasskeyCeremonyID}}">
+  <input type="hidden" name="passkey_response" value="">
+  <p class="ln-meta" data-ln-webauthn-status role="status"></p>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.passkey.call") "variant" "primary" "type" "button")}}
+  <a class="ln-button ln-button--secondary" href="{{route "auth.login"}}">{{t "page.auth.passkey.alternative"}}</a></div>
+</form>
+{{else}}
+<p class="ln-banner ln-banner--warning" role="alert">{{t "page.auth.second_factor.no_method"}}</p>
+{{end}}
+<form method="post" action="{{route "auth.second_factor.cancel"}}" class="ln-actions">
+  {{csrf_field}}
+  <input type="hidden" name="challenge_id" value="{{.ChallengeID}}">
+  <input type="hidden" name="attempt_token" value="{{.AttemptToken}}">
+  {{template "component.button" (dict "label" (t "page.auth.second_factor.cancel") "variant" "secondary" "type" "submit")}}
+</form>
+<a href="{{route "auth.recovery_code"}}">{{t "page.auth.second_factor.use_recovery"}}</a>
+{{end}}
+{{end}}

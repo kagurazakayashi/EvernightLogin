@@ -439,6 +439,18 @@
 // 路由/限流、Webhook/应用会话通知（步骤 59）、撤销列表查询、非 Windows/race/
 // 多实例未验证。
 //
+// 步骤 64 在步骤 63 账户入口页面上补齐：第二因素（邮件/TOTP/Passkey 第二步）、
+// 强因素初始化、忘记/重置密码、恢复代码与受限恢复重绑。第二因素挑战/尝试令牌只用
+// 签名短时效 HttpOnly Cookie（内部 pagestate）与隐藏字段传递，不进入 URL/日志；
+// 恢复代码前经 internal/mfa 只读交接校验后再由 recovery.Begin 原子消费；Passkey
+// 只使用服务端 options 做真实 WebAuthn get/create，异常仅映射安全文案、不降级；
+// 强初始化与恢复绑定只列服务端允许方法，完成后撤销受限会话并要求重新登录。页面
+// 后端契约由 UIPageMFABackend/UIPageMFAOptions 冻结，代表适配器在 internal/
+// uiauthadapter（真实 mfa/passkey/recovery/passwordreset/session）；强初始化与恢复
+// 绑定的 Authorizer/Binder/Requirements 等生产装配留后续步骤，未装配时 fail-closed。
+// 真实硬件认证器与浏览器视口/读屏未实测（软件 WebAuthn 模拟认证器与真实服务集成
+// 测试已覆盖页面契约）。
+//
 // 页面阶段已由步骤 62 建立基础：根包公开契约 login.NewWebUI / ui.v1（命名路由、
 // 公开视图模型、模板函数、宿主渲染器/模板覆盖优先级与整体禁用内置页面），web/
 // 内嵌 html/template + 原生 CSS/ES 模块（无 Node/npm、无第三方在线资源），经

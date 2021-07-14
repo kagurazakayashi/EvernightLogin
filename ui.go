@@ -293,6 +293,8 @@ type WebUIOptions struct {
 	FormTokens UIFormTokenProvider
 	// PageAuth 非 nil 时注册步骤 63 账户入口页面（登录/注册/邀请/邮箱验证/退出）。
 	PageAuth *UIPageAuthOptions
+	// PageMFA 非 nil 时注册步骤 64 两步验证/Passkey/恢复/找回页面。
+	PageMFA *UIPageMFAOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -331,6 +333,7 @@ type WebUI struct {
 	hostPage            map[string]string
 	builtinPageDisabled bool
 	pageAuth            *pageAuthPages
+	pageMFA             *pageMFAPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -377,6 +380,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageAuth = pages
+	}
+	if options.PageMFA != nil {
+		pages, pageErr := newPageMFAPages(*options.PageMFA)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageMFA = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -545,6 +555,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageAuth != nil {
 		routes = append(routes, ui.pageAuth.routes...)
 	}
+	if ui.pageMFA != nil {
+		routes = append(routes, ui.pageMFA.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -571,6 +584,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageAuth != nil {
 		for name := range ui.pageAuth.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageMFA != nil {
+		for name := range ui.pageMFA.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -868,6 +888,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	if handler == nil && ui.pageAuth != nil {
 		handler = ui.pageAuth.handlers[route.Name]
 	}
+	if handler == nil && ui.pageMFA != nil {
+		handler = ui.pageMFA.handlers[route.Name]
+	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
 		if handleErr != nil {
@@ -894,6 +917,11 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 			page.StatusCode = outcome.StatusCode
 		}
 		page.Data = outcome.Data
+		if page.Data == nil {
+			// 页面处理器错误/空数据时使用空映射，让模板中的 .Data.X 安全为空，
+			// 避免“错误页自身渲染失败”的二次故障。
+			page.Data = map[string]any{}
+		}
 		if len(outcome.FieldErrors) > 0 {
 			page.FieldErrors = outcome.FieldErrors
 		}

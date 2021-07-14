@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
@@ -986,6 +987,66 @@ type ResendRequest struct {
 	ChallengeID  string
 	AttemptToken string
 	RequestID    string
+}
+
+// RecoveryAuthenticationRequest 是“使用恢复代码”前的只读交接请求：只校验本次
+// 第二因素挑战、尝试令牌与受限会话三者一致，不改变挑战/会话/验证码状态。
+type RecoveryAuthenticationRequest struct {
+	ChallengeID     string
+	AttemptToken    string
+	ExistingSession string
+	RequestID       string
+}
+
+// RecoveryAuthentication 为“使用恢复代码替代第二步”提供受控只读交接：验证挑战
+// 用途/状态/尝试令牌摘要/未过期/受限会话绑定后，返回可由 internal/recovery.Begin
+// 接受的最小认证结果（OutcomePendingSecondFactor、Restricted、待第二步）。
+//
+// 安全边界：本方法不消费验证码、不迁移挑战状态、不签发会话、不记录成功审计，只
+// 做只读一致性校验；任一项不匹配统一返回 ErrChallengeInvalid。恢复代码本身仍由
+// recovery.Begin 原子消费并在审计事务内完成，本方法不能替代其校验。
+func (s *Service) RecoveryAuthentication(ctx context.Context,
+	request RecoveryAuthenticationRequest) (authn.AuthenticateResult, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return authn.AuthenticateResult{}, err
+	}
+	attemptDigest, err := hexAttemptToken(request.AttemptToken)
+	if err != nil {
+		return authn.AuthenticateResult{}, ErrChallengeInvalid
+	}
+	challenge, err := s.loadChallenge(ctx, request.ChallengeID)
+	if err != nil {
+		return authn.AuthenticateResult{}, err
+	}
+	if challenge.Purpose != PurposeLogin {
+		return authn.AuthenticateResult{}, ErrChallengeInvalid
+	}
+	if !equalDigest(challenge.AttemptSHA256, attemptDigest) || challenge.State != StatePending {
+		return authn.AuthenticateResult{}, ErrChallengeInvalid
+	}
+	now := s.now()
+	if !now.Before(challenge.ExpiresAt) || challenge.Attempts >= challenge.MaxAttempts {
+		return authn.AuthenticateResult{}, ErrChallengeInvalid
+	}
+	sessionRecord, err := s.opts.Sessions.Validate(ctx, strings.TrimSpace(request.ExistingSession))
+	if err != nil || sessionRecord.UserID != challenge.UserID ||
+		!sessionRecord.IsRestricted() || sessionRecord.Kind != session.KindRestricted ||
+		sessionRecord.Reason != session.ReasonPendingSecondFactor ||
+		sessionRecord.AppID != challenge.AppID ||
+		sessionRecord.ID != challenge.RestrictedSessionID || challenge.RestrictedSessionID == "" {
+		return authn.AuthenticateResult{}, ErrChallengeInvalid
+	}
+	return authn.AuthenticateResult{
+		UserID:           challenge.UserID,
+		Username:         challenge.Username,
+		Outcome:          authn.OutcomePendingSecondFactor,
+		CompletedMethods: []authn.Method{authn.MethodPassword},
+		CompletedAt:      challenge.CreatedAt,
+		RequiredSteps:    []authn.Step{authn.StepSecondFactor},
+		Restricted:       true,
+		SecurityVersion:  challenge.SecurityVersion,
+	}, nil
 }
 
 // Resend 在冷却后重发验证码，并使旧验证码失效（ReplaceActive + 代数递增）。

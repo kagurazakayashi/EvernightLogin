@@ -20,7 +20,12 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
+	"github.com/kagurazakayashi/EvernightLogin/internal/pagestate"
+	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
+	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
+	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
@@ -41,8 +46,16 @@ type Options struct {
 	// 必须用 cid/token 与当前 pending 票据做只读绑定校验后才允许系统身份发送。
 	RegistrationStore registration.Store
 	Credential        *credential.Service
-	Now               func() time.Time
-	Logger            *slog.Logger
+	// 步骤 64：第二因素/Passkey/恢复/找回页面所需真实服务；同时参与密码登录后的
+	// 受限结果继续（BeginLogin），未装配时页面只显示受限状态、不伪造成功。
+	MFA           *mfa.Service
+	Passkeys      *passkey.Service
+	Recovery      *recovery.Service
+	PasswordReset *passwordreset.Service
+	// PageState 是步骤 64 临时页面状态的签名编解码器；MFA 非 nil 时必填。
+	PageState *pagestate.Codec
+	Now       func() time.Time
+	Logger    *slog.Logger
 }
 
 // Adapter 实现 login.UIPageAuthBackend。
@@ -52,9 +65,11 @@ type Adapter struct {
 
 // New 校验依赖并构造适配器。
 func New(options Options) (*Adapter, error) {
-	if options.Authn == nil || options.Sessions == nil || options.Registration == nil ||
-		options.Onboarding == nil {
-		return nil, fmt.Errorf("页面账户适配器缺少必需服务")
+	if options.Authn == nil || options.Sessions == nil {
+		return nil, fmt.Errorf("页面账户适配器缺少认证/会话服务")
+	}
+	if options.MFA != nil && options.PageState == nil {
+		return nil, fmt.Errorf("页面 MFA 需要签名的页面状态编解码器")
 	}
 	if options.ResendComponentID == "" {
 		options.ResendComponentID = "web-login-page"
@@ -94,6 +109,41 @@ func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
 	if len(userAgent) > 512 {
 		userAgent = userAgent[:512]
 	}
+	complete := result.Outcome == authn.OutcomeComplete && !result.Restricted &&
+		len(result.RequiredSteps) == 0
+	steps := make([]string, 0, len(result.RequiredSteps))
+	for _, step := range result.RequiredSteps {
+		steps = append(steps, string(step))
+	}
+	// 装配 MFA 时，任何密码结果都要先经真实第二因素启动：账户启用因素/强制策略
+	// 时返回受限挑战；没有可用因素时 RequiresSecondFactor=false，再签发普通会话。
+	if a.opts.MFA != nil {
+		start, startErr := a.opts.MFA.BeginLogin(ctx, mfa.BeginLoginRequest{Result: result,
+			ExistingSession: existing, RememberMe: loginRequest.RememberMe,
+			RequestID: loginRequest.RequestID, Client: session.ClientInfo{
+				UserAgent: userAgent, Address: clientIP}})
+		if startErr != nil {
+			return login.UIPageLoginResult{}, publicMFAError(startErr)
+		}
+		if start.RequiresSecondFactor || start.SetupRequired {
+			cookie, cookieErr := a.opts.Sessions.NewCookie(start.RestrictedSession)
+			if cookieErr != nil {
+				return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+			}
+			view, stateCookie, stateErr := a.mfaView(start)
+			if stateErr != nil {
+				return login.UIPageLoginResult{}, stateErr
+			}
+			return login.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
+				Restricted: true, RequiredSteps: steps, Cookie: cookie,
+				SecondFactor: &view, StateCookie: stateCookie}, nil
+		}
+		if !complete {
+			// 受限但非第二因素（如待改密）不能被本流程绕过：fail-closed 回页面提示。
+			return login.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
+				Restricted: true, RequiredSteps: steps}, nil
+		}
+	}
 	issued, loginErr := a.opts.Sessions.Login(ctx, session.LoginRequest{
 		Result: result, ExistingSession: existing, RememberMe: loginRequest.RememberMe,
 		RequestID: loginRequest.RequestID, Client: session.ClientInfo{UserAgent: userAgent,
@@ -105,12 +155,6 @@ func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
 	if cookieErr != nil {
 		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
-	complete := result.Outcome == authn.OutcomeComplete && !result.Restricted &&
-		len(result.RequiredSteps) == 0
-	steps := make([]string, 0, len(result.RequiredSteps))
-	for _, step := range result.RequiredSteps {
-		steps = append(steps, string(step))
-	}
 	return login.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
 		Complete: complete, Restricted: !complete, RequiredSteps: steps,
 		Cookie: cookie}, nil
@@ -120,6 +164,9 @@ func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
 func (a *Adapter) RegistrationAvailability(ctx context.Context) (login.UIPageRegistrationAvailability, error) {
 	if err := ctx.Err(); err != nil {
 		return login.UIPageRegistrationAvailability{}, err
+	}
+	if a.opts.Registration == nil {
+		return login.UIPageRegistrationAvailability{}, nil
 	}
 	return login.UIPageRegistrationAvailability{
 		Enabled:                  a.opts.Registration.Enabled(),

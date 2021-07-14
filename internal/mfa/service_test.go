@@ -1294,3 +1294,58 @@ func TestTOTPStrongAuthGatedByPolicy(t *testing.T) {
 		t.Fatal("普通账户 TOTP 第二步应签发完整会话")
 	}
 }
+
+// TestRecoveryAuthenticationHandoff 验证恢复代码前的只读交接：只接受一致且活动的
+// 第二因素挑战/受限会话，不消费挑战、不签发会话。
+func TestRecoveryAuthenticationHandoff(t *testing.T) {
+	env := newTestEnv(t, nil)
+	env.enableEmailFactor()
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.completeAuthn(), RequestID: "req-handoff"})
+	if err != nil {
+		t.Fatalf("第二步: %v", err)
+	}
+	result, err := env.service.RecoveryAuthentication(env.ctx, mfa.RecoveryAuthenticationRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-handoff"})
+	if err != nil {
+		t.Fatalf("只读交接失败: %v", err)
+	}
+	if result.Outcome != authn.OutcomePendingSecondFactor || !result.Restricted ||
+		len(result.RequiredSteps) != 1 || result.RequiredSteps[0] != authn.StepSecondFactor ||
+		result.SecurityVersion <= 0 || result.UserID == "" {
+		t.Fatalf("交接结果不满足恢复前置契约: %+v", result)
+	}
+	// 只读：挑战仍为 pending，可用正确验证码继续完成登录。
+	if state := env.queryString(`SELECT state FROM mfa_challenges WHERE id=?`, start.ChallengeID); state != string(mfa.StatePending) {
+		t.Fatalf("只读交接不应改变挑战状态，实际 %s", state)
+	}
+	// 错误会话/错误令牌/过期都应 fail-closed。
+	other, err := env.session.Login(env.ctx, session.LoginRequest{Result: env.completeAuthn(),
+		RequestID: "req-other-session"})
+	if err != nil {
+		t.Fatalf("签发其他会话: %v", err)
+	}
+	_ = other
+	if _, err := env.service.RecoveryAuthentication(env.ctx, mfa.RecoveryAuthenticationRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: "00", ExistingSession: start.RestrictedSession.Secret.Reveal()}); !errors.Is(err, mfa.ErrChallengeInvalid) {
+		t.Fatalf("短令牌应拒绝，实际 %v", err)
+	}
+	if _, err := env.service.RecoveryAuthentication(env.ctx, mfa.RecoveryAuthenticationRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: "wrong-session"}); !errors.Is(err, mfa.ErrChallengeInvalid) {
+		t.Fatalf("错误会话应拒绝，实际 %v", err)
+	}
+	// 成功后挑战一次性消费，交接不可再用。
+	code := env.waitCode()
+	if _, err := env.service.Verify(env.ctx, mfa.VerifyRequest{ChallengeID: start.ChallengeID,
+		AttemptToken: start.AttemptToken, Code: code,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-handoff-verify"}); err != nil {
+		t.Fatalf("验证失败: %v", err)
+	}
+	if _, err := env.service.RecoveryAuthentication(env.ctx, mfa.RecoveryAuthenticationRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal()}); !errors.Is(err, mfa.ErrChallengeInvalid) {
+		t.Fatalf("已消费挑战不应再交接，实际 %v", err)
+	}
+}

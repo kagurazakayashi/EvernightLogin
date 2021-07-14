@@ -3,6 +3,7 @@
 const modules = {
   "confirm": () => import("./modules/confirm.mjs"),
   "async-form": () => import("./modules/async-form.mjs"),
+  "webauthn": () => import("./modules/webauthn.mjs"),
 };
 
 for (const element of document.querySelectorAll("[data-ln-module]")) {

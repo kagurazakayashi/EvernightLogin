@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -299,37 +300,23 @@ func TestWebUIAssetsAndI18n(t *testing.T) {
 	}
 }
 
-// walkEmbeddedTemplates 遍历内置模板文件内容。
+// walkEmbeddedTemplates 遍历内置模板文件内容（全部 layout/component/page）。
 func walkEmbeddedTemplates(visit func([]byte)) error {
-	paths := []string{
-		"web/templates/layout/base.html", "web/templates/layout/auth.html",
-	}
-	entries, err := webEmbedded.ReadDir("web/templates/component")
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			paths = append(paths, "web/templates/component/"+entry.Name())
+	return fs.WalkDir(webEmbedded, "web/templates", func(logicalPath string, entry fs.DirEntry,
+		walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-	}
-	pages, err := webEmbedded.ReadDir("web/templates/page/system")
-	if err != nil {
-		return err
-	}
-	for _, entry := range pages {
-		if !entry.IsDir() {
-			paths = append(paths, "web/templates/page/system/"+entry.Name())
+		if entry.IsDir() || !strings.HasSuffix(logicalPath, ".html") {
+			return nil
 		}
-	}
-	for _, logical := range paths {
-		data, readErr := webEmbedded.ReadFile(logical)
+		data, readErr := webEmbedded.ReadFile(logicalPath)
 		if readErr != nil {
 			return readErr
 		}
 		visit(data)
-	}
-	return nil
+		return nil
+	})
 }
 
 // TestWebUIConstantsAndValidation 验证契约版本、前缀与路由唯一性。

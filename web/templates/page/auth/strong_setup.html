@@ -1,0 +1,27 @@
+{{define "page-title"}}{{t "page.auth.strong_setup.title"}}{{end}}
+{{define "content"}}
+{{with .Data.StrongSetupDone}}
+  <div class="ln-banner ln-banner--success" role="status">{{t "page.auth.strong_setup.relogin"}}</div>
+  <p class="ln-meta">{{t "page.auth.strong_setup.reauth_required"}}</p>
+  <a class="ln-button ln-button--primary" href="{{route "auth.login"}}">{{t "common.action.login"}}</a>
+{{else}}
+{{with .Data.StrongSetup}}
+  <div class="ln-banner ln-banner--warning">{{t "page.auth.strong_setup.restricted"}}</div>
+  {{if .AllowedMethods}}<p class="ln-meta">{{t "page.auth.strong_setup.allowed"}}: {{range .AllowedMethods}}<code>{{.}}</code> {{end}}</p>{{end}}
+  {{with $.Data.PasskeyStart}}
+    <form method="post" action="{{route "auth.strong_setup.passkey_finish"}}" data-ln-module="webauthn" data-ln-mode="create" data-ln-options="{{printf "%s" .PublicKey}}" data-ln-webauthn-form data-ln-response-field="passkey_response">
+      {{csrf_field}}
+      <input type="hidden" name="passkey_ceremony_id" value="{{.CeremonyID}}">
+      <input type="hidden" name="passkey_response" value="">
+      <p class="ln-meta" data-ln-webauthn-status role="status"></p>
+      <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.strong_setup.bind_passkey") "variant" "primary" "type" "button")}}</div>
+    </form>
+  {{else}}
+    <form method="post" action="{{route "auth.strong_setup.passkey_start"}}" data-ln-module="async-form">
+      {{csrf_field}}
+      <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.strong_setup.bind_passkey") "variant" "primary" "type" "submit")}}</div>
+    </form>
+  {{end}}
+{{end}}
+{{end}}
+{{end}}

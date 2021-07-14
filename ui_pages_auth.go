@@ -75,6 +75,11 @@ type UIPageLoginResult struct {
 	Restricted    bool
 	RequiredSteps []string
 	Cookie        *http.Cookie
+	// SecondFactor 非空表示后端已启动真实第二因素挑战；页面必须跳转到
+	// auth.second_factor 继续，不能当作登录成功。
+	SecondFactor *UIPageSecondFactor
+	// StateCookie 是签名封装的短期挑战状态（HttpOnly）。
+	StateCookie *http.Cookie
 }
 
 // UIPageRegistrationAvailability 是注册开关与邮箱策略快照。
@@ -229,6 +234,9 @@ func UIPageAuthPublicFormPaths(prefix string) map[string]string {
 
 // formPurposeForRoute 把公开页面路由映射为匿名 CSRF 表单用途（与 POST 路径一致）。
 func formPurposeForRoute(routeName string) string {
+	if purpose := mfaFormPurposeForRoute(routeName); purpose != "" {
+		return purpose
+	}
 	switch routeName {
 	case "auth.login", "auth.login.submit":
 		return "auth.login"
@@ -347,8 +355,14 @@ func (h *authPageHandlers) login(ctx context.Context, request *http.Request,
 		}
 		return outcome, nil
 	}
-	// 需要补充验证/受限结果：绝不是登录成功。允许适配器下发受限会话 Cookie 供
-	// 后续步骤继续，但页面只显示真实受限状态，不跳转业务页。
+	// 需要补充验证/受限结果：绝不是登录成功。
+	if result.SecondFactor != nil {
+		// 后端已启动真实第二因素挑战：下发受限会话与签名状态，跳转确认页。
+		outcome := UIPageOutcome{RedirectRoute: "auth.second_factor"}
+		outcome.SetCookies = append(outcome.SetCookies, result.Cookie, result.StateCookie)
+		return outcome, nil
+	}
+	// 未装配第二因素后端：只显示真实受限状态，不跳转业务页。
 	outcome := UIPageOutcome{Data: data, ErrorCode: "MFA_REQUIRED",
 		ErrorSummary: text("page.auth.login.restricted"), FieldErrors: map[string]string{}}
 	if result.Cookie != nil {

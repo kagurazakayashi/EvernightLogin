@@ -18,7 +18,7 @@
 {{if .ErrorSummary}}
 <div class="ln-banner ln-banner--error" role="alert" data-ln-component="banner" data-ln-state="error">
   <p>{{.ErrorSummary}}</p>
-  {{if .RequestID}}<p class="ln-meta">{{t "common.label.request_id"}}: <code>{{.RequestID}}</code></p>{{end}}
+  {{if .ErrorCode}}<p class="ln-meta">{{t "common.label.status"}}: <code>{{.ErrorCode}}</code>{{if .RequestID}} · {{t "common.label.request_id"}}: <code>{{.RequestID}}</code>{{end}}</p>{{else}}{{if .RequestID}}<p class="ln-meta">{{t "common.label.request_id"}}: <code>{{.RequestID}}</code></p>{{end}}{{end}}
 </div>
 {{end}}
 {{template "content" .}}
