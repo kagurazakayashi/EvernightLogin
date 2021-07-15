@@ -1,0 +1,25 @@
+{{define "page-title"}}{{t "page.app.scan.title"}}{{end}}
+{{define "content"}}
+{{with .Data.Scan}}
+<div class="ln-banner ln-banner--warning">{{.Warning}}</div>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.oauth.consent.application"}}</dt><dd>{{.ApplicationName}} <code>{{.ClientID}}</code></dd>
+  <dt>{{t "page.app.scan.status"}}</dt><dd><code>{{.Status}}</code></dd>
+  <dt>{{t "page.oauth.consent.expires"}}</dt><dd>{{format_time .ExpiresAt "UTC"}}</dd>
+  <dt>{{t "page.app.scan.requester"}}</dt><dd class="ln-meta">{{.RequesterHint}}</dd>
+</dl>
+<ul class="ln-scope-list">{{range .Scopes}}<li><strong>{{.Description}}</strong> <code>{{.Value}}</code></li>{{end}}</ul>
+{{if $.Data.Decided}}
+<p class="ln-meta">{{t "page.app.scan.decided"}}</p>
+{{else}}
+<div class="ln-actions">
+<form method="post" action="{{route "app.scan_confirm.decide"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="request_id" value="{{.RequestID}}"><input type="hidden" name="expected_version" value="{{.Version}}"><input type="hidden" name="approve" value="true">
+{{template "component.button" (dict "label" (t "page.app.scan.approve") "variant" "primary" "type" "submit")}}</form>
+<form method="post" action="{{route "app.scan_confirm.decide"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="request_id" value="{{.RequestID}}"><input type="hidden" name="expected_version" value="{{.Version}}"><input type="hidden" name="approve" value="false">
+{{template "component.button" (dict "label" (t "page.app.scan.deny") "variant" "secondary" "type" "submit")}}</form>
+</div>
+{{end}}
+{{end}}
+{{end}}

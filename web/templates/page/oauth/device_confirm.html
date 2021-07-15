@@ -1,0 +1,24 @@
+{{define "page-title"}}{{t "page.oauth.device.confirm_title"}}{{end}}
+{{define "content"}}
+{{with .Data.DeviceDone}}
+<div class="ln-banner ln-banner--{{if .Approved}}success{{else}}warning{{end}}" role="status">
+{{if .Approved}}{{t "page.oauth.device.approved"}}{{else}}{{t "page.oauth.device.denied"}}{{end}}
+</div>
+<p class="ln-meta">{{t "page.oauth.device.can_close"}}</p>
+{{else}}{{with .Data.Device}}
+<div class="ln-banner ln-banner--warning">{{t "page.oauth.consent.risk"}}</div>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.oauth.consent.application"}}</dt><dd>{{.ApplicationName}} <code>{{.ClientID}}</code></dd>
+  <dt>{{t "page.oauth.consent.expires"}}</dt><dd>{{format_time .ExpiresAt "UTC"}}</dd>
+</dl>
+<ul class="ln-scope-list">{{range .Scopes}}<li><strong>{{.Description}}</strong> <code>{{.Value}}</code></li>{{end}}</ul>
+<div class="ln-actions">
+<form method="post" action="{{route "oauth.device_confirm.decide"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="user_code" value="{{.UserCode}}"><input type="hidden" name="approve" value="true">
+{{template "component.button" (dict "label" (t "page.oauth.consent.approve") "variant" "primary" "type" "submit")}}</form>
+<form method="post" action="{{route "oauth.device_confirm.decide"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="user_code" value="{{.UserCode}}"><input type="hidden" name="approve" value="false">
+{{template "component.button" (dict "label" (t "page.oauth.consent.deny") "variant" "secondary" "type" "submit")}}</form>
+</div>
+{{end}}{{end}}
+{{end}}

@@ -1,0 +1,8 @@
+{{define "page-title"}}{{t "page.oauth.device.title"}}{{end}}
+{{define "content"}}
+<p>{{t "page.oauth.device.description"}}</p>
+<form method="post" action="{{route "oauth.device_verify.describe"}}" data-ln-module="async-form">{{csrf_field}}
+{{template "component.field" (dict "id" "device-code" "name" "user_code" "type" "text" "label" (t "page.oauth.device.code_label") "help" (t "page.oauth.device.code_help") "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.oauth.device.continue") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}

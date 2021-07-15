@@ -237,6 +237,9 @@ func formPurposeForRoute(routeName string) string {
 	if purpose := mfaFormPurposeForRoute(routeName); purpose != "" {
 		return purpose
 	}
+	if purpose := oauthFormPurposeForRoute(routeName); purpose != "" {
+		return purpose
+	}
 	switch routeName {
 	case "auth.login", "auth.login.submit":
 		return "auth.login"

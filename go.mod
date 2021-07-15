@@ -12,6 +12,7 @@ require (
 	golang.org/x/term v0.47.0
 	golang.org/x/text v0.44.0
 	modernc.org/sqlite v1.62.0
+	rsc.io/qr v0.2.0
 	software.sslmate.com/src/go-pkcs12 v0.7.4
 )
 

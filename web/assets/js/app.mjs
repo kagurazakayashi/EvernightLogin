@@ -4,6 +4,9 @@ const modules = {
   "confirm": () => import("./modules/confirm.mjs"),
   "async-form": () => import("./modules/async-form.mjs"),
   "webauthn": () => import("./modules/webauthn.mjs"),
+  "qr-poll": () => import("./modules/qr.mjs"),
+  "qr-claim": () => import("./modules/qr.mjs"),
+  "qr-countdown": () => import("./modules/qr.mjs"),
 };
 
 for (const element of document.querySelectorAll("[data-ln-module]")) {

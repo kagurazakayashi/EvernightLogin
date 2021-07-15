@@ -1,0 +1,26 @@
+{{define "page-title"}}{{t "page.oauth.consent.title"}}{{end}}
+{{define "content"}}
+{{with .Data.Consent}}
+<div class="ln-banner ln-banner--warning">{{t "page.oauth.consent.risk"}}</div>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.oauth.consent.application"}}</dt><dd>{{.ApplicationName}} <code>{{.ClientID}}</code></dd>
+  <dt>{{t "page.oauth.consent.account"}}</dt><dd>{{.UserDisplayName}}</dd>
+  <dt>{{t "page.oauth.consent.expires"}}</dt><dd>{{format_time .ExpiresAt "UTC"}}</dd>
+</dl>
+<section aria-labelledby="scope-list"><h2 id="scope-list">{{t "page.oauth.consent.scopes"}}</h2>
+<ul class="ln-scope-list">{{range .Scopes}}<li><strong>{{.Description}}</strong> <code>{{.Value}}</code>{{if .Limits}}<p class="ln-meta">{{.Limits}}</p>{{end}}</li>{{end}}</ul>
+</section>
+<section aria-labelledby="audience-list"><h2 id="audience-list">{{t "page.oauth.consent.audiences"}}</h2>
+<ul class="ln-scope-list">{{range .Audiences}}<li>{{.Description}} <code>{{.Value}}</code></li>{{else}}<li class="ln-meta">{{t "page.oauth.consent.no_audience"}}</li>{{end}}</ul>
+</section>
+<p class="ln-meta">{{t "page.oauth.consent.redirect"}}: <code>{{.RedirectURI}}</code></p>
+<div class="ln-actions">
+<form method="post" action="{{route "oauth.consent.decide"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="request_id" value="{{.RequestID}}"><input type="hidden" name="approve" value="true">
+{{template "component.button" (dict "label" (t "page.oauth.consent.approve") "variant" "primary" "type" "submit")}}</form>
+<form method="post" action="{{route "oauth.consent.decide"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="request_id" value="{{.RequestID}}"><input type="hidden" name="approve" value="false">
+{{template "component.button" (dict "label" (t "page.oauth.consent.deny") "variant" "secondary" "type" "submit")}}</form>
+</div>
+{{end}}
+{{end}}

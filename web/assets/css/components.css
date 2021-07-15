@@ -42,3 +42,6 @@
 .ln-recovery-codes { font-family: var(--ln-font-mono); list-style: none; padding: var(--ln-space-3); background: var(--ln-color-surface-subtle); border-radius: var(--ln-radius); overflow-x: auto; }
 .ln-recovery-codes li { padding: var(--ln-space-1) 0; }
 .ln-secret { font-family: var(--ln-font-mono); overflow-x: auto; padding: var(--ln-space-3); background: var(--ln-color-surface-subtle); border-radius: var(--ln-radius); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.ln-qr-wrap { display: inline-block; padding: var(--ln-space-3); background: #FFFFFF; border: 1px solid var(--ln-color-border); border-radius: var(--ln-radius); max-width: 100%; }
+.ln-qr { width: 220px; height: 220px; max-width: 100%; height: auto; display: block; }

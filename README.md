@@ -591,6 +591,18 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 
 - **审计修复语义（2026-11-18）**：导出 handler 使用**任务局部上限**（绝不回写共享 Service 字段，并发导出互不影响；配置保持不变）；逐行结果/报告改为**分页读取到真实总数**（SQL 单页 100、服务端按 `(job_id,row_number)` 拼接，明细上限默认 5000），`truncated` 按真实总数计算，`ListRows` 返回该值、`ReportCSV` 返回 `(CSV, truncated, error)` 并在每行 `report_truncated` 列显式标记；导入在**处理首行前**与每批复验权限、导出**每页**复验 `users.export`，中途撤权 → 任务 `failed`+`ACCESS_DENIED`（不 succeeded/不静默跳过）；`failed` 保留导入输入供受控 `Retry` 真正续跑（`succeeded/partial/cancelled` 才清空），崩溃遗留 `running` 由宿主启动时 `ReconcileInterrupted` 收敛为 `failed`（`TASK_TIMEOUT`）使 Retry 可达，任务墙钟到期 → `failed`+`TASK_TIMEOUT`（取消才写 cancelled），并提供 `CleanupExpiredInputs`；导出扫描量硬上限（任务上限 10 倍、≥1000、≤1,000,000）；构造时若配置导出目录但缺少 `UserScopeAuthorizer` 直接拒绝；`newJobID` 随机源失败返回错误而非 panic。
 
+## OAuth 授权确认、设备码与扫码登录页面（步骤 65）
+
+在步骤 62～64 页面上接入正式 OAuth/设备码/扫码页面，保留后端协议语义；无新迁移、无新错误码、无新依赖。
+
+- **OAuth 授权确认页**（`oauth.consent`/`.decide`）：从真实 `oauthflow.BeginAuthorization` 创建确认请求，展示受控应用名（宿主 `ApplicationNames` 目录或稳定 ClientID，绝不使用客户端自报名）、当前账户、Scope 中文动作说明、audience 目标资源、精确回调与到期时间；未知自定义 scope fail-closed 不引导批准。批准/拒绝都调用真实 `DecideAuthorization`（批准再次认证由后端完成）：批准只跳后端生成的 `RedirectURL`（含一次性 code/state，框架校验绝对跳转协议，拒绝 javascript/data 等），拒绝走标准 `access_denied` 回调；授权码不写入页面 DOM/日志。
+- **设备码页**（`oauth.device_verify(.describe)`/`oauth.device_confirm(.decide)`）：GET 只渲染短码输入、不消费；POST 先用真实 `DescribeDeviceAuthorization` 读取应用/scope/到期，再以同一 `UserCode` 提交真实 `DecideDeviceAuthorization`；页面不接触 DeviceCode/Token，设备流不声明 OIDC ID Token。
+- **网页扫码发起页**（`auth.qr_login` 及 poll/claim/regenerate/cancel）：真实 `qrlogin.Begin` 创建短时请求；**服务端本地内联 SVG 二维码**（新增直接依赖 `rsc.io/qr v0.2.0`：Go Authors，BSD-3-Clause，无传递依赖；仅用于本地矩阵编码，不访问在线二维码服务），带 `role="img"`/`<title>` 可访问名；页面按 `ExpiresAt` 显示剩余秒数倒计时，归零后停止轮询、禁用提交并提示重新生成；`RequestID/到期` 展示，`ClaimSecret` 只放 HMAC 签名短时效 HttpOnly 状态 Cookie（`internal/pagestate`），绝不进入二维码/URL/DOM/日志。轮询遵守服务端状态与间隔、页面卸载停止计时；批准后由原发起页面自动（或按钮）调用真实 `Claim`，只签发目标应用会话；重新生成同事务取消旧请求，取消/拒绝/过期/已领取均按真实状态展示，旧异步响应不能覆盖。
+- **APP 扫码确认页**（`app.scan_confirm`/`.decide`）：真实完整会话读取 `Describe`（应用名/范围/请求端脱敏线索/版本/风险提醒），批准/拒绝提交 `RequestID + ExpectedVersion` 调真实 `Approve/Deny`；页面不自动同意、不提供跳过/后台批准，版本冲突与并发决定由后端判定。
+- **安全接线**：匿名表单（授权/设备/扫码/APP 确认）使用步骤 63 签名双提交匿名 CSRF + Origin/Referer；CSRF 公开路径由 `UIPageOAuthPublicFormPaths(prefix)` 提供给宿主 transport；页面不解析用户身份，全部经真实会话/后端服务。错误按领域映射为稳定码 400/403/409/429/503，内部故障 500 中文兜底；Scope 目录缺失的未知值直接拒绝。
+- **依赖新增**：`rsc.io/qr v0.2.0`（Rob Pike/Go Authors，BSD-3-Clause，`go.mod` 无 requires、无传递依赖；已 `go mod verify`/`go vet` 通过），仅服务端本地生成二维码矩阵并渲染内联 SVG；不引入在线二维码服务、字体或 CDN。
+- **已知限制**：授权确认页当前未把后端 OAuth 协议错误（如 invalid_scope）转成标准 error 重定向，而是 fail-closed 页面错误；Scope/audience 中文目录目前内置 openid/profile/email/offline_access，自定义 scope 需宿主受控目录补充；APP 确认页路由为公开路径 + 处理器内真实会话校验（页面框架不再重复会话分级）；真实二维码相机扫描、真实浏览器/读屏/移动 APP 未实测；真实 OAuth 客户端/手机 APP 联调由后续部署步骤完成。
+
 ## 两步验证、Passkey 交互与账户恢复页面（步骤 64）
 
 在步骤 63 账户入口页面上补齐登录第二步、WebAuthn、找回与受限恢复页面；无新迁移、无新错误码（复用既有 48 码）、无新依赖。

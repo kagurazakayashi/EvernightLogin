@@ -1,0 +1,39 @@
+{{define "page-title"}}{{t "page.auth.qr_login.title"}}{{end}}
+{{define "content"}}
+{{with .Data.QR}}
+<div class="ln-banner ln-banner--warning">{{t "page.auth.qr_login.risk"}}</div>
+<p>{{t "page.auth.qr_login.scan_hint"}}</p>
+<div class="ln-qr-wrap">{{qr_svg .QRPayload}}</div>
+<p class="ln-meta" data-ln-deadline="{{.ExpiresAt.UnixMilli}}" data-ln-module="qr-countdown">
+  {{t "page.auth.qr_login.remaining"}} <span data-ln-countdown>—</span>
+  <span data-ln-expired hidden>{{t "page.auth.qr_login.expired"}}</span>
+</p>
+<p class="ln-meta">{{t "common.label.request_id"}}: <code>{{.RequestID}}</code></p>
+<p class="ln-meta">{{t "page.auth.qr_login.expires"}}: {{format_time .ExpiresAt "UTC"}}</p>
+<form method="post" action="{{route "auth.qr_login.poll"}}" data-ln-module="qr-poll" data-ln-interval="{{.PollIntervalSeconds}}" data-ln-claim-action="{{route "auth.qr_login.claim"}}">{{csrf_field}}
+<input type="hidden" name="request_id" value="{{.RequestID}}">
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.qr_login.refresh_status") "variant" "secondary" "type" "submit")}}</div>
+</form>
+<div class="ln-actions">
+<form method="post" action="{{route "auth.qr_login.regenerate"}}">{{csrf_field}}{{template "component.button" (dict "label" (t "page.auth.qr_login.regenerate") "variant" "secondary" "type" "submit")}}</form>
+<form method="post" action="{{route "auth.qr_login.cancel"}}">{{csrf_field}}{{template "component.button" (dict "label" (t "common.action.cancel") "variant" "secondary" "type" "submit")}}</form>
+</div>
+{{else}}{{with .Data.QRStatus}}
+<div class="ln-banner ln-banner--info" role="status">{{t "page.auth.qr_login.status"}}: <code>{{.Status}}</code></div>
+<p class="ln-meta">{{t "page.auth.qr_login.expires"}}: {{format_time .ExpiresAt "UTC"}}</p>
+{{if eq .Status "approved"}}
+<form method="post" action="{{route "auth.qr_login.claim"}}" data-ln-module="qr-claim">{{csrf_field}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.qr_login.claim") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{else if or (eq .Status "pending") (eq .Status "approved")}}
+<form method="post" action="{{route "auth.qr_login.poll"}}" data-ln-module="qr-poll" data-ln-interval="{{.PollIntervalSeconds}}" data-ln-claim-action="{{route "auth.qr_login.claim"}}">{{csrf_field}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.qr_login.refresh_status") "variant" "secondary" "type" "submit")}}</div></form>
+{{else}}
+<p class="ln-meta">{{t "page.auth.qr_login.restart_hint"}}</p>
+<a class="ln-button ln-button--primary" href="{{route "auth.qr_login"}}">{{t "page.auth.qr_login.restart"}}</a>
+{{end}}
+{{else}}
+<p>{{t "page.auth.qr_login.error_generic"}}</p>
+<a class="ln-button ln-button--secondary" href="{{route "auth.qr_login"}}">{{t "page.auth.qr_login.restart"}}</a>
+{{end}}{{end}}
+{{end}}

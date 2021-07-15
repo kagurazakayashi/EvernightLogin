@@ -167,6 +167,9 @@ type UIPageOutcome struct {
 	// ErrorCode/ErrorSummary 作用于错误摘要与页面状态；不包含内部细节。
 	ErrorCode    string
 	ErrorSummary string
+	// ExternalRedirectURL 是后端生成的受控绝对跳转（例如 OAuth 已登记回调）；
+	// 框架只允许不含控制字符、长度受限且非 javascript/data 的绝对 URL。
+	ExternalRedirectURL string
 	// RedirectRoute 是命名路由；RedirectPath 是站内相对路径（框架加 BasePath）。
 	// RedirectQuery 只允许白名单键（页面处理器负责校验）。
 	RedirectRoute string
@@ -295,6 +298,8 @@ type WebUIOptions struct {
 	PageAuth *UIPageAuthOptions
 	// PageMFA 非 nil 时注册步骤 64 两步验证/Passkey/恢复/找回页面。
 	PageMFA *UIPageMFAOptions
+	// PageOAuth 非 nil 时注册步骤 65 OAuth 授权/设备码/扫码登录页面。
+	PageOAuth *UIPageOAuthOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -334,6 +339,7 @@ type WebUI struct {
 	builtinPageDisabled bool
 	pageAuth            *pageAuthPages
 	pageMFA             *pageMFAPages
+	pageOAuth           *pageOAuthPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -387,6 +393,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageMFA = pages
+	}
+	if options.PageOAuth != nil {
+		pages, pageErr := newPageOAuthPages(*options.PageOAuth)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageOAuth = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -558,6 +571,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageMFA != nil {
 		routes = append(routes, ui.pageMFA.routes...)
 	}
+	if ui.pageOAuth != nil {
+		routes = append(routes, ui.pageOAuth.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -591,6 +607,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageMFA != nil {
 		for name := range ui.pageMFA.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageOAuth != nil {
+		for name := range ui.pageOAuth.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -891,6 +914,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	if handler == nil && ui.pageMFA != nil {
 		handler = ui.pageMFA.handlers[route.Name]
 	}
+	if handler == nil && ui.pageOAuth != nil {
+		handler = ui.pageOAuth.handlers[route.Name]
+	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
 		if handleErr != nil {
@@ -949,6 +975,12 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 // redirectTarget 解析页面处理器输出的重定向目标：命名路由或站内相对路径（加
 // BasePath），仅允许白名单查询键；非法目标回退到默认首页而不是开放重定向。
 func (ui *WebUI) redirectTarget(outcome UIPageOutcome) (string, bool) {
+	if outcome.ExternalRedirectURL != "" {
+		if target, ok := safeExternalRedirect(outcome.ExternalRedirectURL); ok {
+			return target, true
+		}
+		return ui.prefix + "/401", true
+	}
 	if outcome.RedirectRoute != "" {
 		route, ok := ui.byName[outcome.RedirectRoute]
 		if !ok || route.Access == UIAccessManagement {
@@ -1199,6 +1231,13 @@ func templateFuncs(state any) template.FuncMap {
 			}
 		},
 		"mask": func(value string) string { return maskUIValue(value) },
+		"qr_svg": func(payload string) template.HTML {
+			svg, err := renderQRSVG(payload)
+			if err != nil {
+				return template.HTML("")
+			}
+			return template.HTML(svg)
+		},
 		"list": func(values ...any) []any { return values },
 		"dict": func(values ...any) map[string]any {
 			result := map[string]any{}
@@ -1484,4 +1523,26 @@ func maskUIValue(value string) string {
 		return "[REDACTED]"
 	}
 	return string(runes[:3]) + "***" + string(runes[len(runes)-3:])
+}
+
+// safeExternalRedirect 校验后端生成的绝对跳转：拒绝控制字符、userinfo、
+// javascript/data/file 等危险 scheme；OAuth 已登记回调自定义 scheme 允许。
+func safeExternalRedirect(value string) (string, bool) {
+	if value == "" || len(value) > 2048 {
+		return "", false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x20 || value[index] == 0x7f {
+			return "", false
+		}
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.User != nil {
+		return "", false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "javascript", "data", "file", "vbscript":
+		return "", false
+	}
+	return value, true
 }

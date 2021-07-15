@@ -18,13 +18,17 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
+	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
 	"github.com/kagurazakayashi/EvernightLogin/internal/pagestate"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
+	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
@@ -54,8 +58,17 @@ type Options struct {
 	PasswordReset *passwordreset.Service
 	// PageState 是步骤 64 临时页面状态的签名编解码器；MFA 非 nil 时必填。
 	PageState *pagestate.Codec
-	Now       func() time.Time
-	Logger    *slog.Logger
+	// 步骤 65：OAuth 授权确认/设备码与扫码登录页所需真实服务与受控展示配置。
+	OAuth      *oauthflow.Service
+	QR         *qrlogin.Service
+	App        *app.Service
+	Account    *account.Service
+	QRClientID string
+	QRScopes   []string
+	// ApplicationNames 是宿主受控目录聚合的 client_id -> 应用展示名映射。
+	ApplicationNames map[string]string
+	Now              func() time.Time
+	Logger           *slog.Logger
 }
 
 // Adapter 实现 login.UIPageAuthBackend。
@@ -65,8 +78,8 @@ type Adapter struct {
 
 // New 校验依赖并构造适配器。
 func New(options Options) (*Adapter, error) {
-	if options.Authn == nil || options.Sessions == nil {
-		return nil, fmt.Errorf("页面账户适配器缺少认证/会话服务")
+	if options.Sessions == nil {
+		return nil, fmt.Errorf("页面账户适配器缺少会话服务")
 	}
 	if options.MFA != nil && options.PageState == nil {
 		return nil, fmt.Errorf("页面 MFA 需要签名的页面状态编解码器")

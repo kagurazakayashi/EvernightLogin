@@ -266,6 +266,23 @@ func sanitizeText(value string, max int) string {
 // 响应中显式 Reveal() 后交给发起端，禁止写入二维码、URL、日志、审计或普通存储。
 type ClaimSecret struct{ value string }
 
+// ClaimSecretFromString 从服务端受控存储/签名状态恢复领取绑定文本。它只做格式
+// 校验，不证明秘密有效；调用方必须来自可信服务端状态（不得直接取自请求参数）。
+func ClaimSecretFromString(value string) (ClaimSecret, error) {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 32 || len(trimmed) > 128 {
+		return ClaimSecret{}, ErrInvalidRequest
+	}
+	for index := 0; index < len(trimmed); index++ {
+		character := trimmed[index]
+		if !(character >= 'A' && character <= 'Z') && !(character >= 'a' && character <= 'z') &&
+			!(character >= '0' && character <= '9') && character != '-' && character != '_' {
+			return ClaimSecret{}, ErrInvalidRequest
+		}
+	}
+	return ClaimSecret{value: trimmed}, nil
+}
+
 // newClaimSecret 用安全随机源生成领取绑定（base64url 无填充，43 字符）。
 func newClaimSecret(random io.Reader) (ClaimSecret, error) {
 	if random == nil {
