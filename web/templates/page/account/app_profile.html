@@ -1,0 +1,20 @@
+{{define "page-title"}}{{t "page.account.app_profile.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.appSelected}}
+<p>{{t "page.account.app_profile.hint"}}</p>
+<dl class="ln-meta"><dt>{{t "common.label.current_app"}}</dt><dd><code>{{.Data.app.AppID}}</code></dd><dt>{{t "page.account.profile.stable_id"}}</dt><dd><code>{{.Data.app.UserID}}</code></dd></dl>
+{{if .Data.updated}}{{template "component.banner" (dict "tone" "success" "message" (t "page.account.app_profile.updated"))}}{{end}}
+<form method="post" action="{{route "account.app_profile.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="row_version" value="{{.Data.app.RowVersion}}">
+  {{template "component.field" (dict "id" "app-display-name" "name" "display_name" "label" (t "page.account.app_profile.display_name") "value" .Data.app.DisplayName)}}
+  {{template "component.field" (dict "id" "app-title" "name" "title" "label" (t "page.account.app_profile.title_field") "value" .Data.app.Title)}}
+  {{template "component.field" (dict "id" "app-note" "name" "note" "label" (t "page.account.app_profile.note") "value" .Data.app.Note)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p><a href="{{route "account.profile"}}">{{t "page.account.app_profile.global_link"}}</a></p>
+{{else}}
+{{template "component.state" (dict "state" "not_enabled" "title" (t "page.account.app_profile.no_app"))}}
+{{end}}
+{{end}}

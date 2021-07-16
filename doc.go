@@ -564,6 +564,13 @@
 // user.bulk.export/users.export 默认强认证；错误码复用既有 48 码不新增。不实现
 // 应用成员导入、HTTP/CLI/页面与跨实例互斥。
 //
+// 步骤 66（进行中）：根公开 `WebUIOptions.PageAccount`/`UIAccountBackend`/
+// `UIAccountBackend` 契约与内置账户设置页（资料/应用资料/头像/邮箱变更/改密），
+// `internal/uiaccountadapter` 接真实 profile/app/avatar/emailchange/passwordreset；
+// 敏感操作经 reauth 挑战（绑定操作与参数）后执行；transport 对 multipart 表单做
+// 有界 CSRF 令牌提取；头像经受控路由输出。真实服务集成测试与真实浏览器验证尚未
+// 完成，见步骤 66 开发报告；不新增错误码/迁移/依赖。
+//
 // 步骤 63 审计修复：邮箱验证页验证/重发两表单共用同一匿名 CSRF 页面用途
 // （/email/verify 与 /email/verify/resend），GET 单一令牌可两用；匿名重发前用
 // internal/credential.Peek 只读校验 uid/cid/token 与当前 pending 票据绑定，绑定

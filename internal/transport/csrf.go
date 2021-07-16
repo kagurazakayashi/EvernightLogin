@@ -3,13 +3,22 @@ package transport
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
 )
+
+// maxMultipartCSRFBodyBytes 是 multipart CSRF 读取的硬上限（请求体仍受 MaxBytesReader
+// 更严格约束）；用于覆盖 2 MiB 头像上传 + 字段开销，不允许无界缓冲。
+const maxMultipartCSRFBodyBytes = 8 << 20
+
+// maxCSRFFormFieldBytes 是单个非文件表单字段上限。
+const maxCSRFFormFieldBytes = 64 << 10
 
 const (
 	// DefaultCSRFCookieName 是未来 Cookie 会话使用的默认会话 Cookie 名。__Host-
@@ -206,6 +215,58 @@ func isSafeMethod(method string) bool {
 	}
 }
 
+// readMultipartCSRFToken 从 multipart 请求中有界提取单一 CSRF 隐藏字段：只累计
+// 非文件字段的小体积数据，文件部分读取后丢弃，随后恢复整个请求体供页面处理器
+// 再次解析上传文件。重复/空令牌、超界或解析失败一律拒绝。
+func readMultipartCSRFToken(request *http.Request, field, boundary string) (string, bool) {
+	if boundary == "" {
+		return "", false
+	}
+	body, readErr := io.ReadAll(request.Body)
+	_ = request.Body.Close()
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+	if readErr != nil || len(body) == 0 || len(body) > maxMultipartCSRFBodyBytes {
+		return "", false
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	token := ""
+	found := false
+	for {
+		part, partErr := reader.NextPart()
+		if errors.Is(partErr, io.EOF) {
+			break
+		}
+		if partErr != nil {
+			return "", false
+		}
+		name := part.FormName()
+		if name != field {
+			_ = part.Close()
+			continue
+		}
+		if found || part.FileName() != "" {
+			_ = part.Close()
+			return "", false
+		}
+		value, valueErr := io.ReadAll(io.LimitReader(part, maxCSRFFormFieldBytes+1))
+		_ = part.Close()
+		if valueErr != nil || len(value) > maxCSRFFormFieldBytes {
+			return "", false
+		}
+		trimmed, ok := trimCSRFToken(string(value))
+		if !ok {
+			return "", false
+		}
+		token = trimmed
+		found = true
+	}
+	if !found {
+		return "", false
+	}
+	return token, true
+}
+
 // requestOrigin 从 Origin 或 Referer 得到请求来源的规范化 origin。两者都缺失或
 // 无效时返回 false；不把 sec-fetch-site 等客户端可伪造的头当作来源证据。
 func requestOrigin(request *http.Request) (string, bool) {
@@ -265,16 +326,23 @@ func trimCSRFToken(token string) (string, bool) {
 	return trimmed, true
 }
 
-// readCSRFFormToken 从 application/x-www-form-urlencoded 请求体的单一隐藏字段读取
-// CSRF 令牌。仅用于不安全方法；读取上限 maxCSRFBodyBytes，读取后恢复请求体供
-// 后续处理器使用；重复字段、空值、非表单类型、解析失败一律 fail-closed。
+// readCSRFFormToken 从 application/x-www-form-urlencoded 或 multipart/form-data 请求
+// 体的单一隐藏字段读取 CSRF 令牌。仅用于不安全方法；读取上限受限（请求体已由
+// MaxBytesReader 限长，非文件字段另有上限），读取后恢复请求体供后续处理器使用；
+// 重复字段、空值、非表单类型、解析失败一律 fail-closed。
 func readCSRFFormToken(request *http.Request, field string) (string, bool) {
 	if request == nil || field == "" || request.Body == nil {
 		return "", false
 	}
 	contentType := request.Header.Get("Content-Type")
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", false
+	}
+	if mediaType == "multipart/form-data" {
+		return readMultipartCSRFToken(request, field, params["boundary"])
+	}
+	if mediaType != "application/x-www-form-urlencoded" {
 		return "", false
 	}
 	body, readErr := io.ReadAll(io.LimitReader(request.Body, maxCSRFBodyBytes+1))

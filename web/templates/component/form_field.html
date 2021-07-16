@@ -1,6 +1,6 @@
 {{define "component.field"}}<div class="ln-field" data-ln-component="field" data-ln-state="{{if .error}}error{{else}}ready{{end}}">
   <label class="ln-field__label" for="{{.id}}">{{.label}}</label>
   {{if .help}}<p class="ln-field__help" id="{{.id}}-help">{{.help}}</p>{{end}}
-  <input class="ln-input" id="{{.id}}" name="{{.name}}" type="{{if .type}}{{.type}}{{else}}text{{end}}" value="{{.value}}"{{if .required}} required aria-required="true"{{end}}{{if .error}} aria-invalid="true" aria-describedby="{{.id}}-error"{{else if .help}} aria-describedby="{{.id}}-help"{{end}}>
+  {{if .textarea}}<textarea class="ln-input ln-input--textarea" id="{{.id}}" name="{{.name}}" rows="{{if .rows}}{{.rows}}{{else}}4{{end}}"{{if .required}} required aria-required="true"{{end}}{{if .error}} aria-invalid="true" aria-describedby="{{.id}}-error"{{else if .help}} aria-describedby="{{.id}}-help"{{end}}>{{.value}}</textarea>{{else}}<input class="ln-input" id="{{.id}}" name="{{.name}}" type="{{if .type}}{{.type}}{{else}}text{{end}}" value="{{.value}}"{{if .autocomplete}} autocomplete="{{.autocomplete}}"{{end}}{{if .required}} required aria-required="true"{{end}}{{if .error}} aria-invalid="true" aria-describedby="{{.id}}-error"{{else if .help}} aria-describedby="{{.id}}-help"{{end}}>{{end}}
   {{if .error}}<p class="ln-field__error" id="{{.id}}-error">{{.error}}</p>{{end}}
 </div>{{end}}

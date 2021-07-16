@@ -1,0 +1,26 @@
+{{define "page-title"}}{{t "page.account.avatar.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.account.avatar.supported"}}</p>
+<p class="ln-meta">{{t "page.account.avatar.limits"}}</p>
+{{if .Data.status}}{{template "component.banner" (dict "tone" "info" "message" (t "page.account.avatar.status"))}}{{end}}
+{{if .Data.avatar.Present}}
+<p><img src="{{route "account.profile_avatar_image"}}" alt="{{t "page.account.avatar.current"}}" width="96" height="96"></p>
+{{else}}<p>{{t "page.account.avatar.none"}}</p>{{end}}
+<form method="post" action="{{route "account.profile_avatar.submit"}}" enctype="multipart/form-data" data-ln-module="async-form">
+  {{csrf_field}}
+  <input type="hidden" name="row_version" value="{{.Data.avatar.RowVersion}}">
+  <div class="ln-field"><label class="ln-field__label" for="avatar-file">{{t "page.account.avatar.choose"}}</label>
+  <input class="ln-input" id="avatar-file" name="avatar" type="file" accept="image/png,image/jpeg,image/gif" required aria-describedby="avatar-help">
+  <p class="ln-field__help" id="avatar-help">{{t "page.account.avatar.preview_help"}}</p></div>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.avatar.upload") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{if .Data.avatar.Present}}
+<form method="post" action="{{route "account.profile_avatar.remove"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  <input type="hidden" name="row_version" value="{{.Data.avatar.RowVersion}}">
+  {{template "component.button" (dict "label" (t "page.account.avatar.remove") "variant" "secondary" "type" "submit")}}
+</form>
+{{end}}
+<p><a href="{{route "account.profile"}}">{{t "common.action.back"}}</a></p>
+{{end}}

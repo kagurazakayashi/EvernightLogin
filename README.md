@@ -1130,3 +1130,14 @@ Python 只用于启动包辅助工具，不是将来 Go 产品的运行依赖。
 - **匿名重发绑定校验与统一响应**：匿名声明确认重发前，在 `internal/credential` 新增只读 `Peek`（不消费、不记失败尝试）校验 `uid+cid+token` 与当前 pending 验证票据及一次性凭证绑定（票据存在/未过期/凭证 ID 与 token 恒时匹配）；绑定失败、票据不存在、用户不存在、冷却中、发送失败**对外一律呈现同一“已受理”语义**，差异只写入受限运行日志，避免账户/邮箱状态探测与借用系统身份滥发。已登录用户仍按本人 Caller 重发；后端每用户冷却继续生效，传输层 IP 限流缺失仍登记遗留。
 - **重定向收紧**：`safeRelativePath` 额外拒绝 `.`/`..` 点段，避免点段规范化越过 UI BasePath/路由预期。
 - 新增真实后端用例：GET→重发成功（同页 CSRF 令牌）→冷却不重发→伪造 token/不存在用户/已消费票据均统一受理且不发送；`internal/credential` 新增只读校验不影响既有消费语义。
+
+## 个人资料、头像、邮箱与密码修改页面（步骤 66）
+
+在步骤 62～65 页面框架上新增账户设置页（`WebUIOptions.PageAccount`，ui.v1 兼容新增）：`account.profile`（GET/POST `/account/profile`）、`account.profile_username`（受控更名）、`account.app_profile`（当前应用成员资料，应用来自可信会话 AppID，不接受 URL 自报）、`account.profile_avatar`（multipart 上传/移除）与受控图片路由 `account.profile_avatar_image`、`account.profile_email`（申请/待验证/取消）、公开验证页 `account.email_change_verify`（GET 不消费、POST 消费，独立于步骤 63 `/email/verify`）、`account.password`。普通资料/更名/头像/邮箱/密码分别独立表单与命名路由，不做“保存全部”；写操作携带服务端行版本，冲突提示重新读取。
+
+- **后端适配**：新增 `UIAccountBackend` 公开契约与 `internal/uiaccountadapter` 参考实现，调用真实 `profile`/`app`/`avatar`/`emailchange`/`passwordreset`/`session` 服务；页面不解析 Cookie、不缓存权限。
+- **敏感操作再次认证**：更名/邮箱申请/改密由适配器在服务端执行 `reauth.BeginChallenge`→`VerifyChallenge`（绑定操作与参数摘要、一次性批准、短时效）后才调用真实服务；页面收集当前密码仅用于该挑战（不保存/不回显），失败显示 `REAUTH_REQUIRED`/`MFA_REQUIRED`，不降级。`authn.SetPassword` 调整为先保留调用方已有的批准/确认信号再注入当前密码复核事实，使 `password.change` 的 `ConfirmationRequired` 策略在真实链路可满足。
+- **头像**：multipart + 会话 CSRF（transport 扩展为对 `multipart/form-data` 有界提取单一 `csrf_token`，不关闭 CSRF）；页面层接受上限取 `min(头像服务 2 MiB, 传输层默认 MaxBodyBytes 1 MiB) = 1 MiB`（默认装配下超限由页面/传输给出明确失败，不会放宽全局请求体上限；宿主需同时提高 `HTTPOptions.MaxBodyBytes` 与头像服务上限才能上传更大文件）。真实格式/大小/尺寸/像素/SVG/伪造 MIME 校验与重编码由 `internal/avatar` 执行；受控 `Read` 路由输出服务端 Content-Type/ETag/nosniff/私有缓存，不暴露存储键/文件名；失败保留旧头像；页面无在线资源，预览仅本地。
+- **邮箱双验证**：当前身份再次认证 → 新邮箱一次性链接验证（GET 不消费）→ 切换并告知旧邮箱；旧地址在新地址验证前继续有效；验证邮件“交给发送方”不等于已验证；旧邮箱告知失败不回滚新邮箱事实。
+- **改密**：当前密码 + 新密码 + 确认 + reauth；成功后按后端真实结果（`RequiresRelogin`、撤销会话数）清 Cookie 跳登录，不自动登录、不宣称外部 OAuth Token 即时全部失效。
+- **验证**：真实 SQLite/服务集成测试（profile/avatar/emailchange/passwordreset/reauth + 本地捕获邮件）覆盖资料白名单/行版本冲突/更名 reauth/头像 PNG 上传与受控读取/SVG 拒绝/邮箱申请→验证页→切换/改密后旧会话失效；页面级测试覆盖渲染/转义/multipart 表单/错误映射。真实浏览器 375/768/1024/320、200% 文本、键盘/读屏、真机与反代部署未实测（步骤 66 环境限制内如实记录，不宣称通过）。详见 `.ai/lead/reports/step66-dev.md`。

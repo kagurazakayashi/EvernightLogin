@@ -1,0 +1,18 @@
+{{define "page-title"}}{{t "page.account.profile.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.account.profile.global_hint"}}</p>
+<dl class="ln-meta"><dt>{{t "page.account.profile.stable_id"}}</dt><dd><code>{{.Data.profile.UserID}}</code></dd><dt>{{t "common.label.username"}}</dt><dd><code>{{.Data.profile.Username}}</code></dd></dl>
+{{if .Data.updated}}{{template "component.banner" (dict "tone" "success" "message" (t "page.account.profile.updated"))}}{{end}}
+<form method="post" action="{{route "account.profile.update"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="row_version" value="{{.Data.profile.RowVersion}}">
+  {{template "component.field" (dict "id" "profile-nickname" "name" "nickname" "label" (t "common.label.display_name") "value" .Data.profile.Nickname)}}
+  {{template "component.field" (dict "id" "profile-biography" "name" "biography" "label" (t "page.account.profile.biography") "value" .Data.profile.Biography "textarea" true "rows" 4)}}
+  {{template "component.field" (dict "id" "profile-language" "name" "language" "label" (t "common.label.language") "value" .Data.profile.Language)}}
+  {{template "component.field" (dict "id" "profile-timezone" "name" "timezone" "label" (t "common.label.time_zone") "value" .Data.profile.Timezone)}}
+  {{template "component.field" (dict "id" "profile-phone" "name" "phone" "label" (t "page.account.profile.phone_label") "value" .Data.profile.Phone "help" (t "common.form.phone_unverified"))}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p><a href="{{route "account.profile_username"}}">{{t "page.account.profile.change_username"}}</a> · <a href="{{route "account.profile_avatar"}}">{{t "common.label.avatar"}}</a> · <a href="{{route "account.profile_email"}}">{{t "page.account.profile.change_email"}}</a> · <a href="{{route "account.password"}}">{{t "page.account.profile.change_password"}}</a></p>
+{{end}}

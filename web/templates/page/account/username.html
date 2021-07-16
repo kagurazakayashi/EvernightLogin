@@ -1,0 +1,16 @@
+{{define "page-title"}}{{t "page.account.username.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.account.profile.username_change_impact"}}</p>
+<dl class="ln-meta"><dt>{{t "page.account.profile.stable_id"}}</dt><dd><code>{{.Data.profile.UserID}}</code></dd></dl>
+{{if .Data.changed}}{{template "component.banner" (dict "tone" "success" "message" (t "page.account.username.changed"))}}{{end}}
+<p>{{t "page.account.username.current"}}: <code>{{.Data.profile.Username}}</code></p>
+<form method="post" action="{{route "account.profile_username.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="row_version" value="{{.Data.profile.RowVersion}}">
+  {{template "component.field" (dict "id" "username-new" "name" "new_username" "label" (t "page.account.username.new") "value" "" "required" true "autocomplete" "username")}}
+  {{template "component.field" (dict "id" "username-password" "name" "current_password" "label" (t "common.label.current_password") "type" "password" "value" "" "help" (t "page.account.reauth.hint") "required" true "autocomplete" "current-password")}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.username.submit") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p><a href="{{route "account.profile"}}">{{t "common.action.back"}}</a></p>
+{{end}}

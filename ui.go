@@ -177,6 +177,11 @@ type UIPageOutcome struct {
 	RedirectQuery url.Values
 	// SetCookies 只用于会话/短期提示 Cookie；框架在写响应前设置。
 	SetCookies []*http.Cookie
+	// ContentType 非空时表示二进制/原始响应（例如受控头像字节），框架跳过模板，
+	// 使用 Body/Headers 输出；此时 StatusCode 必须为有效状态。
+	ContentType string
+	Body        []byte
+	Headers     http.Header
 }
 
 // UIBrand 是页面品牌设置（默认仅本地资源）。
@@ -296,6 +301,8 @@ type WebUIOptions struct {
 	FormTokens UIFormTokenProvider
 	// PageAuth 非 nil 时注册步骤 63 账户入口页面（登录/注册/邀请/邮箱验证/退出）。
 	PageAuth *UIPageAuthOptions
+	// PageAccount 非 nil 时注册步骤 66 个人资料/头像/邮箱/密码页面。
+	PageAccount *UIPageAccountOptions
 	// PageMFA 非 nil 时注册步骤 64 两步验证/Passkey/恢复/找回页面。
 	PageMFA *UIPageMFAOptions
 	// PageOAuth 非 nil 时注册步骤 65 OAuth 授权/设备码/扫码登录页面。
@@ -338,6 +345,7 @@ type WebUI struct {
 	hostPage            map[string]string
 	builtinPageDisabled bool
 	pageAuth            *pageAuthPages
+	pageAccount         *pageAccountPages
 	pageMFA             *pageMFAPages
 	pageOAuth           *pageOAuthPages
 }
@@ -386,6 +394,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageAuth = pages
+	}
+	if options.PageAccount != nil {
+		pages, pageErr := newPageAccountPages(*options.PageAccount)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageAccount = pages
 	}
 	if options.PageMFA != nil {
 		pages, pageErr := newPageMFAPages(*options.PageMFA)
@@ -568,6 +583,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageAuth != nil {
 		routes = append(routes, ui.pageAuth.routes...)
 	}
+	if ui.pageAccount != nil {
+		routes = append(routes, ui.pageAccount.routes...)
+	}
 	if ui.pageMFA != nil {
 		routes = append(routes, ui.pageMFA.routes...)
 	}
@@ -600,6 +618,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageAuth != nil {
 		for name := range ui.pageAuth.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageAccount != nil {
+		for name := range ui.pageAccount.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -896,7 +921,11 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 		csrfToken = token
 	}
 	if route.Access == UIAccessPublic && ui.opts.FormTokens != nil {
-		if purpose := formPurposeForRoute(route.Name); purpose != "" {
+		purpose := formPurposeForRoute(route.Name)
+		if purpose == "" {
+			purpose = accountFormPurpose(route.Name)
+		}
+		if purpose != "" {
 			token, cookie, err := ui.opts.FormTokens.Issue(ctx, request, purpose)
 			if err == nil {
 				csrfToken = token
@@ -910,6 +939,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	handler := ui.opts.Handlers[route.Name]
 	if handler == nil && ui.pageAuth != nil {
 		handler = ui.pageAuth.handlers[route.Name]
+	}
+	if handler == nil && ui.pageAccount != nil {
+		handler = ui.pageAccount.handlers[route.Name]
 	}
 	if handler == nil && ui.pageMFA != nil {
 		handler = ui.pageMFA.handlers[route.Name]
@@ -937,6 +969,26 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 		}
 		if target, redirect := ui.redirectTarget(outcome); redirect {
 			http.Redirect(writer, request, target, http.StatusSeeOther)
+			return
+		}
+		if outcome.ContentType != "" {
+			status := outcome.StatusCode
+			if status == 0 {
+				status = http.StatusOK
+			}
+			for key, values := range outcome.Headers {
+				for _, value := range values {
+					writer.Header().Add(key, value)
+				}
+			}
+			writer.Header().Set("Content-Type", outcome.ContentType)
+			if writer.Header().Get("Cache-Control") == "" {
+				writer.Header().Set("Cache-Control", "no-store")
+			}
+			writer.WriteHeader(status)
+			if request.Method != http.MethodHead {
+				_, _ = writer.Write(outcome.Body)
+			}
 			return
 		}
 		if outcome.StatusCode != 0 {
@@ -1009,7 +1061,24 @@ func (ui *WebUI) redirectTarget(outcome UIPageOutcome) (string, bool) {
 		if !safeRelativePath(outcome.RedirectPath) {
 			return ui.prefix + "/home", true
 		}
-		return ui.prefix + outcome.RedirectPath, true
+		target := ui.prefix + outcome.RedirectPath
+		if len(outcome.RedirectQuery) > 0 {
+			values := url.Values{}
+			for key, list := range outcome.RedirectQuery {
+				if !validRedirectQueryKey(key) {
+					continue
+				}
+				for _, value := range list {
+					if len(value) <= 256 {
+						values.Add(key, value)
+					}
+				}
+			}
+			if encoded := values.Encode(); encoded != "" {
+				target += "?" + encoded
+			}
+		}
+		return target, true
 	}
 	return "", false
 }

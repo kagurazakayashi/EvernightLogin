@@ -1,0 +1,23 @@
+{{define "page-title"}}{{t "page.account.email_change.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<ol class="ln-meta"><li>{{t "page.account.email_change.step_reauth"}}</li><li>{{t "page.account.email_change.step_new_email"}}</li><li>{{t "page.account.email_change.step_complete"}}</li></ol>
+{{if .Data.email.HasEmail}}<p>{{t "common.label.email"}}: <code>{{.Data.email.OldEmail}}</code></p>{{else}}<p>{{t "page.account.email_change.first_add"}}</p>{{end}}
+{{if .Data.requested}}{{template "component.banner" (dict "tone" "info" "message" (t "page.account.email_change.requested"))}}{{end}}
+{{if .Data.email.Pending}}
+<section><h2>{{t "page.account.email_change.pending"}}</h2>
+<p>{{t "page.account.email_change.pending_detail"}}: <code>{{.Data.email.NewEmail}}</code></p>
+<form method="post" action="{{route "account.profile_email.cancel"}}" data-ln-module="async-form">{{csrf_field}}{{template "component.button" (dict "label" (t "page.account.email_change.cancel") "variant" "secondary" "type" "submit")}}</form>
+</section>
+{{else}}
+<p>{{t "page.account.email_change.old_still_valid"}}</p>
+<form method="post" action="{{route "account.profile_email.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  {{template "component.field" (dict "id" "email-new" "name" "new_email" "label" (t "common.label.email") "type" "email" "value" "" "required" true "autocomplete" "email")}}
+  {{template "component.field" (dict "id" "email-password" "name" "current_password" "label" (t "common.label.current_password") "type" "password" "value" "" "help" (t "page.account.reauth.hint") "required" true "autocomplete" "current-password")}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.email_change.submit") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p class="ln-meta">{{t "page.account.email_change.notice_only_old"}}</p>
+{{end}}
+<p><a href="{{route "account.profile"}}">{{t "common.action.back"}}</a></p>
+{{end}}

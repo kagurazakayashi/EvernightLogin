@@ -546,8 +546,12 @@ func (s *Service) SetPassword(ctx context.Context, caller Caller, request SetPas
 		}
 		// 刚完成当前密码复核：把该事实作为步骤 39 敏感策略的近期 password 认证
 		// 事实传入，避免宿主还要重复注入 Signals；要求 strong 的策略仍会 fail-closed。
+		// 保留调用方已获得的绑定操作批准（ApprovalToken/Confirmed），否则
+		// ConfirmationRequired 策略会在自助改密路径上永远无法满足。
+		previousSignals := reauth.SignalsFromContext(ctx)
 		ctx = reauth.WithSignals(ctx, reauth.Signals{
 			VerifiedAt: s.clockNow(), Strength: policy.StrengthPassword, Complete: true,
+			Confirmed: previousSignals.Confirmed, ApprovalToken: previousSignals.ApprovalToken,
 		})
 	}
 
