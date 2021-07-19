@@ -1,0 +1,26 @@
+{{define "page-title"}}{{t "page.account.totp.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.Binding}}
+<div class="ln-banner ln-banner--warning">{{t "page.account.totp.secret_once"}}</div>
+<div class="ln-qr-wrap">{{qr_svg .URI}}</div>
+<p class="ln-meta">{{t "page.account.totp.expires"}}: {{format_time .ExpiresAt "UTC"}}</p>
+<form method="post" action="{{route "account.security_totp.bind_confirm"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="binding_id" value="{{.BindingID}}">
+{{template "component.field" (dict "id" "totp-code" "name" "code" "label" (t "page.account.totp.code_label") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.confirm") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{else}}
+{{if .Data.Done}}<div class="ln-banner ln-banner--success" role="status">{{t "page.account.totp.done"}}</div>{{end}}
+{{with .Data.TOTP}}
+<p>{{t "page.account.totp.status"}}: <code>{{if .Enabled}}active{{else}}{{.Status}}{{end}}</code></p>
+{{if .Enabled}}<p class="ln-meta">{{t "page.account.totp.metadata"}}: {{.Algorithm}} · {{.Digits}} · {{.PeriodSeconds}}s · {{format_time .ActivatedAt "UTC"}}</p>{{end}}
+{{end}}
+<form method="post" action="{{route "account.security_totp.bind_start"}}">{{csrf_field}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.totp.bind") "variant" "primary" "type" "submit")}}</div></form>
+<form method="post" action="{{route "account.security_totp.remove"}}" data-ln-module="async-form">{{csrf_field}}
+{{template "component.field" (dict "id" "totp-remove-code" "name" "code" "label" (t "page.account.totp.current_code") "help" "" "value" "" "required" true)}}
+{{template "component.field" (dict "id" "totp-remove-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.totp.remove") "variant" "danger" "type" "submit")}}</div></form>
+{{end}}
+{{end}}

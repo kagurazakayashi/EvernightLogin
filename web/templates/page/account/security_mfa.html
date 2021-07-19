@@ -1,0 +1,22 @@
+{{define "page-title"}}{{t "page.account.security_mfa.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.Enrollment}}
+<div class="ln-banner ln-banner--info" role="status">{{t "page.account.security_mfa.code_sent"}}{{if .MaskedEmail}} <code>{{.MaskedEmail}}</code>{{end}}</div>
+<form method="post" action="{{route "account.security_mfa.add_confirm"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="challenge_id" value="{{.ChallengeID}}">
+<input type="hidden" name="attempt_token" value="{{.AttemptToken}}">
+{{template "component.field" (dict "id" "mfa-code" "name" "code" "label" (t "page.account.security_mfa.code_label") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.confirm") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{else}}
+{{if .Data.Done}}<div class="ln-banner ln-banner--success" role="status">{{t "page.account.security_mfa.done"}}</div>{{end}}
+<ul class="ln-list">{{range .Data.Factors}}<li>{{t "page.account.security_mfa.email"}} <code>{{.State}}</code> {{format_time .CreatedAt "UTC"}}</li>{{else}}<li class="ln-meta">{{t "common.state.empty"}}</li>{{end}}</ul>
+<form method="post" action="{{route "account.security_mfa.add_start"}}">{{csrf_field}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.security_mfa.email_add") "variant" "primary" "type" "submit")}}</div></form>
+<form method="post" action="{{route "account.security_mfa.remove"}}" data-ln-module="async-form">{{csrf_field}}
+<p class="ln-meta">{{t "page.account.security_mfa.email_remove_confirm"}}</p>
+{{template "component.field" (dict "id" "mfa-remove-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.security_mfa.email_remove") "variant" "danger" "type" "submit")}}</div></form>
+{{end}}
+{{end}}

@@ -1,0 +1,19 @@
+{{define "page-title"}}{{t "page.account.grants.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.Grants}}
+<table class="ln-table"><caption>{{t "page.account.grants.title"}}</caption>
+<thead><tr><th scope="col">{{t "page.oauth.consent.application"}}</th><th scope="col">{{t "page.account.grants.authorization"}}</th><th scope="col">{{t "page.oauth.consent.scopes"}}</th><th scope="col">{{t "page.oauth.consent.expires"}}</th><th scope="col">{{t "page.account.grants.revoke"}}</th></tr></thead>
+<tbody>{{range .Grants}}<tr><td>{{.ApplicationName}} <code>{{.ClientID}}</code></td>
+<td><code>{{.AuthorizationID}}</code></td>
+<td>{{range .Scopes}}{{.Description}} <code>{{.Value}}</code><br>{{end}}</td>
+<td>{{format_time .ExpiresAt "UTC"}}</td>
+<td><form method="post" action="{{route "account.grants.revoke"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="authorization_id" value="{{.AuthorizationID}}">
+<label class="ln-field__label" for="grant-revoke-password-{{.AuthorizationID}}">{{t "page.account.security_mfa.current_password"}}</label>
+<input class="ln-input" id="grant-revoke-password-{{.AuthorizationID}}" name="current_password" type="password" required aria-required="true">
+{{template "component.button" (dict "label" (t "page.account.grants.revoke") "variant" "danger" "type" "submit")}}</form></td></tr>{{else}}<tr><td colspan="5" class="ln-meta">{{t "page.account.grants.empty"}}</td></tr>{{end}}</tbody></table>
+{{else}}<p class="ln-banner ln-banner--warning">{{t "page.account.grants.query_unavailable"}}</p>{{end}}
+{{with .Data.RevokeResult}}<div class="ln-banner ln-banner--success" role="status">{{t "page.account.grants.revoked"}}</div>
+<p class="ln-meta">{{t "page.account.grants.offline_token_hint"}}</p>{{end}}
+{{end}}

@@ -307,6 +307,8 @@ type WebUIOptions struct {
 	PageMFA *UIPageMFAOptions
 	// PageOAuth 非 nil 时注册步骤 65 OAuth 授权/设备码/扫码登录页面。
 	PageOAuth *UIPageOAuthOptions
+	// PageSecurity 非 nil 时注册步骤 67 安全中心/会话/已授权应用页面。
+	PageSecurity *UIPageSecurityOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -348,6 +350,7 @@ type WebUI struct {
 	pageAccount         *pageAccountPages
 	pageMFA             *pageMFAPages
 	pageOAuth           *pageOAuthPages
+	pageSecurity        *pageSecurityPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -415,6 +418,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageOAuth = pages
+	}
+	if options.PageSecurity != nil {
+		pages, pageErr := newPageSecurityPages(*options.PageSecurity)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageSecurity = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -592,6 +602,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageOAuth != nil {
 		routes = append(routes, ui.pageOAuth.routes...)
 	}
+	if ui.pageSecurity != nil {
+		routes = append(routes, ui.pageSecurity.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -639,6 +652,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageOAuth != nil {
 		for name := range ui.pageOAuth.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageSecurity != nil {
+		for name := range ui.pageSecurity.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -948,6 +968,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageOAuth != nil {
 		handler = ui.pageOAuth.handlers[route.Name]
+	}
+	if handler == nil && ui.pageSecurity != nil {
+		handler = ui.pageSecurity.handlers[route.Name]
 	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)

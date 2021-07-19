@@ -591,6 +591,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 
 - **审计修复语义（2026-11-18）**：导出 handler 使用**任务局部上限**（绝不回写共享 Service 字段，并发导出互不影响；配置保持不变）；逐行结果/报告改为**分页读取到真实总数**（SQL 单页 100、服务端按 `(job_id,row_number)` 拼接，明细上限默认 5000），`truncated` 按真实总数计算，`ListRows` 返回该值、`ReportCSV` 返回 `(CSV, truncated, error)` 并在每行 `report_truncated` 列显式标记；导入在**处理首行前**与每批复验权限、导出**每页**复验 `users.export`，中途撤权 → 任务 `failed`+`ACCESS_DENIED`（不 succeeded/不静默跳过）；`failed` 保留导入输入供受控 `Retry` 真正续跑（`succeeded/partial/cancelled` 才清空），崩溃遗留 `running` 由宿主启动时 `ReconcileInterrupted` 收敛为 `failed`（`TASK_TIMEOUT`）使 Retry 可达，任务墙钟到期 → `failed`+`TASK_TIMEOUT`（取消才写 cancelled），并提供 `CleanupExpiredInputs`；导出扫描量硬上限（任务上限 10 倍、≥1000、≤1,000,000）；构造时若配置导出目录但缺少 `UserScopeAuthorizer` 直接拒绝；`newJobID` 随机源失败返回错误而非 panic。
 
+## 安全中心、会话与已授权应用自助页面（步骤 67）
+
+在步骤 62～66 页面上补齐账户安全中心；无新迁移、无新错误码、无新依赖（复用步骤 65 的 `rsc.io/qr`）。
+
+- **MFA 邮件因素**（`account.security_mfa`）：`mfa.Factors` 只读；添加走真实 `BeginEmailFactorEnrollment`→邮件验证码→`ConfirmEmailFactorEnrollment`，只有真实验证通过才启用；移除需 `mfa.remove` 操作绑定的再次认证后调用 `RemoveEmailFactor`，强制 MFA/最后因素由后端拒绝。
+- **TOTP**（`account.security_totp`）：`BeginBinding` 的 Secret/URI 仅本次绑定显示，二维码由服务端本地 `qr_svg` 生成；`ConfirmBinding` 动态码通过才 active；`Bindings` 只显示算法/位数/时间步/激活时间；解除需当前动态码 + 再次认证，最后强因素由后端拒绝。
+- **Passkey**（`account.security_passkeys`）：列表只显示名称/时间/传输/同步状态；注册由服务端决定用途（`BeginRegistrationWithPurpose`）并用真实 WebAuthn 断言完成；重命名仅显示名；撤销由服务内部 `passkey.remove` 再次认证并检查最后登录方式。用途字段缺失显示“待后端提供”，不猜测。
+- **恢复代码**（`account.security_recovery_codes`）：`Inventory` 只读组代际/剩余数；`Generate` 需 `recovery.codes.rotate` 再次认证，旧组立即失效，新代码只显示一次；页面不保存明文、不上传保存证据。
+- **会话与设备**（`account.sessions`）：真实 `ListSessions` 分页（Page/PageSize/Total/HasMore）；当前会话使用服务端 `Current` 徽标；UA 截断并标“自述不可信”，来源地址按 `/24`、`/64` 或本地来源脱敏；退出指定/其他（保留当前）/全部（含当前，成功后清 Cookie 回登录）均经 `session.revoke.self` 操作绑定再次认证后调用真实 `RevokeSession/RevokeAllOwnSessions`；不调用管理员 `AdminRevoke`。
+- **已授权应用**（`account.grants`）：新增真实 `oauthflow.ListUserAuthorizations`（分页上限、只返回本人、排除在线撤销、不含 Token/授权码/state/PKCE），详情展示受控应用名/Scope 中文说明/audience/时间/刷新族计数；撤回经 `oauth.authorization.revoke.self` 再次认证后调用真实 `RevokeAuthorization`，返回刷新族/Token/未兑换码计数并提示离线 Access Token 仍可能到原到期前可用。
+- **再次认证**：页面适配器 `internal/uisecurityadapter` 统一执行真实 `reauth.BeginChallenge/VerifyChallenge`（复用 `authn.ReauthPasswordVerifier` 等既有密码验证器）；敏感操作目录已补登 `session.revoke.self`、`oauth.authorization.revoke.self`，`mfa.remove`/`passkey.remove` 标记为已实现并按近期主密码强度（强认证实现前避免功能死锁，高权限账户由宿主加严为 strong）；错误凭据/强度不足 fail-closed `REAUTH_REQUIRED`/`MFA_REQUIRED`（挑战校验失败统一回到 `REAUTH_REQUIRED`），不降级；页面显示错误摘要与稳定码；成功操作写真实审计与安全告知。
+- **已知缺口**：强认证 reauth 的强因素验证执行器仍待后续装配（当前强认证要求 fail-closed）；Passkey 用途元数据与最后可用方式聚合缺失，页面按“待后端提供/仅列真实事实”展示，不猜测。
+- **i18n/错误**：新增 `page.account.security*` 等 zh-CN 键；错误复用既有稳定码，领域 `CodeOf` 归一化到公开码集合，未知值 fail-closed 为 `INTERNAL_ERROR`；页面显示 request_id。
+- **已知限制**：真实浏览器/读屏/移动端、真实硬件 Passkey、TOTP/Passkey 页面级全流程（服务级已有真实测试）未实测；强认证 reauth 成功路径未实测；授权列表分页/大量数据未压测。
+
 ## OAuth 授权确认、设备码与扫码登录页面（步骤 65）
 
 在步骤 62～64 页面上接入正式 OAuth/设备码/扫码页面，保留后端协议语义；无新迁移、无新错误码、无新依赖。

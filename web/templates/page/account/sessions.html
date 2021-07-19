@@ -1,0 +1,27 @@
+{{define "page-title"}}{{t "page.account.sessions.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.Done}}<div class="ln-banner ln-banner--success" role="status">{{t "page.account.sessions.done"}}</div>{{end}}
+{{with .Data.Sessions}}
+<table class="ln-table"><caption>{{t "page.account.sessions.title"}}</caption>
+<thead><tr><th scope="col">{{t "page.account.sessions.current"}}</th><th scope="col">{{t "page.account.sessions.created"}}</th><th scope="col">{{t "page.account.sessions.last_seen"}}</th><th scope="col">{{t "page.account.sessions.client"}}</th><th scope="col">{{t "common.label.status"}}</th></tr></thead>
+<tbody>{{range .Sessions}}<tr>
+<td>{{if .Current}}{{t "page.account.sessions.current"}}{{else}}—{{end}} <code>{{.ID}}</code></td>
+<td>{{format_time .CreatedAt "UTC"}}</td>
+<td>{{format_time .LastSeenAt "UTC"}}</td>
+<td><span class="ln-meta">{{.ClientHint}}</span>{{if .AddressHint}}<br><span class="ln-meta">{{.AddressHint}}</span>{{end}}</td>
+<td>{{.Kind}}{{if .Reason}} <code>{{.Reason}}</code>{{end}}</td>
+</tr>{{else}}<tr><td colspan="5" class="ln-meta">{{t "page.account.sessions.empty"}}</td></tr>{{end}}</tbody></table>
+<p class="ln-meta">{{t "page.account.sessions.client_untrusted"}}</p>
+{{end}}
+<form method="post" action="{{route "account.sessions.revoke_others"}}" data-ln-module="async-form">{{csrf_field}}
+{{template "component.field" (dict "id" "revoke-others-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.sessions.revoke_others") "variant" "danger" "type" "submit")}}</div></form>
+<form method="post" action="{{route "account.sessions.revoke_all"}}" data-ln-module="async-form">{{csrf_field}}
+{{template "component.field" (dict "id" "revoke-all-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.sessions.revoke_all") "variant" "danger" "type" "submit")}}</div></form>
+<form method="post" action="{{route "account.sessions.revoke"}}" data-ln-module="async-form">{{csrf_field}}
+{{template "component.field" (dict "id" "revoke-target" "name" "target_session_id" "label" (t "page.account.sessions.target") "help" "" "value" "" "required" true)}}
+{{template "component.field" (dict "id" "revoke-target-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.sessions.revoke") "variant" "secondary" "type" "submit")}}</div></form>
+{{end}}

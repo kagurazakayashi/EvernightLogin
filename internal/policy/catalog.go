@@ -389,11 +389,11 @@ func defaultOperations() []Operation {
 		},
 		{
 			ID: "mfa.remove", Domain: DomainMFA, Name: "移除两步验证因素",
-			Description:        "移除当前账户的某个第二因素；必须先验证替代方式，禁止移除最后一个可用因素导致降级，执行器未实现前 fail-closed。",
-			Default:            strongReauth,
+			Description:        "移除当前账户的某个第二因素；必须先验证替代方式与近期主密码，禁止移除最后一个可用因素导致降级。强认证实现前默认按近期主密码判定以避免功能死锁，高权限账户应由宿主加严为 strong。",
+			Default:            passwordStrong,
 			PermissionKey:      "self.credentials.manage",
 			ImmutableSensitive: true,
-			Implemented:        false,
+			Implemented:        true,
 		},
 		{
 			ID: "passkey.register", Domain: DomainMFA, Name: "注册 Passkey",
@@ -482,6 +482,13 @@ func defaultOperations() []Operation {
 			Default:       oauthConsent,
 			PermissionKey: "",
 			Implemented:   true,
+		},
+		{
+			ID: "oauth.authorization.revoke.self", Domain: DomainApplication,
+			Name:        "撤回自己的 OAuth 应用授权",
+			Description: "用户撤回本人对某应用的授权；必须近期主密码验证与确认，只能撤回本人 AuthorizationID，撤销未兑换授权码、刷新令牌族与在线撤销标记，但已签发离线 Access Token 可能到原到期前仍可用。",
+			Default:     passwordStrong,
+			Implemented: true,
 		},
 		{
 			ID: "oauth.device.authorization.approve", Domain: DomainApplication,
@@ -617,6 +624,12 @@ func defaultOperations() []Operation {
 			Description: "管理接口统一入口；必须完成强认证（MFA 未实现前默认拒绝），策略不能替代每个管理接口自己的权限检查。",
 			Default:     strongReauthNoConfirm,
 			Implemented: false,
+		},
+		{
+			ID: "session.revoke.self", Domain: DomainSession, Name: "退出自己的会话",
+			Description: "用户退出自己的指定会话、其他会话或全部会话；必须近期主密码验证与确认，只能作用于本人会话，不撤销 OAuth 应用授权或刷新令牌族，管理员强制下线另用 session.revoke.other。",
+			Default:     passwordStrong,
+			Implemented: true,
 		},
 		{
 			ID: "session.revoke.other", Domain: DomainSession, Name: "强制下线其他会话",

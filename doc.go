@@ -439,6 +439,12 @@
 // 路由/限流、Webhook/应用会话通知（步骤 59）、撤销列表查询、非 Windows/race/
 // 多实例未验证。
 //
+// 步骤 67 已接入账户安全中心：邮件 MFA/TOTP/Passkey/恢复代码自助管理、会话分页与
+// 指定/其他/全部退出、已授权应用列表与撤回。敏感动作经 internal/uisecurityadapter
+// 完成操作/目标/参数绑定的 reauth 后调用真实 mfa/totp/passkey/recovery/session/
+// oauthflow 服务；会话 UA/来源脱敏且不当作可信设备；授权列表只返回本人、排除在线
+// 撤销、不含秘密；强认证 reauth 执行器与敏感操作目录缺口仍 fail-closed 待后续装配。
+//
 // 步骤 65 已接入 OAuth 授权确认、RFC 8628 设备码与 APP 扫码登录页面：真实
 // oauthflow 创建/决定确认（批准只跳后端生成的重定向，拒绝走标准 access_denied），
 // 设备短码 GET 不消费、POST 真实读取与决定，扫码发起页用本地 rsc.io/qr 生成内联

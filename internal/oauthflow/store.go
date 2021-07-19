@@ -155,6 +155,12 @@ type Store interface {
 	ConsumeAuthorizationCodeTx(ctx context.Context, tx audit.Tx, codeID string, now time.Time) (bool, error)
 	// MarkAuthorizationCodeReplayed 记录重复兑换探测（不影响已签发令牌）。
 	MarkAuthorizationCodeReplayed(ctx context.Context, codeID string, now time.Time) error
+	// ListApprovedAuthorizationRequests 列出用户本人已批准且未过期的授权确认请求，
+	// 按最近决定时间倒序分页；只读、不含任何令牌/授权码秘密。
+	ListApprovedAuthorizationRequests(ctx context.Context, userID string, now time.Time,
+		offset, pageSize int) ([]AuthorizationRequestRecord, int64, error)
+	// ClientUserRevocation 读取（用户,客户端）在线撤销标记；未撤销返回零值。
+	ClientUserRevocation(ctx context.Context, userID, clientID string) (time.Time, bool, error)
 
 	// UserState 读取账户状态快照（授权确认与兑换前复核用户仍 active）。
 	UserState(ctx context.Context, userID string) (UserState, bool, error)

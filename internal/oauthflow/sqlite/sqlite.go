@@ -128,6 +128,75 @@ func (s *Store) GetAuthorizationRequest(ctx context.Context,
 	return record, true, nil
 }
 
+const listApprovedRequestsSQL = `SELECT ` + requestColumns + ` FROM oauth_authorization_requests q
+WHERE q.user_id=? AND q.status='approved' AND q.expires_at_ms>?
+AND NOT EXISTS(SELECT 1 FROM oauth_client_user_revocations r
+WHERE r.user_id=q.user_id AND r.client_id=q.client_id AND r.revoked_at_ms>=q.decided_at_ms)
+ORDER BY q.decided_at_ms DESC, q.id DESC LIMIT ? OFFSET ?`
+
+const countApprovedRequestsSQL = `SELECT COUNT(*) FROM oauth_authorization_requests q
+WHERE q.user_id=? AND q.status='approved' AND q.expires_at_ms>?
+AND NOT EXISTS(SELECT 1 FROM oauth_client_user_revocations r
+WHERE r.user_id=q.user_id AND r.client_id=q.client_id AND r.revoked_at_ms>=q.decided_at_ms)`
+
+const clientUserRevocationSQL = `SELECT revoked_at_ms FROM oauth_client_user_revocations
+WHERE user_id=? AND client_id=?`
+
+// ListApprovedAuthorizationRequests 实现用户本人授权列表查询（只读、分页有界）。
+func (s *Store) ListApprovedAuthorizationRequests(ctx context.Context, userID string,
+	now time.Time, offset, pageSize int) ([]oauthflow.AuthorizationRequestRecord, int64, error) {
+	if offset < 0 || pageSize <= 0 || pageSize > 100 {
+		return nil, 0, oauthflow.ErrInvalidRequest
+	}
+	nowMS := now.UTC().UnixMilli()
+	rows, err := s.store.QueryContext(ctx, listApprovedRequestsSQL, userID, nowMS, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	records := make([]oauthflow.AuthorizationRequestRecord, 0, pageSize)
+	for rows.Next() {
+		record, scanErr := scanRequest(rows)
+		if scanErr != nil {
+			return nil, 0, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, scanErr)
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	countRows, err := s.store.QueryContext(ctx, countApprovedRequestsSQL, userID, nowMS)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer countRows.Close()
+	if !countRows.Next() {
+		return nil, 0, fmt.Errorf("%w: 授权计数失败", oauthflow.ErrStoreUnavailable)
+	}
+	var total int64
+	if err := countRows.Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return records, total, nil
+}
+
+// ClientUserRevocation 读取在线撤销标记（未撤销返回 false）。
+func (s *Store) ClientUserRevocation(ctx context.Context, userID, clientID string) (time.Time, bool, error) {
+	rows, err := s.store.QueryContext(ctx, clientUserRevocationSQL, userID, clientID)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return time.Time{}, false, rows.Err()
+	}
+	var revokedMS int64
+	if err := rows.Scan(&revokedMS); err != nil {
+		return time.Time{}, false, fmt.Errorf("%w: %w", oauthflow.ErrStoreUnavailable, err)
+	}
+	return time.UnixMilli(revokedMS).UTC(), true, nil
+}
+
 // DecideAuthorizationRequestTx 条件迁移 pending 请求。
 func (s *Store) DecideAuthorizationRequestTx(ctx context.Context, tx audit.Tx,
 	requestID, status string, now time.Time) (bool, error) {

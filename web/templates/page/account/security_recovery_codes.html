@@ -1,0 +1,19 @@
+{{define "page-title"}}{{t "page.account.recovery_codes.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.Codes}}
+<div class="ln-banner ln-banner--warning">{{t "page.account.recovery_codes.once"}}</div>
+<ul class="ln-recovery-codes">{{range .Data.Codes}}<li><code>{{.}}</code></li>{{end}}</ul>
+<p class="ln-meta">{{t "page.account.recovery_codes.old_invalid"}}</p>
+{{else}}
+{{with .Data.Recovery}}
+{{if .HasActiveGroup}}<p>{{t "page.account.recovery_codes.current"}}: {{t_fmt "page.account.recovery_codes.generation" "generation" (format_number .Generation)}} · {{t_fmt "page.account.recovery_codes.remaining" "count" (format_number .CodesRemaining)}}</p>
+{{else}}<p class="ln-meta">{{t "page.account.recovery_codes.empty"}}</p>{{end}}
+{{end}}
+<div class="ln-banner ln-banner--warning">{{t "page.account.recovery_codes.regenerate_warning"}}</div>
+<form method="post" action="{{route "account.security_recovery_codes.generate"}}" data-ln-module="async-form">{{csrf_field}}
+<input type="hidden" name="confirm" value="true">
+{{template "component.field" (dict "id" "recovery-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.recovery_codes.regenerate") "variant" "danger" "type" "submit")}}</div></form>
+{{end}}
+{{end}}

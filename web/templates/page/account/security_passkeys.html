@@ -1,0 +1,20 @@
+{{define "page-title"}}{{t "page.account.passkeys.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.Done}}<div class="ln-banner ln-banner--success" role="status">{{t "page.account.passkeys.done"}}</div>{{end}}
+{{with .Data.Registration}}
+<form method="post" action="{{route "account.security_passkeys.register_finish"}}" data-ln-module="webauthn" data-ln-mode="create" data-ln-options="{{printf "%s" .PublicKey}}" data-ln-webauthn-form data-ln-response-field="passkey_response">{{csrf_field}}
+<input type="hidden" name="ceremony_id" value="{{.CeremonyID}}">
+<input type="hidden" name="passkey_response" value="">
+<input type="hidden" name="name" value="">
+<p class="ln-meta" data-ln-webauthn-status role="status"></p>
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.passkeys.register") "variant" "primary" "type" "button")}}</div>
+</form>
+{{else}}
+<table class="ln-table"><caption>{{t "page.account.passkeys.title"}}</caption>
+<thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.account.passkeys.created"}}</th><th scope="col">{{t "page.account.passkeys.last_used"}}</th><th scope="col">{{t "common.label.status"}}</th></tr></thead>
+<tbody>{{range .Data.Passkeys}}<tr><td>{{.Name}}</td><td>{{format_time .CreatedAt "UTC"}}</td><td>{{format_time .LastUsedAt "UTC"}}</td><td>{{t "page.account.passkeys.purpose_unknown"}}</td></tr>{{else}}<tr><td colspan="4" class="ln-meta">{{t "page.account.passkeys.empty"}}</td></tr>{{end}}</tbody></table>
+<form method="post" action="{{route "account.security_passkeys.register_start"}}">{{csrf_field}}
+<div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.passkeys.add") "variant" "primary" "type" "submit")}}</div></form>
+{{end}}
+{{end}}

@@ -629,9 +629,12 @@ func accountErrorOutcome(err error, data any, fallbackKey string) UIPageOutcome 
 			outcome.StatusCode = http.StatusForbidden
 			outcome.ErrorCode = "ACCESS_DENIED"
 			outcome.ErrorSummary = text("common.state.forbidden")
-		case "REQ_INVALID":
-			outcome.ErrorCode = "REQ_INVALID"
+		case "REQ_INVALID", "CHALLENGE_INVALID":
+			outcome.ErrorCode = publicErr.Code
 			outcome.ErrorSummary = text(fallbackKey)
+			if fallbackKey == "" {
+				outcome.ErrorSummary = text("common.state.invalid_or_expired")
+			}
 		case "DB_UNAVAILABLE", "AUDIT_WRITE_FAILED", "MAIL_DELIVERY_FAILED", "RESOURCE_FORBIDDEN":
 			// 依赖/通知/资源策略故障不能伪装成用户输入错误。
 			outcome.StatusCode = http.StatusServiceUnavailable
