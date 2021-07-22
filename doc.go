@@ -570,6 +570,12 @@
 // user.bulk.export/users.export 默认强认证；错误码复用既有 48 码不新增。不实现
 // 应用成员导入、HTTP/CLI/页面与跨实例互斥。
 //
+// 步骤 68：公开 `WebUIOptions.PageAdmin`/`UIAdminBackend` 与内置用户管理/注册审核/
+// 用户组/批量导入导出任务页面（UIAccessManagement），`internal/uiadminadapter` 接真实
+// account/profile/onboarding/group/userbatch；页面级 + 真实服务集成测试通过。已知
+// 后端缺口（导出文件受控下载、用户搜索、root 列表标记、组删除精确计数）与生产
+// 管理会话/authz 装配按 fail-closed 如实登记；未新增错误码/迁移/依赖。
+//
 // 步骤 66（进行中）：根公开 `WebUIOptions.PageAccount`/`UIAccountBackend`/
 // `UIAccountBackend` 契约与内置账户设置页（资料/应用资料/头像/邮箱变更/改密），
 // `internal/uiaccountadapter` 接真实 profile/app/avatar/emailchange/passwordreset；

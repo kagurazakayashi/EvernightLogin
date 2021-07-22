@@ -1,0 +1,42 @@
+{{define "page-title"}}{{t "page.admin.users.detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.deleted}}
+<section><h2>{{t "page.admin.users.deleted"}}</h2>
+<p class="ln-meta">{{t "page.admin.users.delete_irreversible"}}</p>
+<p><a href="{{route "admin.users"}}">{{t "common.action.back"}}</a></p></section>
+{{else}}
+<dl>
+  <dt>{{t "page.account.profile.stable_id"}}</dt><dd><code>{{.Data.user.UserID}}</code></dd>
+  <dt>{{t "common.label.username"}}</dt><dd><code>{{.Data.user.Username}}</code></dd>
+  <dt>{{t "common.label.status"}}</dt><dd>{{.Data.user.Status}}</dd>
+</dl>
+<h2>{{t "page.admin.users.edit_title"}}</h2>
+<form method="post" action="{{route "admin.user_update"}}?user_id={{.Data.user.UserID}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="user_id" value="{{.Data.user.UserID}}">
+  <input type="hidden" name="row_version" value="{{.Data.user.RowVersion}}">
+  {{template "component.field" (dict "id" "admin-nickname" "name" "nickname" "label" (t "common.label.display_name") "value" .Data.user.Nickname)}}
+  {{template "component.field" (dict "id" "admin-biography" "name" "biography" "label" (t "page.account.profile.biography") "value" .Data.user.Biography "textarea" true)}}
+  {{template "component.field" (dict "id" "admin-language" "name" "language" "label" (t "common.label.language") "value" .Data.user.Language)}}
+  {{template "component.field" (dict "id" "admin-timezone" "name" "timezone" "label" (t "common.label.time_zone") "value" .Data.user.Timezone)}}
+  {{template "component.field" (dict "id" "admin-phone" "name" "phone" "label" (t "page.account.profile.phone_label") "value" .Data.user.Phone "help" (t "common.form.phone_unverified"))}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}</div>
+</form>
+<h2>{{t "page.admin.users.state_title"}}</h2>
+<form method="post" action="{{route "admin.user_state"}}" data-ln-module="async-form">
+  {{csrf_field}}<input type="hidden" name="user_id" value="{{.Data.user.UserID}}">
+  <input type="hidden" name="row_version" value="{{.Data.user.RowVersion}}">
+  <label class="ln-field__label" for="admin-state-action">{{t "page.admin.users.state_action"}}</label>
+  <select class="ln-input" id="admin-state-action" name="action">
+    <option value="disable">{{t "page.admin.users.disable"}}</option>
+    <option value="enable">{{t "page.admin.users.enable"}}</option>
+    <option value="request_delete">{{t "page.admin.users.request_delete"}}</option>
+  </select>
+  <p class="ln-meta">{{t "page.admin.users.disable_confirm"}} {{t "page.admin.users.enable_hint"}}</p>
+  {{template "component.button" (dict "label" (t "page.admin.users.apply_state") "variant" "secondary" "type" "submit")}}
+</form>
+<p><a href="{{route "admin.user_delete_preview"}}?user_id={{.Data.user.UserID}}">{{t "page.admin.users.delete_preview"}}</a></p>
+<p><a href="{{route "admin.users"}}">{{t "common.action.back"}}</a></p>
+{{end}}
+{{end}}

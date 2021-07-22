@@ -1,0 +1,20 @@
+{{define "page-title"}}{{t "page.admin.reviews.decide_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<dl><dt>{{t "page.admin.users.title"}}</dt><dd><code>{{.Data.review.UserID}}</code></dd>
+<dt>{{t "common.label.username"}}</dt><dd>{{.Data.review.Username}}</dd>
+<dt>{{t "common.label.status"}}</dt><dd>{{.Data.review.Status}}</dd></dl>
+<form method="post" action="{{route "admin.review_decide"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}<input type="hidden" name="user_id" value="{{.Data.review.UserID}}">
+  <div class="ln-field"><label class="ln-field__label" for="review-reason">{{t "page.admin.reviews.reason"}}</label>
+  <textarea class="ln-input" id="review-reason" name="reason" rows="3" required></textarea></div>
+  {{template "component.field" (dict "id" "review-app" "name" "app_id" "label" (t "page.admin.reviews.app_optional") "value" "")}}
+  {{template "component.field" (dict "id" "review-roles" "name" "roles" "label" (t "page.admin.reviews.roles_optional") "value" "")}}
+  <p class="ln-meta">{{t "page.admin.reviews.roles_impact"}}</p>
+  <div class="ln-actions">
+    <button class="ln-button ln-button--primary" type="submit" name="decision" value="approve">{{t "page.admin.reviews.approve"}}</button>
+    <button class="ln-button ln-button--secondary" type="submit" name="decision" value="reject">{{t "page.admin.reviews.reject"}}</button>
+  </div>
+</form>
+<p><a href="{{route "admin.reviews"}}">{{t "common.action.back"}}</a></p>
+{{end}}

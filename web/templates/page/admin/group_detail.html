@@ -1,0 +1,38 @@
+{{define "page-title"}}{{t "page.admin.groups.detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<dl><dt>{{t "common.label.name"}}</dt><dd>{{.Data.group.Name}}</dd>
+<dt>{{t "page.admin.groups.group_key"}}</dt><dd><code>{{.Data.group.GroupKey}}</code></dd>
+<dt>{{t "page.admin.groups.scope"}}</dt><dd><code>{{.Data.group.ScopeID}}</code></dd>
+<dt>{{t "page.admin.groups.kind"}}</dt><dd>{{.Data.group.ScopeKind}}</dd></dl>
+<p class="ln-meta">{{t "page.admin.groups.no_status"}}</p>
+<h2>{{t "page.admin.groups.update"}}</h2>
+<form method="post" action="{{route "admin.group_update"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}<input type="hidden" name="group_id" value="{{.Data.group.ID}}">
+  {{template "component.field" (dict "id" "group-edit-name" "name" "name" "label" (t "common.label.name") "value" .Data.group.Name "required" true)}}
+  {{template "component.field" (dict "id" "group-edit-description" "name" "description" "label" (t "page.admin.groups.description") "value" .Data.group.Description "textarea" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}</div>
+</form>
+<h2>{{t "page.admin.groups.members_title"}}</h2>
+<table class="ln-table"><thead><tr><th>{{t "page.account.profile.stable_id"}}</th><th>{{t "page.admin.groups.joined"}}</th></tr></thead>
+<tbody>{{range .Data.members}}<tr><td><code>{{.UserID}}</code></td><td>{{format_time .CreatedAt "UTC"}}</td></tr>
+{{else}}<tr><td colspan="2">{{t "page.admin.groups.no_members"}}</td></tr>{{end}}</tbody></table>
+{{if .Data.hasMore}}<p><a href="{{route "admin.group_detail"}}?group_id={{.Data.group.ID}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+<form method="post" action="{{route "admin.group_members"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}<input type="hidden" name="group_id" value="{{.Data.group.ID}}">
+  <label class="ln-field__label" for="group-members-action">{{t "page.admin.groups.members_action"}}</label>
+  <select class="ln-input" id="group-members-action" name="action"><option value="add">{{t "page.admin.groups.members_add"}}</option><option value="remove">{{t "page.admin.groups.members_remove"}}</option></select>
+  <div class="ln-field"><label class="ln-field__label" for="group-members-ids">{{t "page.admin.groups.members_ids"}}</label>
+  <textarea class="ln-input" id="group-members-ids" name="user_ids" rows="3" required></textarea>
+  <p class="ln-field__help">{{t "page.admin.groups.members_limit"}}</p></div>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.groups.members_submit") "variant" "secondary" "type" "submit")}}</div>
+</form>
+<h2>{{t "page.admin.groups.delete_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.groups.delete_confirm"}} {{t "page.admin.groups.delete_counts_unknown"}}</p>
+<form method="post" action="{{route "admin.group_delete"}}">
+  {{csrf_field}}<input type="hidden" name="group_id" value="{{.Data.group.ID}}">
+  <label><input type="checkbox" name="confirm_delete" value="yes" required> {{t "page.admin.users.delete_checkbox"}}</label>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.groups.delete") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p><a href="{{route "admin.groups"}}">{{t "common.action.back"}}</a></p>
+{{end}}

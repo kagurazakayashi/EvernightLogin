@@ -1,0 +1,24 @@
+{{define "page-title"}}{{t "page.admin.users.delete_preview_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.users.delete_complete_confirm"}}</p>
+<dl>
+  <dt>{{t "page.account.profile.stable_id"}}</dt><dd><code>{{.Data.preview.UserID}}</code></dd>
+  <dt>{{t "common.label.username"}}</dt><dd>{{.Data.preview.Username}}</dd>
+  <dt>{{t "page.admin.users.app_memberships"}}</dt><dd>{{.Data.preview.AppMemberships}}</dd>
+  <dt>{{t "page.admin.users.user_roles"}}</dt><dd>{{.Data.preview.UserRoles}}</dd>
+  <dt>{{t "page.admin.users.group_memberships"}}</dt><dd>{{.Data.preview.GroupMemberships}}</dd>
+  <dt>{{t "page.admin.users.one_time_credentials"}}</dt><dd>{{.Data.preview.OneTimeCredentials}}</dd>
+  <dt>{{t "page.admin.users.owned_applications"}}</dt><dd>{{.Data.preview.OwnedApplications}}</dd>
+</dl>
+{{if .Data.preview.IsRoot}}<p>{{template "component.banner" (dict "tone" "error" "message" (t "page.admin.users.protected"))}}</p>
+{{else}}
+<form method="post" action="{{route "admin.user_delete"}}">
+  {{csrf_field}}<input type="hidden" name="user_id" value="{{.Data.preview.UserID}}">
+  <input type="hidden" name="row_version" value="{{.Data.preview.RowVersion}}">
+  <label><input type="checkbox" name="confirm_delete" value="yes" required> {{t "page.admin.users.delete_checkbox"}}</label>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.users.delete_complete") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}
+<p><a href="{{route "admin.users"}}">{{t "common.action.back"}}</a></p>
+{{end}}

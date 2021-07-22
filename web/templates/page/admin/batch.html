@@ -1,0 +1,10 @@
+{{define "page-title"}}{{t "page.admin.batch.list_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p><a class="ln-button" href="{{route "admin.user_import"}}">{{t "page.admin.batch.import_title"}}</a>
+<a class="ln-button" href="{{route "admin.user_export"}}">{{t "page.admin.batch.export_title"}}</a></p>
+<table class="ln-table"><thead><tr><th>{{t "page.admin.batch.job"}}</th><th>{{t "page.admin.batch.kind"}}</th><th>{{t "common.label.status"}}</th><th>{{t "page.admin.batch.total_rows"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Data.jobs}}<tr><td><code>{{.JobID}}</code></td><td>{{.Kind}}</td><td>{{.State}}</td><td>{{.TotalRows}}</td>
+<td><a href="{{route "admin.user_batch_detail"}}?job_id={{.JobID}}">{{t "page.admin.batch.open"}}</a></td></tr>
+{{else}}<tr><td colspan="5">{{t "page.admin.batch.empty"}}</td></tr>{{end}}</tbody></table>
+{{end}}

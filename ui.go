@@ -303,6 +303,8 @@ type WebUIOptions struct {
 	PageAuth *UIPageAuthOptions
 	// PageAccount 非 nil 时注册步骤 66 个人资料/头像/邮箱/密码页面。
 	PageAccount *UIPageAccountOptions
+	// PageAdmin 非 nil 时注册步骤 68 用户管理/注册审核/用户组页面。
+	PageAdmin *UIPageAdminOptions
 	// PageMFA 非 nil 时注册步骤 64 两步验证/Passkey/恢复/找回页面。
 	PageMFA *UIPageMFAOptions
 	// PageOAuth 非 nil 时注册步骤 65 OAuth 授权/设备码/扫码登录页面。
@@ -348,6 +350,7 @@ type WebUI struct {
 	builtinPageDisabled bool
 	pageAuth            *pageAuthPages
 	pageAccount         *pageAccountPages
+	pageAdmin           *pageAdminPages
 	pageMFA             *pageMFAPages
 	pageOAuth           *pageOAuthPages
 	pageSecurity        *pageSecurityPages
@@ -404,6 +407,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageAccount = pages
+	}
+	if options.PageAdmin != nil {
+		pages, pageErr := newPageAdminPages(*options.PageAdmin)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageAdmin = pages
 	}
 	if options.PageMFA != nil {
 		pages, pageErr := newPageMFAPages(*options.PageMFA)
@@ -596,6 +606,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageAccount != nil {
 		routes = append(routes, ui.pageAccount.routes...)
 	}
+	if ui.pageAdmin != nil {
+		routes = append(routes, ui.pageAdmin.routes...)
+	}
 	if ui.pageMFA != nil {
 		routes = append(routes, ui.pageMFA.routes...)
 	}
@@ -638,6 +651,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageAccount != nil {
 		for name := range ui.pageAccount.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageAdmin != nil {
+		for name := range ui.pageAdmin.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -963,6 +983,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	if handler == nil && ui.pageAccount != nil {
 		handler = ui.pageAccount.handlers[route.Name]
 	}
+	if handler == nil && ui.pageAdmin != nil {
+		handler = ui.pageAdmin.handlers[route.Name]
+	}
 	if handler == nil && ui.pageMFA != nil {
 		handler = ui.pageMFA.handlers[route.Name]
 	}
@@ -1109,7 +1132,7 @@ func (ui *WebUI) redirectTarget(outcome UIPageOutcome) (string, bool) {
 // validRedirectQueryKey 限制页面处理器可附加的查询键（仅用于提示类参数）。
 func validRedirectQueryKey(key string) bool {
 	switch key {
-	case "status", "next":
+	case "status", "next", "user_id", "group_id", "job_id", "scope_id", "offset":
 		return true
 	}
 	return false

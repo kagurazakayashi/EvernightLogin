@@ -1,0 +1,12 @@
+{{define "page-title"}}{{t "page.admin.reviews.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.reviews.hint"}}</p>
+<table class="ln-table"><caption>{{t "page.admin.reviews.title"}}</caption>
+<thead><tr><th>{{t "common.label.username"}}</th><th>{{t "common.label.status"}}</th><th>{{t "common.label.created"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Data.reviews}}<tr><td>{{.Username}}</td><td>{{.Status}}</td>
+<td>{{format_time .CreatedAt "UTC"}}</td>
+<td><a href="{{route "admin.review_detail"}}?user_id={{.UserID}}">{{t "page.admin.reviews.decide"}}</a></td></tr>
+{{else}}<tr><td colspan="4">{{t "page.admin.reviews.empty"}}</td></tr>{{end}}</tbody></table>
+{{if .Data.hasMore}}<p><a href="{{route "admin.reviews"}}?offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{end}}

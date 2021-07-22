@@ -1,0 +1,23 @@
+{{define "page-title"}}{{t "page.admin.users.create"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.created}}
+<section><h2>{{t "page.admin.users.created_title"}}</h2>
+<dl><dt>{{t "page.account.profile.stable_id"}}</dt><dd><code>{{.Data.created.UserID}}</code></dd>
+<dt>{{t "common.label.username"}}</dt><dd><code>{{.Data.created.Username}}</code></dd>
+<dt>{{t "common.label.status"}}</dt><dd>{{.Data.created.Status}}</dd></dl>
+<p class="ln-meta">{{t "page.admin.users.create_hint"}}</p>
+<p><a href="{{route "admin.users"}}">{{t "common.action.back"}}</a></p></section>
+{{else}}
+<p class="ln-meta">{{t "page.admin.users.create_hint"}}</p>
+<form method="post" action="{{route "admin.user_create.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  {{template "component.field" (dict "id" "admin-create-username" "name" "username" "label" (t "common.label.username") "value" "" "required" true)}}
+  {{template "component.field" (dict "id" "admin-create-nickname" "name" "nickname" "label" (t "common.label.display_name") "value" "")}}
+  {{template "component.field" (dict "id" "admin-create-biography" "name" "biography" "label" (t "page.account.profile.biography") "value" "" "textarea" true)}}
+  {{template "component.field" (dict "id" "admin-create-language" "name" "language" "label" (t "common.label.language") "value" "")}}
+  {{template "component.field" (dict "id" "admin-create-timezone" "name" "timezone" "label" (t "common.label.time_zone") "value" "")}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.users.create_submit") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}
+{{end}}

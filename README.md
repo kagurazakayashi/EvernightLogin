@@ -1156,3 +1156,8 @@ Python 只用于启动包辅助工具，不是将来 Go 产品的运行依赖。
 - **邮箱双验证**：当前身份再次认证 → 新邮箱一次性链接验证（GET 不消费）→ 切换并告知旧邮箱；旧地址在新地址验证前继续有效；验证邮件“交给发送方”不等于已验证；旧邮箱告知失败不回滚新邮箱事实。
 - **改密**：当前密码 + 新密码 + 确认 + reauth；成功后按后端真实结果（`RequiresRelogin`、撤销会话数）清 Cookie 跳登录，不自动登录、不宣称外部 OAuth Token 即时全部失效。
 - **验证**：真实 SQLite/服务集成测试（profile/avatar/emailchange/passwordreset/reauth + 本地捕获邮件）覆盖资料白名单/行版本冲突/更名 reauth/头像 PNG 上传与受控读取/SVG 拒绝/邮箱申请→验证页→切换/改密后旧会话失效；页面级测试覆盖渲染/转义/multipart 表单/错误映射。真实浏览器 375/768/1024/320、200% 文本、键盘/读屏、真机与反代部署未实测（步骤 66 环境限制内如实记录，不宣称通过）。详见 `.ai/lead/reports/step66-dev.md`。
+
+## 用户管理、注册审核、用户组与批量任务页面（步骤 68）
+
+新增 `WebUIOptions.PageAdmin`/`UIAdminBackend` 与 `internal/uiadminadapter`，管理页全部 `UIAccessManagement`（依赖宿主用 `session.AuthorizeManagement` 产生 management 会话），实现用户列表（状态筛选/受控排序/limit-offset+HasMore，无关键字搜索/总数）、创建（五字段白名单，不设密码/角色/成员）、详情与资料编辑（行版本）、禁用/启用/请求删除、删除影响预览与不可逆完成删除（root/受保护对象由服务端拒绝）、注册审核（理由必填、批准/拒绝、可选应用/角色、通知失败与审核事实分开）、用户组列表/创建/名称说明更新/成员分页与 1～12 原子增删/删除组（影响计数缺失时明确不精确）。页面错误映射复用 48 码（403/409/503/500 中文兜底）。批量入口：`admin.user_import`（multipart CSV→真实 `PrecheckImport` 展示表头/行数/拒绝行/CanImport，预检查不写库→`StartImport` 幂等任务）、`admin.user_export`（字段/自由文本许可/最大行数/幂等键→`StartExport`，文件不出服务器）、`admin.user_batch`/`admin.user_batch_detail`（真实状态/计数/逐行结果/truncated，取消只提交请求并刷新真实状态，failed 续跑）、`admin.user_batch_report`（受控 ReportCSV 附件下载，任务所有权由后端再次鉴权）。
+验证：页面级 + 真实服务集成测试（真实 SQLite account/profile/onboarding/group/userbatch；分页筛选、root 保护、重复审核、组成员原子、批量部分失败、跨用户任务拒绝、授权拒绝 fail-closed、跨应用组拒绝）；真实浏览器/视口/读屏未实测。已知缺口：导出文件受控下载 API、用户关键字搜索、列表 root 标记、组删除精确计数、生产管理会话/authz 装配，均按 fail-closed 如实登记。详见 `.ai/lead/reports/step68-dev.md`。

@@ -1,0 +1,27 @@
+{{define "page-title"}}{{t "page.admin.batch.detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<dl><dt>{{t "page.admin.batch.job"}}</dt><dd><code>{{.Data.job.JobID}}</code></dd>
+<dt>{{t "page.admin.batch.kind"}}</dt><dd>{{.Data.job.Kind}}</dd>
+<dt>{{t "common.label.status"}}</dt><dd>{{.Data.job.State}}</dd>
+<dt>{{t "page.admin.batch.total_rows"}}</dt><dd>{{.Data.job.TotalRows}}</dd>
+<dt>{{t "page.admin.batch.counts"}}</dt><dd>{{t "page.admin.batch.created"}}={{.Data.job.CreatedCount}} {{t "page.admin.batch.skipped"}}={{.Data.job.SkippedCount}} {{t "page.admin.batch.conflict"}}={{.Data.job.ConflictCount}} {{t "page.admin.batch.failed"}}={{.Data.job.FailedCount}} {{t "page.admin.batch.denied"}}={{.Data.job.DeniedCount}}</dd>
+{{if .Data.job.ExportSHA256}}<dt>{{t "page.admin.batch.sha256"}}</dt><dd><code>{{.Data.job.ExportSHA256}}</code></dd>{{end}}
+{{if .Data.job.Truncated}}<dt>{{t "page.admin.batch.truncated"}}</dt><dd>{{t "page.admin.batch.truncated_hint"}}</dd>{{end}}
+</dl>
+<p class="ln-meta">{{t "page.admin.batch.cancel_hint"}}</p>
+<form method="post" action="{{route "admin.user_batch_action"}}">
+  {{csrf_field}}<input type="hidden" name="job_id" value="{{.Data.job.JobID}}">
+  <div class="ln-actions">
+    <button class="ln-button ln-button--secondary" type="submit" name="action" value="cancel">{{t "page.admin.batch.request_cancel"}}</button>
+    <button class="ln-button ln-button--secondary" type="submit" name="action" value="retry">{{t "page.admin.batch.retry"}}</button>
+  </div>
+</form>
+<p><a href="{{route "admin.user_batch_report"}}?job_id={{.Data.job.JobID}}">{{t "page.admin.batch.download_report"}}</a></p>
+<h2>{{t "page.admin.batch.rows"}}</h2>
+<table class="ln-table"><thead><tr><th>#</th><th>{{t "common.label.status"}}</th><th>{{t "page.admin.batch.error_code"}}</th><th>{{t "page.admin.batch.username"}}</th><th>{{t "page.account.profile.stable_id"}}</th></tr></thead>
+<tbody>{{range .Data.rows}}<tr><td>{{.RowNumber}}</td><td>{{.Action}}</td><td>{{.ErrorCode}}</td><td>{{.UsernameNormalized}}</td><td><code>{{.UserID}}</code></td></tr>
+{{else}}<tr><td colspan="5">{{t "page.admin.batch.no_rows"}}</td></tr>{{end}}</tbody></table>
+{{if .Data.rowsTruncated}}<p class="ln-meta">{{t "page.admin.batch.rows_truncated"}}</p>{{end}}
+<p><a href="{{route "admin.user_batch"}}">{{t "common.action.back"}}</a></p>
+{{end}}

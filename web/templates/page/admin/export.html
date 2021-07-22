@@ -1,0 +1,15 @@
+{{define "page-title"}}{{t "page.admin.batch.export_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.batch.export_hint"}}</p>
+<form method="post" action="{{route "admin.user_export.submit"}}" data-ln-module="async-form">
+  {{csrf_field}}
+  {{range .Data.fields}}<label><input type="checkbox" name="{{.}}" value="1" checked> {{.}}</label><br>{{end}}
+  <label><input type="checkbox" name="include_free_text" value="1"> {{t "page.admin.batch.free_text"}}</label>
+  <div class="ln-field"><label class="ln-field__label" for="export-max">{{t "page.admin.batch.max_rows"}}</label>
+  <input class="ln-input" id="export-max" name="max_rows" type="number" min="0" max="100000" value="0"></div>
+  <div class="ln-field"><label class="ln-field__label" for="export-key">{{t "page.admin.batch.idempotency_key"}}</label>
+  <input class="ln-input" id="export-key" name="idempotency_key" type="text" required minlength="8"></div>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.batch.start_export") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}

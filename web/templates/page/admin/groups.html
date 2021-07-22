@@ -1,0 +1,19 @@
+{{define "page-title"}}{{t "page.admin.groups.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<h2>{{t "page.admin.groups.create"}}</h2>
+<form method="post" action="{{route "admin.group_create"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  {{template "component.field" (dict "id" "group-scope" "name" "scope_id" "label" (t "page.admin.groups.scope") "value" "" "help" (t "page.admin.groups.scope_immutable") "required" true)}}
+  {{template "component.field" (dict "id" "group-key" "name" "group_key" "label" (t "page.admin.groups.group_key") "value" "" "required" true)}}
+  {{template "component.field" (dict "id" "group-name" "name" "name" "label" (t "common.label.name") "value" "" "required" true)}}
+  {{template "component.field" (dict "id" "group-description" "name" "description" "label" (t "page.admin.groups.description") "value" "" "textarea" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.create") "variant" "primary" "type" "submit")}}</div>
+</form>
+<h2>{{t "page.admin.groups.list_title"}}</h2>
+<table class="ln-table"><thead><tr><th>{{t "common.label.name"}}</th><th>{{t "page.admin.groups.group_key"}}</th><th>{{t "page.admin.groups.scope"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Data.groups}}<tr><td>{{.Name}}</td><td><code>{{.GroupKey}}</code></td><td><code>{{.ScopeID}}</code></td>
+<td><a href="{{route "admin.group_detail"}}?group_id={{.ID}}">{{t "page.admin.groups.open"}}</a></td></tr>
+{{else}}<tr><td colspan="4">{{t "page.admin.groups.empty"}}</td></tr>{{end}}</tbody></table>
+{{if .Data.hasMore}}<p><a href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{end}}

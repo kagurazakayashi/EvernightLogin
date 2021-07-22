@@ -1,0 +1,26 @@
+{{define "page-title"}}{{t "page.admin.batch.import_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.batch.import_hint"}}</p>
+<form method="post" action="{{route "admin.user_import.submit"}}" enctype="multipart/form-data">
+  {{csrf_field}}
+  <div class="ln-field"><label class="ln-field__label" for="import-file">{{t "page.admin.batch.choose_csv"}}</label>
+  <input class="ln-input" id="import-file" name="csv_file" type="file" accept=".csv,text/csv" required></div>
+  <div class="ln-field"><label class="ln-field__label" for="import-key">{{t "page.admin.batch.idempotency_key"}}</label>
+  <input class="ln-input" id="import-key" name="idempotency_key" type="text" required minlength="8"></div>
+  <div class="ln-actions">
+    <button class="ln-button ln-button--secondary" type="submit" name="action" value="precheck">{{t "page.admin.batch.precheck"}}</button>
+    <button class="ln-button ln-button--primary" type="submit" name="action" value="start">{{t "page.admin.batch.start_import"}}</button>
+  </div>
+  <p class="ln-meta">{{t "page.admin.batch.partial_hint"}}</p>
+</form>
+{{if .Data.report}}
+<section><h2>{{t "page.admin.batch.precheck_result"}}</h2>
+<dl><dt>{{t "page.admin.batch.headers"}}</dt><dd>{{range .Data.report.Headers}}<code>{{.}}</code> {{end}}</dd>
+<dt>{{t "page.admin.batch.total_rows"}}</dt><dd>{{.Data.report.TotalRows}}</dd>
+<dt>{{t "page.admin.batch.rejected_rows"}}</dt><dd>{{.Data.report.RejectedRows}}</dd>
+<dt>{{t "page.admin.batch.can_import"}}</dt><dd>{{.Data.report.CanImport}}</dd></dl>
+{{if .Data.report.Errors}}<ul>{{range .Data.report.Errors}}<li>{{t "page.admin.batch.line"}} {{.Line}}: <code>{{.Code}}</code> {{.Reason}}</li>{{end}}</ul>{{end}}
+</section>
+{{end}}
+{{end}}

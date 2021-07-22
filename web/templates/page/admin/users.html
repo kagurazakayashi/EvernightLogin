@@ -1,0 +1,37 @@
+{{define "page-title"}}{{t "page.admin.users.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.users.scope_hint"}}</p>
+<form method="get" action="{{route "admin.users"}}">
+  <label class="ln-field__label" for="users-status">{{t "common.label.status"}}</label>
+  <select class="ln-input" id="users-status" name="status">
+    <option value="">{{t "page.admin.users.status_all"}}</option>
+    <option value="pending"{{if eq .Data.query.Status "pending"}} selected{{end}}>{{t "page.admin.users.status_pending"}}</option>
+    <option value="active"{{if eq .Data.query.Status "active"}} selected{{end}}>{{t "page.admin.users.status_active"}}</option>
+    <option value="disabled"{{if eq .Data.query.Status "disabled"}} selected{{end}}>{{t "page.admin.users.status_disabled"}}</option>
+    <option value="pending_delete"{{if eq .Data.query.Status "pending_delete"}} selected{{end}}>{{t "page.admin.users.status_pending_delete"}}</option>
+  </select>
+  <label class="ln-field__label" for="users-sort">{{t "page.admin.users.sort"}}</label>
+  <select class="ln-input" id="users-sort" name="sort">
+    <option value="created_at"{{if eq .Data.query.Sort "created_at"}} selected{{end}}>{{t "page.admin.users.sort_created"}}</option>
+    <option value="updated_at"{{if eq .Data.query.Sort "updated_at"}} selected{{end}}>{{t "page.admin.users.sort_updated"}}</option>
+    <option value="username"{{if eq .Data.query.Sort "username"}} selected{{end}}>{{t "page.admin.users.sort_username"}}</option>
+    <option value="id"{{if eq .Data.query.Sort "id"}} selected{{end}}>{{t "page.admin.users.sort_id"}}</option>
+  </select>
+  <input type="hidden" name="offset" value="0">
+  {{template "component.button" (dict "label" (t "page.admin.users.filter") "type" "submit")}}
+</form>
+<p class="ln-meta">{{t "page.admin.users.search_unavailable"}} {{t "page.admin.users.total_unknown"}}</p>
+<table class="ln-table">
+  <caption>{{t "page.admin.users.title"}}</caption>
+  <thead><tr><th>{{t "common.label.username"}}</th><th>{{t "common.label.display_name"}}</th><th>{{t "common.label.status"}}</th><th>{{t "common.label.created"}}</th><th>{{t "common.label.updated"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
+  <tbody>{{range .Data.users}}<tr>
+    <td><a href="{{route "admin.user_detail"}}?user_id={{.UserID}}">{{.Username}}</a></td>
+    <td>{{.Nickname}}</td><td>{{.Status}}</td>
+    <td>{{format_time .CreatedAt "UTC"}}</td><td>{{format_time .UpdatedAt "UTC"}}</td>
+    <td><a href="{{route "admin.user_detail"}}?user_id={{.UserID}}">{{t "page.admin.users.open"}}</a></td>
+  </tr>{{else}}<tr><td colspan="6">{{t "page.admin.users.empty"}}</td></tr>{{end}}</tbody>
+</table>
+<p><a class="ln-button" href="{{route "admin.user_create"}}">{{t "page.admin.users.create"}}</a></p>
+{{if .Data.hasMore}}<p><a href="{{route "admin.users"}}?status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{end}}
