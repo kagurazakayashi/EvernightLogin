@@ -311,6 +311,8 @@ type WebUIOptions struct {
 	PageOAuth *UIPageOAuthOptions
 	// PageSecurity 非 nil 时注册步骤 67 安全中心/会话/已授权应用页面。
 	PageSecurity *UIPageSecurityOptions
+	// PageRBAC 非 nil 时注册步骤 69 角色/权限/委派/有效权限页面。
+	PageRBAC *UIPageRBACOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -354,6 +356,7 @@ type WebUI struct {
 	pageMFA             *pageMFAPages
 	pageOAuth           *pageOAuthPages
 	pageSecurity        *pageSecurityPages
+	pageRBAC            *pageRBACPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -435,6 +438,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageSecurity = pages
+	}
+	if options.PageRBAC != nil {
+		pages, pageErr := newPageRBACPages(*options.PageRBAC)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageRBAC = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -618,6 +628,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageSecurity != nil {
 		routes = append(routes, ui.pageSecurity.routes...)
 	}
+	if ui.pageRBAC != nil {
+		routes = append(routes, ui.pageRBAC.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -679,6 +692,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageSecurity != nil {
 		for name := range ui.pageSecurity.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageRBAC != nil {
+		for name := range ui.pageRBAC.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -995,6 +1015,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	if handler == nil && ui.pageSecurity != nil {
 		handler = ui.pageSecurity.handlers[route.Name]
 	}
+	if handler == nil && ui.pageRBAC != nil {
+		handler = ui.pageRBAC.handlers[route.Name]
+	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
 		if handleErr != nil {
@@ -1132,7 +1155,8 @@ func (ui *WebUI) redirectTarget(outcome UIPageOutcome) (string, bool) {
 // validRedirectQueryKey 限制页面处理器可附加的查询键（仅用于提示类参数）。
 func validRedirectQueryKey(key string) bool {
 	switch key {
-	case "status", "next", "user_id", "group_id", "job_id", "scope_id", "offset":
+	case "status", "next", "user_id", "group_id", "job_id", "scope_id", "offset",
+		"role_id", "permission_id", "subject_user_id":
 		return true
 	}
 	return false

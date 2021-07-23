@@ -1,0 +1,45 @@
+{{define "page-title"}}{{t "page.admin.rbac.permission_detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p><a href="{{route "admin.permissions"}}?scope_id={{.Data.permission.ScopeID}}">{{t "common.action.back"}}</a></p>
+<dl>
+  <dt>{{t "common.label.name"}}</dt><dd>{{.Data.permission.Name}}</dd>
+  <dt>{{t "page.admin.rbac.machine_key"}}</dt><dd><code>{{.Data.permission.Key}}</code></dd>
+  <dt>{{t "page.admin.rbac.group"}}</dt><dd><code>{{.Data.permission.Group}}</code></dd>
+  <dt>{{t "common.label.scope"}}</dt><dd>{{if eq .Data.permission.ScopeKind "application"}}{{if .Data.permission.AppContext}}{{.Data.permission.AppContext}}{{else}}{{t "page.admin.rbac.scope_application"}}{{end}}{{else}}{{t "page.admin.rbac.scope_system"}}{{end}} <code>{{.Data.permission.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.rbac.permission_kind"}}</dt><dd>{{if .Data.permission.RootOnly}}{{t "page.admin.rbac.root_only"}}{{else if .Data.permission.Builtin}}{{t "page.admin.rbac.builtin"}}{{else}}{{t "page.admin.rbac.custom"}}{{end}}</dd>
+  <dt>{{t "page.admin.rbac.explain_what"}}</dt><dd>{{.Data.permission.Description}}</dd>
+  <dt>{{t "page.admin.rbac.effective_scope"}}</dt><dd>{{if .Data.permission.DefaultScope}}{{.Data.permission.DefaultScope}}{{else}}{{t "page.admin.rbac.scope_inherited"}}{{end}}</dd>
+  <dt>{{t "page.admin.rbac.explain_limits"}}</dt><dd>{{.Data.permission.Limits}}</dd>
+  <dt>{{t "page.admin.rbac.default_value"}}</dt><dd>{{if eq .Data.permission.ScopeKind "application"}}{{t "page.admin.rbac.app_default_not_provided"}}{{else if .Data.permission.DefaultName}}{{t "page.admin.rbac.default_enabled"}}: {{if .Data.permission.DefaultEnabled}}{{t "page.admin.rbac.enabled"}}{{else}}{{t "page.admin.rbac.disabled"}}{{end}}{{else}}{{t "page.admin.rbac.no_catalog_default"}}{{end}}</dd>
+  <dt>{{t "common.label.current_value"}}</dt><dd>{{if .Data.permission.Enabled}}{{t "page.admin.rbac.enabled"}}{{else}}{{t "page.admin.rbac.disabled"}}{{end}}</dd>
+  <dt>{{t "page.admin.rbac.implemented"}}</dt><dd>{{if .Data.permission.Implemented}}{{t "page.admin.rbac.implemented_yes"}}{{else}}{{t "page.admin.rbac.implemented_no"}}{{end}}</dd>
+  <dt>{{t "page.admin.rbac.requires_reauth"}}</dt><dd>{{if .Data.permission.RequiresReauth}}{{t "page.admin.rbac.requires_reauth_yes"}}{{else}}{{t "page.admin.rbac.requires_reauth_no"}}{{end}}</dd>
+  <dt>{{t "page.admin.rbac.default_roles"}}</dt><dd>{{if eq .Data.permission.ScopeKind "application"}}{{t "page.admin.rbac.app_default_roles_not_provided"}}{{else}}{{range .Data.defaultRoles}}<code>{{.}}</code> {{else}}{{t "page.admin.rbac.not_default_granted"}}{{end}}{{end}}</dd>
+  <dt>{{t "page.admin.rbac.stable_id"}}</dt><dd><code>{{.Data.permission.PermissionID}}</code></dd>
+</dl>
+<p class="ln-meta">{{t "page.admin.rbac.stop_effect_hint"}}</p>
+
+{{if .Data.updated}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.saved"}}</p></div>{{end}}
+
+<h2>{{t "page.admin.rbac.permission_edit"}}</h2>
+<p class="ln-meta">{{t "page.admin.rbac.builtin_text_hint"}}</p>
+<form method="post" action="{{route "admin.permission_update"}}" novalidate>
+  {{csrf_field}}<input type="hidden" name="permission_id" value="{{.Data.permission.PermissionID}}">
+  {{template "component.field" (dict "id" "permission-name" "name" "name" "label" (t "common.label.name") "value" .Data.permission.Name "required" true)}}
+  {{template "component.field" (dict "id" "permission-description" "name" "description" "label" (t "page.admin.rbac.explain_what") "value" .Data.permission.Description "textarea" true)}}
+  {{template "component.field" (dict "id" "permission-limits" "name" "limits" "label" (t "page.admin.rbac.explain_limits") "value" .Data.permission.Limits "textarea" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}</div>
+</form>
+
+<h2>{{t "page.admin.rbac.permission_state_title"}}</h2>
+<form method="post" action="{{route "admin.permission_state"}}">
+  {{csrf_field}}<input type="hidden" name="permission_id" value="{{.Data.permission.PermissionID}}">
+  {{if .Data.permission.Enabled}}<input type="hidden" name="action" value="disable">
+  <label class="ln-field__label" for="permission-disable-confirm">{{t "page.admin.rbac.confirm_disable_permission"}}</label>
+  <input id="permission-disable-confirm" type="checkbox" name="confirm" value="yes" required>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.disable_permission") "variant" "danger" "type" "submit")}}</div>
+  {{else}}<input type="hidden" name="action" value="enable">
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.enable_permission") "variant" "primary" "type" "submit")}}</div>{{end}}
+</form>
+{{end}}

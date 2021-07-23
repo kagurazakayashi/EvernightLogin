@@ -1,0 +1,36 @@
+{{define "page-title"}}{{t "page.admin.rbac.preset.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.rbac.preset.intro"}}</p>
+{{if .Data.diff.ExecutionRestricted}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.rbac.preset.execution_restricted"}}</p></div>{{end}}
+<p class="ln-meta">{{t "page.admin.rbac.preset.computed_hint"}}</p>
+<nav class="ln-actions" aria-label="{{t "page.admin.rbac.scope_switch"}}">
+  {{range .Data.scopes}}<a class="ln-button ln-button--secondary" href="{{route "admin.preset_diff"}}?scope_id={{.ScopeID}}"{{if eq .ScopeID $.Data.scopeID}} aria-current="true"{{end}}>{{if .ApplicationName}}{{.ApplicationName}} ({{.ScopeID}}){{else}}{{.ScopeID}}{{end}}</a>{{end}}
+</nav>
+{{if not .Data.diff.Available}}
+  {{template "component.state" (dict "state" "unavailable" "title" (t "page.admin.rbac.preset.unavailable") "description" .Data.diff.UnavailableReason)}}
+{{else}}
+<dl>
+  <dt>{{t "page.admin.rbac.preset.catalog_version"}}</dt><dd><code>{{.Data.diff.CatalogVersion}}</code></dd>
+  <dt>{{t "common.label.scope"}}</dt><dd><code>{{.Data.diff.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.rbac.preset.summary"}}</dt><dd>{{t "page.admin.rbac.preset.roles"}}: {{format_number .Data.diff.Summary.RoleCount}} · {{t "page.admin.rbac.preset.changed_roles"}}: {{format_number .Data.diff.Summary.ChangedRoles}} · {{t "page.admin.rbac.preset.missing_roles"}}: {{format_number .Data.diff.Summary.MissingRoles}} · {{t "page.admin.rbac.preset.add_permissions"}}: {{format_number .Data.diff.Summary.AddPermissions}} · {{t "page.admin.rbac.preset.remove_permissions"}}: {{format_number .Data.diff.Summary.RemovePermissions}} · {{t "page.admin.rbac.preset.missing_permissions"}}: {{format_number .Data.diff.Summary.MissingPermissions}} · {{t "page.admin.rbac.preset.disabled_permissions"}}: {{format_number .Data.diff.Summary.DisabledPermissions}}</dd>
+</dl>
+<table class="ln-table">
+  <caption>{{t "page.admin.rbac.preset.title"}}</caption>
+  <thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.admin.rbac.machine_key"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.admin.rbac.preset.add_permissions"}}</th><th scope="col">{{t "page.admin.rbac.preset.remove_permissions"}}</th><th scope="col">{{t "page.admin.rbac.preset.protected"}}</th></tr></thead>
+  <tbody>
+  {{range .Data.diff.Roles}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td><code>{{.RoleKey}}</code></td>
+    <td>{{if not .Exists}}{{t "page.admin.rbac.preset.missing"}}{{else if .Unchanged}}{{t "page.admin.rbac.preset.unchanged"}}{{else}}{{t "page.admin.rbac.preset.changed"}}{{end}}</td>
+    <td>{{range .AddPermissions}}<div><code>{{.Key}}</code> {{.Name}}</div>{{else}}—{{end}}</td>
+    <td>{{range .RemovePermissions}}<div><code>{{.Key}}</code> {{.Name}}</div>{{else}}—{{end}}</td>
+    <td>{{if .Protected}}{{t "page.admin.rbac.preset.protected_yes"}}{{else}}—{{end}}</td>
+  </tr>
+  {{else}}<tr><td colspan="6" class="ln-meta">{{t "page.admin.rbac.preset.empty"}}</td></tr>{{end}}
+  </tbody>
+</table>
+<p class="ln-meta">{{t "page.admin.rbac.preset.custom_scope_hint"}}</p>
+{{end}}
+{{end}}

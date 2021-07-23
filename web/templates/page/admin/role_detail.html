@@ -1,0 +1,129 @@
+{{define "page-title"}}{{t "page.admin.rbac.role_detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p><a href="{{route "admin.roles"}}?scope_id={{.Data.role.ScopeID}}">{{t "common.action.back"}}</a></p>
+<dl>
+  <dt>{{t "common.label.name"}}</dt><dd>{{.Data.role.Name}}</dd>
+  <dt>{{t "page.admin.rbac.machine_key"}}</dt><dd><code>{{.Data.role.Key}}</code></dd>
+  <dt>{{t "common.label.scope"}}</dt><dd>{{if eq .Data.role.ScopeKind "application"}}{{if .Data.role.AppContext}}{{.Data.role.AppContext}}{{else}}{{t "page.admin.rbac.scope_application"}}{{end}}{{else}}{{t "page.admin.rbac.scope_system"}}{{end}} <code>{{.Data.role.ScopeID}}</code></dd>
+  <dt>{{t "common.label.status"}}</dt><dd>{{if .Data.role.Enabled}}{{t "page.admin.rbac.enabled"}}{{else}}{{t "page.admin.rbac.disabled"}}{{end}}{{if .Data.role.Builtin}} · {{t "page.admin.rbac.builtin_protected"}}{{end}}</dd>
+  <dt>{{t "page.admin.rbac.explain_what"}}</dt><dd>{{.Data.role.Description}}</dd>
+  <dt>{{t "page.admin.rbac.explain_limits"}}</dt><dd>{{.Data.role.Limits}}</dd>
+  <dt>{{t "page.admin.rbac.assignments"}}</dt><dd>{{t "page.admin.rbac.users"}}: {{format_number .Data.role.UserAssignments}} · {{t "page.admin.rbac.groups"}}: {{format_number .Data.role.GroupAssignments}}</dd>
+  <dt>{{t "page.admin.rbac.stable_id"}}</dt><dd><code>{{.Data.role.ID}}</code></dd>
+</dl>
+<p class="ln-meta">{{t "page.admin.rbac.role_limits_hint"}}</p>
+
+{{if .Data.compose}}
+<h2>{{t "page.admin.rbac.compose_result"}}</h2>
+{{template "component.banner" (dict "tone" "success" "message" (t_fmt "page.admin.rbac.compose_done" "action" .Data.compose.Action))}}
+<p>{{t "page.admin.rbac.compose_affected"}}: {{t "page.admin.rbac.users"}} {{format_number .Data.compose.AffectedUsers}} · {{t "page.admin.rbac.groups"}} {{format_number .Data.compose.AffectedGroups}}</p>
+<div class="ln-grid">
+  <section><h3>{{t "page.admin.rbac.before"}}</h3><ul class="ln-list">{{range .Data.compose.Before}}<li><code>{{.Key}}</code> {{.Name}}</li>{{else}}<li class="ln-meta">{{t "common.state.empty"}}</li>{{end}}</ul></section>
+  <section><h3>{{t "page.admin.rbac.after"}}</h3><ul class="ln-list">{{range .Data.compose.After}}<li><code>{{.Key}}</code> {{.Name}}</li>{{else}}<li class="ln-meta">{{t "common.state.empty"}}</li>{{end}}</ul></section>
+</div>
+{{end}}
+
+{{if .Data.permissionCatalogUnavailable}}
+{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.rbac.permission_details_unavailable"))}}
+{{end}}
+{{if .Data.updated}}
+<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.saved"}}</p></div>
+{{end}}
+
+<h2>{{t "page.admin.rbac.role_edit"}}</h2>
+<form method="post" action="{{route "admin.role_update"}}" novalidate>
+  {{csrf_field}}<input type="hidden" name="role_id" value="{{.Data.role.ID}}">
+  {{template "component.field" (dict "id" "role-name" "name" "name" "label" (t "common.label.name") "value" .Data.role.Name "required" true)}}
+  {{template "component.field" (dict "id" "role-description" "name" "description" "label" (t "page.admin.rbac.explain_what") "value" .Data.role.Description "textarea" true "help" (t "page.admin.rbac.explain_what_help"))}}
+  {{template "component.field" (dict "id" "role-limits" "name" "limits" "label" (t "page.admin.rbac.explain_limits") "value" .Data.role.Limits "textarea" true "help" (t "page.admin.rbac.explain_limits_help"))}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}</div>
+</form>
+
+<h2>{{t "page.admin.rbac.role_state_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.rbac.role_state_hint"}}</p>
+<form method="post" action="{{route "admin.role_state"}}">
+  {{csrf_field}}<input type="hidden" name="role_id" value="{{.Data.role.ID}}">
+  {{if .Data.role.Enabled}}<input type="hidden" name="action" value="disable">
+  <label class="ln-field__label" for="role-disable-confirm">{{t "page.admin.rbac.confirm_disable_role"}}</label>
+  <input id="role-disable-confirm" type="checkbox" name="confirm" value="yes" required>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.disable_role") "variant" "danger" "type" "submit")}}</div>
+  {{else}}<input type="hidden" name="action" value="enable">
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.enable_role") "variant" "primary" "type" "submit")}}</div>{{end}}
+</form>
+
+<h2>{{t "page.admin.rbac.default_permissions"}}</h2>
+<p class="ln-meta">{{if .Data.role.IsPreset}}{{t "page.admin.rbac.default_permissions_source"}}{{else}}{{t "page.admin.rbac.default_permissions_not_provided"}}{{end}}</p>
+{{if .Data.role.DefaultPermissions}}
+<table class="ln-table">
+  <caption>{{t "page.admin.rbac.default_permissions"}}</caption>
+  <thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.admin.rbac.machine_key"}}</th><th scope="col">{{t "page.admin.rbac.explain_what"}}</th><th scope="col">{{t "page.admin.rbac.explain_limits"}}</th></tr></thead>
+  <tbody>{{range .Data.role.DefaultPermissions}}<tr><td>{{.Name}}</td><td><code>{{.Key}}</code></td><td>{{if .Description}}{{.Description}}{{else if .DefaultSummary}}{{.DefaultSummary}}{{else}}{{t "page.admin.rbac.not_provided"}}{{end}}</td><td>{{if .Limits}}{{.Limits}}{{else if .DefaultLimits}}{{.DefaultLimits}}{{else}}{{t "page.admin.rbac.not_provided"}}{{end}}</td></tr>
+  {{end}}</tbody>
+</table>
+{{else}}{{template "component.state" (dict "state" "unavailable" "title" (t "page.admin.rbac.default_permissions_none") "description" (t "page.admin.rbac.default_permissions_none_hint"))}}{{end}}
+
+<h2>{{t "page.admin.rbac.current_permissions"}}</h2>
+<p class="ln-meta">{{t "page.admin.rbac.current_permissions_hint"}}</p>
+<table class="ln-table">
+  <caption>{{t "page.admin.rbac.current_permissions"}}</caption>
+  <thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.admin.rbac.machine_key"}}</th><th scope="col">{{t "page.admin.rbac.application_context"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.admin.rbac.explain_what"}}</th><th scope="col">{{t "page.admin.rbac.explain_limits"}}</th><th scope="col">{{t "common.label.actions"}}</th></tr></thead>
+  <tbody>
+  {{range .Data.role.CurrentPermissions}}
+  <tr>
+    <td>{{.Name}}{{if .RootOnly}} <span class="ln-badge">{{t "page.admin.rbac.root_only"}}</span>{{end}}</td>
+    <td><code>{{.Key}}</code></td>
+    <td>{{if eq .ScopeKind "application"}}{{if .AppContext}}{{.AppContext}}{{else}}{{t "page.admin.rbac.scope_application"}}{{end}} <code>{{.ScopeID}}</code>{{else}}{{t "page.admin.rbac.scope_system"}} <code>{{.ScopeID}}</code>{{end}}</td>
+    <td>{{if .Enabled}}{{t "page.admin.rbac.enabled"}}{{else}}{{t "page.admin.rbac.disabled"}}{{end}}</td>
+    <td>{{if .Description}}{{.Description}}{{else}}{{t "page.admin.rbac.not_provided"}}{{end}}</td>
+    <td>{{if .Limits}}{{.Limits}}{{else}}{{t "page.admin.rbac.not_provided"}}{{end}}</td>
+    <td>
+      <form method="post" action="{{route "admin.role_permissions"}}">
+        {{csrf_field}}<input type="hidden" name="role_id" value="{{$.Data.role.ID}}">
+        <input type="hidden" name="permission_id" value="{{.PermissionID}}">
+        <input type="hidden" name="action" value="remove">
+        <label class="ln-field__label" for="compose-remove-{{.PermissionID}}">{{t "page.admin.rbac.confirm_compose"}}</label>
+        <input id="compose-remove-{{.PermissionID}}" type="checkbox" name="confirm" value="yes" required>
+        <button class="ln-button ln-button--danger" type="submit">{{t "page.admin.rbac.remove_permission"}}</button>
+      </form>
+    </td>
+  </tr>
+  {{else}}<tr><td colspan="7" class="ln-meta">{{t "page.admin.rbac.no_current_permissions"}}</td></tr>{{end}}
+  </tbody>
+</table>
+
+{{if not .Data.permissionCatalogUnavailable}}
+<h2>{{t "page.admin.rbac.available_permissions"}}</h2>
+<p class="ln-meta">{{t "page.admin.rbac.available_permissions_hint"}}</p>
+<table class="ln-table">
+  <caption>{{t "page.admin.rbac.available_permissions"}}</caption>
+  <thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.admin.rbac.machine_key"}}</th><th scope="col">{{t "page.admin.rbac.explain_what"}}</th><th scope="col">{{t "page.admin.rbac.explain_limits"}}</th><th scope="col">{{t "common.label.actions"}}</th></tr></thead>
+  <tbody>
+  {{range .Data.available}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td><code>{{.Key}}</code></td>
+    <td>{{.Description}}</td>
+    <td>{{.Limits}}</td>
+    <td>
+      <form method="post" action="{{route "admin.role_permissions"}}">
+        {{csrf_field}}<input type="hidden" name="role_id" value="{{$.Data.role.ID}}">
+        <input type="hidden" name="permission_id" value="{{.PermissionID}}">
+        <input type="hidden" name="action" value="add">
+        <label class="ln-field__label" for="compose-add-{{.PermissionID}}">{{t "page.admin.rbac.confirm_compose"}}</label>
+        <input id="compose-add-{{.PermissionID}}" type="checkbox" name="confirm" value="yes" required>
+        <button class="ln-button ln-button--primary" type="submit">{{t "page.admin.rbac.add_permission"}}</button>
+      </form>
+    </td>
+  </tr>
+  {{else}}<tr><td colspan="5" class="ln-meta">{{t "page.admin.rbac.no_available_permissions"}}</td></tr>{{end}}
+  </tbody>
+</table>
+<p class="ln-meta">{{t "page.admin.rbac.root_only_compose_hint"}}</p>
+{{end}}
+
+<h2>{{t "page.admin.rbac.assignments_title"}}</h2>
+<p><a class="ln-button ln-button--secondary" href="{{route "admin.role_assignments"}}?role_id={{.Data.role.ID}}">{{t "page.admin.rbac.manage_assignments"}}</a></p>
+{{if .Data.assignments.Users}}<h3>{{t "page.admin.rbac.direct_users"}}</h3><ul class="ln-list">{{range .Data.assignments.Users}}<li><code>{{.UserID}}</code> · {{t "page.admin.rbac.data_scope"}}: {{.DataScopeText}}</li>{{end}}</ul>{{end}}
+{{if .Data.assignments.Groups}}<h3>{{t "page.admin.rbac.indirect_groups"}}</h3><ul class="ln-list">{{range .Data.assignments.Groups}}<li><code>{{.GroupID}}</code> · {{t "common.label.scope"}}: <code>{{.ScopeID}}</code></li>{{end}}</ul>{{end}}
+{{end}}

@@ -570,6 +570,15 @@
 // user.bulk.export/users.export 默认强认证；错误码复用既有 48 码不新增。不实现
 // 应用成员导入、HTTP/CLI/页面与跨实例互斥。
 //
+// 步骤 69：公开 `WebUIOptions.PageRBAC`/`UIRBACBackend` 与内置角色/权限/委派/有效
+// 权限/预设差异页面（UIAccessManagement），`internal/uiadminadapter.NewRBAC` 接真实
+// role/permission/group/delegation/authz/preset 目录；角色与权限显示中文说明、生效
+// 范围、不能做什么与默认/当前值，应用同名权限带应用上下文，root 不是可分配角色且
+// root_only 不可由普通角色组合；角色组合展示改动前后权限与受影响分配，分配确认绑定
+// 实际目标并由 delegation.Guard 复核；委派管理只读（签发/撤回仅受信通道）；有效权限
+// 显示直接角色/用户组来源与数据范围；预设差异只读计算（恢复执行仅受信通道）。页面
+// 契约 + 真实服务集成测试通过。未新增错误码/迁移/依赖；未做实浏览器视口/读屏实测。
+//
 // 步骤 68：公开 `WebUIOptions.PageAdmin`/`UIAdminBackend` 与内置用户管理/注册审核/
 // 用户组/批量导入导出任务页面（UIAccessManagement），`internal/uiadminadapter` 接真实
 // account/profile/onboarding/group/userbatch；页面级 + 真实服务集成测试通过。已知

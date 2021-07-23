@@ -1,0 +1,58 @@
+{{define "page-title"}}{{t "page.admin.rbac.effective.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.rbac.effective.intro"}}</p>
+<p class="ln-meta">{{t "page.admin.rbac.effective.authorize_hint"}}</p>
+<p class="ln-meta">{{t "page.admin.rbac.effective.no_cache_hint"}}</p>
+<form method="get" action="{{route "admin.access_effective"}}" novalidate>
+  {{template "component.field" (dict "id" "effective-subject" "name" "subject_user_id" "label" (t "page.admin.rbac.effective.subject") "value" .Data.subjectUserID "required" true "help" (t "page.admin.rbac.effective.subject_help"))}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="effective-scope">{{t "common.label.scope"}}</label>
+    <p class="ln-field__help" id="effective-scope-help">{{t "page.admin.rbac.effective.scope_help"}}</p>
+    <select class="ln-input" id="effective-scope" name="scope_id" aria-describedby="effective-scope-help">
+      {{range .Data.scopes}}<option value="{{.ScopeID}}"{{if eq .ScopeID $.Data.scopeID}} selected{{end}}>{{if .ApplicationName}}{{.ApplicationName}} ({{.ScopeID}}){{else}}{{.ScopeID}}{{end}}</option>{{end}}
+    </select>
+  </div>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.effective.query") "variant" "primary" "type" "submit")}}</div>
+</form>
+
+{{if not .Data.queried}}
+{{template "component.state" (dict "state" "idle" "title" (t "page.admin.rbac.effective.not_queried") "description" (t "page.admin.rbac.effective.not_queried_hint"))}}
+{{else}}{{with .Data.effective}}
+<dl>
+  <dt>{{t "page.admin.rbac.effective.subject"}}</dt><dd><code>{{.SubjectUserID}}</code></dd>
+  <dt>{{t "common.label.scope"}}</dt><dd><code>{{.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.rbac.effective.account_status"}}</dt><dd>{{.AccountStatusText}}</dd>
+  <dt>{{t "page.admin.rbac.effective.application_status"}}</dt><dd>{{.ApplicationStatusText}}</dd>
+  <dt>{{t "page.admin.rbac.effective.membership_status"}}</dt><dd>{{.MembershipStatusText}}</dd>
+  {{if .DeniedCode}}<dt>{{t "page.admin.rbac.effective.denied"}}</dt><dd><code>{{.DeniedCode}}</code> {{.DeniedReasonText}}</dd>{{end}}
+  {{if .SourceLimitReached}}<dt>{{t "page.admin.rbac.effective.source_limit"}}</dt><dd>{{t "page.admin.rbac.effective.source_limit_hint"}}</dd>{{end}}
+</dl>
+
+{{range .Permissions}}
+<section class="ln-card">
+  <h2>{{.Name}} <code>{{.Key}}</code></h2>
+  <p>{{t "page.admin.rbac.effective.data_scope"}}: {{.DataScope.Display}}{{if and (eq .DataScope.Mode "resources") .DataScope.Resources}} ({{range .DataScope.Resources}}<code>{{.}}</code> {{end}}){{end}}</p>
+  <table class="ln-table">
+    <caption>{{t "page.admin.rbac.effective.sources"}} {{.Key}}</caption>
+    <thead><tr><th scope="col">{{t "page.admin.rbac.effective.source_kind"}}</th><th scope="col">{{t "page.admin.rbac.effective.source_role"}}</th><th scope="col">{{t "page.admin.rbac.effective.source_group"}}</th><th scope="col">{{t "page.admin.rbac.effective.source_data_scope"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.admin.rbac.assigned_by"}}</th></tr></thead>
+    <tbody>
+    {{range .Sources}}
+    <tr>
+      <td>{{if eq .Kind "user_role"}}{{t "page.admin.rbac.effective.kind_direct"}}{{else}}{{t "page.admin.rbac.effective.kind_group"}}{{end}}</td>
+      <td>{{.RoleName}} <code>{{.RoleKey}}</code></td>
+      <td>{{if .GroupID}}{{.GroupName}} <code>{{.GroupID}}</code>{{else}}—{{end}}</td>
+      <td>{{.DataScope.Display}}{{if and (eq .DataScope.Mode "resources") .DataScope.Resources}}: {{range .DataScope.Resources}}<code>{{.}}</code> {{end}}{{end}}</td>
+      <td>{{if .Included}}{{t "page.admin.rbac.effective.included"}}{{else}}{{t "page.admin.rbac.effective.excluded"}}{{if .ExcludedReason}}: {{.ExcludedReason}}{{end}}{{end}}</td>
+      <td><code>{{.AssignedBy}}</code> {{format_time .CreatedAt "UTC"}}</td>
+    </tr>
+    {{else}}<tr><td colspan="6" class="ln-meta">{{t "page.admin.rbac.effective.no_sources"}}</td></tr>{{end}}
+    </tbody>
+  </table>
+</section>
+{{else}}<p class="ln-meta">{{t "page.admin.rbac.effective.empty"}}</p>{{end}}
+{{if .HasMore}}<p><a class="ln-button ln-button--secondary" rel="next" href="{{route "admin.access_effective"}}?subject_user_id={{.SubjectUserID}}&scope_id={{.ScopeID}}&offset={{.NextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+<p class="ln-meta">{{t "page.admin.rbac.effective.role_name_hint"}}</p>
+{{end}}
+{{end}}
+{{end}}

@@ -1,0 +1,22 @@
+{{define "page-title"}}{{t "page.admin.rbac.role_create"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.rbac.role_create_hint"}}</p>
+<p class="ln-meta">{{t "page.admin.rbac.root_hint"}}</p>
+<form method="post" action="{{route "admin.role_create.submit"}}" novalidate>
+  {{csrf_field}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="role-scope">{{t "common.label.scope"}}</label>
+    <p class="ln-field__help" id="role-scope-help">{{t "page.admin.rbac.role_scope_help"}}</p>
+    <select class="ln-input" id="role-scope" name="scope_id" aria-describedby="role-scope-help">
+      {{range .Data.scopes}}<option value="{{.ScopeID}}"{{if eq .ScopeID $.Data.scopeID}} selected{{end}}>{{if .ApplicationName}}{{.ApplicationName}} ({{.ScopeID}}){{else}}{{.ScopeID}}{{end}}</option>{{end}}
+    </select>
+  </div>
+  {{template "component.field" (dict "id" "role-key" "name" "role_key" "label" (t "page.admin.rbac.machine_key") "value" "" "help" (t "page.admin.rbac.role_key_help") "required" true)}}
+  {{template "component.field" (dict "id" "role-name" "name" "name" "label" (t "common.label.name") "value" "" "required" true)}}
+  {{template "component.field" (dict "id" "role-description" "name" "description" "label" (t "page.admin.rbac.explain_what") "value" "" "textarea" true "help" (t "page.admin.rbac.explain_what_help"))}}
+  {{template "component.field" (dict "id" "role-limits" "name" "limits" "label" (t "page.admin.rbac.explain_limits") "value" "" "textarea" true "help" (t "page.admin.rbac.explain_limits_help"))}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.role_create") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p><a href="{{route "admin.roles"}}?scope_id={{.Data.scopeID}}">{{t "common.action.back"}}</a></p>
+{{end}}

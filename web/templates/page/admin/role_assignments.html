@@ -1,0 +1,54 @@
+{{define "page-title"}}{{t "page.admin.rbac.assignments_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p><a href="{{route "admin.role_detail"}}?role_id={{.Data.role.ID}}">{{t "common.action.back"}}</a></p>
+<dl>
+  <dt>{{t "common.label.name"}}</dt><dd>{{.Data.role.Name}} <code>{{.Data.role.Key}}</code></dd>
+  <dt>{{t "common.label.scope"}}</dt><dd>{{if eq .Data.role.ScopeKind "application"}}{{if .Data.role.AppContext}}{{.Data.role.AppContext}}{{else}}{{t "page.admin.rbac.scope_application"}}{{end}}{{else}}{{t "page.admin.rbac.scope_system"}}{{end}} <code>{{.Data.role.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.rbac.current_permissions"}}</dt><dd>{{format_number (len .Data.role.CurrentPermissions)}}</dd>
+</dl>
+{{if .Data.assign}}
+<div class="ln-banner ln-banner--success" role="status"><p>{{t_fmt "page.admin.rbac.assign_done" "action" .Data.assign.Action}}: <code>{{.Data.assign.TargetID}}</code> ({{.Data.assign.TargetKind}}) · {{t "page.admin.rbac.data_scope"}}: {{.Data.assign.DataScopeText}}{{if not .Data.assign.Changed}} · {{t "page.admin.rbac.no_change"}}{{end}}</p></div>
+{{end}}
+<p class="ln-meta">{{t "page.admin.rbac.assign_hint"}}</p>
+<p class="ln-meta">{{t "page.admin.rbac.assign_indirect_hint"}}</p>
+
+<h2>{{t "page.admin.rbac.direct_users"}}</h2>
+<table class="ln-table">
+  <caption>{{t "page.admin.rbac.direct_users"}}</caption>
+  <thead><tr><th scope="col">{{t "page.admin.rbac.user_id"}}</th><th scope="col">{{t "page.admin.rbac.data_scope"}}</th><th scope="col">{{t "page.admin.rbac.assigned_by"}}</th><th scope="col">{{t "page.admin.rbac.created_at"}}</th></tr></thead>
+  <tbody>{{range .Data.assignments.Users}}<tr><td><code>{{.UserID}}</code></td><td>{{.DataScopeText}}</td><td><code>{{.AssignedBy}}</code></td><td>{{format_time .CreatedAt "UTC"}}</td></tr>
+  {{else}}<tr><td colspan="4" class="ln-meta">{{t "page.admin.rbac.no_direct_users"}}</td></tr>{{end}}</tbody>
+</table>
+
+<h2>{{t "page.admin.rbac.indirect_groups"}}</h2>
+<table class="ln-table">
+  <caption>{{t "page.admin.rbac.indirect_groups"}}</caption>
+  <thead><tr><th scope="col">{{t "page.admin.rbac.group_id"}}</th><th scope="col">{{t "common.label.scope"}}</th><th scope="col">{{t "page.admin.rbac.data_scope"}}</th><th scope="col">{{t "page.admin.rbac.created_at"}}</th></tr></thead>
+  <tbody>{{range .Data.assignments.Groups}}<tr><td><code>{{.GroupID}}</code></td><td><code>{{.ScopeID}}</code></td><td>{{.DataScopeText}}</td><td>{{format_time .CreatedAt "UTC"}}</td></tr>
+  {{else}}<tr><td colspan="4" class="ln-meta">{{t "page.admin.rbac.no_indirect_groups"}}</td></tr>{{end}}</tbody>
+</table>
+
+<h2>{{t "page.admin.rbac.assign_form"}}</h2>
+<form method="post" action="{{route "admin.role_assign"}}" novalidate>
+  {{csrf_field}}<input type="hidden" name="role_id" value="{{.Data.role.ID}}">
+  <div class="ln-field">
+    <label class="ln-field__label" for="assign-kind">{{t "page.admin.rbac.target_kind"}}</label>
+    <select class="ln-input" id="assign-kind" name="target_kind">
+      <option value="user">{{t "page.admin.rbac.users"}}</option>
+      <option value="group">{{t "page.admin.rbac.groups"}}</option>
+    </select>
+  </div>
+  {{template "component.field" (dict "id" "assign-target" "name" "target_id" "label" (t "page.admin.rbac.target_id") "value" "" "required" true "help" (t "page.admin.rbac.target_help"))}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="assign-action">{{t "page.admin.rbac.action"}}</label>
+    <select class="ln-input" id="assign-action" name="action">
+      <option value="assign">{{t "page.admin.rbac.assign"}}</option>
+      <option value="revoke">{{t "page.admin.rbac.revoke"}}</option>
+    </select>
+  </div>
+  <label class="ln-field__label" for="assign-confirm">{{t "page.admin.rbac.confirm_assign"}}</label>
+  <input id="assign-confirm" type="checkbox" name="confirm" value="yes" required>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.submit_assign") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}
