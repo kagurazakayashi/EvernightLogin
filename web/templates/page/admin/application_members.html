@@ -1,0 +1,105 @@
+{{define "page-title"}}{{t "page.admin.applications.members.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with $app := .Data.app}}{{$root := $}}
+{{if eq $app.Status "disabled"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.applications.state.disabled"))}}{{end}}
+{{if eq $root.Data.status "member_added"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.members.added"))}}{{end}}
+{{if eq $root.Data.status "member_profile_saved"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.members.profile_saved"))}}{{end}}
+{{if eq $root.Data.status "member_state_enable"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.members.enabled"))}}{{end}}
+{{if eq $root.Data.status "member_state_disable"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.members.disabled"))}}{{end}}
+{{if eq $root.Data.status "member_removed"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.members.removed"))}}{{end}}
+<p class="ln-meta">{{t "page.admin.applications.current_app"}}: <strong>{{$app.Name}}</strong> · <code>{{$app.ID}}</code></p>
+<nav aria-label="{{t "page.admin.applications.subnav"}}">
+  <ul class="ln-actions">
+    <li><a href="{{route "admin.application_profile"}}?app_id={{$app.ID}}">{{t "page.admin.applications.profile.title"}}</a></li>
+    <li><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}" aria-current="page">{{t "page.admin.applications.members.title"}}</a></li>
+    <li><a href="{{route "admin.application_security"}}?app_id={{$app.ID}}">{{t "page.admin.applications.security.title"}}</a></li>
+    <li><a href="{{route "admin.application_credentials"}}?app_id={{$app.ID}}">{{t "page.admin.applications.credentials.title"}}</a></li>
+    <li><a href="{{route "admin.application_grants"}}?app_id={{$app.ID}}">{{t "page.admin.applications.grants.title"}}</a></li>
+    <li><a href="{{route "admin.application_status"}}?app_id={{$app.ID}}">{{t "page.admin.applications.status.title"}}</a></li>
+  </ul>
+</nav>
+<p>{{t "page.admin.applications.members.scope_hint"}}</p>
+<p class="ln-meta">{{t "page.admin.applications.members.no_global_credentials"}}</p>
+<div class="ln-actions">
+  <a href="{{route "admin.applications"}}">{{t "common.action.back"}}</a>
+</div>
+{{if $app.Capabilities.ManageMembers}}
+<h2>{{t "page.admin.applications.members.add_title"}}</h2>
+<form method="post" action="{{route "admin.application_members.submit"}}" data-ln-module="async-form" novalidate autocomplete="off">
+  {{csrf_field}}
+  <input type="hidden" name="app_id" value="{{$app.ID}}">
+  <input type="hidden" name="action" value="add">
+  {{template "component.field" (dict "id" "member-user-id" "name" "user_id" "label" (t "page.admin.applications.members.user_id") "value" "" "help" (t "page.admin.applications.members.user_id.help") "autocomplete" "off")}}
+  {{template "component.field" (dict "id" "member-display-name" "name" "display_name" "label" (t "page.admin.applications.members.display_name") "value" "" "help" (t "page.admin.applications.members.display_name.help"))}}
+  {{template "component.field" (dict "id" "member-title" "name" "title" "label" (t "page.admin.applications.members.title_field") "value" "" "help" (t "page.admin.applications.members.title_field.help"))}}
+  {{template "component.field" (dict "id" "member-note" "name" "note" "label" (t "page.admin.applications.members.note") "value" "" "textarea" true "help" (t "page.admin.applications.members.note.help"))}}
+  <p class="ln-meta">{{t "page.admin.applications.members.add_scope"}}</p>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.applications.members.add") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{else}}
+<div class="ln-state"><p>{{t "page.admin.applications.members.no_write"}}</p></div>
+{{end}}
+<h2>{{t "page.admin.applications.members.list_title"}}</h2>
+{{if $root.Data.members}}
+{{range $root.Data.members}}
+<article class="ln-card" data-ln-component="member">
+  <h3><code>{{.UserID}}</code></h3>
+  <dl>
+    <dt>{{t "page.admin.applications.members.display_name"}}</dt>
+    <dd>{{if .DisplayName}}{{.DisplayName}}{{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+    <dt>{{t "page.admin.applications.members.title_field"}}</dt>
+    <dd>{{if .Title}}{{.Title}}{{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+    <dt>{{t "page.admin.applications.members.note"}}</dt>
+    <dd>{{if .Note}}{{.Note}}{{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+    <dt>{{t "common.label.status"}}</dt>
+    <dd>{{if eq .Status "active"}}{{t "page.admin.applications.members.status_active"}}{{else}}{{t "page.admin.applications.members.status_disabled"}}{{end}}</dd>
+    <dt>{{t "common.label.updated"}}</dt><dd>{{format_time .UpdatedAt "UTC"}}</dd>
+    <dt>{{t "page.admin.applications.profile.row_version"}}</dt><dd>{{.RowVersion}}</dd>
+  </dl>
+  {{if $app.Capabilities.ManageMembers}}
+  <form method="post" action="{{route "admin.application_members.submit"}}" data-ln-module="async-form" novalidate autocomplete="off">
+    {{csrf_field}}
+    <input type="hidden" name="app_id" value="{{$app.ID}}">
+    <input type="hidden" name="user_id" value="{{.UserID}}">
+    <input type="hidden" name="row_version" value="{{.RowVersion}}">
+    <input type="hidden" name="action" value="profile">
+    {{template "component.field" (dict "id" (printf "member-%s-display" .UserID) "name" "display_name" "label" (t "page.admin.applications.members.display_name") "value" .DisplayName "help" (t "page.admin.applications.members.display_name.help"))}}
+    {{template "component.field" (dict "id" (printf "member-%s-title" .UserID) "name" "title" "label" (t "page.admin.applications.members.title_field") "value" .Title "help" (t "page.admin.applications.members.title_field.help"))}}
+    {{template "component.field" (dict "id" (printf "member-%s-note" .UserID) "name" "note" "label" (t "page.admin.applications.members.note") "value" .Note "textarea" true "help" (t "page.admin.applications.members.note.help"))}}
+    <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.applications.members.save_profile") "variant" "primary" "type" "submit")}}</div>
+  </form>
+  <form method="post" action="{{route "admin.application_members.submit"}}" data-ln-module="async-form" novalidate>
+    {{csrf_field}}
+    <input type="hidden" name="app_id" value="{{$app.ID}}">
+    <input type="hidden" name="user_id" value="{{.UserID}}">
+    <input type="hidden" name="row_version" value="{{.RowVersion}}">
+    <input type="hidden" name="action" value="{{if eq .Status "active"}}disable{{else}}enable{{end}}">
+    {{if eq .Status "active"}}
+    <label class="ln-field__label" for="member-{{.UserID}}-confirm"><input type="checkbox" id="member-{{.UserID}}-confirm" name="confirm" value="yes"> {{t "page.admin.applications.members.disable_confirm"}}</label>
+    {{template "component.button" (dict "label" (t "page.admin.applications.members.disable") "variant" "danger" "type" "submit")}}
+    {{else}}
+    {{template "component.button" (dict "label" (t "page.admin.applications.members.enable") "variant" "secondary" "type" "submit")}}
+    {{end}}
+  </form>
+  <form method="post" action="{{route "admin.application_members.submit"}}" data-ln-module="async-form" novalidate>
+    {{csrf_field}}
+    <input type="hidden" name="app_id" value="{{$app.ID}}">
+    <input type="hidden" name="user_id" value="{{.UserID}}">
+    <input type="hidden" name="row_version" value="{{.RowVersion}}">
+    <input type="hidden" name="action" value="remove">
+    <label class="ln-field__label" for="member-{{.UserID}}-remove"><input type="checkbox" id="member-{{.UserID}}-remove" name="confirm" value="yes"> {{t "page.admin.applications.members.remove_confirm"}}</label>
+    {{template "component.button" (dict "label" (t "page.admin.applications.members.remove") "variant" "danger" "type" "submit")}}
+  </form>
+  {{end}}
+</article>
+{{end}}
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "page.admin.applications.members.empty"}}</p></div>
+{{end}}
+{{if $root.Data.hasMore}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}"><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}&offset={{$root.Data.nextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
+<p><a href="{{route "admin.applications"}}">{{t "common.action.back"}}</a></p>
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "common.state.forbidden"}}</p></div>
+{{end}}
+{{end}}

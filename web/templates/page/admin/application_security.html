@@ -1,0 +1,119 @@
+{{define "page-title"}}{{t "page.admin.applications.security.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with $app := .Data.app}}{{$root := $}}{{if $root.Data.form}}{{$form := $root.Data.form}}
+{{if eq $app.Status "disabled"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.applications.state.disabled"))}}{{end}}
+{{if eq $root.Data.status "registered"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.security.registered"))}}{{end}}
+{{if eq $root.Data.status "saved"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.security.saved"))}}{{end}}
+<p class="ln-meta">{{t "page.admin.applications.current_app"}}: <strong>{{$app.Name}}</strong> · <code>{{$app.ID}}</code></p>
+<nav aria-label="{{t "page.admin.applications.subnav"}}">
+  <ul class="ln-actions">
+    <li><a href="{{route "admin.application_profile"}}?app_id={{$app.ID}}">{{t "page.admin.applications.profile.title"}}</a></li>
+    <li><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}">{{t "page.admin.applications.members.title"}}</a></li>
+    <li><a href="{{route "admin.application_security"}}?app_id={{$app.ID}}" aria-current="page">{{t "page.admin.applications.security.title"}}</a></li>
+    <li><a href="{{route "admin.application_credentials"}}?app_id={{$app.ID}}">{{t "page.admin.applications.credentials.title"}}</a></li>
+    <li><a href="{{route "admin.application_grants"}}?app_id={{$app.ID}}">{{t "page.admin.applications.grants.title"}}</a></li>
+    <li><a href="{{route "admin.application_status"}}?app_id={{$app.ID}}">{{t "page.admin.applications.status.title"}}</a></li>
+  </ul>
+</nav>
+{{if eq $app.ClientType "public"}}<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.applications.security.public_client"}}</p></div>{{end}}
+{{if $root.ErrorSummary}}<section><h2>{{t "page.admin.applications.security.callback_fix_title"}}</h2><ul class="ln-list">
+<li>{{t "page.admin.applications.security.callback.error.unsafe_scheme"}}</li>
+<li>{{t "page.admin.applications.security.callback.error.wildcard"}}</li>
+<li>{{t "page.admin.applications.security.callback.error.loopback_uncontrolled"}}</li>
+<li>{{t "page.admin.applications.security.callback.error.loopback_missing_port"}}</li>
+<li>{{t "page.admin.applications.security.callback.error.custom_scheme"}}</li>
+<li>{{t "page.admin.applications.security.callback.error.fragment_userinfo"}}</li>
+<li>{{t "page.admin.applications.security.callback.error.redirect_required"}}</li>
+</ul></section>{{end}}
+{{if $root.Data.secret}}<section class="ln-card" data-ln-module="secret-copy"><h2>{{t "page.admin.applications.credentials.once_title"}}</h2>
+<p class="ln-banner ln-banner--warning" role="alert">{{t "page.admin.applications.credentials.once_warning"}}</p>
+<dl><dt>{{t "page.admin.applications.credentials.secret_id"}}</dt><dd><code>{{$root.Data.secret.Info.ID}}</code></dd>
+<dt>{{t "page.admin.applications.credentials.prefix"}}</dt><dd><code>{{$root.Data.secret.Info.Prefix}}</code></dd>
+<dt>{{t "page.admin.applications.credentials.expires_at"}}</dt><dd>{{format_time $root.Data.secret.Info.ExpiresAt "UTC"}}</dd></dl>
+<p><code class="ln-secret">{{$root.Data.secret.Secret}}</code></p>
+<p class="ln-meta">{{t "page.admin.applications.credentials.select_and_copy"}}</p>
+<button type="button" class="ln-button ln-button--secondary" data-ln-secret-copy data-ln-copied="{{t "page.admin.applications.credentials.copy_done"}}" data-ln-copy-failed="{{t "page.admin.applications.credentials.copy_failed"}}" hidden>{{t "common.action.copy"}}</button>
+<p class="ln-meta" data-ln-secret-status role="status"></p>
+<p class="ln-meta">{{t "page.admin.applications.credentials.capture_warning"}}</p></section>{{end}}
+{{if $root.Data.certificate}}<section><h2>{{t "page.admin.applications.security.certificate_registered_title"}}</h2>
+<dl><dt>{{t "page.admin.applications.credentials.fingerprint"}}</dt><dd><code>{{$root.Data.certificate.FingerprintSHA256}}</code></dd>
+<dt>{{t "page.admin.applications.credentials.subject"}}</dt><dd>{{$root.Data.certificate.Subject}}</dd>
+<dt>{{t "page.admin.applications.credentials.not_after"}}</dt><dd>{{format_time $root.Data.certificate.NotAfter "UTC"}}</dd></dl></section>{{end}}
+{{with $settings := $root.Data.settings}}
+{{if not $settings.Registered}}
+<h2>{{t "page.admin.applications.security.register_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.applications.security.register_hint"}}</p>
+{{if $app.Capabilities.ManageSecurity}}
+<form method="post" action="{{route "admin.application_security.submit"}}" data-ln-module="async-form" novalidate autocomplete="off">
+  {{csrf_field}}<input type="hidden" name="app_id" value="{{$app.ID}}"><input type="hidden" name="action" value="register">
+  <fieldset><legend>{{t "page.admin.applications.security.grant_types"}}</legend>
+    <p class="ln-meta">{{t "page.admin.applications.security.grant_types.help"}}</p>
+    <label><input type="checkbox" name="grant_code" value="1"{{if $form.grantCode}} checked{{end}}> {{t "page.admin.applications.security.grant_code"}}</label>
+    <label><input type="checkbox" name="grant_refresh" value="1"{{if $form.grantRefresh}} checked{{end}}> {{t "page.admin.applications.security.grant_refresh"}}</label>
+    {{if eq $app.ClientType "confidential"}}<label><input type="checkbox" name="grant_credentials" value="1"{{if $form.grantCredentials}} checked{{end}}> {{t "page.admin.applications.security.grant_credentials"}}</label>{{end}}
+    <label><input type="checkbox" name="grant_device" value="1"{{if $form.grantDevice}} checked{{end}}> {{t "page.admin.applications.security.grant_device"}}</label>
+  </fieldset>
+  {{template "component.field" (dict "id" "security-redirects" "name" "redirect_uris" "label" (t "page.admin.applications.security.redirect_uris") "value" $form.redirectURIs "textarea" true "help" (t "page.admin.applications.security.redirect_uris.help"))}}
+  {{template "component.field" (dict "id" "security-logout" "name" "post_logout_redirect_uris" "label" (t "page.admin.applications.security.post_logout") "value" $form.postLogout "textarea" true "help" (t "page.admin.applications.security.post_logout.help"))}}
+  {{template "component.field" (dict "id" "security-scopes" "name" "scopes" "label" (t "page.admin.applications.security.scopes") "value" $form.scopes "textarea" true "help" (t "page.admin.applications.security.scopes.help"))}}
+  {{template "component.field" (dict "id" "security-audiences" "name" "audiences" "label" (t "page.admin.applications.security.audiences") "value" $form.audiences "textarea" true "help" (t "page.admin.applications.security.audiences.help"))}}
+  {{if eq $app.ClientType "confidential"}}
+  <fieldset><legend>{{t "page.admin.applications.security.auth_methods"}}</legend><p class="ln-meta">{{t "page.admin.applications.security.auth_methods.help"}}</p>
+    <label><input type="checkbox" name="auth_basic" value="1"{{if $form.authBasic}} checked{{end}}> {{t "page.admin.applications.security.auth_basic"}}</label>
+    <label><input type="checkbox" name="auth_post" value="1"{{if $form.authPost}} checked{{end}}> {{t "page.admin.applications.security.auth_post"}}</label>
+    <label><input type="checkbox" name="auth_tls" value="1"{{if $form.authTLS}} checked{{end}}> {{t "page.admin.applications.security.auth_tls"}}</label>
+  </fieldset>
+  {{template "component.field" (dict "id" "security-certificate" "name" "certificate_pem" "label" (t "page.admin.applications.security.certificate_pem") "value" $form.certificatePEM "textarea" true "help" (t "page.admin.applications.security.certificate_pem.help"))}}
+  {{end}}
+  {{if eq $app.ClientType "public"}}<input type="hidden" name="require_pkce" value="1"><p class="ln-meta">{{t "page.admin.applications.security.pkce_public"}}</p>
+  {{else}}<label><input type="checkbox" name="require_pkce" value="1"{{if $form.requirePKCE}} checked{{end}}> {{t "page.admin.applications.security.pkce"}}</label>{{end}}
+  <label class="ln-field__label" for="security-register-confirm"><input type="checkbox" id="security-register-confirm" name="confirm" value="yes"> {{t "page.admin.applications.confirm.not_authorization"}}</label>
+  <p class="ln-meta">{{t "page.admin.applications.credentials.not_server_tls"}}</p>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.applications.security.register") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{else}}<div class="ln-state"><p>{{t "page.admin.applications.security.no_write"}}</p></div>{{end}}
+{{else}}
+<h2>{{t "page.admin.applications.security.current_title"}}</h2>
+<dl>
+  <dt>{{t "page.admin.applications.security.client_id"}}</dt><dd><code>{{$settings.ClientID}}</code>（{{t "page.admin.applications.security.client_id.help"}}）</dd>
+  <dt>{{t "page.admin.applications.profile.client_type"}}</dt><dd>{{if eq $settings.ClientType "public"}}{{t "page.admin.applications.client_type_public"}}{{else}}{{t "page.admin.applications.client_type_confidential"}}{{end}}</dd>
+  <dt>{{t "page.admin.applications.security.grant_types"}}</dt><dd>{{range $settings.GrantTypes}}<code>{{.}}</code> {{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+  <dt>{{t "page.admin.applications.security.redirect_uris"}}</dt><dd>{{range $settings.RedirectURIs}}<div><code>{{.}}</code></div>{{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+  <dt>{{t "page.admin.applications.security.post_logout"}}</dt><dd>{{range $settings.PostLogoutRedirectURIs}}<div><code>{{.}}</code></div>{{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+  <dt>{{t "page.admin.applications.security.scopes"}}</dt><dd>{{range $settings.Scopes}}<code>{{.}}</code> {{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+  <dt>{{t "page.admin.applications.security.audiences"}}</dt><dd>{{range $settings.Audiences}}<div><code>{{.}}</code></div>{{else}}{{t "common.state.missing_value"}}{{end}}{{if $settings.AudienceTrustUnverified}}<p class="ln-meta">{{t "page.admin.applications.security.audience_unverified"}}</p>{{end}}</dd>
+  <dt>{{t "page.admin.applications.security.auth_methods"}}</dt><dd>{{range $settings.AuthMethods}}<code>{{.}}</code> {{else}}{{t "common.state.missing_value"}}{{end}}<p class="ln-meta">{{t "page.admin.applications.security.auth_methods_readonly"}}</p></dd>
+  <dt>{{t "page.admin.applications.security.pkce"}}</dt><dd>{{if $settings.RequirePKCE}}{{t "page.admin.applications.security.enabled"}}{{else}}{{t "page.admin.applications.security.disabled"}}{{end}}</dd>
+  <dt>{{t "page.admin.applications.profile.row_version"}}</dt><dd>{{$settings.RowVersion}}</dd>
+</dl>
+{{if $app.Capabilities.ManageSecurity}}
+<h2>{{t "page.admin.applications.security.update_title"}}</h2>
+<form method="post" action="{{route "admin.application_security.submit"}}" data-ln-module="async-form" novalidate autocomplete="off">
+  {{csrf_field}}<input type="hidden" name="app_id" value="{{$app.ID}}"><input type="hidden" name="action" value="update"><input type="hidden" name="row_version" value="{{$settings.RowVersion}}">
+  <fieldset><legend>{{t "page.admin.applications.security.grant_types"}}</legend>
+    <label><input type="checkbox" name="grant_code" value="1"{{if $form.grantCode}} checked{{end}}> {{t "page.admin.applications.security.grant_code"}}</label>
+    <label><input type="checkbox" name="grant_refresh" value="1"{{if $form.grantRefresh}} checked{{end}}> {{t "page.admin.applications.security.grant_refresh"}}</label>
+    {{if eq $settings.ClientType "confidential"}}<label><input type="checkbox" name="grant_credentials" value="1"{{if $form.grantCredentials}} checked{{end}}> {{t "page.admin.applications.security.grant_credentials"}}</label>{{end}}
+    <label><input type="checkbox" name="grant_device" value="1"{{if $form.grantDevice}} checked{{end}}> {{t "page.admin.applications.security.grant_device"}}</label>
+    <p class="ln-meta">{{t "page.admin.applications.security.grant_update_help"}}</p>
+  </fieldset>
+  {{template "component.field" (dict "id" "security-redirects-update" "name" "redirect_uris" "label" (t "page.admin.applications.security.redirect_uris") "value" $form.redirectURIs "textarea" true "help" (t "page.admin.applications.security.redirect_uris_update_help"))}}
+  {{template "component.field" (dict "id" "security-logout-update" "name" "post_logout_redirect_uris" "label" (t "page.admin.applications.security.post_logout") "value" $form.postLogout "textarea" true "help" (t "page.admin.applications.security.post_logout.help"))}}
+  {{template "component.field" (dict "id" "security-scopes-update" "name" "scopes" "label" (t "page.admin.applications.security.scopes") "value" $form.scopes "textarea" true "help" (t "page.admin.applications.security.scopes_update_help"))}}
+  {{template "component.field" (dict "id" "security-audiences-update" "name" "audiences" "label" (t "page.admin.applications.security.audiences") "value" $form.audiences "textarea" true "help" (t "page.admin.applications.security.audiences.help"))}}
+  {{if eq $settings.ClientType "public"}}<input type="hidden" name="require_pkce" value="1"><p class="ln-meta">{{t "page.admin.applications.security.pkce_public"}}</p>{{else}}<label><input type="checkbox" name="require_pkce" value="1"{{if $form.requirePKCE}} checked{{end}}> {{t "page.admin.applications.security.pkce"}}</label>{{end}}
+  <label class="ln-field__label" for="security-update-confirm"><input type="checkbox" id="security-update-confirm" name="confirm" value="yes"> {{t "page.admin.applications.confirm.not_authorization"}}</label>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.applications.security.save") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}
+{{if $root.Data.changes}}<h2>{{t "page.admin.applications.security.diff_title"}}</h2>
+<table class="ln-table"><caption>{{t "page.admin.applications.security.diff_caption"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.applications.diff.field"}}</th><th scope="col">{{t "page.admin.applications.diff.removed"}}</th><th scope="col">{{t "page.admin.applications.diff.added"}}</th></tr></thead>
+<tbody>{{range $root.Data.changes}}<tr><td>{{t (printf "page.admin.applications.security.field.%s" .Field)}}</td>
+<td>{{if .Before}}<pre>{{.Before}}</pre>{{else}}{{t "common.state.missing_value"}}{{end}}</td>
+<td>{{if .After}}<pre>{{.After}}</pre>{{else}}{{t "common.state.missing_value"}}{{end}}</td></tr>{{end}}</tbody></table>{{end}}
+{{end}}{{end}}
+<p><a href="{{route "admin.applications"}}">{{t "common.action.back"}}</a></p>
+{{else}}{{template "component.state" (dict "state" "forbidden" "title" (t "common.state.forbidden"))}}{{end}}{{end}}
+{{end}}

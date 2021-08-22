@@ -7,6 +7,7 @@ const modules = {
   "qr-poll": () => import("./modules/qr.mjs"),
   "qr-claim": () => import("./modules/qr.mjs"),
   "qr-countdown": () => import("./modules/qr.mjs"),
+  "secret-copy": () => import("./modules/secret-copy.mjs"),
 };
 
 for (const element of document.querySelectorAll("[data-ln-module]")) {

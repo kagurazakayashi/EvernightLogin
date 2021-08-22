@@ -1,0 +1,53 @@
+{{define "page-title"}}{{t "page.admin.applications.grants.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with $app := .Data.app}}{{$root := $}}{{with $policy := $root.Data.policy}}
+{{if eq $app.Status "disabled"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.applications.state.disabled"))}}{{end}}
+<p class="ln-meta">{{t "page.admin.applications.current_app"}}: <strong>{{$app.Name}}</strong> · <code>{{$app.ID}}</code></p>
+<nav aria-label="{{t "page.admin.applications.subnav"}}">
+  <ul class="ln-actions">
+    <li><a href="{{route "admin.application_profile"}}?app_id={{$app.ID}}">{{t "page.admin.applications.profile.title"}}</a></li>
+    <li><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}">{{t "page.admin.applications.members.title"}}</a></li>
+    <li><a href="{{route "admin.application_security"}}?app_id={{$app.ID}}">{{t "page.admin.applications.security.title"}}</a></li>
+    <li><a href="{{route "admin.application_credentials"}}?app_id={{$app.ID}}">{{t "page.admin.applications.credentials.title"}}</a></li>
+    <li><a href="{{route "admin.application_grants"}}?app_id={{$app.ID}}" aria-current="page">{{t "page.admin.applications.grants.title"}}</a></li>
+    <li><a href="{{route "admin.application_status"}}?app_id={{$app.ID}}">{{t "page.admin.applications.status.title"}}</a></li>
+  </ul>
+</nav>
+{{if eq $policy.State "policy"}}
+<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.applications.grants.policy_write_trusted_only"}}</p></div>
+<h2>{{t "page.admin.applications.grants.policy_title"}}</h2>
+<dl>
+  <dt>{{t "page.admin.applications.grants.policy_version"}}</dt><dd>{{$policy.RowVersion}}</dd>
+  <dt>{{t "page.admin.applications.grants.policy_updated_by"}}</dt><dd>{{if $policy.UpdatedBy}}<code>{{$policy.UpdatedBy}}</code>{{else}}{{t "common.state.missing_value"}}{{end}}</dd>
+</dl>
+<h3>{{t "page.admin.applications.grants.policy_operations"}}</h3>
+{{if $policy.Allowed}}<table class="ln-table"><caption>{{t "page.admin.applications.grants.policy_operations"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.applications.grants.policy_operation"}}</th><th scope="col">{{t "page.admin.applications.grants.policy_object"}}</th><th scope="col">{{t "page.admin.applications.grants.policy_write"}}</th></tr></thead>
+<tbody>{{range $policy.Allowed}}<tr><td><code>{{.ID}}</code><br>{{.Object}}</td><td>{{.Object}}</td><td>{{if .Write}}{{t "page.admin.applications.grants.policy_yes"}}{{else}}{{t "page.admin.applications.grants.policy_no"}}{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p>{{t "page.admin.applications.grants.policy_none"}}</p>{{end}}
+<h3>{{t "page.admin.applications.grants.policy_service_operations"}}</h3>
+{{if $policy.ServiceAllowed}}<ul>{{range $policy.ServiceAllowed}}<li><code>{{.ID}}</code></li>{{end}}</ul>{{else}}<p>{{t "page.admin.applications.grants.policy_none"}}</p>{{end}}
+<h3>{{t "page.admin.applications.grants.policy_objects"}}</h3>
+{{if $policy.Objects}}<table class="ln-table"><caption>{{t "page.admin.applications.grants.policy_objects"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.applications.grants.policy_object"}}</th><th scope="col">{{t "page.admin.applications.grants.policy_mode"}}</th><th scope="col">{{t "page.admin.applications.grants.policy_resources"}}</th></tr></thead>
+<tbody>{{range $policy.Objects}}<tr><td>{{.Object}}</td><td>{{if eq .Mode "all"}}{{t "page.admin.applications.grants.policy_mode_all"}}{{else}}{{t "page.admin.applications.grants.policy_mode_resources"}}{{end}}</td><td>{{range .Resources}}<div><code>{{.}}</code></div>{{else}}{{t "common.state.missing_value"}}{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p>{{t "page.admin.applications.grants.policy_none"}}</p>{{end}}
+<h3>{{t "page.admin.applications.grants.policy_fields"}}</h3>
+{{if $policy.Fields}}<table class="ln-table"><caption>{{t "page.admin.applications.grants.policy_fields"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.applications.grants.policy_object"}}</th><th scope="col">{{t "page.admin.applications.grants.policy_read_fields"}}</th><th scope="col">{{t "page.admin.applications.grants.policy_write_fields"}}</th></tr></thead>
+<tbody>{{range $policy.Fields}}<tr><td>{{.Object}}</td><td>{{range .Read}}<code>{{.}}</code> {{end}}</td><td>{{range .Write}}<code>{{.}}</code> {{else}}{{t "common.state.missing_value"}}{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p>{{t "page.admin.applications.grants.policy_none"}}</p>{{end}}
+<h3>{{t "page.admin.applications.grants.policy_limits"}}</h3>
+<dl><dt>{{t "page.admin.applications.grants.policy_max_limit"}}</dt><dd>{{$policy.Limits.MaxLimit}}</dd>
+<dt>{{t "page.admin.applications.grants.policy_max_offset"}}</dt><dd>{{$policy.Limits.MaxOffset}}</dd>
+<dt>{{t "page.admin.applications.grants.policy_max_batch"}}</dt><dd>{{$policy.Limits.MaxBatch}}</dd></dl>
+<p class="ln-meta">{{t "page.admin.applications.grants.no_write"}}</p>
+{{else if eq $policy.State "not_configured"}}
+<div class="ln-state" data-ln-state="not_configured"><p class="ln-state__title">{{t "page.admin.applications.grants.policy_not_configured"}}</p><p class="ln-meta">{{t "page.admin.applications.grants.policy_not_configured_hint"}}</p></div>
+{{else}}
+<div class="ln-state" data-ln-state="unavailable"><p class="ln-state__title">{{t "page.admin.applications.grants.policy_unavailable"}}</p><p class="ln-meta">{{if $policy.Reason}}{{$policy.Reason}}{{else}}{{t "page.admin.applications.grants.policy_unavailable_hint"}}{{end}}</p></div>
+{{end}}
+<p class="ln-meta">{{t "page.admin.applications.grants.identity_hint"}}</p>
+<p><a href="{{route "admin.applications"}}">{{t "common.action.back"}}</a></p>
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "common.state.forbidden"}}</p></div>
+{{end}}{{end}}
+{{end}}

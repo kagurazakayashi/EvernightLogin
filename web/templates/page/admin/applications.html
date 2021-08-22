@@ -1,0 +1,43 @@
+{{define "page-title"}}{{t "page.admin.applications.list.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.applications.list.description"}}</p>
+<form method="get" action="{{route "admin.applications"}}">
+  <label class="ln-field__label" for="apps-status">{{t "page.admin.applications.list.status_filter"}}</label>
+  <select class="ln-input" id="apps-status" name="status">
+    <option value="">{{t "common.state.all"}}</option>
+    <option value="active"{{if eq .Data.status "active"}} selected{{end}}>{{t "page.admin.applications.status_active"}}</option>
+    <option value="disabled"{{if eq .Data.status "disabled"}} selected{{end}}>{{t "page.admin.applications.status_disabled"}}</option>
+  </select>
+  <label class="ln-field__label" for="apps-sort">{{t "page.admin.applications.list.sort"}}</label>
+  <select class="ln-input" id="apps-sort" name="sort">
+    <option value="updated_at"{{if eq .Data.sort "updated_at"}} selected{{end}}>{{t "page.admin.applications.list.sort_updated"}}</option>
+    <option value="created_at"{{if eq .Data.sort "created_at"}} selected{{end}}>{{t "page.admin.applications.list.sort_created"}}</option>
+    <option value="name"{{if eq .Data.sort "name"}} selected{{end}}>{{t "page.admin.applications.list.sort_name"}}</option>
+    <option value="id"{{if eq .Data.sort "id"}} selected{{end}}>{{t "page.admin.applications.list.sort_id"}}</option>
+  </select>
+  <input type="hidden" name="offset" value="0">
+  {{template "component.button" (dict "label" (t "page.admin.applications.list.filter") "type" "submit" "variant" "secondary")}}
+</form>
+<p class="ln-meta">{{t "page.admin.applications.list.scope_hint"}}</p>
+<table class="ln-table">
+  <caption>{{t "page.admin.applications.list.table_caption"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "common.label.name"}}</th>
+    <th scope="col">{{t "page.admin.applications.list.app_id"}}</th>
+    <th scope="col">{{t "common.label.status"}}</th>
+    <th scope="col">{{t "page.admin.applications.list.client_type"}}</th>
+    <th scope="col">{{t "common.label.updated"}}</th>
+    <th scope="col">{{t "common.label.actions"}}</th>
+  </tr></thead>
+  <tbody>{{range .Data.applications}}<tr>
+    <td>{{.Name}}</td>
+    <td><code>{{.ID}}</code></td>
+    <td>{{if eq .Status "active"}}{{t "page.admin.applications.status_active"}}{{else if eq .Status "disabled"}}{{t "page.admin.applications.status_disabled"}}{{else}}{{t "common.state.missing_value"}}{{end}}</td>
+    <td>{{if eq .ClientType "public"}}{{t "page.admin.applications.client_type_public"}}{{else if eq .ClientType "confidential"}}{{t "page.admin.applications.client_type_confidential"}}{{else}}{{t "common.state.missing_value"}}{{end}}</td>
+    <td>{{format_time .UpdatedAt "UTC"}}</td>
+    <td><a href="{{route "admin.application_profile"}}?app_id={{.ID}}">{{t "page.admin.applications.list.manage"}}</a></td>
+  </tr>{{else}}<tr><td colspan="6">{{if or .Data.status .Data.sort}}{{t "page.admin.applications.list.no_results"}}{{else}}{{t "page.admin.applications.list.empty"}}{{end}}</td></tr>{{end}}</tbody>
+</table>
+{{if .Data.hasMore}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}"><a href="{{route "admin.applications"}}?status={{.Data.status}}&sort={{.Data.sort}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
+{{end}}

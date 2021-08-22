@@ -1,0 +1,49 @@
+{{define "page-title"}}{{t "page.admin.applications.status.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with $app := .Data.app}}{{$root := $}}
+{{if eq $app.Status "disabled"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.applications.state.disabled"))}}{{end}}
+{{if $root.Data.action}}
+  {{if $root.Data.changed}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.status.changed"))}}
+  {{else}}{{template "component.banner" (dict "tone" "info" "message" (t "page.admin.applications.status.already"))}}{{end}}
+{{end}}
+<p class="ln-meta">{{t "page.admin.applications.current_app"}}: <strong>{{$app.Name}}</strong> · <code>{{$app.ID}}</code></p>
+<nav aria-label="{{t "page.admin.applications.subnav"}}">
+  <ul class="ln-actions">
+    <li><a href="{{route "admin.application_profile"}}?app_id={{$app.ID}}">{{t "page.admin.applications.profile.title"}}</a></li>
+    <li><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}">{{t "page.admin.applications.members.title"}}</a></li>
+    <li><a href="{{route "admin.application_security"}}?app_id={{$app.ID}}">{{t "page.admin.applications.security.title"}}</a></li>
+    <li><a href="{{route "admin.application_credentials"}}?app_id={{$app.ID}}">{{t "page.admin.applications.credentials.title"}}</a></li>
+    <li><a href="{{route "admin.application_grants"}}?app_id={{$app.ID}}">{{t "page.admin.applications.grants.title"}}</a></li>
+    <li><a href="{{route "admin.application_status"}}?app_id={{$app.ID}}" aria-current="page">{{t "page.admin.applications.status.title"}}</a></li>
+  </ul>
+</nav>
+<h2>{{t "page.admin.applications.status.current_title"}}</h2>
+<dl>
+  <dt>{{t "common.label.status"}}</dt><dd>{{if eq $app.Status "active"}}{{t "page.admin.applications.status_active"}}{{else}}{{t "page.admin.applications.status_disabled"}}{{end}}</dd>
+  <dt>{{t "page.admin.applications.profile.row_version"}}</dt><dd>{{$app.RowVersion}}</dd>
+</dl>
+<p>{{t "page.admin.applications.status.disabled_hint"}}</p>
+<p class="ln-meta">{{t "page.admin.applications.status.session_scope_hint"}}</p>
+{{if $app.Capabilities.Write}}
+<form method="post" action="{{route "admin.application_status.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="app_id" value="{{$app.ID}}">
+  <input type="hidden" name="row_version" value="{{$app.RowVersion}}">
+  {{if eq $app.Status "active"}}
+  <input type="hidden" name="action" value="disable">
+  <label for="status-disable-confirm"><input type="checkbox" id="status-disable-confirm" name="confirm" value="yes"> {{t "page.admin.applications.status.disable_confirm"}}</label>
+  {{template "component.button" (dict "label" (t "page.admin.applications.status.disable") "variant" "danger" "type" "submit")}}
+  {{else}}
+  <input type="hidden" name="action" value="enable">
+  {{template "component.button" (dict "label" (t "page.admin.applications.status.enable") "variant" "primary" "type" "submit")}}
+  {{end}}
+</form>
+{{else}}
+<div class="ln-state"><p>{{t "page.admin.applications.status.no_write"}}</p></div>
+{{end}}
+<p><a href="{{route "admin.applications"}}">{{t "common.action.back"}}</a></p>
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "common.state.forbidden"}}</p></div>
+{{end}}
+{{end}}

@@ -313,6 +313,8 @@ type WebUIOptions struct {
 	PageSecurity *UIPageSecurityOptions
 	// PageRBAC 非 nil 时注册步骤 69 角色/权限/委派/有效权限页面。
 	PageRBAC *UIPageRBACOptions
+	// PageApps 非 nil 时注册步骤 70 应用资料/成员/安全接入/凭证/许可/状态页面。
+	PageApps *UIPageAppsOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -357,6 +359,7 @@ type WebUI struct {
 	pageOAuth           *pageOAuthPages
 	pageSecurity        *pageSecurityPages
 	pageRBAC            *pageRBACPages
+	pageApps            *pageAppsPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -445,6 +448,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageRBAC = pages
+	}
+	if options.PageApps != nil {
+		pages, pageErr := newPageAppsPages(*options.PageApps)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageApps = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -631,6 +641,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageRBAC != nil {
 		routes = append(routes, ui.pageRBAC.routes...)
 	}
+	if ui.pageApps != nil {
+		routes = append(routes, ui.pageApps.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -699,6 +712,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageRBAC != nil {
 		for name := range ui.pageRBAC.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageApps != nil {
+		for name := range ui.pageApps.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -1017,6 +1037,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageRBAC != nil {
 		handler = ui.pageRBAC.handlers[route.Name]
+	}
+	if handler == nil && ui.pageApps != nil {
+		handler = ui.pageApps.handlers[route.Name]
 	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
@@ -1378,6 +1401,17 @@ func templateFuncs(state any) template.FuncMap {
 			return template.HTML(svg)
 		},
 		"list": func(values ...any) []any { return values },
+		"join": func(values []string, separator string) string {
+			return strings.Join(values, separator)
+		},
+		"contains": func(values []string, target string) bool {
+			for _, value := range values {
+				if value == target {
+					return true
+				}
+			}
+			return false
+		},
 		"dict": func(values ...any) map[string]any {
 			result := map[string]any{}
 			for index := 0; index+1 < len(values); index += 2 {

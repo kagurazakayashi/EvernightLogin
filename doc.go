@@ -579,6 +579,17 @@
 // 显示直接角色/用户组来源与数据范围；预设差异只读计算（恢复执行仅受信通道）。页面
 // 契约 + 真实服务集成测试通过。未新增错误码/迁移/依赖；未做实浏览器视口/读屏实测。
 //
+// 步骤 70：公开 `WebUIOptions.PageApps`/`UIAppsBackend` 与内置应用资料/成员/回调与
+// 授权方式/应用客户端凭证/资源与接口字段许可/应用状态页面（UIAccessManagement），
+// `internal/uiadminadapter.NewApps` 接真实 app/oauthclient；应用 ID/ScopeID/客户端类型
+// 只读，资料保存显示服务端实际生效差异，负责人变更不转移权限；成员只影响当前应用；
+// 客户端秘密只在登记/轮换响应出现一次且不进 URL/存储，元数据只显示编号/前缀/状态/
+// 到期；危险回调由真实服务拒绝且页面可纠正；公开客户端无内置密钥入口；服务器 TLS
+// 私钥与应用客户端凭证分区。资源/接口/字段许可由 internal/managedapi 真实委托策略
+// 后端提供：页面经宿主受信只读通道展示操作/对象数据范围/读写字段/上限/版本，写入仅
+// 允许受信管理端且页面不提供写控件；未配置/通道不可用显示真实状态，不伪造“尚未
+// 启用”。页面契约 + 真实服务集成测试通过；未新增迁移/错误码/依赖。
+//
 // 步骤 68：公开 `WebUIOptions.PageAdmin`/`UIAdminBackend` 与内置用户管理/注册审核/
 // 用户组/批量导入导出任务页面（UIAccessManagement），`internal/uiadminadapter` 接真实
 // account/profile/onboarding/group/userbatch；页面级 + 真实服务集成测试通过。已知

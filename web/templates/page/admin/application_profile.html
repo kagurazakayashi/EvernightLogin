@@ -1,0 +1,75 @@
+{{define "page-title"}}{{t "page.admin.applications.profile.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with $app := .Data.app}}{{$root := $}}
+{{if eq $app.Status "disabled"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.applications.state.disabled"))}}{{end}}
+{{if eq $root.Data.status "saved"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.profile.saved"))}}{{end}}
+{{if eq $root.Data.status "no_changes"}}{{template "component.banner" (dict "tone" "info" "message" (t "page.admin.applications.profile.no_changes"))}}{{end}}
+<p class="ln-meta">{{t "page.admin.applications.current_app"}}: <strong>{{$app.Name}}</strong> · <code>{{$app.ID}}</code></p>
+<nav aria-label="{{t "page.admin.applications.subnav"}}">
+  <ul class="ln-actions">
+    <li><a href="{{route "admin.application_profile"}}?app_id={{$app.ID}}" aria-current="page">{{t "page.admin.applications.profile.title"}}</a></li>
+    <li><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}">{{t "page.admin.applications.members.title"}}</a></li>
+    <li><a href="{{route "admin.application_security"}}?app_id={{$app.ID}}">{{t "page.admin.applications.security.title"}}</a></li>
+    <li><a href="{{route "admin.application_credentials"}}?app_id={{$app.ID}}">{{t "page.admin.applications.credentials.title"}}</a></li>
+    <li><a href="{{route "admin.application_grants"}}?app_id={{$app.ID}}">{{t "page.admin.applications.grants.title"}}</a></li>
+    <li><a href="{{route "admin.application_status"}}?app_id={{$app.ID}}">{{t "page.admin.applications.status.title"}}</a></li>
+  </ul>
+</nav>
+<h2>{{t "page.admin.applications.profile.identity_title"}}</h2>
+<dl>
+  <dt>{{t "page.admin.applications.profile.app_id"}}</dt><dd><code>{{$app.ID}}</code></dd>
+  <dt>{{t "page.admin.applications.profile.scope_id"}}</dt><dd><code>{{$app.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.applications.profile.client_type"}}</dt><dd>{{if eq $app.ClientType "public"}}{{t "page.admin.applications.client_type_public"}}{{else}}{{t "page.admin.applications.client_type_confidential"}}{{end}}</dd>
+  <dt>{{t "common.label.status"}}</dt><dd>{{if eq $app.Status "active"}}{{t "page.admin.applications.status_active"}}{{else}}{{t "page.admin.applications.status_disabled"}}{{end}}</dd>
+  <dt>{{t "common.label.created"}}</dt><dd>{{format_time $app.CreatedAt "UTC"}}</dd>
+  <dt>{{t "common.label.updated"}}</dt><dd>{{format_time $app.UpdatedAt "UTC"}}</dd>
+  <dt>{{t "page.admin.applications.profile.row_version"}}</dt><dd>{{$app.RowVersion}}</dd>
+</dl>
+<p class="ln-meta">{{t "page.admin.applications.profile.id.help"}}</p>
+{{if $app.Capabilities.Write}}
+<h2>{{t "page.admin.applications.profile.edit_title"}}</h2>
+<form method="post" action="{{route "admin.application_profile.submit"}}" data-ln-module="async-form" novalidate autocomplete="off">
+  {{csrf_field}}
+  <input type="hidden" name="app_id" value="{{$app.ID}}">
+  <input type="hidden" name="row_version" value="{{$app.RowVersion}}">
+  {{template "component.field" (dict "id" "app-name" "name" "name" "label" (t "page.admin.applications.profile.name") "value" $app.Name "help" (t "page.admin.applications.profile.name.help") "autocomplete" "off")}}
+  {{template "component.field" (dict "id" "app-description" "name" "description" "label" (t "page.admin.applications.profile.description") "value" $app.Description "textarea" true "help" (t "page.admin.applications.profile.description.help"))}}
+  {{template "component.field" (dict "id" "app-icon" "name" "icon_ref" "label" (t "page.admin.applications.profile.icon_ref") "value" $app.IconRef "help" (t "page.admin.applications.profile.icon_ref.help"))}}
+  {{template "component.field" (dict "id" "app-homepage" "name" "homepage" "label" (t "page.admin.applications.profile.homepage") "value" $app.Homepage "help" (t "page.admin.applications.profile.homepage.help"))}}
+  {{if $app.Capabilities.ChangeOwner}}
+    {{template "component.field" (dict "id" "app-owner" "name" "owner_user_id" "label" (t "page.admin.applications.profile.owner") "value" $app.OwnerUserID "help" (t "page.admin.applications.profile.owner.help"))}}
+  {{else}}
+    <div class="ln-field"><span class="ln-field__label">{{t "page.admin.applications.profile.owner"}}</span>
+      <p>{{if $app.OwnerUserID}}<code>{{$app.OwnerUserID}}</code>{{else}}{{t "common.state.missing_value"}}{{end}}</p>
+      <p class="ln-field__help">{{t "page.admin.applications.profile.owner.readonly"}}</p>
+      <input type="hidden" name="owner_user_id" value="{{$app.OwnerUserID}}">
+    </div>
+  {{end}}
+  {{template "component.field" (dict "id" "app-contact" "name" "contact_info" "label" (t "page.admin.applications.profile.contact_info") "value" $app.ContactInfo "help" (t "page.admin.applications.profile.contact_info.help"))}}
+  <p class="ln-meta">{{t "page.admin.applications.profile.save_scope"}}</p>
+  <div class="ln-actions">
+    {{template "component.button" (dict "label" (t "page.admin.applications.profile.save") "variant" "primary" "type" "submit")}}
+    <a class="ln-button ln-button--secondary" href="{{route "admin.application_profile"}}?app_id={{$app.ID}}">{{t "page.admin.applications.profile.reset"}}</a>
+  </div>
+</form>
+{{else}}
+<div class="ln-state"><p>{{t "page.admin.applications.profile.no_write"}}</p></div>
+{{end}}
+{{if $root.Data.changes}}
+<h2>{{t "page.admin.applications.profile.diff_title"}}</h2>
+<table class="ln-table">
+  <caption>{{t "page.admin.applications.profile.diff_caption"}}</caption>
+  <thead><tr><th scope="col">{{t "page.admin.applications.diff.field"}}</th><th scope="col">{{t "page.admin.applications.diff.before"}}</th><th scope="col">{{t "page.admin.applications.diff.after"}}</th></tr></thead>
+  <tbody>{{range $root.Data.changes}}<tr>
+    <td>{{t (printf "page.admin.applications.profile.field.%s" .Field)}}</td>
+    <td>{{if .Before}}{{.Before}}{{else}}{{t "common.state.missing_value"}}{{end}}</td>
+    <td>{{if .After}}{{.After}}{{else}}{{t "common.state.missing_value"}}{{end}}</td>
+  </tr>{{end}}</tbody>
+</table>
+{{end}}
+<p><a href="{{route "admin.application_status"}}?app_id={{$app.ID}}">{{t "page.admin.applications.status.title"}}</a> · <a href="{{route "admin.applications"}}">{{t "common.action.back"}}</a></p>
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "common.state.forbidden"}}</p></div>
+{{end}}
+{{end}}
