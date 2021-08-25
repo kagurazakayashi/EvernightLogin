@@ -1186,3 +1186,13 @@ Python 只用于启动包辅助工具，不是将来 Go 产品的运行依赖。
 - **应用状态与跨应用**：停用/启用为独立确认操作并显示服务端 `Changed` 语义（幂等不伪造再次变更），停用不等于删除，页面常驻停用横幅；手改 `app_id`、目标用户 ID 或凭证 ID 的跨应用读写由页面能力钩子与真实服务双重拒绝。
 
 验证：页面契约测试（受控 `UIAppsBackend`：12 条路由、秘密恰好出现一次且 `no-store`、危险回调拒绝、许可页无假控件、无权限/普通会话 403、负责人只读、成员停用确认、委派拒绝映射）与真实服务集成测试（临时 SQLite + 真实 `internal/app`/`internal/oauthclient`/account/delegation：资料修改与只读身份、负责人变更被拒、成员应用内资料不回写全局、成员停用只影响当前应用、危险回调未登记客户端、合法登记秘密一次、轮换进入真实过渡期、撤销旧凭证成功且最后一个可用凭证被 `CONFLICT` 拒绝、应用停用后成员写入被 `CLIENT_DISABLED` 拒绝、跨应用读写拒绝）通过。已知缺口：策略写入仅受信管理端（页面只读）；成员“添加/移除”的委派成功路径需真实角色授权场景；登记/修改安全设置的真实再次验证需宿主装配 `reauth.Service`（集成测试使用替身契约）；真实浏览器视口/读屏/200% 文本与真机未实测。详见 `.ai/lead/reports/step70-dev.md`。
+
+## 客服求助、人工恢复申请与独立审批页面（步骤 71）
+
+新增 `WebUIOptions.PageSupport`/`UISupportBackend` 与 `internal/uiadminadapter.NewSupport`，全部路由 `UIAccessManagement`（宿主必须用 `session.AuthorizeManagement` 产生 management 会话），实现客服求助与人工恢复工作流：
+
+- **求助单**：`support.cases`（本人被指派工单 + 状态筛选 + `HasMore` 分页）、`support.case_create(.submit)`（稳定用户 ID 定位目标摘要 → 求助原因 → 确认登记；读取摘要不等于创建）、`support.case_detail`（工单身份/目标最小资料/原因/分派与状态迁移/发送入口/人工恢复申请/追加式历史）、`support.case_reassign.submit`、`support.case_transition.submit`（手工写 `sent` 被页面与服务端拒绝）、`support.case_send.submit`（只向目标此前已验证邮箱发起一次性入口；缺渠道转人工核验；`sent` 明确“密码未因此改变”）。
+- **脱敏与秘密禁区**：目标只显示稳定 ID、服务端脱敏用户名/邮箱、账户状态与渠道事实；不显示电话、完整邮箱、密码、验证码、重置链接、Token、MFA 秘密、恢复代码或证据原文；无“以该用户登录”、代设密码、改收件地址、跳过核验入口；电话是联系资料而非身份依据的提示常驻页面。
+- **人工恢复**：`support.recovery_request`（申请详情 + 发起者取消）、`support.recovery_create.submit`（密码恢复/MFA 恢复分别申请；核验依据/外部记录编号/证据摘要只提交一次、原文不可回读；绑定目标安全版本、交付渠道与内容摘要；`Enabled=false` 时只显示真实未启用原因且不渲染可提交表单）、`support.recovery_inbox`（当前真实受控待审批列表尚未提供，明确显示“能力尚未提供”，不枚举申请 ID、不显示静态卡片）、`support.recovery_approval`（候选独立审批人通过新的受控读取契约进入；在批准表单之前显示真正将执行的目标/操作/交付/核验/等待期/时间窗口；发起者/目标本人显示自批限制且无写控件）、`support.recovery_approve.submit`/`support.recovery_reject.submit`、`support.recovery_execute(.submit)`（独立执行确认页显示实际目标、单一账户范围、真实操作与可预见后果，常驻“确认不是授权”；重复执行只在重读确认完成后显示“该申请已执行，本次未再次执行”；恢复完成与完成通知失败分开呈现）。
+- **服务端契约补充**：`internal/manualrecovery` 新增受控只读契约 `GetRequestForApproval`（仅待审批 + 当前具备该操作类型审批资格、非发起者/目标本人）、`GetRequestForExecution`/`GetApproval`/`GetExecution`（参与人或真实执行人）、`PolicySummary`（页面显示真实制度值）、`ContentConsistent`，以及 `Store.GetLatestApproval`（含历史批准，SQLite 实现）；所有拒绝写失败审计，不改变业务状态。
+- **验证与限制**：页面契约测试（受控 `UISupportBackend`：16 路由、无秘密/无冒充入口、确认拦截、未启用无假表单、自批限制、候选审批真实内容顺序、执行确认与幂等、通知失败与恢复完成分离、审批工作台不伪造列表）与真实服务集成测试（临时 SQLite + 真实 `internal/support`/`internal/manualrecovery`：不同工作人员账户、跨范围与跨工作人员拒绝、本地测试发送器、自批拒绝、独立批准、等待期拒绝、真实执行、重复执行幂等、审批资格撤销后拒绝、人工恢复默认关闭）通过。已知缺口：候选审批人受控待审批列表、拒绝人读取终态申请与人工恢复完整生命周期历史投影尚未提供（页面明确标注，不伪造）；真实再次认证由宿主装配 `reauth.Service`（集成测试用替身契约）；真实浏览器视口/读屏/200% 文本与真机未实测。详见 `.ai/lead/reports/step71-dev.md`。

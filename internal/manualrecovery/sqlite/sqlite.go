@@ -45,6 +45,12 @@ content_digest,status,approved_at_ms,not_before_ms,expires_at_ms,
 COALESCE(finished_at_ms,0),COALESCE(invalidated_reason,''),row_version
 FROM manual_recovery_approvals WHERE request_id=? AND status='active' LIMIT 1`
 
+const selectLatestApprovalSQL = `SELECT id,request_id,approver_user_id,operation_type,
+content_digest,status,approved_at_ms,not_before_ms,expires_at_ms,
+COALESCE(finished_at_ms,0),COALESCE(invalidated_reason,''),row_version
+FROM manual_recovery_approvals WHERE request_id=?
+ORDER BY approved_at_ms DESC, row_version DESC LIMIT 1`
+
 const approverHistorySQL = `SELECT COUNT(*) FROM manual_recovery_approvals
 WHERE request_id=? AND approver_user_id=?`
 
@@ -183,6 +189,38 @@ func (s *Store) InsertApprovalTx(ctx context.Context, tx audit.Tx, record manual
 // GetActiveApproval 返回请求当前 active 批准。
 func (s *Store) GetActiveApproval(ctx context.Context, requestID string) (manualrecovery.ApprovalRecord, bool, error) {
 	rows, err := s.store.QueryContext(ctx, selectActiveApprovalSQL, requestID)
+	if err != nil {
+		return manualrecovery.ApprovalRecord{}, false, storeError("读取人工恢复批准", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return manualrecovery.ApprovalRecord{}, false, storeError("读取人工恢复批准", err)
+		}
+		return manualrecovery.ApprovalRecord{}, false, nil
+	}
+	var record manualrecovery.ApprovalRecord
+	var operation, status string
+	var approvedMS, notBeforeMS, expiresMS, finishedMS int64
+	if err := rows.Scan(&record.ID, &record.RequestID, &record.ApproverUserID, &operation,
+		&record.ContentDigest, &status, &approvedMS, &notBeforeMS, &expiresMS,
+		&finishedMS, &record.InvalidatedReason, &record.RowVersion); err != nil {
+		return manualrecovery.ApprovalRecord{}, false, storeError("读取人工恢复批准", err)
+	}
+	record.Operation = manualrecovery.OperationType(operation)
+	record.Status = manualrecovery.ApprovalStatus(status)
+	record.ApprovedAt = time.UnixMilli(approvedMS).UTC()
+	record.NotBefore = time.UnixMilli(notBeforeMS).UTC()
+	record.ExpiresAt = time.UnixMilli(expiresMS).UTC()
+	if finishedMS != 0 {
+		record.FinishedAt = time.UnixMilli(finishedMS).UTC()
+	}
+	return record, true, nil
+}
+
+// GetLatestApproval 返回请求最近一次批准（含历史状态）；只读查询。
+func (s *Store) GetLatestApproval(ctx context.Context, requestID string) (manualrecovery.ApprovalRecord, bool, error) {
+	rows, err := s.store.QueryContext(ctx, selectLatestApprovalSQL, requestID)
 	if err != nil {
 		return manualrecovery.ApprovalRecord{}, false, storeError("读取人工恢复批准", err)
 	}

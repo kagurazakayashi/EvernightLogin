@@ -315,6 +315,8 @@ type WebUIOptions struct {
 	PageRBAC *UIPageRBACOptions
 	// PageApps 非 nil 时注册步骤 70 应用资料/成员/安全接入/凭证/许可/状态页面。
 	PageApps *UIPageAppsOptions
+	// PageSupport 非 nil 时注册步骤 71 客服求助/人工恢复申请/独立审批页面。
+	PageSupport *UIPageSupportOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -360,6 +362,7 @@ type WebUI struct {
 	pageSecurity        *pageSecurityPages
 	pageRBAC            *pageRBACPages
 	pageApps            *pageAppsPages
+	pageSupport         *pageSupportPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -455,6 +458,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageApps = pages
+	}
+	if options.PageSupport != nil {
+		pages, pageErr := newPageSupportPages(*options.PageSupport)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageSupport = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -644,6 +654,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageApps != nil {
 		routes = append(routes, ui.pageApps.routes...)
 	}
+	if ui.pageSupport != nil {
+		routes = append(routes, ui.pageSupport.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -719,6 +732,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageApps != nil {
 		for name := range ui.pageApps.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageSupport != nil {
+		for name := range ui.pageSupport.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -1040,6 +1060,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageApps != nil {
 		handler = ui.pageApps.handlers[route.Name]
+	}
+	if handler == nil && ui.pageSupport != nil {
+		handler = ui.pageSupport.handlers[route.Name]
 	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)

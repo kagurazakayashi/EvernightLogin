@@ -1,0 +1,132 @@
+{{define "page-title"}}{{t "page.support.recovery_request.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--warning" role="note">
+  <p>{{t "page.support.case_create.phone_notice"}}</p>
+</div>
+<h1 tabindex="-1">{{t "page.support.recovery_request.title"}}</h1>
+{{with $request := .Data.request}}{{$root := $}}
+{{if eq $root.Data.notice "created"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.support.recovery_request.created"))}}{{end}}
+{{if eq $root.Data.notice "approved"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.support.recovery_request.approved"))}}{{end}}
+{{if eq $root.Data.notice "rejected"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.support.recovery_request.rejected"))}}{{end}}
+{{if eq $root.Data.notice "cancelled"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.support.recovery_request.cancelled"))}}{{end}}
+{{if eq $root.Data.notice "executed"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.support.recovery_request.executed"))}}{{end}}
+{{if eq $root.Data.notice "already_executed"}}{{template "component.banner" (dict "tone" "info" "message" (t "page.support.recovery_approval.already_executed"))}}{{end}}
+<section aria-labelledby="recovery-identity">
+  <h2 id="recovery-identity">{{t "page.support.recovery_request.identity"}}</h2>
+  <dl>
+    <dt>{{t "page.support.recovery_request.request_id"}}</dt><dd><code>{{$request.ID}}</code></dd>
+    <dt>{{t "common.label.status"}}</dt><dd>{{if eq $request.Status "pending_approval"}}{{t "manual_recovery.status.pending_approval"}}{{else if eq $request.Status "approved"}}{{t "manual_recovery.status.approved"}}{{else if eq $request.Status "executing"}}{{t "manual_recovery.status.executing"}}{{else if eq $request.Status "completed"}}{{t "manual_recovery.status.completed"}}{{else if eq $request.Status "rejected"}}{{t "manual_recovery.status.rejected"}}{{else if eq $request.Status "cancelled"}}{{t "manual_recovery.status.cancelled"}}{{else if eq $request.Status "failed"}}{{t "manual_recovery.status.failed"}}{{else if eq $request.Status "expired"}}{{t "manual_recovery.status.expired"}}{{else}}{{t "manual_recovery.status.unknown"}}（{{$request.Status}}）{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.target"}}</dt><dd><code>{{$request.TargetUserID}}</code></dd>
+    <dt>{{t "page.support.recovery_request.initiator"}}</dt><dd><code>{{$request.InitiatorUserID}}</code></dd>
+    <dt>{{t "page.support.recovery_request.support_case"}}</dt><dd>{{if $request.SupportCaseID}}<code>{{$request.SupportCaseID}}</code>{{else}}—{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.row_version"}}</dt><dd>{{$request.RowVersion}} · {{if $request.ContentConsistent}}{{t "page.support.recovery_request.content_bound"}}{{else}}{{t "page.support.recovery_request.content_changed"}}{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.expires"}}</dt><dd>{{format_time $request.ExpiresAt "UTC"}}</dd>
+    <dt>{{t "page.support.recovery_request.closed_reason"}}</dt><dd>{{if $request.ClosedReason}}{{$request.ClosedReason}}{{else}}—{{end}}</dd>
+  </dl>
+</section>
+<section aria-labelledby="recovery-operation">
+  <h2 id="recovery-operation">{{t "page.support.recovery_approval.actual_operation"}}</h2>
+  <dl>
+    <dt>{{t "manual_recovery.operation.label"}}</dt><dd>{{if eq $request.Operation "password_reset"}}{{t "manual_recovery.operation.password_reset"}}{{else if eq $request.Operation "mfa_reset"}}{{t "manual_recovery.operation.mfa_reset"}}{{else}}{{t "manual_recovery.operation.unknown"}}（{{$request.Operation}}）{{end}}</dd>
+    <dt>{{t "manual_recovery.operation.consequence"}}</dt><dd>{{if eq $request.Operation "password_reset"}}{{t "manual_recovery.operation.password_reset_consequence"}}{{else if eq $request.Operation "mfa_reset"}}{{t "manual_recovery.operation.mfa_reset_consequence"}}{{else}}—{{end}}</dd>
+    <dt>{{t "manual_recovery.basis.label"}}</dt><dd>{{if eq $request.VerificationBasis "in_person_identity_document"}}{{t "manual_recovery.basis.in_person_identity_document"}}{{else if eq $request.VerificationBasis "notarized_declaration"}}{{t "manual_recovery.basis.notarized_declaration"}}{{else}}{{t "manual_recovery.basis.unknown"}}{{end}}</dd>
+    <dt>{{t "manual_recovery.reference.label"}}</dt><dd><code>{{$request.VerificationReference}}</code></dd>
+    <dt>{{t "manual_recovery.evidence.label"}}</dt><dd>{{if $request.EvidenceRegistered}}{{t "page.support.recovery_request.evidence_unavailable"}}{{else}}—{{end}}</dd>
+    <dt>{{t "manual_recovery.delivery.label"}}</dt><dd>{{if eq $request.Delivery "verified_email"}}{{t "manual_recovery.delivery.verified_email"}}{{else}}{{t "manual_recovery.delivery.unknown"}}{{end}} · {{if eq $request.DeliveryBound "unknown"}}{{t "page.support.recovery_request.delivery_unknown"}}{{else}}{{$request.DeliveryBound}}{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.target_security_version"}}</dt><dd>{{$request.TargetSecurityVersion}}</dd>
+    <dt>{{t "page.support.recovery_request.target_privilege"}}</dt><dd>{{if $request.TargetHighPrivilege}}{{t "page.support.recovery_request.target_high"}}{{else}}{{t "page.support.recovery_request.target_normal"}}{{end}}</dd>
+    <dt>{{t "page.support.case_create.reason.label"}}</dt><dd><span class="ln-pre">{{$request.Reason}}</span></dd>
+  </dl>
+  <p class="ln-meta">{{t "page.support.recovery_request.independent_required"}}</p>
+</section>
+{{if $root.Data.policyAvailable}}
+<section aria-labelledby="recovery-policy">
+  <h2 id="recovery-policy">{{t "page.support.recovery_request.policy_title"}}</h2>
+  <dl>
+    <dt>{{t "page.support.recovery_request.wait_period"}}</dt><dd>{{$root.Data.waitPeriodLabel}}</dd>
+    <dt>{{t "page.support.recovery_request.approval_ttl"}}</dt><dd>{{$root.Data.approvalTTLLabel}}</dd>
+    <dt>{{t "page.support.recovery_request.request_ttl"}}</dt><dd>{{$root.Data.requestTTLLabel}}</dd>
+    <dt>{{t "page.support.recovery_request.independent"}}</dt><dd>{{if $root.Data.independentRequired}}{{t "page.support.recovery_request.required"}}{{else}}{{t "page.support.recovery_request.not_required"}}{{end}}</dd>
+  </dl>
+</section>
+{{end}}
+{{if $request.HasApproval}}
+<section aria-labelledby="recovery-approval">
+  <h2 id="recovery-approval">{{t "page.support.recovery_request.approval_title"}}</h2>
+  <dl>
+    <dt>{{t "page.support.recovery_request.approval_id"}}</dt><dd><code>{{$request.Approval.ID}}</code></dd>
+    <dt>{{t "page.support.recovery_request.approver"}}</dt><dd><code>{{$request.Approval.ApproverUserID}}</code></dd>
+    <dt>{{t "page.support.recovery_request.approval_status"}}</dt><dd>{{$request.Approval.Status}}</dd>
+    <dt>{{t "page.support.recovery_request.approved_at"}}</dt><dd>{{format_time $request.Approval.ApprovedAt "UTC"}}</dd>
+    <dt>{{t "page.support.recovery_request.not_before"}}</dt><dd>{{format_time $request.Approval.NotBefore "UTC"}}</dd>
+    <dt>{{t "page.support.recovery_request.approval_expires"}}</dt><dd>{{format_time $request.Approval.ExpiresAt "UTC"}}</dd>
+  </dl>
+</section>
+{{end}}
+{{if $request.HasExecution}}
+<section aria-labelledby="recovery-execution">
+  <h2 id="recovery-execution">{{t "page.support.recovery_request.execution_title"}}</h2>
+  <dl>
+    <dt>{{t "page.support.recovery_request.execution_id"}}</dt><dd><code>{{$request.Execution.ID}}</code></dd>
+    <dt>{{t "page.support.recovery_request.executor"}}</dt><dd><code>{{$request.Execution.ExecutorUserID}}</code></dd>
+    <dt>{{t "page.support.recovery_request.execution_status"}}</dt><dd>{{$request.Execution.Status}}</dd>
+    <dt>{{t "page.support.recovery_request.sessions_revoked"}}</dt><dd>{{$request.Execution.SessionsRevoked}}</dd>
+    <dt>{{t "page.support.recovery_request.factors_reset"}}</dt><dd>{{if $request.Execution.FactorsReset}}{{t "common.state.yes"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.credential_issued"}}</dt><dd>{{if $request.Execution.CredentialIssued}}{{t "page.support.recovery_request.credential_issued_notice"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.notification"}}</dt><dd>{{if eq $request.Execution.Notification "sent"}}{{t "manual_recovery.notification.sent"}}{{else if eq $request.Execution.Notification "pending"}}{{t "manual_recovery.notification.pending"}}{{else if eq $request.Execution.Notification "failed"}}{{t "manual_recovery.notification.failed"}}{{else if eq $request.Execution.Notification "not_configured"}}{{t "manual_recovery.notification.not_configured"}}{{else}}{{t "page.support.recovery_request.notification_unknown"}}{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.started_at"}}</dt><dd>{{format_time $request.Execution.StartedAt "UTC"}}</dd>
+    <dt>{{t "page.support.recovery_request.finished_at"}}</dt><dd>{{if $request.Execution.FinishedAt.IsZero}}—{{else}}{{format_time $request.Execution.FinishedAt "UTC"}}{{end}}</dd>
+  </dl>
+  {{if eq $request.Execution.Notification "failed"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.support.recovery_approval.completed_notice_failed"))}}{{end}}
+</section>
+{{end}}
+<section aria-labelledby="recovery-actions">
+  <h2 id="recovery-actions">{{t "page.support.case_detail.actions"}}</h2>
+  {{if eq $request.Status "pending_approval"}}
+  <p>{{t "page.support.recovery_request.pending_hint"}}</p>
+  {{if and $root.Data.isInitiator (not $root.Data.terminal)}}
+  <div class="ln-card">
+    <h3>{{t "page.support.recovery_request.cancel"}}</h3>
+    <form method="post" action="{{route "support.recovery_cancel.submit"}}" data-ln-module="async-form" novalidate>
+      {{csrf_field}}
+      <input type="hidden" name="request_id" value="{{$request.ID}}">
+      <label class="ln-field__label" for="cancel-reason">{{t "page.support.recovery_request.cancel_reason"}}</label>
+      <textarea class="ln-input" id="cancel-reason" name="reason" rows="2" maxlength="200" required></textarea>
+      <label for="cancel-confirm"><input type="checkbox" id="cancel-confirm" name="confirm" value="yes" required> {{t "page.support.case_detail.confirm"}}</label>
+      {{template "component.button" (dict "label" (t "page.support.recovery_request.cancel") "type" "submit" "variant" "danger")}}
+    </form>
+  </div>
+  {{end}}
+  {{else if eq $request.Status "approved"}}
+  <p>{{t "page.support.recovery_request.approved_hint"}}</p>
+  {{if and $root.Data.isInitiator (not $root.Data.terminal)}}
+  <div class="ln-card">
+    <h3>{{t "page.support.recovery_request.cancel"}}</h3>
+    <form method="post" action="{{route "support.recovery_cancel.submit"}}" data-ln-module="async-form" novalidate>
+      {{csrf_field}}
+      <input type="hidden" name="request_id" value="{{$request.ID}}">
+      <label class="ln-field__label" for="cancel-reason2">{{t "page.support.recovery_request.cancel_reason"}}</label>
+      <textarea class="ln-input" id="cancel-reason2" name="reason" rows="2" maxlength="200" required></textarea>
+      <label for="cancel-confirm2"><input type="checkbox" id="cancel-confirm2" name="confirm" value="yes" required> {{t "page.support.case_detail.confirm"}}</label>
+      {{template "component.button" (dict "label" (t "page.support.recovery_request.cancel") "type" "submit" "variant" "danger")}}
+    </form>
+  </div>
+  {{end}}
+  {{if $root.Data.capabilities.ExecuteRecovery}}
+  <p><a href="{{route "support.recovery_execute"}}?request_id={{$request.ID}}">{{t "page.support.recovery_approval.execute"}}</a></p>
+  {{else}}<p class="ln-meta">{{t "page.support.recovery_execute.denied"}}</p>{{end}}
+  {{else}}
+  <p class="ln-meta">{{t "page.support.recovery_request.terminal_hint"}}</p>
+  {{end}}
+</section>
+<section aria-labelledby="recovery-history">
+  <h2 id="recovery-history">{{t "page.support.history.title"}}</h2>
+  <p class="ln-meta">{{t "page.support.history.immutable"}}</p>
+  {{if $request.HistoryUnavailable}}<div class="ln-state"><p>{{t "page.support.history.recovery_unavailable"}}</p></div>{{end}}
+</section>
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "page.support.common.forbidden"}}</p></div>
+{{end}}
+<p><a href="{{route "support.cases"}}">{{t "common.action.back"}}</a> · <a href="{{route "support.recovery_inbox"}}">{{t "page.support.recovery_inbox.title"}}</a></p>
+{{end}}

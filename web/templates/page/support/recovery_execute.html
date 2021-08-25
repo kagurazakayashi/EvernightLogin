@@ -1,0 +1,49 @@
+{{define "page-title"}}{{t "page.support.recovery_approval.execute"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--warning" role="note">
+  <p>{{t "page.support.case_create.phone_notice"}}</p>
+</div>
+<h1 tabindex="-1">{{t "page.support.recovery_approval.execute"}}</h1>
+{{with $request := .Data.request}}{{$root := $}}
+<section aria-labelledby="execute-target">
+  <h2 id="execute-target">{{t "page.support.recovery_approval.confirm_target"}}</h2>
+  <dl>
+    <dt>{{t "page.support.recovery_request.request_id"}}</dt><dd><code>{{$request.ID}}</code></dd>
+    <dt>{{t "page.support.recovery_request.target"}}</dt><dd><code>{{$request.TargetUserID}}</code> · {{t "page.support.recovery_approval.single_account"}}</dd>
+    <dt>{{t "page.support.recovery_request.initiator"}}</dt><dd><code>{{$request.InitiatorUserID}}</code></dd>
+    <dt>{{t "manual_recovery.operation.label"}}</dt><dd>{{if eq $request.Operation "password_reset"}}{{t "manual_recovery.operation.password_reset"}}{{else if eq $request.Operation "mfa_reset"}}{{t "manual_recovery.operation.mfa_reset"}}{{else}}{{t "manual_recovery.operation.unknown"}}{{end}}</dd>
+    <dt>{{t "manual_recovery.operation.consequence"}}</dt><dd>{{if eq $request.Operation "password_reset"}}{{t "manual_recovery.operation.password_reset_consequence"}}{{else if eq $request.Operation "mfa_reset"}}{{t "manual_recovery.operation.mfa_reset_consequence"}}{{else}}—{{end}}</dd>
+    <dt>{{t "manual_recovery.delivery.label"}}</dt><dd>{{if eq $request.Delivery "verified_email"}}{{t "manual_recovery.delivery.verified_email"}}{{else}}{{t "manual_recovery.delivery.unknown"}}{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.row_version"}}</dt><dd>{{$request.RowVersion}} · {{if $request.ContentConsistent}}{{t "page.support.recovery_request.content_bound"}}{{else}}{{t "page.support.recovery_request.content_changed"}}{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.expires"}}</dt><dd>{{format_time $request.ExpiresAt "UTC"}}</dd>
+    <dt>{{t "page.support.recovery_request.not_before"}}</dt><dd>{{if $request.HasApproval}}{{format_time $request.Approval.NotBefore "UTC"}}{{else}}—{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.approval_expires"}}</dt><dd>{{if $request.HasApproval}}{{format_time $request.Approval.ExpiresAt "UTC"}}{{else}}—{{end}}</dd>
+    <dt>{{t "page.support.recovery_request.approver"}}</dt><dd>{{if $request.HasApproval}}<code>{{$request.Approval.ApproverUserID}}</code>{{else}}—{{end}}</dd>
+  </dl>
+</section>
+<section aria-labelledby="execute-consequence">
+  <h2 id="execute-consequence">{{t "page.support.recovery_approval.consequence_title"}}</h2>
+  <ul>
+    <li>{{t "page.support.recovery_execute.consequence_scope"}}</li>
+    <li>{{t "page.support.recovery_execute.consequence_irreversible"}}</li>
+    <li>{{t "page.support.recovery_execute.consequence_notification"}}</li>
+    <li>{{t "page.support.recovery_approval.sessions_hint"}}</li>
+  </ul>
+  <p>{{t "page.support.recovery_approval.confirm_not_authorization"}}</p>
+</section>
+{{if $root.Data.canExecute}}
+<form method="post" action="{{route "support.recovery_execute.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="request_id" value="{{$request.ID}}">
+  <label for="execute-confirm"><input type="checkbox" id="execute-confirm" name="confirm" value="yes" required> {{t "page.support.recovery_execute.confirm"}}</label>
+  {{template "component.button" (dict "label" (t "page.support.recovery_approval.execute") "type" "submit" "variant" "danger")}}
+</form>
+{{else}}
+<div class="ln-state"><p>{{t "page.support.recovery_execute.not_ready"}}</p></div>
+{{end}}
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "page.support.common.forbidden"}}</p></div>
+{{end}}
+<p><a href="{{route "support.recovery_request"}}?request_id={{.Data.request.ID}}">{{t "common.action.back"}}</a></p>
+{{end}}

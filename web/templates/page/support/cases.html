@@ -1,0 +1,44 @@
+{{define "page-title"}}{{t "page.support.cases.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status">
+  <p>{{t "page.support.case_create.phone_notice"}}</p>
+</div>
+<h1 tabindex="-1">{{t "page.support.cases.title"}}</h1>
+<p class="ln-meta">{{t "page.support.cases.description"}}</p>
+<form method="get" action="{{route "support.cases"}}">
+  <label class="ln-field__label" for="cases-status">{{t "page.support.cases.status_filter"}}</label>
+  <select class="ln-input" id="cases-status" name="status">
+    <option value="">{{t "common.state.all"}}</option>
+    <option value="pending_verification"{{if eq .Data.status "pending_verification"}} selected{{end}}>{{t "support.status.pending_verification"}}</option>
+    <option value="sent"{{if eq .Data.status "sent"}} selected{{end}}>{{t "support.status.sent"}}</option>
+    <option value="manual_review"{{if eq .Data.status "manual_review"}} selected{{end}}>{{t "support.status.manual_review"}}</option>
+    <option value="closed"{{if eq .Data.status "closed"}} selected{{end}}>{{t "support.status.closed"}}</option>
+    <option value="cancelled"{{if eq .Data.status "cancelled"}} selected{{end}}>{{t "support.status.cancelled"}}</option>
+  </select>
+  {{template "component.button" (dict "label" (t "page.support.cases.apply_filter") "type" "submit" "variant" "secondary")}}
+</form>
+<p class="ln-meta">{{t "page.support.cases.scope_hint"}}</p>
+<table class="ln-table">
+  <caption>{{t "page.support.cases.table_caption"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "page.support.cases.case_id"}}</th>
+    <th scope="col">{{t "page.support.cases.target"}}</th>
+    <th scope="col">{{t "page.support.cases.target_email"}}</th>
+    <th scope="col">{{t "common.label.status"}}</th>
+    <th scope="col">{{t "common.label.updated"}}</th>
+    <th scope="col">{{t "common.label.actions"}}</th>
+  </tr></thead>
+  <tbody>{{range .Data.cases}}<tr>
+    <td><code>{{.ID}}</code></td>
+    <td>{{.TargetMaskedUsername}}<br><code>{{.TargetUserID}}</code></td>
+    <td>{{.TargetMaskedEmail}}<br><span class="ln-meta">{{t "page.support.cases.email_snapshot"}}</span></td>
+    <td>{{if eq .Status "pending_verification"}}{{t "support.status.pending_verification"}}{{else if eq .Status "sent"}}{{t "support.status.sent"}}{{else if eq .Status "manual_review"}}{{t "support.status.manual_review"}}{{else if eq .Status "closed"}}{{t "support.status.closed"}}{{else if eq .Status "cancelled"}}{{t "support.status.cancelled"}}{{else}}{{t "support.status.unknown"}}{{end}}</td>
+    <td>{{format_time .UpdatedAt "UTC"}}</td>
+    <td><a href="{{route "support.case_detail"}}?case_id={{.ID}}">{{t "page.support.cases.open"}}</a></td>
+  </tr>{{else}}<tr><td colspan="6">{{if .Data.filtered}}{{t "page.support.cases.no_results"}}{{else}}{{t "page.support.cases.empty"}}{{end}}</td></tr>{{end}}</tbody>
+</table>
+{{if .Data.hasMore}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}"><a href="{{route "support.cases"}}?status={{.Data.status}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></nav>{{else}}<p class="ln-meta">{{t "common.pagination.end"}}</p>{{end}}
+{{if .Data.capabilities.CreateCase}}<p><a href="{{route "support.case_create"}}">{{t "page.support.cases.create"}}</a></p>{{else}}<p class="ln-meta">{{t "page.support.cases.create_denied"}}</p>{{end}}
+<p class="ln-meta">{{t "page.support.cases.history_note"}}</p>
+{{end}}

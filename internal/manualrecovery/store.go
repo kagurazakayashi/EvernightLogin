@@ -28,6 +28,9 @@ type Store interface {
 	InsertApprovalTx(ctx context.Context, tx audit.Tx, record ApprovalRecord) error
 	// GetActiveApproval 返回请求当前 active 批准。
 	GetActiveApproval(ctx context.Context, requestID string) (ApprovalRecord, bool, error)
+	// GetLatestApproval 返回请求最近一次批准（含已消费/失效/过期历史），供页面展示
+	// 真实批准时间窗口；没有批准时返回 false。只读，不改变任何状态。
+	GetLatestApproval(ctx context.Context, requestID string) (ApprovalRecord, bool, error)
 	// ApproverHistory 报告指定用户是否曾是该请求的审批人（含已消费/失效历史），
 	// 供审批后仍可查看申请（历史参与人授权）。
 	ApproverHistory(ctx context.Context, requestID, approverUserID string) (bool, error)

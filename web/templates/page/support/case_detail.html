@@ -1,0 +1,180 @@
+{{define "page-title"}}{{t "page.support.case_detail.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--warning" role="note">
+  <p>{{t "page.support.case_create.phone_notice"}}</p>
+</div>
+<h1 tabindex="-1">{{t "page.support.case_detail.title"}}</h1>
+{{with $case := .Data.case}}{{$root := $}}
+{{if eq $root.Data.notice "reassigned"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.support.case_detail.reassigned"))}}{{end}}
+{{if eq $root.Data.notice "transitioned"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.support.case_detail.transitioned"))}}{{end}}
+{{if eq $root.Data.notice "reset_sent"}}{{template "component.banner" (dict "tone" "success" "message" (t "page.support.case_detail.reset_sent"))}}{{end}}
+{{if eq $root.Data.notice "manual_review"}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.support.case_detail.manual_review"))}}{{end}}
+<section aria-labelledby="case-identity">
+  <h2 id="case-identity">{{t "page.support.case_detail.identity"}}</h2>
+  <dl>
+    <dt>{{t "page.support.cases.case_id"}}</dt><dd><code>{{$case.ID}}</code></dd>
+    <dt>{{t "page.support.cases.target"}}</dt><dd>{{$case.TargetMaskedUsername}} · <code>{{$case.TargetUserID}}</code></dd>
+    <dt>{{t "page.support.cases.target_email"}}</dt><dd>{{$case.TargetMaskedEmail}} <span class="ln-meta">{{t "page.support.cases.email_snapshot"}}</span></dd>
+    <dt>{{t "common.label.status"}}</dt><dd>{{if eq $case.Status "pending_verification"}}{{t "support.status.pending_verification"}}{{else if eq $case.Status "sent"}}{{t "support.status.sent"}}{{else if eq $case.Status "manual_review"}}{{t "support.status.manual_review"}}{{else if eq $case.Status "closed"}}{{t "support.status.closed"}}{{else if eq $case.Status "cancelled"}}{{t "support.status.cancelled"}}{{else}}{{t "support.status.unknown"}}{{end}}</dd>
+    <dt>{{t "page.support.case_detail.creator"}}</dt><dd><code>{{$case.CreatedByUserID}}</code></dd>
+    <dt>{{t "page.support.case_detail.assignee"}}</dt><dd><code>{{$case.AssigneeUserID}}</code></dd>
+    <dt>{{t "page.support.case_detail.row_version"}}</dt><dd>{{$case.RowVersion}}</dd>
+    <dt>{{t "common.label.updated"}}</dt><dd>{{format_time $case.UpdatedAt "UTC"}}</dd>
+  </dl>
+</section>
+<section aria-labelledby="case-target">
+  <h2 id="case-target">{{t "page.support.case_detail.current_channel"}}</h2>
+  {{if $root.Data.targetUnread}}
+  <div class="ln-state"><p>{{t "page.support.case_detail.channel_unread"}}</p></div>
+  {{else}}
+  <dl>
+    <dt>{{t "page.support.cases.target"}}</dt><dd>{{$root.Data.target.MaskedUsername}}</dd>
+    <dt>{{t "page.support.cases.target_email"}}</dt><dd>{{$root.Data.target.MaskedEmail}}</dd>
+    <dt>{{t "page.support.case_create.has_password"}}</dt><dd>{{if $root.Data.target.HasPassword}}{{t "common.state.yes"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+    <dt>{{t "page.support.case_create.has_verified_email"}}</dt><dd>{{if $root.Data.target.HasVerifiedEmail}}{{t "common.state.yes"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+  </dl>
+  {{end}}
+  <p class="ln-meta">{{t "page.support.case_detail.phone_contact_only"}}</p>
+</section>
+<section aria-labelledby="case-reason">
+  <h2 id="case-reason">{{t "page.support.case_create.reason.label"}}</h2>
+  <p class="ln-pre">{{$case.Reason}}</p>
+</section>
+{{if not $root.Data.terminal}}
+<section aria-labelledby="case-actions">
+  <h2 id="case-actions">{{t "page.support.case_detail.actions"}}</h2>
+  {{if $root.Data.capabilities.SendReset}}
+  <div class="ln-card">
+    <h3>{{t "page.support.case_detail.reset_send"}}</h3>
+    <p>{{t "page.support.case_detail.reset_impact"}}</p>
+    <form method="post" action="{{route "support.case_send.submit"}}" data-ln-module="async-form" novalidate>
+      {{csrf_field}}
+      <input type="hidden" name="case_id" value="{{$case.ID}}">
+      <label for="send-confirm"><input type="checkbox" id="send-confirm" name="confirm" value="yes" required> {{t "page.support.case_detail.reset_confirm"}}</label>
+      {{template "component.button" (dict "label" (t "page.support.case_detail.reset_send") "type" "submit" "variant" "primary")}}
+    </form>
+  </div>
+  {{else}}<p class="ln-meta">{{t "page.support.case_detail.send_denied"}}</p>{{end}}
+  {{if $root.Data.capabilities.UpdateCase}}
+  <div class="ln-card">
+    <h3>{{t "page.support.case_detail.transition_title"}}</h3>
+    <form method="post" action="{{route "support.case_transition.submit"}}" data-ln-module="async-form" novalidate>
+      {{csrf_field}}
+      <input type="hidden" name="case_id" value="{{$case.ID}}">
+      <label class="ln-field__label" for="transition-status">{{t "page.support.case_detail.to_status"}}</label>
+      <select class="ln-input" id="transition-status" name="to_status">
+        {{if ne $case.Status "manual_review"}}<option value="manual_review">{{t "support.status.manual_review"}}</option>{{end}}
+        <option value="closed">{{t "support.status.closed"}}</option>
+        <option value="cancelled">{{t "support.status.cancelled"}}</option>
+      </select>
+      <label class="ln-field__label" for="transition-note">{{t "page.support.case_detail.note.label"}}</label>
+      <textarea class="ln-input" id="transition-note" name="note" rows="3" maxlength="1000"></textarea>
+      <label for="transition-confirm"><input type="checkbox" id="transition-confirm" name="confirm" value="yes" required> {{t "page.support.case_detail.confirm"}}</label>
+      {{template "component.button" (dict "label" (t "page.support.case_detail.save_transition") "type" "submit" "variant" "secondary")}}
+    </form>
+  </div>
+  <div class="ln-card">
+    <h3>{{t "page.support.case_detail.reassign"}}</h3>
+    <p>{{t "page.support.case_detail.reassign_impact"}}</p>
+    <form method="post" action="{{route "support.case_reassign.submit"}}" data-ln-module="async-form" novalidate>
+      {{csrf_field}}
+      <input type="hidden" name="case_id" value="{{$case.ID}}">
+      <label class="ln-field__label" for="reassign-target">{{t "page.support.case_detail.new_assignee"}}</label>
+      <input class="ln-input" id="reassign-target" name="new_assignee_user_id" required>
+      <label for="reassign-confirm"><input type="checkbox" id="reassign-confirm" name="confirm" value="yes" required> {{t "page.support.case_detail.confirm"}}</label>
+      {{template "component.button" (dict "label" (t "page.support.case_detail.reassign") "type" "submit" "variant" "secondary")}}
+    </form>
+  </div>
+  {{end}}
+</section>
+{{end}}
+{{if not $root.Data.policyAvailable}}
+<section aria-labelledby="case-recovery">
+  <h2 id="case-recovery">{{t "page.support.recovery_request.title"}}</h2>
+  <div class="ln-state" role="status"><p class="ln-state__title">{{t "page.support.recovery_request.policy_unavailable"}}</p></div>
+</section>
+{{else}}
+<section aria-labelledby="case-recovery">
+  <h2 id="case-recovery">{{t "page.support.recovery_request.title"}}</h2>
+  <p class="ln-meta">{{t "page.support.recovery_request.independent_required"}}</p>
+  {{if not $root.Data.policy.Enabled}}
+  <div class="ln-state"><p>{{t "page.support.recovery_request.not_enabled"}}</p></div>
+  {{else if not $root.Data.terminal}}
+  <dl>
+    <dt>{{t "page.support.recovery_request.wait_period"}}</dt><dd>{{$root.Data.waitPeriodLabel}}</dd>
+    <dt>{{t "page.support.recovery_request.approval_ttl"}}</dt><dd>{{$root.Data.approvalTTLLabel}}</dd>
+    <dt>{{t "page.support.recovery_request.request_ttl"}}</dt><dd>{{$root.Data.requestTTLLabel}}</dd>
+  </dl>
+  {{if $root.Data.capabilities.RequestRecovery}}
+  <form method="post" action="{{route "support.recovery_create.submit"}}" data-ln-module="async-form" novalidate>
+    {{csrf_field}}
+    <input type="hidden" name="target_user_id" value="{{$case.TargetUserID}}">
+    <input type="hidden" name="support_case_id" value="{{$case.ID}}">
+    <fieldset>
+      <legend>{{t "manual_recovery.operation.label"}}</legend>
+      <label><input type="radio" name="operation" value="password_reset" required> {{t "manual_recovery.operation.password_reset"}}</label>
+      <label><input type="radio" name="operation" value="mfa_reset"> {{t "manual_recovery.operation.mfa_reset"}}</label>
+    </fieldset>
+    <label class="ln-field__label" for="recovery-basis">{{t "manual_recovery.basis.label"}}</label>
+    <select class="ln-input" id="recovery-basis" name="verification_basis" required>
+      {{range $root.Data.policy.VerificationBases}}<option value="{{.}}">{{if eq . "in_person_identity_document"}}{{t "manual_recovery.basis.in_person_identity_document"}}{{else if eq . "notarized_declaration"}}{{t "manual_recovery.basis.notarized_declaration"}}{{else}}{{t "manual_recovery.basis.unknown"}}{{end}}</option>{{end}}
+    </select>
+    <p class="ln-meta">{{t "manual_recovery.basis.source_hint"}}</p>
+    <label class="ln-field__label" for="recovery-reference">{{t "manual_recovery.reference.label"}}</label>
+    <input class="ln-input" id="recovery-reference" name="verification_reference" maxlength="128" required>
+    <label class="ln-field__label" for="recovery-evidence">{{t "manual_recovery.evidence.label"}}</label>
+    <textarea class="ln-input" id="recovery-evidence" name="evidence_summary" rows="3" maxlength="1024" required aria-describedby="recovery-evidence-help"></textarea>
+    <p class="ln-meta" id="recovery-evidence-help">{{t "manual_recovery.evidence.help"}}</p>
+    <label class="ln-field__label" for="recovery-reason">{{t "page.support.case_create.reason.label"}}</label>
+    <textarea class="ln-input" id="recovery-reason" name="reason" rows="3" maxlength="500" required></textarea>
+    <label class="ln-field__label" for="recovery-delivery">{{t "manual_recovery.delivery.label"}}</label>
+    <select class="ln-input" id="recovery-delivery" name="delivery" required>
+      {{range $root.Data.policy.DeliveryChannels}}<option value="{{.}}">{{if eq . "verified_email"}}{{t "manual_recovery.delivery.verified_email"}}{{else}}{{t "manual_recovery.delivery.unknown"}}{{end}}</option>{{end}}
+    </select>
+    <label for="recovery-confirm"><input type="checkbox" id="recovery-confirm" name="confirm" value="yes" required> {{t "page.support.recovery_request.confirm"}}</label>
+    {{template "component.button" (dict "label" (t "page.support.recovery_request.submit") "type" "submit" "variant" "primary")}}
+  </form>
+  {{else}}<p class="ln-meta">{{t "page.support.recovery_request.request_denied"}}</p>{{end}}
+  {{else}}<p class="ln-meta">{{t "page.support.case_detail.terminal"}}</p>{{end}}
+</section>
+{{end}}
+<section aria-labelledby="case-history">
+  <h2 id="case-history">{{t "page.support.history.title"}}</h2>
+  <p class="ln-meta">{{t "page.support.history.immutable"}}</p>
+  {{if $root.Data.historyUnavailable}}
+  <div class="ln-state"><p>{{t "page.support.history.unavailable"}}</p></div>
+  {{else if not $root.Data.history.Events}}
+  <div class="ln-state"><p>{{t "page.support.history.empty"}}</p></div>
+  {{else}}
+  <div class="ln-table-scroll" tabindex="0" role="group" aria-label="{{t "page.support.history.title"}}">
+  <table class="ln-table">
+    <caption>{{t "page.support.history.caption"}}</caption>
+    <thead><tr>
+      <th scope="col">{{t "page.support.history.seq"}}</th>
+      <th scope="col">{{t "page.support.history.time"}}</th>
+      <th scope="col">{{t "page.support.history.action"}}</th>
+      <th scope="col">{{t "page.support.history.actor"}}</th>
+      <th scope="col">{{t "page.support.history.from_status"}}</th>
+      <th scope="col">{{t "page.support.history.to_status"}}</th>
+      <th scope="col">{{t "page.support.history.detail"}}</th>
+    </tr></thead>
+    <tbody>{{range $root.Data.history.Events}}<tr>
+      <td>{{.Seq}}</td>
+      <td>{{format_time .CreatedAt "UTC"}}</td>
+      <td>{{if eq .Action "support.case.created"}}{{t "support.event.created"}}{{else if eq .Action "support.case.assigned"}}{{t "support.event.assigned"}}{{else if eq .Action "support.case.status_changed"}}{{t "support.event.status_changed"}}{{else if eq .Action "support.case.reset_requested"}}{{t "support.event.reset_requested"}}{{else if eq .Action "support.case.manual_review"}}{{t "support.event.manual_review"}}{{else}}{{t "support.event.unknown"}}{{end}} <code>{{.Action}}</code></td>
+      <td>{{.ActorType}} <code>{{.ActorID}}</code></td>
+      <td>{{if .FromStatus}}{{if eq .FromStatus "pending_verification"}}{{t "support.status.pending_verification"}}{{else if eq .FromStatus "sent"}}{{t "support.status.sent"}}{{else if eq .FromStatus "manual_review"}}{{t "support.status.manual_review"}}{{else if eq .FromStatus "closed"}}{{t "support.status.closed"}}{{else if eq .FromStatus "cancelled"}}{{t "support.status.cancelled"}}{{else}}{{.FromStatus}}{{end}}{{else}}—{{end}}</td>
+      <td>{{if .ToStatus}}{{if eq .ToStatus "pending_verification"}}{{t "support.status.pending_verification"}}{{else if eq .ToStatus "sent"}}{{t "support.status.sent"}}{{else if eq .ToStatus "manual_review"}}{{t "support.status.manual_review"}}{{else if eq .ToStatus "closed"}}{{t "support.status.closed"}}{{else if eq .ToStatus "cancelled"}}{{t "support.status.cancelled"}}{{else}}{{.ToStatus}}{{end}}{{else}}—{{end}}</td>
+      <td>{{.Detail}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+  </div>
+  {{if $root.Data.history.HasMore}}<p class="ln-meta">{{t "page.support.history.has_more"}}</p>{{end}}
+  {{end}}
+</section>
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "page.support.common.forbidden"}}</p></div>
+{{end}}
+<p><a href="{{route "support.cases"}}">{{t "common.action.back"}}</a></p>
+{{end}}

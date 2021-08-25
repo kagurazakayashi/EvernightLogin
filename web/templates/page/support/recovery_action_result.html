@@ -1,0 +1,21 @@
+{{define "page-title"}}{{t "page.support.recovery_request.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--warning" role="note">
+  <p>{{t "page.support.case_create.phone_notice"}}</p>
+</div>
+<h1 tabindex="-1">{{t "page.support.recovery_request.title"}}</h1>
+{{if eq .Data.action "rejected"}}
+<div class="ln-banner ln-banner--success" role="status">
+  <p>{{t "page.support.recovery_request.rejected"}}</p>
+</div>
+{{end}}
+<dl>
+  <dt>{{t "page.support.recovery_request.request_id"}}</dt><dd><code>{{.Data.requestID}}</code></dd>
+  <dt>{{t "common.label.status"}}</dt><dd>{{t "manual_recovery.status.rejected"}}</dd>
+</dl>
+<div class="ln-state" role="note">
+  <p class="ln-state__title">{{t "page.support.recovery_request.reject_read_unavailable"}}</p>
+</div>
+<p><a href="{{route "support.cases"}}">{{t "page.support.cases.title"}}</a></p>
+{{end}}

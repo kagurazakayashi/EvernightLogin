@@ -1,0 +1,53 @@
+{{define "page-title"}}{{t "page.support.case_create.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--warning" role="note">
+  <p>{{t "page.support.case_create.phone_notice"}}</p>
+</div>
+<h1 tabindex="-1">{{t "page.support.case_create.title"}}</h1>
+<p class="ln-meta">{{t "page.support.case_create.description"}}</p>
+{{if .Data.created}}
+<div class="ln-banner ln-banner--success" role="status">
+  <p>{{t "page.support.case_create.created"}} <code>{{.Data.created.ID}}</code></p>
+</div>
+<p><a href="{{route "support.case_detail"}}?case_id={{.Data.created.ID}}">{{t "page.support.cases.open"}}</a></p>
+{{else}}
+<form method="post" action="{{route "support.case_create.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="action" value="lookup">
+  <label class="ln-field__label" for="create-target">{{t "page.support.case_create.target_id.label"}}</label>
+  <input class="ln-input" id="create-target" name="target_user_id" value="{{.Data.targetID}}" required aria-describedby="create-target-help">
+  <p class="ln-meta" id="create-target-help">{{t "page.support.case_create.target_id.help"}}</p>
+  <label class="ln-field__label" for="create-reason">{{t "page.support.case_create.reason.label"}}</label>
+  <textarea class="ln-input" id="create-reason" name="reason" rows="4" maxlength="2000">{{.Data.reason}}</textarea>
+  {{template "component.button" (dict "label" (t "page.support.case_create.lookup") "type" "submit" "variant" "secondary")}}
+</form>
+{{if .Data.target}}
+<section aria-labelledby="create-target-heading">
+  <h2 id="create-target-heading">{{t "page.support.case_create.target_heading"}}</h2>
+  <dl>
+    <dt>{{t "page.support.case_create.target_id.label"}}</dt><dd><code>{{.Data.target.UserID}}</code></dd>
+    <dt>{{t "page.support.cases.target"}}</dt><dd>{{.Data.target.MaskedUsername}}</dd>
+    <dt>{{t "page.support.cases.target_email"}}</dt><dd>{{.Data.target.MaskedEmail}}</dd>
+    <dt>{{t "common.label.status"}}</dt><dd>{{.Data.target.Status}}</dd>
+    <dt>{{t "page.support.case_create.has_password"}}</dt><dd>{{if .Data.target.HasPassword}}{{t "common.state.yes"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+    <dt>{{t "page.support.case_create.has_verified_email"}}</dt><dd>{{if .Data.target.HasVerifiedEmail}}{{t "common.state.yes"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+  </dl>
+  <p class="ln-meta">{{t "page.support.case_create.target_scope_hint"}}</p>
+  {{if .Data.capabilities.CreateCase}}
+  <form method="post" action="{{route "support.case_create.submit"}}" data-ln-module="async-form" novalidate>
+    {{csrf_field}}
+    <input type="hidden" name="action" value="create">
+    <input type="hidden" name="target_user_id" value="{{.Data.target.UserID}}">
+    <input type="hidden" name="reason" value="{{.Data.reason}}">
+    <label for="create-confirm"><input type="checkbox" id="create-confirm" name="confirm" value="yes" required> {{t "page.support.case_create.confirm"}}</label>
+    {{template "component.button" (dict "label" (t "page.support.case_create.submit") "type" "submit" "variant" "primary")}}
+  </form>
+  {{else}}
+  <div class="ln-state"><p>{{t "page.support.cases.create_denied"}}</p></div>
+  {{end}}
+</section>
+{{end}}
+{{end}}
+<p><a href="{{route "support.cases"}}">{{t "common.action.back"}}</a></p>
+{{end}}

@@ -579,6 +579,25 @@
 // 显示直接角色/用户组来源与数据范围；预设差异只读计算（恢复执行仅受信通道）。页面
 // 契约 + 真实服务集成测试通过。未新增错误码/迁移/依赖；未做实浏览器视口/读屏实测。
 //
+// 步骤 71：公开 `WebUIOptions.PageSupport`/`UISupportBackend` 与内置客服求助/人工
+// 恢复申请/独立审批页面（16 条命名路由，全部 UIAccessManagement），
+// `internal/uiadminadapter.NewSupport` 接真实 internal/support 与 internal/manualrecovery。
+// 客服只见获准普通用户与必要脱敏资料（稳定 ID/脱敏用户名与邮箱/状态/渠道事实，不含
+// 电话、完整邮箱、密码、验证码、重置链接、Token 或秘密），不提供“以该用户登录”；
+// 登记只记录原因，发送只到原已验证邮箱且不立即改密/不解除 MFA/不签发会话；处理历史
+// 只追加、无编辑/删除入口。人工恢复默认关闭时只显示真实原因，制度值（核验依据/交付
+// 方式/等待期/批准与申请有效期）来自服务端真实配置；申请绑定操作、核验依据与外部
+// 记录编号，证据摘要只提交一次且原文不可回读；独立审批页在批准表单之前显示真正将
+// 执行的目标/操作/交付/后果/时间窗口，拒绝自批（发起者/目标本人）并说明“确认不是
+// 授权”；执行确认页再次显示实际目标与一次性后果，重复执行只有在重新读取确认完成
+// 后才显示“已执行，本次未再次执行”，恢复完成与完成通知失败分开呈现。为候选审批人
+// 读取待审批申请、执行人读取执行结果与页面展示批准/执行时间窗口，internal/
+// manualrecovery 新增受控只读契约（GetRequestForApproval/GetRequestForExecution/
+// GetApproval/GetExecution/PolicySummary/ContentConsistent + Store.GetLatestApproval），
+// 仍拒绝未参与者并写失败审计。页面契约 + 真实服务集成测试通过；未新增迁移/错误码/
+// 依赖。已知缺口：候选审批人待审批列表（工作台显示能力未提供，不枚举 ID）、拒绝人
+// 读取终态申请与人工恢复完整生命周期历史投影尚未提供、真实浏览器/读屏未实测。
+//
 // 步骤 70：公开 `WebUIOptions.PageApps`/`UIAppsBackend` 与内置应用资料/成员/回调与
 // 授权方式/应用客户端凭证/资源与接口字段许可/应用状态页面（UIAccessManagement），
 // `internal/uiadminadapter.NewApps` 接真实 app/oauthclient；应用 ID/ScopeID/客户端类型
