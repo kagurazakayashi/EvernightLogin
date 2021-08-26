@@ -1,0 +1,64 @@
+{{define "page-title"}}{{t "page.admin.security_policy.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.boundary"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.security_policy.forbidden") "description" (t "page.admin.security_policy.forbidden_help"))}}
+<p><a href="{{route "admin.security_policy_diff"}}">{{t "page.admin.security_policy.open_diff"}}</a></p>
+{{else if .Data.loadFailed}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.security_policy.load_failed") "description" (t "page.admin.security_policy.load_failed_help"))}}
+<p><a class="ln-button ln-button--secondary" href="{{route "admin.security_policies"}}">{{t "common.action.retry"}}</a></p>
+{{else}}
+{{if not .Data.capabilities.WritePolicies}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.security_policy.read_only"}}</p></div>{{end}}
+<p class="ln-meta">{{t "page.admin.security_policy.description"}}</p>
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.scope_line" "scope" .Data.snapshot.ScopeID "version" (format_number .Data.snapshot.Version) "catalog" .Data.snapshot.CatalogVersion}}</p>
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.count_line" "total" (format_number .Data.total) "changed" (format_number .Data.changed)}}</p>
+<nav class="ln-actions" aria-label="{{t "page.admin.security_policy.navigation"}}">
+  <a class="ln-button ln-button--secondary" href="{{route "admin.security_policy_diff"}}">{{t "page.admin.security_policy.open_diff"}}</a>
+  <a class="ln-button ln-button--secondary" href="{{route "admin.notification_mail"}}">{{t "page.admin.security_policy.open_notification"}}</a>
+</nav>
+<form method="get" action="{{route "admin.security_policies"}}">
+  <label class="ln-field__label" for="policy-domain">{{t "page.admin.security_policy.filter_domain"}}</label>
+  <select class="ln-input" id="policy-domain" name="domain">
+    <option value="">{{t "common.state.all"}}</option>
+    {{range .Data.domainOptions}}<option value="{{.value}}"{{if eq .value $.Data.domain}} selected{{end}}>{{t .key}}</option>{{end}}
+  </select>
+  <label class="ln-field__label" for="policy-source">{{t "page.admin.security_policy.filter_source"}}</label>
+  <select class="ln-input" id="policy-source" name="source">
+    <option value="">{{t "common.state.all"}}</option>
+    <option value="default"{{if eq .Data.source "default"}} selected{{end}}>{{t "page.admin.security_policy.source.default"}}</option>
+    <option value="override"{{if eq .Data.source "override"}} selected{{end}}>{{t "page.admin.security_policy.source.override"}}</option>
+    <option value="application"{{if eq .Data.source "application"}} selected{{end}}>{{t "page.admin.security_policy.source.application"}}</option>
+  </select>
+  <label class="ln-field__label" for="policy-only-diff"><input type="checkbox" id="policy-only-diff" name="only_diff" value="1"{{if .Data.onlyDiff}} checked{{end}}> {{t "page.admin.security_policy.filter_only_diff"}}</label>
+  {{template "component.button" (dict "label" (t "common.action.apply_filter") "type" "submit" "variant" "secondary")}}
+</form>
+{{if .Data.noDiff}}<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.no_diff"}}</p></div>{{end}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.security_policy.title"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.security_policy.catalog_caption"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "page.admin.security_policy.column_operation"}}</th>
+    <th scope="col">{{t "page.admin.security_policy.column_domain"}}</th>
+    <th scope="col">{{t "page.admin.security_policy.column_source"}}</th>
+    <th scope="col">{{t "page.admin.security_policy.column_protection"}}</th>
+    <th scope="col">{{t "page.admin.security_policy.column_constraints"}}</th>
+    <th scope="col">{{t "page.admin.security_policy.column_capability"}}</th>
+    <th scope="col">{{t "common.label.actions"}}</th>
+  </tr></thead>
+  <tbody>{{range .Data.operations}}<tr>
+    <td><a href="{{route "admin.security_policy_detail"}}?operation={{.OperationID}}">{{.Name}}</a><br><code>{{.OperationID}}</code></td>
+    <td>{{t .DomainKey}}</td>
+    <td>{{t .SourceKey}}{{if .Override}}<br><span class="ln-meta">{{t "page.admin.security_policy.value.has_override"}}</span>{{else}}<br><span class="ln-meta">{{t "page.admin.security_policy.value.no_override"}}</span>{{end}}</td>
+    <td>{{t "page.admin.security_policy.field.sensitive.label"}}: {{if .Effective.Sensitive}}{{t "page.admin.security_policy.value.required"}}{{else}}{{t "page.admin.security_policy.value.not_required"}}{{end}}<br>{{t "page.admin.security_policy.field.reauth_required.label"}}: {{if .Effective.ReauthRequired}}{{t "page.admin.security_policy.value.required"}}{{else}}{{t "page.admin.security_policy.value.not_required"}}{{end}}<br>{{t .Effective.StrengthKey}}</td>
+    <td>{{if .RootOnly}}{{t "page.admin.security_policy.root_only"}}{{end}} {{if .ImmutableSensitive}}{{t "page.admin.security_policy.immutable_sensitive"}}{{end}}<br><span class="ln-meta">{{t "page.admin.security_policy.audit_required"}}</span></td>
+    <td>{{if .StrengthAvailable}}{{t "page.admin.security_policy.strength_available"}}{{else}}{{t "page.admin.security_policy.strength_unavailable"}}{{end}}<br>{{if .Implemented}}{{t "page.admin.security_policy.implemented"}}{{else}}{{t "page.admin.security_policy.not_implemented"}}{{end}}<br><span class="ln-meta">{{t_fmt "page.admin.security_policy.diff_count" "count" (format_number (len .ChangedFields))}}</span></td>
+    <td><a href="{{route "admin.security_policy_detail"}}?operation={{.OperationID}}">{{t "page.admin.security_policy.action.view"}}</a></td>
+  </tr>{{else}}<tr><td colspan="7">{{if .Data.filtered}}{{t "page.admin.security_policy.filtered_empty"}}{{else}}{{t "page.admin.security_policy.empty"}}{{end}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+{{if .Data.declaredCount}}<h2>{{t "page.admin.security_policy.declared_title"}}</h2>
+<ul>{{range .Data.declared}}<li><code>{{.OperationID}}</code> · {{.Name}}</li>{{end}}</ul>{{end}}
+<p class="ln-meta">{{t "page.admin.security_policy.order_note"}}</p>
+{{end}}
+{{end}}

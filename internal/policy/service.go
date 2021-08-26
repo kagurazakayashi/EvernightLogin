@@ -101,6 +101,43 @@ func New(options Options) (*Service, error) {
 // CatalogVersion 返回当前目录版本。
 func (s *Service) CatalogVersion() string { return s.catalog.Version }
 
+// Operation 返回目录中某敏感操作的只读定义副本（含不可覆盖约束）。页面与适配器
+// 只能读取；策略修改仍必须走 Set/Restore 的 root、再次认证与审计链。
+func (s *Service) Operation(operationID string) (Operation, bool) {
+	operation, ok := s.catalog.Lookup(operationID)
+	return operation, ok
+}
+
+// UserIsRoot 报告可信用户调用者当前是否为真实 root。它只读取用户资格，不授予
+// 任何写权限；管理页面用它决定是否呈现写控件（真正写入仍由 Set/Restore 强制）。
+func (s *Service) UserIsRoot(ctx context.Context, caller Caller) (bool, error) {
+	ctx = normalizeContext(ctx)
+	if err := caller.actor.Validate(); err != nil {
+		return false, ErrAccessDenied
+	}
+	if !caller.IsUser() {
+		return false, nil
+	}
+	exists, isRoot, err := s.opts.Store.GetUserRoot(ctx, caller.actor.ID)
+	if err != nil {
+		return false, ErrStoreUnavailable
+	}
+	return exists && isRoot, nil
+}
+
+// AvailableStrengths 返回当前环境已实现并可满足的认证强度（升序，固定包含 none
+// 与 password）。页面用它区分“当前环境尚未支持”与“业务执行器未实现”，不得把
+// 未实现强度显示为可满足。
+func (s *Service) AvailableStrengths() []Strength {
+	result := make([]Strength, 0, len(s.available))
+	for _, strength := range []Strength{StrengthNone, StrengthPassword, StrengthStrong} {
+		if s.available[strength] {
+			result = append(result, strength)
+		}
+	}
+	return result
+}
+
 // Version 返回作用域当前策略版本；未发生变更时为 0。
 func (s *Service) Version(ctx context.Context, caller Caller, scopeID string) (int64, error) {
 	ctx = normalizeContext(ctx)

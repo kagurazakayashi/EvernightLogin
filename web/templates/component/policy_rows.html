@@ -1,0 +1,23 @@
+{{define "component.policy_value"}}{{if .Empty}}<span class="ln-meta">{{t "page.admin.security_policy.value.unset"}}</span>{{else if .IsNumber}}{{format_number .Number}} {{t "page.admin.security_policy.unit_seconds"}}{{else}}{{t .DisplayKey}}{{end}}{{end}}
+{{define "component.policy_field_label"}}{{t (printf "page.admin.security_policy.field.%s.label" .)}}{{end}}
+{{define "component.policy_rows"}}<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.security_policy.values_caption"}}">
+  <table class="ln-table">
+    <caption>{{t "page.admin.security_policy.values_caption"}}</caption>
+    <thead><tr>
+      <th scope="col">{{t "page.admin.security_policy.column_field"}}</th>
+      <th scope="col">{{t "common.label.default_value"}}</th>
+      <th scope="col">{{t "page.admin.security_policy.column_override"}}</th>
+      {{if .proposed}}<th scope="col">{{t "page.admin.security_policy.column_proposed"}}</th>{{end}}
+      <th scope="col">{{t "common.label.current_value"}}</th>
+      <th scope="col">{{t "page.admin.security_policy.column_changed"}}</th>
+    </tr></thead>
+    <tbody>{{range .rows}}<tr>
+      <th scope="row">{{template "component.policy_field_label" .Field}}</th>
+      <td>{{template "component.policy_value" .Default}}</td>
+      <td>{{if .Override}}{{template "component.policy_value" .Override}}{{else}}{{t "page.admin.security_policy.value.no_override"}}{{end}}</td>
+      {{if $.proposed}}<td>{{template "component.policy_value" .Proposed}}</td>{{end}}
+      <td>{{template "component.policy_value" .Effective}}</td>
+      <td>{{if .Changed}}{{t "page.admin.security_policy.value.changed"}}{{else}}{{t "page.admin.security_policy.value.same"}}{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+</div>{{end}}

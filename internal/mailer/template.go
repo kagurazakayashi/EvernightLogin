@@ -110,6 +110,9 @@ var builtinTemplates = map[Kind]Template{
 // TemplateSet 是已编译并校验的模板集合。
 type TemplateSet struct {
 	templates map[Kind]compiledTemplate
+	// source 保存通过校验的模板源文本，仅供管理页面只读展示与合成预览；不含
+	// 任何渲染数据、秘密或一次性入口。
+	source map[Kind]Template
 }
 
 type compiledTemplate struct {
@@ -124,7 +127,8 @@ func DefaultTemplateSet() (*TemplateSet, error) {
 
 // NewTemplateSet 编译并校验一组模板；缺少任一用途或模板为空时返回错误。
 func NewTemplateSet(templates map[Kind]Template) (*TemplateSet, error) {
-	set := &TemplateSet{templates: make(map[Kind]compiledTemplate, len(templates))}
+	set := &TemplateSet{templates: make(map[Kind]compiledTemplate, len(templates)),
+		source: make(map[Kind]Template, len(templates))}
 	for _, kind := range []Kind{KindVerification, KindPasswordReset, KindSecurityNotice} {
 		tmpl, ok := templates[kind]
 		if !ok {
@@ -142,8 +146,22 @@ func NewTemplateSet(templates map[Kind]Template) (*TemplateSet, error) {
 			return nil, fmt.Errorf("%w: %s 正文模板: %v", ErrTemplateInvalid, kind, err)
 		}
 		set.templates[kind] = compiledTemplate{subject: subject, body: body}
+		set.source[kind] = Template{Subject: tmpl.Subject, Body: tmpl.Body}
 	}
 	return set, nil
+}
+
+// Templates 返回当前已编译模板的源文本只读副本（按用途）。调用方修改返回值不影响
+// 已编译集合；该文本不含渲染数据、验证码、重置链接或秘密。
+func (s *TemplateSet) Templates() map[Kind]Template {
+	if s == nil {
+		return nil
+	}
+	result := make(map[Kind]Template, len(s.source))
+	for kind, tmpl := range s.source {
+		result[kind] = tmpl
+	}
+	return result
 }
 
 // Render 渲染指定用途的邮件内容，并做头部/正文安全校验。

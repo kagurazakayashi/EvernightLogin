@@ -1,0 +1,43 @@
+{{define "page-title"}}{{t "page.admin.security_policy.diff_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.snapshot}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.boundary"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.security_policy.forbidden") "description" (t "page.admin.security_policy.forbidden_help"))}}
+{{else}}
+{{if .Data.notice}}<div class="ln-banner ln-banner--success" role="status"><p>{{if eq .Data.notice "restored"}}{{t "page.admin.security_policy.notice.restored"}}{{else if eq .Data.notice "unchanged"}}{{t "page.admin.security_policy.unchanged"}}{{else if eq .Data.notice "stale"}}{{t "page.admin.security_policy.restore.stale"}}{{else}}{{t "page.admin.security_policy.notice.restored"}}{{end}}</p></div>{{end}}
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.scope_line" "scope" .Data.snapshot.ScopeID "version" (format_number .Data.snapshot.Version) "catalog" .Data.snapshot.CatalogVersion}}</p>
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.summary_line" "changed" (format_number .Data.changed) "declared" (format_number .Data.declaredCount)}}</p>
+<nav class="ln-actions" aria-label="{{t "page.admin.security_policy.navigation"}}">
+  <a class="ln-button ln-button--secondary" href="{{route "admin.security_policies"}}">{{t "common.action.back"}}</a>
+</nav>
+{{if .Data.noDiff}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.no_diff"}}</p></div>
+{{else}}
+<h2>{{t "page.admin.security_policy.diff_overrides_title"}}</h2>
+{{range .Data.affected}}
+<section aria-labelledby="policy-op-{{.operation.OperationID}}">
+  <h3 id="policy-op-{{.operation.OperationID}}"><a href="{{route "admin.security_policy_detail"}}?operation={{.operation.OperationID}}">{{.operation.Name}}</a></h3>
+  <p><code>{{.operation.OperationID}}</code> · {{t .operation.DomainKey}} · {{t .operation.SourceKey}}</p>
+  {{template "component.policy_rows" (dict "rows" .rows "proposed" false)}}
+</section>
+{{end}}
+{{end}}
+{{if .Data.declaredCount}}
+<h2>{{t "page.admin.security_policy.declared_title"}}</h2>
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.declared_keep" "count" (format_number .Data.declaredCount)}}</p>
+<ul>{{range .Data.declared}}<li><a href="{{route "admin.security_policy_detail"}}?operation={{.operation.OperationID}}">{{.operation.Name}}</a> <code>{{.operation.OperationID}}</code></li>{{end}}</ul>
+{{else}}<p class="ln-meta">{{t "page.admin.security_policy.declared_none"}}</p>{{end}}
+{{if and (not .Data.noDiff) .Data.capabilities.WritePolicies}}
+<h2>{{t "page.admin.security_policy.restore_all_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.security_policy.restore_all_help"}}</p>
+<form method="post" action="{{route "admin.security_policy_restore_preview"}}">
+  {{csrf_field}}
+  <input type="hidden" name="mode" value="all">
+  {{template "component.button" (dict "label" (t "page.admin.security_policy.action.restore_all") "type" "submit" "variant" "danger")}}
+</form>
+{{end}}
+{{end}}
+{{else}}<p class="ln-meta">{{.ErrorSummary}}</p>{{end}}
+{{end}}

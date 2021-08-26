@@ -1196,3 +1196,23 @@ Python 只用于启动包辅助工具，不是将来 Go 产品的运行依赖。
 - **人工恢复**：`support.recovery_request`（申请详情 + 发起者取消）、`support.recovery_create.submit`（密码恢复/MFA 恢复分别申请；核验依据/外部记录编号/证据摘要只提交一次、原文不可回读；绑定目标安全版本、交付渠道与内容摘要；`Enabled=false` 时只显示真实未启用原因且不渲染可提交表单）、`support.recovery_inbox`（当前真实受控待审批列表尚未提供，明确显示“能力尚未提供”，不枚举申请 ID、不显示静态卡片）、`support.recovery_approval`（候选独立审批人通过新的受控读取契约进入；在批准表单之前显示真正将执行的目标/操作/交付/核验/等待期/时间窗口；发起者/目标本人显示自批限制且无写控件）、`support.recovery_approve.submit`/`support.recovery_reject.submit`、`support.recovery_execute(.submit)`（独立执行确认页显示实际目标、单一账户范围、真实操作与可预见后果，常驻“确认不是授权”；重复执行只在重读确认完成后显示“该申请已执行，本次未再次执行”；恢复完成与完成通知失败分开呈现）。
 - **服务端契约补充**：`internal/manualrecovery` 新增受控只读契约 `GetRequestForApproval`（仅待审批 + 当前具备该操作类型审批资格、非发起者/目标本人）、`GetRequestForExecution`/`GetApproval`/`GetExecution`（参与人或真实执行人）、`PolicySummary`（页面显示真实制度值）、`ContentConsistent`，以及 `Store.GetLatestApproval`（含历史批准，SQLite 实现）；所有拒绝写失败审计，不改变业务状态。
 - **验证与限制**：页面契约测试（受控 `UISupportBackend`：16 路由、无秘密/无冒充入口、确认拦截、未启用无假表单、自批限制、候选审批真实内容顺序、执行确认与幂等、通知失败与恢复完成分离、审批工作台不伪造列表）与真实服务集成测试（临时 SQLite + 真实 `internal/support`/`internal/manualrecovery`：不同工作人员账户、跨范围与跨工作人员拒绝、本地测试发送器、自批拒绝、独立批准、等待期拒绝、真实执行、重复执行幂等、审批资格撤销后拒绝、人工恢复默认关闭）通过。已知缺口：候选审批人受控待审批列表、拒绝人读取终态申请与人工恢复完整生命周期历史投影尚未提供（页面明确标注，不伪造）；真实再次认证由宿主装配 `reauth.Service`（集成测试用替身契约）；真实浏览器视口/读屏/200% 文本与真机未实测。详见 `.ai/lead/reports/step71-dev.md`。
+
+## root 敏感操作策略覆盖与安全通知设置页面（步骤 72）
+
+新增 `WebUIOptions.PageSecurityPolicy`/`UISecurityPolicyBackend` 与 `internal/uiadminadapter.NewSecurityPolicy`，全部路由 `UIAccessManagement`（宿主必须用 `session.AuthorizeManagement` 产生 management 会话），把真实 `internal/policy` 与 `internal/mailer`/`internal/reauth` 能力接到管理页面：
+
+- **敏感操作目录与三值**：`admin.security_policies` 展示服务端目录（操作名称/稳定 ID/业务域/来源/有效保护摘要/不可覆盖约束/能力状态与差异数，业务域/来源/只看差异筛选），默认/覆盖/有效值分列且覆盖为 `nil` 时显示“未设置覆盖”；`admin.security_policy_detail` 显示基础权限（空键明确“由宿主专用授权器判定”）、root 专属、必须审计、`ImmutableSensitive` 与“认证强度是否可满足/执行器是否已实现”两个独立事实。
+- **编辑、预览与并发**：`admin.security_policy_preview` 只提交六个白名单字段（敏感/再次认证/新鲜度/强度/确认/告知），先校验联动（取消敏感只取消额外要求；未要求再次认证时新鲜度 0、强度 none）并显示当前/拟提交/默认值、派生字段与未执行声明；`admin.security_policy_save` 绑定 `ExpectedVersion` 与请求编号，修改 `security.policy.change` 自身保护需额外阅读确认；`CONFLICT` 后重新读取并保留非敏感草稿，不自动覆盖。
+- **恢复默认**：`admin.security_policy_diff` 列出真实覆盖差异与应用声明分区；`admin.security_policy_restore_preview` 逐项/整体恢复都先显示实际作用域、版本、真实覆盖数量、逐条默认/当前对照与保留的应用声明，自身保护项额外确认；`admin.security_policy_restore` 提交前重算范围，版本/数量/自身保护位变化即判定旧确认失效并返回 `CONFLICT`。
+- **权限与不可覆盖边界**：只有真实 root 能写入（`policy.Service` 的 root 判定 + 再次认证 + 审计 fail-closed）；普通管理员的读取需要宿主明确独立许可，无许可时不渲染目录；页面没有关闭基础授权、审计、root 保护或 `ImmutableSensitive` 的入口，越权字段被表单白名单拒绝；要求尚未支持的 `strong` 显示“不满足/尚未支持”，不静默降级。
+- **安全通知设置**：`admin.notification_mail` 区分“成功告知由每条策略决定”与投递条件（发送器/发件地址/SMTP/TLS/超时/模板/秘密状态，未知写“未读取”）；三类模板只读展示并可用合成数据预览（不保存、不发送、不生成真实验证码/重置入口）；普通投递字段当前无运行时编辑契约时只读；SMTP 秘密固定遮罩、永不回显，只有宿主提供真实替换回调时才显示替换输入（空=不修改），无移除契约时不提供移除按钮；`admin.notification_mail_test` 要求用户明确输入测试目标，经宿主注入发送器发送合成内容（集成测试使用进程内本地捕获器，不真实外发），失败显示真实错误码；本人安全告知记录区分 `sent/failed/no_verified_email/rate_limited/not_configured/suppressed`，失败不回写业务结果。
+- **验证与限制**：页面契约测试（受控后端：11 条路由、三值/只读/无权限、预览未执行、自身保护额外确认、冲突草稿、整体与逐项恢复范围、秘密遮罩、空测试目标与未配置/失败状态、会话过期）与真实服务集成测试（临时 SQLite + 真实 `policy.Service`/sqlite/审计：root 写入与版本冲突、非 root 只读与写入拒绝、无读取许可不披露、再次认证失败、`ImmutableSensitive` 拒绝、恢复预览、本地捕获测试邮件成功/失败、秘密替换不回显）通过。已知缺口：运行时邮件模板/投递设置编辑与持久化契约未提供（页面只读并标注能力未提供）；普通管理员独立只读权限键由宿主映射，集成测试使用测试授权器；安全告知记录读取依赖宿主装配 `reauth.Service`；真实 SMTP 外发与真实浏览器视口/读屏/200% 文本未实测。详见 `.ai/lead/reports/step72-dev.md`。
+
+
+### 步骤 72 安全修复轮（双审计后）
+
+- **M1 预览/再认证绑定**：`UISecurityPolicyPreview`/`UISecurityPolicyRestorePreview` 增加服务端一次性 `Token`，适配器以随机令牌绑定操作者/动作/作用域/目标/版本/完整六字段摘要或恢复清单摘要，保存/恢复必须带回并在服务端重算比较、一次性消费；换目标、换参数、重复使用返回 `CHALLENGE_INVALID`。再次认证回调收到同一 `UISecurityPolicyActionBinding` 作为参数摘要（未装配 `Reauth` 即 fail-closed `REAUTH_REQUIRED`）。
+- **M2 秘密替换/测试邮件**：适配器强制再次认证（绑定秘密摘要/目标摘要、不含明文）、成功与失败写安全审计（不含秘密/完整目标）、以动作前缀+幂等键去重，重复提交返回同一结果且不重复调用宿主/发送；审计不可用时动作按未完成处理（`AUDIT_WRITE_FAILED`）。
+- **M3 CSRF 门禁**：`UIPageSecurityPolicyOptions.ValidateCSRF` 为必填，缺失时 `NewWebUI` 拒绝构造；每个 POST 处理器先校验表单令牌等于本请求会话签发令牌并通过宿主的 `session.ValidateCSRFToken` 等价校验，失败 403（不依赖默认关闭的 transport CSRF 中间件）。
+- **能力位真实键**：页面能力判定改用真实既有权限键 `security.policy.manage` 并结合 `policy.Service.UserIsRoot`；写/秘密替换/测试邮件能力仅对真实 root + 该键为真，通知区域暂无独立真实键（复用同一键并额外要求 root，待后续冻结）。
+- **质量 Notes**：只读详情不再渲染恢复默认写表单；列表快照读取失败显示正式错误态与重试；`REQ_INVALID` 等错误摘要注册中文内置文案；新增绑定/换目标/换参数/重复令牌、CSRF 缺省、审计/幂等/重复提交、只读无写控件、读取失败状态的真实测试。装配前置仍为：宿主必须接入 `ValidateCSRF`、真实 `Reauth`（建议桥接 `internal/reauth` 参数摘要）、审计与本地捕获/测试发送器；真实浏览器/读屏/真实 SMTP 外发未实测。

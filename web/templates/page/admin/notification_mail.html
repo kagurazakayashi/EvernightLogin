@@ -1,0 +1,141 @@
+{{define "page-title"}}{{t "page.admin.notification_mail.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.settings}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.notification_mail.boundary"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.security_policy.forbidden") "description" (t "page.admin.notification_mail.forbidden_help"))}}
+{{else}}
+{{if .Data.secretReplaced}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.notification_mail.secret.replaced_notice"}}</p></div>{{end}}
+{{if .Data.secretDuplicate}}<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.notification_mail.secret.duplicate"}}</p></div>{{end}}
+<nav class="ln-actions" aria-label="{{t "page.admin.security_policy.navigation"}}">
+  <a class="ln-button ln-button--secondary" href="{{route "admin.security_policies"}}">{{t "page.admin.notification_mail.back_policies"}}</a>
+  <a class="ln-button ln-button--secondary" href="{{route "admin.security_policy_diff"}}">{{t "page.admin.security_policy.open_diff"}}</a>
+</nav>
+<h2>{{t "page.admin.notification_mail.trigger_title"}}</h2>
+<p>{{t "page.admin.notification_mail.trigger_description"}}</p>
+{{if .Data.settings.NotificationRequiredKnown}}<p class="ln-meta">{{t_fmt "page.admin.notification_mail.trigger_count" "count" (format_number .Data.settings.NotificationRequiredOperations)}}</p>{{else}}<p class="ln-meta">{{t "page.admin.notification_mail.trigger_count_unknown"}}</p>{{end}}
+<h2>{{t "page.admin.notification_mail.conditions_title"}}</h2>
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.notification_mail.conditions_title"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.notification_mail.conditions_title"}}</caption>
+  <tbody>
+    <tr><th scope="row">{{t "page.admin.notification_mail.condition.sender"}}</th><td>{{if .Data.settings.SenderConfigured}}{{t "page.admin.notification_mail.configured"}}{{else}}{{t "page.admin.notification_mail.not_configured"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.notification_mail.condition.from"}}</th><td>{{if .Data.settings.From}}<code>{{.Data.settings.From}}</code>{{else}}{{t "page.admin.notification_mail.unknown"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.notification_mail.condition.smtp"}}</th><td>{{if .Data.settings.SMTPAddr}}<code>{{.Data.settings.SMTPAddr}}</code>{{else}}{{t "page.admin.notification_mail.unknown"}}{{end}} · {{if .Data.settings.SMTPHost}}<code>{{.Data.settings.SMTPHost}}</code>{{else}}{{t "page.admin.notification_mail.unknown"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.notification_mail.condition.tls"}}</th><td>{{if .Data.settings.TLSMode}}<code>{{.Data.settings.TLSMode}}</code>{{else}}{{t "page.admin.notification_mail.unknown"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.notification_mail.condition.timeouts"}}</th><td>{{t_fmt "page.admin.notification_mail.timeouts_value" "smtp" (format_number .Data.settings.SMTPTimeoutSeconds) "attempts" (format_number .Data.settings.MaxAttempts) "delivery" (format_number .Data.settings.DeliveryTimeoutSeconds)}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.notification_mail.condition.template"}}</th><td>{{if .Data.settings.TemplatesConfigured}}{{if eq .Data.settings.TemplateSource "host"}}{{t "page.admin.notification_mail.template_source_host"}}{{else}}{{t "page.admin.notification_mail.template_source_builtin"}}{{end}}{{else}}{{t "page.admin.notification_mail.not_configured"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.notification_mail.condition.secret"}}</th><td>{{if not .Data.settings.SecretStatusKnown}}{{t "page.admin.notification_mail.unknown"}}{{else if .Data.settings.SecretConfigured}}{{t "page.admin.notification_mail.secret.configured"}}{{else}}{{t "page.admin.notification_mail.secret.unconfigured"}}{{end}}</td></tr>
+  </tbody>
+</table>
+</div>
+{{if .Data.settings.SettingsUnavailableReason}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.notification_mail.settings.unavailable"}}</p></div>{{end}}
+<p class="ln-meta">{{t "page.admin.notification_mail.effect_note"}}</p>
+
+<h2>{{t "page.admin.notification_mail.templates_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.notification_mail.templates_help"}}</p>
+{{range .Data.settings.Templates}}
+<section aria-labelledby="mail-template-{{.Kind}}">
+  <h3 id="mail-template-{{.Kind}}">{{t (printf "page.admin.notification_mail.kind.%s" .Kind)}} <code>{{.Kind}}</code></h3>
+  <p class="ln-meta">{{t (printf "page.admin.notification_mail.kind.%s.help" .Kind)}}</p>
+  <p><strong>{{t "page.admin.notification_mail.template.subject"}}</strong> <code>{{.Subject}}</code></p>
+  <pre class="ln-code" tabindex="0">{{.Body}}</pre>
+</section>
+{{else}}<p class="ln-meta">{{t "page.admin.notification_mail.templates_unavailable"}}</p>{{end}}
+{{if not .Data.settings.TemplateEditingAvailable}}<p class="ln-meta">{{t "page.admin.notification_mail.templates_read_only"}}</p>{{end}}
+<form method="post" action="{{route "admin.notification_mail_template_preview"}}">
+  {{csrf_field}}
+  <label class="ln-field__label" for="preview-kind">{{t "page.admin.notification_mail.template.preview_kind"}}</label>
+  <select class="ln-input" id="preview-kind" name="kind">
+    {{range .Data.templateKinds}}<option value="{{.}}"{{if eq . $.Data.previewKind}} selected{{end}}>{{t (printf "page.admin.notification_mail.kind.%s" .)}}</option>{{end}}
+  </select>
+  <p class="ln-field__help">{{t "page.admin.notification_mail.template.preview"}}</p>
+  {{template "component.button" (dict "label" (t "page.admin.notification_mail.template.preview_action") "type" "submit" "variant" "secondary")}}
+</form>
+{{with .Data.templatePreview}}
+<section aria-labelledby="preview-result">
+  <h3 id="preview-result">{{t "page.admin.notification_mail.template.preview_result"}}</h3>
+  {{if .Valid}}
+  <p><strong>{{t "page.admin.notification_mail.template.subject"}}</strong> <code>{{.Subject}}</code></p>
+  <pre class="ln-code" tabindex="0">{{.TextBody}}</pre>
+  {{else}}
+  <div class="ln-banner ln-banner--error" role="alert"><p>{{t "page.admin.notification_mail.template.invalid"}}{{if .ErrorCode}} <code>{{.ErrorCode}}</code>{{end}}</p></div>
+  {{end}}
+</section>
+{{end}}
+
+<h2>{{t "page.admin.notification_mail.settings_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.notification_mail.settings_read_only"}}</p>
+{{if not .Data.settings.SettingsEditingAvailable}}<p class="ln-meta">{{t "page.admin.notification_mail.settings.unavailable"}}</p>{{end}}
+<p class="ln-meta">{{if .Data.settings.AllowPlaintextLocal}}{{t "page.admin.notification_mail.plaintext_local_enabled"}}{{else}}{{t "page.admin.notification_mail.plaintext_local_disabled"}}{{end}} · {{if .Data.settings.TrustedRootsConfigured}}{{t "page.admin.notification_mail.trusted_roots_configured"}}{{else}}{{t "page.admin.notification_mail.trusted_roots_not_configured"}}{{end}}</p>
+
+<h2>{{t "page.admin.notification_mail.secret.title"}}</h2>
+<p>{{if not .Data.settings.SecretStatusKnown}}{{t "page.admin.notification_mail.unknown"}}{{else if .Data.settings.SecretConfigured}}{{t "page.admin.notification_mail.secret.configured"}}{{else}}{{t "page.admin.notification_mail.secret.unconfigured"}}{{end}}</p>
+<p class="ln-meta">{{t "page.admin.notification_mail.secret.mask_note"}}</p>
+{{if .Data.capabilities.ReplaceSecret}}
+<form method="post" action="{{route "admin.notification_mail_secret"}}">
+  {{csrf_field}}
+  <p><label class="ln-field__label" for="secret-password">{{t "page.admin.notification_mail.secret.replace_label"}}</label></p>
+  <input class="ln-input" type="password" id="secret-password" name="secret_password" autocomplete="new-password" maxlength="512" aria-describedby="secret-help">
+  <p class="ln-field__help" id="secret-help">{{t "page.admin.notification_mail.secret.replace_help"}}</p>
+  <p><button class="ln-button ln-button--secondary" type="reset">{{t "page.admin.notification_mail.secret.clear_input"}}</button></p>
+  <input type="hidden" name="idempotency_key" value="{{.Data.idempotencyKey}}">
+  <p><label><input type="checkbox" name="confirm" value="yes" required aria-required="true"> {{t "page.admin.notification_mail.secret.confirm_label"}}</label></p>
+  {{template "component.button" (dict "label" (t "page.admin.notification_mail.secret.replace_action") "type" "submit" "variant" "danger")}}
+</form>
+{{else}}<p class="ln-meta">{{t "page.admin.notification_mail.secret.unavailable"}}</p>{{end}}
+<p class="ln-meta">{{t "page.admin.notification_mail.secret.remove_unavailable"}}</p>
+
+<h2>{{t "page.admin.notification_mail.test.title"}}</h2>
+<p class="ln-meta">{{t "page.admin.notification_mail.test.description"}}</p>
+{{if .Data.capabilities.TestMail}}
+<form method="post" action="{{route "admin.notification_mail_test"}}">
+  {{csrf_field}}
+  <p><label class="ln-field__label" for="test-recipient">{{t "page.admin.notification_mail.test.recipient"}}</label></p>
+  <input class="ln-input" type="email" id="test-recipient" name="recipient" value="{{.Data.testRecipient}}" autocomplete="off" required aria-required="true" aria-describedby="test-recipient-help">
+  <p class="ln-field__help" id="test-recipient-help">{{t "page.admin.notification_mail.test.recipient_help"}}</p>
+  <p><label class="ln-field__label" for="test-kind">{{t "page.admin.notification_mail.test.kind"}}</label></p>
+  <select class="ln-input" id="test-kind" name="kind">
+    {{range .Data.templateKinds}}<option value="{{.}}"{{if eq . $.Data.testKind}} selected{{end}}>{{t (printf "page.admin.notification_mail.kind.%s" .)}}</option>{{end}}
+  </select>
+  <p class="ln-field__help">{{t "page.admin.notification_mail.test.synthetic_note"}}</p>
+  <input type="hidden" name="idempotency_key" value="{{.Data.idempotencyKey}}">
+  <p><label><input type="checkbox" name="confirm" value="yes" required aria-required="true"> {{t "page.admin.notification_mail.test.confirm_label"}}</label></p>
+  {{template "component.button" (dict "label" (t "page.admin.notification_mail.test.confirm") "type" "submit" "variant" "danger")}}
+</form>
+{{else}}<p class="ln-meta">{{t "page.admin.notification_mail.test.unavailable"}}</p>{{end}}
+{{with .Data.testResult}}
+<section aria-labelledby="test-result">
+  <h3 id="test-result">{{t "page.admin.notification_mail.test.result_title"}}</h3>
+  {{if and (eq .Status "accepted") .Duplicate}}
+  <div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.notification_mail.test.duplicate"}}</p></div>
+  {{else if eq .Status "accepted"}}
+  <div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.notification_mail.test.succeeded"}}</p></div>
+  {{else if eq .Status "not_configured"}}
+  <div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.notification_mail.test.not_configured"}}</p></div>
+  {{else}}
+  <div class="ln-banner ln-banner--error" role="alert"><p>{{t "page.admin.notification_mail.test.failed"}}{{if .ErrorCode}} <code>{{.ErrorCode}}</code>{{end}}</p></div>
+  {{end}}
+  <p class="ln-meta">{{t_fmt "page.admin.notification_mail.test.result_line" "recipient" .RecipientMasked "kind" (printf "page.admin.notification_mail.kind.%s" .Kind)}}</p>
+  <p class="ln-meta">{{t "page.admin.notification_mail.test.result_note"}}</p>
+</section>
+{{end}}
+
+<h2>{{t "page.admin.notification_mail.notices_title"}}</h2>
+{{if not .Data.settings.NoticesAvailable}}<p class="ln-meta">{{t "page.admin.notification_mail.notices_unavailable"}}</p>
+{{else if .Data.settings.Notices}}
+<table class="ln-table">
+  <caption>{{t "page.admin.notification_mail.notices_title"}}</caption>
+  <thead><tr><th scope="col">{{t "page.admin.notification_mail.notice.operation"}}</th><th scope="col">{{t "page.admin.notification_mail.notice.state"}}</th><th scope="col">{{t "page.admin.notification_mail.notice.recipient"}}</th><th scope="col">{{t "page.admin.notification_mail.notice.created"}}</th></tr></thead>
+  <tbody>{{range .Data.settings.Notices}}<tr>
+    <td><code>{{.OperationID}}</code></td>
+    <td>{{t (printf "page.admin.notification_mail.notice.state.%s" .State)}}{{if .ErrorCode}} <code>{{.ErrorCode}}</code>{{end}}</td>
+    <td>{{if .RecipientMasked}}<code>{{.RecipientMasked}}</code>{{else}}{{t "page.admin.notification_mail.unknown"}}{{end}}</td>
+    <td>{{format_time .CreatedAt "UTC"}}</td>
+  </tr>{{end}}</tbody>
+</table>
+{{else}}<p class="ln-meta">{{t "page.admin.notification_mail.notices_empty"}}</p>{{end}}
+{{end}}
+{{else}}<p class="ln-meta">{{.ErrorSummary}}</p>{{end}}
+{{end}}

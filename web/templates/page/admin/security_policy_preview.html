@@ -1,0 +1,42 @@
+{{define "page-title"}}{{t "page.admin.security_policy.preview_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.operation}}
+<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.security_policy.preview.not_executed"}}</p></div>
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.confirm_not_authorization"}}</p></div>
+<h2>{{.Data.operation.Name}}</h2>
+<p><code>{{.Data.operation.OperationID}}</code></p>
+{{if .Data.selfProtection}}<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.security_policy.self_warning"}}</p></div>{{end}}
+{{if .Data.strengthWarning}}<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.security_policy.strength.unavailable"}}</p></div>{{end}}
+{{if .Data.noChanges}}<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.previews.unchanged"}}</p></div>{{end}}
+{{template "component.policy_rows" (dict "rows" .Data.rows "proposed" true)}}
+<h2>{{t "page.admin.security_policy.preview_changes_title"}}</h2>
+<ul>
+{{range .Data.preview.ChangedFields}}<li>{{template "component.policy_field_label" .}}</li>{{else}}<li>{{t "page.admin.security_policy.value.same"}}</li>{{end}}
+</ul>
+{{if .Data.preview.DerivedFields}}<h2>{{t "page.admin.security_policy.preview_derived_title"}}</h2>
+<ul>{{range .Data.preview.DerivedFields}}<li>{{template "component.policy_field_label" .}}</li>{{end}}</ul>{{end}}
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.preview_scope_line" "scope" .Data.operation.OperationID "version" (format_number .Data.expectedVersion)}}</p>
+<form method="post" action="{{route "admin.security_policy_save"}}">
+  {{csrf_field}}
+  <input type="hidden" name="operation_id" value="{{.Data.operation.OperationID}}">
+  <input type="hidden" name="expected_version" value="{{format_number .Data.expectedVersion}}">
+  <input type="hidden" name="preview_token" value="{{.Data.preview.Token}}">
+  <input type="hidden" name="sensitive" value="{{if .Data.preview.Proposed.Sensitive}}on{{end}}">
+  <input type="hidden" name="reauth_required" value="{{if .Data.preview.Proposed.ReauthRequired}}on{{end}}">
+  <input type="hidden" name="max_auth_age_seconds" value="{{format_number .Data.preview.Proposed.MaxAuthAgeSeconds}}">
+  <input type="hidden" name="strength" value="{{.Data.preview.Proposed.Strength}}">
+  <input type="hidden" name="confirmation_required" value="{{if .Data.preview.Proposed.ConfirmationRequired}}on{{end}}">
+  <input type="hidden" name="notification_required" value="{{if .Data.preview.Proposed.NotificationRequired}}on{{end}}">
+  {{if .Data.selfProtection}}
+  <p><label><input type="checkbox" name="self_confirm" value="yes" required aria-required="true"> {{t "page.admin.security_policy.self_confirm"}}</label></p>
+  <p class="ln-field__help">{{t "page.admin.security_policy.self_confirm_help"}}</p>
+  {{end}}
+  <p><label><input type="checkbox" name="confirm" value="yes" required aria-required="true"> {{t "page.admin.security_policy.save.confirm_label"}}</label></p>
+  <nav class="ln-actions">
+    {{template "component.button" (dict "label" (t "page.admin.security_policy.action.save") "type" "submit" "variant" "danger")}}
+    <a class="ln-button ln-button--secondary" href="{{route "admin.security_policy_detail"}}?operation={{.Data.operation.OperationID}}">{{t "common.action.cancel"}}</a>
+  </nav>
+</form>
+{{else}}<p class="ln-meta">{{.ErrorSummary}}</p>{{end}}
+{{end}}

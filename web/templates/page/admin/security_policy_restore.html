@@ -1,0 +1,48 @@
+{{define "page-title"}}{{t "page.admin.security_policy.restore_preview_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.preview}}
+<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.security_policy.preview.not_executed"}}</p></div>
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.confirm_not_authorization"}}</p></div>
+{{if .Data.selfProtection}}<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.security_policy.self_warning"}}</p></div>{{end}}
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.restore_target_line" "scope" .Data.preview.ScopeID "version" (format_number .Data.preview.Version)}}</p>
+{{if .Data.all}}<p><strong>{{t "page.admin.security_policy.restore_all_action"}}</strong></p>{{else}}<p><strong>{{t "page.admin.security_policy.restore_one_action"}}</strong></p>{{end}}
+{{if .Data.noChanges}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.restore.no_changes"}}</p></div>
+<p><a class="ln-button ln-button--secondary" href="{{route "admin.security_policy_diff"}}">{{t "common.action.back"}}</a></p>
+{{else}}
+<h2>{{t "page.admin.security_policy.restore_affected_title"}}</h2>
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.restore_affected_count" "count" (format_number .Data.affectedCount)}}</p>
+{{range .Data.affected}}
+<section aria-labelledby="restore-op-{{.operation.OperationID}}">
+  <h3 id="restore-op-{{.operation.OperationID}}">{{.operation.Name}}</h3>
+  <p><code>{{.operation.OperationID}}</code> · {{t .operation.DomainKey}}</p>
+  {{template "component.policy_rows" (dict "rows" .rows "proposed" false)}}
+  <p class="ln-meta">{{t "page.admin.security_policy.restore_removes_override"}}</p>
+</section>
+{{end}}
+{{if and .Data.selfProtection .Data.all}}<p class="ln-meta">{{t "page.admin.security_policy.restore_self_scope"}}</p>{{end}}
+<h2>{{t "page.admin.security_policy.declared_title"}}</h2>
+{{if .Data.declared}}<p class="ln-meta">{{t_fmt "page.admin.security_policy.declared_keep" "count" (format_number (len .Data.declared))}}</p>
+<ul>{{range .Data.declared}}<li><code>{{.operation.OperationID}}</code> · {{.operation.Name}}</li>{{end}}</ul>
+{{else}}<p class="ln-meta">{{t "page.admin.security_policy.declared_none"}}</p>{{end}}
+<form method="post" action="{{route "admin.security_policy_restore"}}">
+  {{csrf_field}}
+  <input type="hidden" name="mode" value="{{if .Data.all}}all{{else}}one{{end}}">
+  <input type="hidden" name="operation_id" value="{{.Data.operationID}}">
+  <input type="hidden" name="expected_version" value="{{format_number .Data.preview.Version}}">
+  <input type="hidden" name="affected_count" value="{{format_number .Data.affectedCount}}">
+  <input type="hidden" name="self_protection" value="{{if .Data.selfProtection}}1{{end}}">
+  <input type="hidden" name="preview_token" value="{{.Data.preview.Token}}">
+  {{if .Data.selfProtection}}
+  <p><label><input type="checkbox" name="self_confirm" value="yes" required aria-required="true"> {{t "page.admin.security_policy.self_confirm"}}</label></p>
+  {{end}}
+  <p><label><input type="checkbox" name="confirm" value="yes" required aria-required="true"> {{t "page.admin.security_policy.restore.confirm_label"}}</label></p>
+  <nav class="ln-actions">
+    {{template "component.button" (dict "label" (t "page.admin.security_policy.action.restore_confirm") "type" "submit" "variant" "danger")}}
+    <a class="ln-button ln-button--secondary" href="{{route "admin.security_policy_diff"}}">{{t "common.action.cancel"}}</a>
+  </nav>
+</form>
+{{end}}
+{{else}}<p class="ln-meta">{{.ErrorSummary}}</p>{{end}}
+{{end}}

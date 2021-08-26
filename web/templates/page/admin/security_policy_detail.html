@@ -1,0 +1,101 @@
+{{define "page-title"}}{{t "page.admin.security_policy.detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.security_policy.boundary"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.security_policy.forbidden") "description" (t "page.admin.security_policy.forbidden_help"))}}
+{{else if .Data.operation}}
+{{if .Data.notice}}<div class="ln-banner ln-banner--success" role="status"><p>{{if eq .Data.notice "saved"}}{{t "page.admin.security_policy.notice.saved"}}{{else if eq .Data.notice "unchanged"}}{{t "page.admin.security_policy.unchanged"}}{{else}}{{t "page.admin.security_policy.notice.saved"}}{{end}}</p></div>{{end}}
+{{if .Data.conflict}}<div class="ln-banner ln-banner--error" role="alert"><p>{{t "page.admin.security_policy.conflict"}}</p></div>
+{{with .Data.draft}}<p class="ln-meta">{{t "page.admin.security_policy.conflict_draft_kept"}}</p>
+<ul class="ln-meta">
+  <li>{{t "page.admin.security_policy.field.sensitive.label"}}: {{if .Sensitive}}{{t "page.admin.security_policy.value.required"}}{{else}}{{t "page.admin.security_policy.value.not_required"}}{{end}}</li>
+  <li>{{t "page.admin.security_policy.field.reauth_required.label"}}: {{if .ReauthRequired}}{{t "page.admin.security_policy.value.required"}}{{else}}{{t "page.admin.security_policy.value.not_required"}}{{end}}</li>
+  <li>{{t "page.admin.security_policy.field.max_auth_age_seconds.label"}}: {{format_number .MaxAuthAgeSeconds}}</li>
+  <li>{{t "page.admin.security_policy.field.strength.label"}}: {{t .StrengthKey}}</li>
+  <li>{{t "page.admin.security_policy.field.confirmation_required.label"}}: {{if .ConfirmationRequired}}{{t "page.admin.security_policy.value.required"}}{{else}}{{t "page.admin.security_policy.value.not_required"}}{{end}}</li>
+  <li>{{t "page.admin.security_policy.field.notification_required.label"}}: {{if .NotificationRequired}}{{t "page.admin.security_policy.value.required"}}{{else}}{{t "page.admin.security_policy.value.not_required"}}{{end}}</li>
+</ul>{{end}}{{end}}
+{{if not .Data.capabilities.WritePolicies}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.security_policy.read_only"}}</p></div>{{end}}
+<nav class="ln-actions" aria-label="{{t "page.admin.security_policy.navigation"}}">
+  <a class="ln-button ln-button--secondary" href="{{route "admin.security_policies"}}">{{t "common.action.back"}}</a>
+  <a class="ln-button ln-button--secondary" href="{{route "admin.security_policy_diff"}}">{{t "page.admin.security_policy.open_diff"}}</a>
+</nav>
+<h2>{{.Data.operation.Name}}</h2>
+<p><code>{{.Data.operation.OperationID}}</code> · {{t .Data.operationDomainKey}} · {{t .Data.operationSourceKey}}</p>
+<p>{{.Data.operation.Description}}</p>
+<p class="ln-meta">{{t_fmt "page.admin.security_policy.scope_line" "scope" .Data.snapshot.ScopeID "version" (format_number .Data.snapshot.Version) "catalog" .Data.snapshot.CatalogVersion}}</p>
+<h2>{{t "page.admin.security_policy.constraints_title"}}</h2>
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.security_policy.constraints_title"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.security_policy.constraints_title"}}</caption>
+  <tbody>
+    <tr><th scope="row">{{t "page.admin.security_policy.column_base_permission"}}</th><td>{{if .Data.operation.PermissionKey}}<code>{{.Data.operation.PermissionKey}}</code>{{else}}{{t "page.admin.security_policy.base_permission_special"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.security_policy.root_only"}}</th><td>{{if .Data.operation.RootOnly}}{{t "page.admin.security_policy.value.required"}}{{else}}{{t "page.admin.security_policy.root_only_note"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.security_policy.audit_required"}}</th><td>{{t "page.admin.security_policy.audit_always"}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.security_policy.immutable_sensitive"}}</th><td>{{if .Data.operation.ImmutableSensitive}}{{t "page.admin.security_policy.immutable_note"}}{{else}}{{t "page.admin.security_policy.mutable_note"}}{{end}}</td></tr>
+    <tr><th scope="row">{{t "page.admin.security_policy.capability_title"}}</th><td>{{if .Data.operation.StrengthAvailable}}{{t "page.admin.security_policy.strength_available"}}{{else}}{{t "page.admin.security_policy.strength_unavailable"}}{{end}} · {{if .Data.operation.Implemented}}{{t "page.admin.security_policy.implemented"}}{{else}}{{t "page.admin.security_policy.not_implemented"}}{{end}}</td></tr>
+  </tbody>
+</table>
+</div>
+<h2>{{t "page.admin.security_policy.values_title"}}</h2>
+{{template "component.policy_rows" (dict "rows" .Data.rows "proposed" false)}}
+{{if not .Data.operation.HasDefault}}<p class="ln-meta">{{t "page.admin.security_policy.default.unavailable"}}</p>{{end}}
+{{if .Data.selfProtection}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.security_policy.self_warning"}}</p></div>{{end}}
+{{if .Data.showForm}}
+<h2>{{t "page.admin.security_policy.edit_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.security_policy.edit_help"}}</p>
+<form method="post" action="{{route "admin.security_policy_preview"}}">
+  {{csrf_field}}
+  <input type="hidden" name="operation_id" value="{{.Data.operation.OperationID}}">
+  <input type="hidden" name="expected_version" value="{{format_number .Data.snapshot.Version}}">
+  <fieldset>
+    <legend>{{t "page.admin.security_policy.edit_group_protection"}}</legend>
+    {{if .Data.operation.ImmutableSensitive}}
+    <input type="hidden" name="sensitive" value="on">
+    <p><label><input type="checkbox" checked disabled aria-describedby="sensitive-help"> {{t "page.admin.security_policy.field.sensitive.label"}}</label></p>
+    <p class="ln-field__help" id="sensitive-help">{{t "page.admin.security_policy.field.sensitive.immutable_help"}}</p>
+    {{else}}
+    <p><label><input type="checkbox" id="sensitive" name="sensitive" value="on"{{if .Data.operation.Effective.Sensitive}} checked{{end}} aria-describedby="sensitive-help"> {{t "page.admin.security_policy.field.sensitive.label"}}</label></p>
+    <p class="ln-field__help" id="sensitive-help">{{t "page.admin.security_policy.field.sensitive.help"}}</p>
+    {{end}}
+    <p><label><input type="checkbox" id="reauth_required" name="reauth_required" value="on"{{if .Data.operation.Effective.ReauthRequired}} checked{{end}} aria-describedby="reauth-help"> {{t "page.admin.security_policy.field.reauth_required.label"}}</label></p>
+    <p class="ln-field__help" id="reauth-help">{{t "page.admin.security_policy.field.reauth_required.help"}}</p>
+    <p><label for="max_auth_age_seconds">{{t "page.admin.security_policy.field.max_auth_age_seconds.label"}}</label></p>
+    <input class="ln-input" type="number" id="max_auth_age_seconds" name="max_auth_age_seconds" min="30" max="2592000" value="{{format_number .Data.operation.Effective.MaxAuthAgeSeconds}}" aria-describedby="age-help">
+    <p class="ln-field__help" id="age-help">{{t "page.admin.security_policy.field.max_auth_age_seconds.help"}}</p>
+    <p><label for="strength">{{t "page.admin.security_policy.field.strength.label"}}</label></p>
+    <select class="ln-input" id="strength" name="strength" aria-describedby="strength-help">
+      <option value="none"{{if eq .Data.operation.Effective.Strength "none"}} selected{{end}}>{{t "page.admin.security_policy.strength.none"}}</option>
+      <option value="password"{{if eq .Data.operation.Effective.Strength "password"}} selected{{end}}>{{t "page.admin.security_policy.strength.password"}}</option>
+      <option value="strong"{{if eq .Data.operation.Effective.Strength "strong"}} selected{{end}}>{{t "page.admin.security_policy.strength.strong"}}</option>
+    </select>
+    <p class="ln-field__help" id="strength-help">{{t "page.admin.security_policy.field.strength.help"}}{{if not .Data.operation.StrengthAvailable}} {{t "page.admin.security_policy.strength.unavailable"}}{{end}}</p>
+  </fieldset>
+  <fieldset>
+    <legend>{{t "page.admin.security_policy.edit_group_confirm"}}</legend>
+    <p><label><input type="checkbox" id="confirmation_required" name="confirmation_required" value="on"{{if .Data.operation.Effective.ConfirmationRequired}} checked{{end}}> {{t "page.admin.security_policy.field.confirmation_required.label"}}</label></p>
+    <p class="ln-field__help">{{t "page.admin.security_policy.field.confirmation_required.help"}}</p>
+    <p><label><input type="checkbox" id="notification_required" name="notification_required" value="on"{{if .Data.operation.Effective.NotificationRequired}} checked{{end}}> {{t "page.admin.security_policy.field.notification_required.label"}}</label></p>
+    <p class="ln-field__help">{{t "page.admin.security_policy.field.notification_required.help"}}</p>
+  </fieldset>
+  <p class="ln-meta">{{t "page.admin.security_policy.session_revoke.unavailable"}}</p>
+  {{template "component.button" (dict "label" (t "page.admin.security_policy.action.preview") "type" "submit")}}
+</form>
+{{else}}
+<p class="ln-meta">{{t "page.admin.security_policy.write_denied"}}</p>
+{{end}}
+{{if .Data.operation.HasDefault}}
+<h2>{{t "page.admin.security_policy.restore_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.security_policy.restore_help"}}</p>
+{{if and .Data.operation.Override .Data.capabilities.WritePolicies}}
+<form method="post" action="{{route "admin.security_policy_restore_preview"}}">
+  {{csrf_field}}
+  <input type="hidden" name="mode" value="one">
+  <input type="hidden" name="operation_id" value="{{.Data.operation.OperationID}}">
+  {{template "component.button" (dict "label" (t "page.admin.security_policy.action.restore_one") "type" "submit" "variant" "danger")}}
+</form>
+{{else if .Data.capabilities.WritePolicies}}<p class="ln-meta">{{t "page.admin.security_policy.restore.no_override"}}</p>{{end}}
+{{end}}
+{{else}}<p class="ln-meta">{{t "page.admin.security_policy.load_failed"}}</p>{{end}}
+{{end}}

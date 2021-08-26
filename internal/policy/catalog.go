@@ -298,6 +298,10 @@ func validateText(label, value string, maxRunes int, allowNewline bool) error {
 	return nil
 }
 
+// ValidatePolicy 校验一条策略组合是否合法。它与服务端写入使用同一语义，供页面
+// 在提交前给出与服务端一致的可纠正提示；它不检查不可变敏感约束，也不代表已授权。
+func ValidatePolicy(value Policy) error { return validatePolicy(value, false) }
+
 // validatePolicy 校验策略组合是否合法。规则在默认目录与覆盖合并后都适用，保证
 // 任何被接受的策略都能被后续执行器一致解释。
 func validatePolicy(value Policy, immutableSensitive bool) error {

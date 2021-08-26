@@ -579,6 +579,31 @@
 // 显示直接角色/用户组来源与数据范围；预设差异只读计算（恢复执行仅受信通道）。页面
 // 契约 + 真实服务集成测试通过。未新增错误码/迁移/依赖；未做实浏览器视口/读屏实测。
 //
+// 步骤 72：公开 `WebUIOptions.PageSecurityPolicy`/`UISecurityPolicyBackend` 与内置
+// root 敏感操作目录/三值对照/覆盖编辑/逐项与整体恢复默认页面和安全通知设置页
+// （11 条命名路由，全部 UIAccessManagement），`internal/uiadminadapter.NewSecurityPolicy`
+// 接真实 internal/policy 与 internal/mailer/reauth 只读事实。只有真实 root 能写入，
+// 仍由 policy.Service 的 root 判定 + 再次认证 + ExpectedVersion + 关键审计强制执行；
+// 普通管理员读取需要宿主明确独立许可，无许可不渲染目录。页面只提交六个白名单字段，
+// 预览不是执行，确认不是授权；修改 security.policy.change 自身保护需额外阅读确认；
+// CONFLICT 后重新读取保留非敏感草稿，不自动覆盖。取消敏感标记、root 专属、审计与
+// ImmutableSensitive 不可通过 UI 关闭；尚未支持的认证强度显示“不满足/尚未支持”，
+// 不静默降级；执行器未实现与强度不可用分开显示。邮件模板只读展示并可用合成数据
+// 预览；SMTP 秘密固定遮罩、永不回显，仅宿主提供真实替换回调时显示替换输入（空=不
+// 修改）；测试邮件必须用户明确输入目标并经宿主注入发送器发送合成内容，失败显示真实
+// 错误码。internal/policy 新增只读 Operation/AvailableStrengths/ValidatePolicy，
+// internal/mailer.TemplateSet 新增源文本只读访问器。页面契约 + 真实服务集成测试通过；
+// 未新增迁移/错误码/依赖。已知缺口：运行时邮件模板/投递设置编辑与持久化契约未提供
+// （页面只读并标注）、普通管理员独立只读权限键由宿主映射、安全告知记录依赖宿主装配
+// reauth.Service、真实 SMTP 外发与真实浏览器/读屏未实测。安全修复轮（双审计后）：
+// 预览增加服务端一次性令牌并把操作者/动作/作用域/目标/版本/完整拟提交值或恢复清单
+// 摘要绑定进再次认证（换目标/换参数/重复使用返回 CHALLENGE_INVALID）；秘密替换与测试
+// 邮件强制再次认证、成功/失败审计与动作前缀幂等键（重复提交不重复调用宿主/发送）；
+// `UIPageSecurityPolicyOptions.ValidateCSRF` 为必填并对每个 POST 校验表单令牌；页面
+// 能力位改用真实权限键 security.policy.manage 且结合 policy.Service.UserIsRoot。宿主
+// 装配前置：ValidateCSRF、真实 Reauth（建议桥接 internal/reauth 参数摘要）、审计与
+// 本地捕获/测试发送器。
+//
 // 步骤 71：公开 `WebUIOptions.PageSupport`/`UISupportBackend` 与内置客服求助/人工
 // 恢复申请/独立审批页面（16 条命名路由，全部 UIAccessManagement），
 // `internal/uiadminadapter.NewSupport` 接真实 internal/support 与 internal/manualrecovery。

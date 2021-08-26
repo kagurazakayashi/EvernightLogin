@@ -317,6 +317,8 @@ type WebUIOptions struct {
 	PageApps *UIPageAppsOptions
 	// PageSupport 非 nil 时注册步骤 71 客服求助/人工恢复申请/独立审批页面。
 	PageSupport *UIPageSupportOptions
+	// PageSecurityPolicy 非 nil 时注册步骤 72 敏感操作策略与安全通知设置页面。
+	PageSecurityPolicy *UIPageSecurityPolicyOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -363,6 +365,7 @@ type WebUI struct {
 	pageRBAC            *pageRBACPages
 	pageApps            *pageAppsPages
 	pageSupport         *pageSupportPages
+	pageSecurityPolicy  *pageSecurityPolicyPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -465,6 +468,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageSupport = pages
+	}
+	if options.PageSecurityPolicy != nil {
+		pages, pageErr := newPageSecurityPolicyPages(*options.PageSecurityPolicy)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageSecurityPolicy = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -657,6 +667,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageSupport != nil {
 		routes = append(routes, ui.pageSupport.routes...)
 	}
+	if ui.pageSecurityPolicy != nil {
+		routes = append(routes, ui.pageSecurityPolicy.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -739,6 +752,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageSupport != nil {
 		for name := range ui.pageSupport.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageSecurityPolicy != nil {
+		for name := range ui.pageSecurityPolicy.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -1063,6 +1083,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageSupport != nil {
 		handler = ui.pageSupport.handlers[route.Name]
+	}
+	if handler == nil && ui.pageSecurityPolicy != nil {
+		handler = ui.pageSecurityPolicy.handlers[route.Name]
 	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
