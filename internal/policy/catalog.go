@@ -565,13 +565,20 @@ func defaultOperations() []Operation {
 			Implemented:        false,
 		},
 		{
+			ID: "audit.export", Domain: DomainAudit, Name: "导出安全审计记录",
+			Description:   "按获准数据范围导出脱敏审计记录（CSV/JSON）；必须强认证与确认并告知，导出单独授权、字段白名单、行数与字节上限、受控目录与随机文件名，不导出受限内部原因或秘密。",
+			Default:       strongReauth,
+			PermissionKey: "audit.export",
+			Implemented:   true,
+		},
+		{
 			ID: "audit.purge", Domain: DomainAudit, Name: "清理安全审计记录",
-			Description:        "按保留策略清理安全审计记录；仅 root 可执行，必须强认证与确认并告知，不能批量掩盖敏感操作历史。",
+			Description:        "按保留策略清理安全审计记录；仅 root 可执行，必须强认证与确认并告知，分批、有边界、可取消，保存请求/执行者/范围/计数/结果，清理审计保留于受保护追加记录，不能批量掩盖敏感操作历史。",
 			Default:            strongReauth,
 			PermissionKey:      "audit.purge",
 			RootOnly:           true,
 			ImmutableSensitive: true,
-			Implemented:        false,
+			Implemented:        true,
 		},
 		{
 			ID: "root.recovery", Domain: DomainRecovery, Name: "root 受控恢复",
