@@ -1,0 +1,100 @@
+{{define "page-title"}}{{t "page.admin.audit.maintenance.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.audit.maintenance.boundary"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.audit.maintenance.forbidden") "description" (t "page.admin.audit.maintenance.forbidden_help"))}}
+{{else}}
+<h2>{{t "page.admin.audit.maintenance.retention"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.maintenance.retention_days"}}</dt><dd>{{format_number .Data.retention.Days}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.retention_cutoff"}}</dt><dd>{{format_time .Data.retention.Cutoff .Data.timezone}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.retention_configured"}}</dt><dd>{{if .Data.retention.Configured}}{{t "common.state.yes"}}{{else}}{{t "page.admin.audit.maintenance.retention_default"}}{{end}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.updated_at"}}</dt><dd>{{if .Data.retention.UpdatedAt.IsZero}}—{{else}}{{format_time .Data.retention.UpdatedAt .Data.timezone}}{{end}}</dd>
+</dl>
+{{if .Data.submitted}}<div class="ln-banner ln-banner--info" role="status"><p>{{t_fmt "page.admin.audit.maintenance.submitted" "task_id" .Data.run.TaskID}}</p></div>{{end}}
+{{if .Data.cancelRequested}}<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.audit.export.cancel_requested"}}</p></div>{{end}}
+{{if .Data.stalePreview}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.audit.maintenance.stale_preview"}}</p></div>{{end}}
+{{if .Data.runsLoadFailed}}<div class="ln-banner ln-banner--error" role="alert"><p>{{t "page.admin.audit.maintenance.runs_load_failed"}}</p></div>{{end}}
+{{if .Data.retentionLoadFailed}}<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.audit.maintenance.retention_load_failed"}}</p></div>{{end}}
+{{if .Data.confirm}}{{with .Data.preview}}
+<section aria-labelledby="purge-confirm-title">
+<h2 id="purge-confirm-title">{{t "page.admin.audit.maintenance.confirm"}}</h2>
+<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.audit.maintenance.confirm_warning"}}</p></div>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.maintenance.scope"}}</dt><dd>{{.ScopeKind}} · <code>{{.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.audit.maintenance.cutoff"}}</dt><dd>{{format_time .Cutoff $.Data.timezone}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.batch_size"}}</dt><dd>{{format_number .BatchSize}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.max_records"}}</dt><dd>{{format_number .MaxRecords}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.estimated"}}</dt><dd>{{if .AtLeast}}{{t_fmt "page.admin.audit.maintenance.estimated_at_least" "count" (format_number .EstimatedCount)}}{{else}}{{format_number .EstimatedCount}}{{end}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.within_retention"}}</dt><dd>{{if .WithinRetention}}{{t "page.admin.audit.maintenance.within_retention_yes"}}{{else}}{{t "page.admin.audit.maintenance.within_retention_no"}}{{end}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.protected"}}</dt><dd>{{if .MaintenanceProtected}}{{t "page.admin.audit.maintenance.protected_yes"}}{{else}}{{t "page.admin.audit.maintenance.protected_unknown"}}{{end}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.artifacts"}}</dt><dd>{{if .ArtifactsIncluded}}{{t "common.state.yes"}}{{else}}{{t "page.admin.audit.maintenance.artifacts_no"}}{{end}}</dd>
+  <dt>{{t "page.admin.audit.maintenance.generated_at"}}</dt><dd>{{format_time .GeneratedAt $.Data.timezone}}</dd>
+</dl>
+<form method="post" action="{{route "admin.audit_maintenance_start"}}">
+  {{csrf_field}}
+  <input type="hidden" name="digest" value="{{.Digest}}">
+  <input type="hidden" name="cutoff" value="{{.Cutoff.Format "2006-01-02"}}">
+  <input type="hidden" name="batch_size" value="{{.BatchSize}}">
+  <input type="hidden" name="max_records" value="{{.MaxRecords}}">
+  <input type="hidden" name="reason" value="{{$.Data.reason}}">
+  <button class="ln-button ln-button--danger" type="submit">{{t "page.admin.audit.maintenance.submit"}}</button>
+  <a class="ln-button ln-button--secondary" href="{{route "admin.audit_maintenance"}}">{{t "page.admin.audit.maintenance.back"}}</a>
+</form>
+<p class="ln-meta">{{t "page.admin.audit.maintenance.confirm_is_not_auth"}}</p>
+</section>
+{{end}}{{else}}
+<section aria-labelledby="purge-preview-title">
+<h2 id="purge-preview-title">{{t "page.admin.audit.maintenance.preview"}}</h2>
+<p class="ln-meta">{{t "page.admin.audit.maintenance.preview_hint"}}</p>
+<form method="post" action="{{route "admin.audit_maintenance_preview"}}">
+  {{csrf_field}}
+  <label class="ln-field__label" for="purge-cutoff">{{t "page.admin.audit.maintenance.cutoff"}}</label>
+  <input class="ln-input" id="purge-cutoff" name="cutoff" placeholder="YYYY-MM-DD" required>
+  {{if field_error "cutoff"}}<p class="ln-field__error">{{field_error "cutoff"}}</p>{{end}}
+  <label class="ln-field__label" for="purge-batch">{{t "page.admin.audit.maintenance.batch_size"}}</label>
+  <input class="ln-input" id="purge-batch" name="batch_size" value="500">
+  {{if field_error "batch_size"}}<p class="ln-field__error">{{field_error "batch_size"}}</p>{{end}}
+  <label class="ln-field__label" for="purge-max">{{t "page.admin.audit.maintenance.max_records"}}</label>
+  <input class="ln-input" id="purge-max" name="max_records" value="100000">
+  {{if field_error "max_records"}}<p class="ln-field__error">{{field_error "max_records"}}</p>{{end}}
+  <label class="ln-field__label" for="purge-reason">{{t "page.admin.audit.maintenance.reason"}}</label>
+  <input class="ln-input" id="purge-reason" name="reason" maxlength="256" required>
+  {{if field_error "reason"}}<p class="ln-field__error">{{field_error "reason"}}</p>{{end}}
+  <button class="ln-button ln-button--secondary" type="submit">{{t "page.admin.audit.maintenance.preview_submit"}}</button>
+</form>
+</section>
+{{end}}
+<h2>{{t "page.admin.audit.maintenance.runs_title"}}</h2>
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.audit.maintenance.runs_title"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.audit.maintenance.runs_caption"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "page.admin.audit.detail.task_id"}}</th>
+    <th scope="col">{{t "common.task.state"}}</th>
+    <th scope="col">{{t "page.admin.audit.maintenance.cutoff"}}</th>
+    <th scope="col">{{t "page.admin.audit.maintenance.counts"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.error_code"}}</th>
+    <th scope="col">{{t "common.label.actions"}}</th>
+  </tr></thead>
+  <tbody>{{range .Data.runs}}<tr>
+    <td>{{if .TaskID}}<code>{{.TaskID}}</code><br><span class="ln-meta">{{.ID}}</span>{{else}}<code>{{.ID}}</code>{{end}}</td>
+    <td>{{t (export_state_key .State)}}</td>
+    <td>{{format_time .Cutoff $.Data.timezone}}</td>
+    <td>{{t_fmt "page.admin.audit.maintenance.counts_line" "cleaned" (format_number .Cleaned) "scanned" (format_number .Scanned) "failed" (format_number .Failed)}}{{if .LimitReached}}<br>{{t "page.admin.audit.maintenance.limit_reached"}}{{end}}</td>
+    <td>{{if .ErrorCode}}<code>{{.ErrorCode}}</code>{{else}}—{{end}}</td>
+    <td>{{if or (eq .State "queued") (eq .State "running") (eq .State "cancel_requested")}}
+      <form method="post" action="{{route "admin.audit_maintenance_cancel"}}">
+        {{csrf_field}}
+        <input type="hidden" name="run_id" value="{{.ID}}">
+        <input type="hidden" name="reason" value="{{t "page.admin.audit.maintenance.cancel_reason_value"}}">
+        <button class="ln-button ln-button--secondary" type="submit">{{t "page.admin.audit.maintenance.cancel"}}</button>
+      </form>
+      {{else}}—{{end}}</td>
+  </tr>{{else}}<tr><td colspan="6">{{t "page.admin.audit.maintenance.no_runs"}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+{{template "component.pagination" (dict "prev_url" .Data.prevURL "next_url" .Data.nextURL "limit" .Data.limit)}}
+{{end}}
+{{end}}

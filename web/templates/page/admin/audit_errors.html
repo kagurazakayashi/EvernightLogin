@@ -1,0 +1,34 @@
+{{define "page-title"}}{{t "page.admin.errors.search_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.errors.public_boundary"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.audit.common.forbidden") "description" (t "page.admin.audit.common.forbidden_help"))}}
+{{else}}
+<form method="get" action="{{route "admin.error_codes"}}">
+  <label class="ln-field__label" for="error-code">{{t "common.label.error_code"}}</label>
+  <input class="ln-input" id="error-code" name="code" value="{{.Data.code}}" autocomplete="off">
+  <label class="ln-field__label" for="error-keyword">{{t "page.admin.errors.keyword"}}</label>
+  <input class="ln-input" id="error-keyword" name="keyword" value="{{.Data.keyword}}" autocomplete="off">
+  <label class="ln-field__label" for="error-category">{{t "page.admin.audit.column.category"}}</label>
+  <input class="ln-input" id="error-category" name="category" value="{{.Data.category}}">
+  <button class="ln-button" type="submit">{{t "page.admin.errors.search"}}</button>
+  <a class="ln-button ln-button--secondary" href="{{route "admin.error_codes"}}">{{t "page.admin.audit.filter.clear"}}</a>
+</form>
+{{if .Data.unknownCode}}{{template "component.banner" (dict "tone" "warning" "message" (t_fmt "page.admin.errors.unknown" "code" .Data.unknownCode))}}{{end}}
+{{if .Data.empty}}<p>{{t "page.admin.errors.empty"}}</p>{{end}}
+{{range .Data.entries}}
+<section class="ln-card" aria-labelledby="error-code-{{.Code}}">
+  <h2 id="error-code-{{.Code}}"><code>{{.Code}}</code> · {{.Category}}</h2>
+  <dl class="ln-keyvalue">
+    <dt>{{t "page.admin.errors.message"}}</dt><dd>{{.Message}}</dd>
+    <dt>{{t "page.admin.errors.http_mapping"}}</dt><dd>{{if .HasHTTPStatus}}{{format_number .HTTPStatus}}{{else}}{{t "page.admin.errors.no_http_mapping"}}{{end}}</dd>
+    <dt>{{t "page.admin.errors.cause"}}</dt><dd>{{if .HasGuidance}}{{.Cause}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+    <dt>{{t "page.admin.errors.advice"}}</dt><dd>{{if .HasGuidance}}{{.Advice}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+    <dt>{{t "page.admin.errors.retry_conditions"}}</dt><dd>{{if .HasGuidance}}{{.Retry}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+  </dl>
+</section>
+{{end}}
+<p class="ln-meta">{{t "page.admin.errors.source_note"}}</p>
+{{end}}
+{{end}}

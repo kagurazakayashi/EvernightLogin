@@ -1,0 +1,84 @@
+{{define "page-title"}}{{t "page.admin.audit.exports.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.audit.exports.scope_hint"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.audit.common.forbidden") "description" (t "page.admin.audit.common.forbidden_help"))}}
+{{else}}
+{{if .Data.submitted}}<div class="ln-banner ln-banner--info" role="status"><p>{{t_fmt "page.admin.audit.export.submitted" "task_id" .Data.submittedTaskID}}</p></div>{{end}}
+{{if .Data.cancelRequested}}<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.audit.export.cancel_requested"}}</p></div>{{end}}
+{{if .Data.loadFailed}}{{template "component.state" (dict "state" "error" "title" (t "page.admin.audit.exports.load_failed") "description" (t "page.admin.audit.common.load_failed_help"))}}{{end}}
+<form method="get" action="{{route "admin.audit_exports"}}">
+  <label class="ln-field__label" for="export-state">{{t "common.label.status"}}</label>
+  <select class="ln-input" id="export-state" name="state">
+    <option value="">{{t "common.state.all"}}</option>
+    <option value="queued"{{if eq .Data.state "queued"}} selected{{end}}>{{t "common.task.state.queued"}}</option>
+    <option value="running"{{if eq .Data.state "running"}} selected{{end}}>{{t "common.task.state.running"}}</option>
+    <option value="succeeded"{{if eq .Data.state "succeeded"}} selected{{end}}>{{t "common.task.state.succeeded"}}</option>
+    <option value="failed"{{if eq .Data.state "failed"}} selected{{end}}>{{t "common.task.state.failed"}}</option>
+    <option value="cancelled"{{if eq .Data.state "cancelled"}} selected{{end}}>{{t "common.task.state.cancelled"}}</option>
+  </select>
+  <button class="ln-button ln-button--secondary" type="submit">{{t "common.action.apply_filter"}}</button>
+</form>
+{{if .Data.updatedAt}}<p class="ln-meta">{{t_fmt "page.admin.audit.list.last_updated" "updated_at" (format_time .Data.updatedAt .Data.timezone) "timezone" .Data.timezone}}</p>{{end}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.audit.exports.title"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.audit.exports.caption"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "page.admin.audit.exports.export_id"}}</th>
+    <th scope="col">{{t "common.task.state"}}</th>
+    <th scope="col">{{t "page.admin.audit.export.format"}}</th>
+    <th scope="col">{{t "page.admin.audit.exports.row_count"}}</th>
+    <th scope="col">{{t "page.admin.audit.detail.task_id"}}</th>
+    <th scope="col">{{t "common.label.actions"}}</th>
+  </tr></thead>
+  <tbody>{{range .Data.exports}}<tr>
+    <td><code>{{.ID}}</code></td>
+    <td>{{t (export_state_key .State)}}</td>
+    <td>{{.Format}}</td>
+    <td>{{if .Truncated}}{{t_fmt "page.admin.audit.exports.row_count_truncated" "count" (format_number .RowCount)}}{{else}}{{format_number .RowCount}}{{end}}</td>
+    <td>{{if .TaskID}}<code>{{.TaskID}}</code>{{else}}—{{end}}</td>
+    <td><a href="{{route "admin.audit_exports"}}?export_id={{.ID}}">{{t "page.admin.audit.exports.open_detail"}}</a></td>
+  </tr>{{else}}<tr><td colspan="6">{{t "page.admin.audit.exports.empty"}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+{{template "component.pagination" (dict "prev_url" .Data.prevURL "next_url" .Data.nextURL "limit" .Data.limit)}}
+{{with .Data.exportDetail}}
+<section aria-labelledby="export-detail-title">
+<h2 id="export-detail-title">{{t "page.admin.audit.export.detail_title"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.exports.export_id"}}</dt><dd><code>{{.ID}}</code></dd>
+  <dt>{{t "common.task.state"}}</dt><dd>{{t (export_state_key .State)}}</dd>
+  <dt>{{t "page.admin.audit.detail.task_id"}}</dt><dd>{{if .TaskID}}<code>{{.TaskID}}</code>{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.audit.export.requested_by"}}</dt><dd>{{.RequestedBy}}</dd>
+  <dt>{{t "page.admin.audit.export.created_at"}}</dt><dd>{{format_time .CreatedAt $.Data.timezone}}</dd>
+  <dt>{{t "page.admin.audit.export.finished_at"}}</dt><dd>{{if .FinishedAt.IsZero}}—{{else}}{{format_time .FinishedAt $.Data.timezone}}{{end}}</dd>
+  <dt>{{t "page.admin.audit.exports.row_count"}}</dt><dd>{{format_number .RowCount}}{{if .Truncated}} · {{t "page.admin.audit.exports.partial_notice"}}{{end}}</dd>
+  <dt>{{t "page.admin.audit.column.error_code"}}</dt><dd>{{if .ErrorCode}}<code>{{.ErrorCode}}</code>{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.audit.detail.failure_reason"}}</dt><dd>{{if .FailureReason}}{{.FailureReason}}{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.audit.export.file"}}</dt><dd>{{if .FileAvailable}}{{t_fmt "page.admin.audit.export.file_ready" "expires" (format_time .FileExpiresAt $.Data.timezone)}}{{else}}{{t "page.admin.audit.export.file_missing"}}{{end}}</dd>
+</dl>
+{{if .Task}}
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.detail.task_state"}}</dt><dd>{{t (export_state_key .Task.State)}}</dd>
+  <dt>{{t "page.admin.audit.detail.attempt"}}</dt><dd>{{format_number .Task.Attempt}} / {{format_number .Task.MaxAttempts}}</dd>
+</dl>
+{{end}}
+<nav class="ln-actions" aria-label="{{t "common.label.actions"}}">
+  {{if and $.Data.downloadAvailable}}<a class="ln-button" href="{{route "admin.audit_export_download"}}?export_id={{.ID}}">{{t "page.admin.audit.export.download"}}</a>{{end}}
+  <a class="ln-button ln-button--secondary" href="{{route "admin.audit_exports"}}">{{t "page.admin.audit.detail.back_list"}}</a>
+</nav>
+{{if or (eq .State "queued") (eq .State "running") (eq .State "cancel_requested")}}
+<form method="post" action="{{route "admin.audit_export_cancel"}}">
+  {{csrf_field}}
+  <input type="hidden" name="export_id" value="{{.ID}}">
+  <label class="ln-field__label" for="export-cancel-reason">{{t "page.admin.audit.export.cancel_reason"}}</label>
+  <input class="ln-input" id="export-cancel-reason" name="reason" maxlength="256" required>
+  <button class="ln-button ln-button--danger" type="submit">{{t "page.admin.audit.export.cancel"}}</button>
+  <p class="ln-meta">{{t "page.admin.audit.export.cancel_hint"}}</p>
+</form>
+{{end}}
+</section>
+{{end}}
+{{end}}
+{{end}}

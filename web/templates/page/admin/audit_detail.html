@@ -1,0 +1,80 @@
+{{define "page-title"}}{{t "page.admin.audit.detail.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.audit.common.forbidden") "description" (t "page.admin.audit.common.forbidden_help"))}}
+{{else if .Data.notFound}}
+{{template "component.state" (dict "state" "empty" "title" (t "page.admin.audit.detail.not_found") "description" (t "page.admin.audit.detail.not_found_help"))}}
+{{else if .Data.retentionExpired}}
+{{template "component.state" (dict "state" "empty" "title" (t "page.admin.audit.detail.retention_expired") "description" (t "page.admin.audit.detail.retention_expired_help"))}}
+{{else if .Data.undisclosed}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.audit.detail.undisclosed") "description" (t "page.admin.audit.detail.undisclosed_help"))}}
+{{else if .Data.loadFailed}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.audit.detail.load_failed") "description" (t "page.admin.audit.common.load_failed_help"))}}
+{{else}}{{with .Data.detail}}
+{{if .Stale}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.audit.detail.stale"))}}{{end}}
+<h2>{{t "page.admin.audit.detail.event_title"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.detail.event_id"}}</dt><dd><code>{{.Event.ID}}</code></dd>
+  <dt>{{t "page.admin.audit.detail.occurred_at"}}</dt><dd><time datetime="{{.Event.OccurredAt.Format "2006-01-02T15:04:05Z07:00"}}">{{format_time .Event.OccurredAt $.Data.timezone}}</time></dd>
+  <dt>{{t "page.admin.audit.detail.outcome"}}</dt><dd>{{t .Event.OutcomeKey}}</dd>
+  <dt>{{t "page.admin.audit.detail.action"}}</dt><dd>{{.Event.Action}}</dd>
+  <dt>{{t "page.admin.audit.detail.scope"}}</dt><dd>{{.ScopeKind}} · <code>{{.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.audit.detail.actor"}}</dt><dd>{{t .Event.ActorKindKey}}{{if .Event.ActorID}} · <code>{{.Event.ActorID}}</code>{{end}}</dd>
+  <dt>{{t "page.admin.audit.detail.target"}}</dt><dd>{{.Event.TargetType}}{{if .Event.TargetID}} · <code>{{.Event.TargetID}}</code>{{end}}</dd>
+  <dt>{{t "page.admin.audit.detail.request_id"}}</dt><dd>{{if .Event.RequestID}}<code>{{.Event.RequestID}}</code> <a href="{{route "admin.audit"}}?request_id={{.Event.RequestID}}">{{t "page.admin.audit.detail.same_request"}}</a>{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.audit.detail.task_id"}}</dt><dd>{{if .Event.TaskID}}<code>{{.Event.TaskID}}</code> <a href="{{route "admin.audit"}}?task_id={{.Event.TaskID}}">{{t "page.admin.audit.detail.same_task"}}</a>{{else}}—{{end}}</dd>
+</dl>
+<section aria-labelledby="audit-public-error">
+<h2 id="audit-public-error">{{t "page.admin.audit.detail.public_error"}}</h2>
+{{if .ErrorCode}}
+<dl class="ln-keyvalue">
+  <dt>{{t "common.label.error_code"}}</dt><dd><code>{{.Error.Code}}</code> · {{.Error.Message}}</dd>
+  <dt>{{t "page.admin.audit.column.category"}}</dt><dd>{{.Error.Category}}</dd>
+  <dt>{{t "page.admin.errors.cause"}}</dt><dd>{{if .Error.HasGuidance}}{{.Error.Cause}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+  <dt>{{t "page.admin.errors.advice"}}</dt><dd>{{if .Error.HasGuidance}}{{.Error.Advice}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+  <dt>{{t "page.admin.errors.retry_conditions"}}</dt><dd>{{if .Error.HasGuidance}}{{.Error.Retry}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+</dl>
+<p><a class="ln-button ln-button--secondary" href="{{route "admin.error_codes"}}?code={{.ErrorCode}}">{{t "page.admin.audit.detail.open_error_code"}}</a></p>
+{{else}}<p>{{t "page.admin.audit.detail.no_error_code"}}</p>{{end}}
+<p class="ln-meta">{{t "page.admin.audit.detail.public_boundary"}}</p>
+</section>
+{{if .RelatedTask}}
+<section aria-labelledby="audit-task-summary">
+<h2 id="audit-task-summary">{{t "page.admin.audit.detail.task_summary"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.detail.task_id"}}</dt><dd><code>{{.RelatedTask.ID}}</code></dd>
+  <dt>{{t "page.admin.audit.detail.task_state"}}</dt><dd>{{t (export_state_key .RelatedTask.State)}}</dd>
+  <dt>{{t "page.admin.audit.detail.attempt"}}</dt><dd>{{format_number .RelatedTask.Attempt}} / {{format_number .RelatedTask.MaxAttempts}}</dd>
+  <dt>{{t "page.admin.audit.detail.failure_reason"}}</dt><dd>{{if .RelatedTask.FailureReason}}{{.RelatedTask.FailureReason}}{{else}}—{{end}}</dd>
+</dl>
+</section>
+{{end}}
+<section aria-labelledby="audit-changes">
+<h2 id="audit-changes">{{t "page.admin.audit.detail.changes"}}</h2>
+{{if .Changes}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.audit.detail.changes"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.audit.detail.changes_caption"}}</caption>
+  <thead><tr><th scope="col">{{t "page.admin.audit.detail.change_field"}}</th><th scope="col">{{t "page.admin.audit.detail.change_before"}}</th><th scope="col">{{t "page.admin.audit.detail.change_after"}}</th></tr></thead>
+  <tbody>{{range .Changes}}<tr><td><code>{{.Field}}</code></td><td>{{if eq .Before "[REDACTED]"}}{{t "page.admin.audit.detail.redacted"}}{{else}}{{.Before}}{{end}}</td><td>{{if eq .After "[REDACTED]"}}{{t "page.admin.audit.detail.redacted"}}{{else}}{{.After}}{{end}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+{{else}}<p>{{t "page.admin.audit.detail.no_changes"}}</p>{{end}}
+</section>
+<section aria-labelledby="audit-restricted">
+<h2 id="audit-restricted">{{t "page.admin.audit.detail.restricted_diagnosis"}}</h2>
+{{if .RestrictedReasonCode}}
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.detail.restricted_reason"}}</dt><dd><code>{{.RestrictedReasonCode}}</code></dd>
+</dl>
+<p class="ln-meta">{{t "page.admin.audit.detail.restricted_internal_hint"}}</p>
+{{else}}
+<p class="ln-meta">{{t "page.admin.audit.detail.restricted_boundary"}}</p>
+{{end}}
+</section>
+<nav class="ln-actions" aria-label="{{t "common.label.actions"}}">
+  <a class="ln-button ln-button--secondary" href="{{route "admin.audit"}}">{{t "page.admin.audit.detail.back"}}</a>
+</nav>
+{{end}}{{end}}
+{{end}}

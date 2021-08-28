@@ -1,0 +1,141 @@
+{{define "page-title"}}{{t "page.admin.audit.list.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.audit.list.scope_hint"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.audit.common.forbidden") "description" (t "page.admin.audit.common.forbidden_help"))}}
+{{else}}
+<p class="ln-meta">{{t_fmt "page.admin.audit.list.scope_line" "scope" .Data.scopeID "timezone" .Data.timezone}}</p>
+<p class="ln-meta">{{if .Data.dataScope}}{{t_fmt "page.admin.audit.list.data_scope" "scope" .Data.dataScope}}{{else}}{{t "page.admin.audit.list.data_scope_unknown"}}{{end}}</p>
+<p class="ln-meta">{{t_fmt "page.admin.audit.list.retention_line" "days" (format_number .Data.retentionDays) "cutoff" (format_time .Data.retentionCutoff .Data.timezone)}}</p>
+{{if .Data.updatedAt}}<p class="ln-meta">{{t_fmt "page.admin.audit.list.last_updated" "updated_at" (format_time .Data.updatedAt .Data.timezone) "timezone" .Data.timezone}}</p>{{end}}
+<section aria-labelledby="audit-quick-title">
+  <h2 id="audit-quick-title">{{t "page.admin.audit.list.quick_title"}}</h2>
+  <form method="get" action="{{route "admin.audit"}}">
+    <label class="ln-field__label" for="audit-request-id">{{t "page.admin.audit.list.quick_request"}}</label>
+    <input class="ln-input" id="audit-request-id" name="request_id" value="{{.Data.filter.RequestID}}" autocomplete="off">
+    {{if field_error "request_id"}}<p class="ln-field__error">{{field_error "request_id"}}</p>{{end}}
+    <button class="ln-button ln-button--secondary" type="submit">{{t "page.admin.audit.list.quick_submit"}}</button>
+  </form>
+  <form method="get" action="{{route "admin.audit"}}">
+    <label class="ln-field__label" for="audit-task-id">{{t "page.admin.audit.list.quick_task"}}</label>
+    <input class="ln-input" id="audit-task-id" name="task_id" value="{{.Data.filter.TaskID}}" autocomplete="off">
+    {{if field_error "task_id"}}<p class="ln-field__error">{{field_error "task_id"}}</p>{{end}}
+    <button class="ln-button ln-button--secondary" type="submit">{{t "page.admin.audit.list.quick_submit"}}</button>
+  </form>
+</section>
+<form method="get" action="{{route "admin.audit"}}" aria-labelledby="audit-filter-title">
+  <h2 id="audit-filter-title">{{t "page.admin.audit.list.filter_title"}}</h2>
+  <label class="ln-field__label" for="audit-from">{{t "page.admin.audit.filter.from"}}</label>
+  <input class="ln-input" id="audit-from" name="from" value="{{.Data.fromValue}}" placeholder="YYYY-MM-DD">
+  {{if field_error "from"}}<p class="ln-field__error">{{field_error "from"}}</p>{{end}}
+  <label class="ln-field__label" for="audit-to">{{t "page.admin.audit.filter.to"}}</label>
+  <input class="ln-input" id="audit-to" name="to" value="{{.Data.toValue}}" placeholder="YYYY-MM-DD">
+  {{if field_error "to"}}<p class="ln-field__error">{{field_error "to"}}</p>{{end}}
+  <label class="ln-field__label" for="audit-app">{{t "page.admin.audit.filter.app_id"}}</label>
+  <input class="ln-input" id="audit-app" name="app_id" value="{{.Data.filter.AppID}}">
+  <label class="ln-field__label" for="audit-system-only"><input type="checkbox" id="audit-system-only" name="system_only" value="1"{{if .Data.filter.SystemOnly}} checked{{end}}> {{t "page.admin.audit.filter.system_only"}}</label>
+  <label class="ln-field__label" for="audit-actor-type">{{t "page.admin.audit.filter.actor_type"}}</label>
+  <select class="ln-input" id="audit-actor-type" name="actor_type">
+    <option value="">{{t "common.state.all"}}</option>
+    <option value="user"{{if eq .Data.filter.ActorType "user"}} selected{{end}}>{{t "audit.actor_kind.user"}}</option>
+    <option value="system"{{if eq .Data.filter.ActorType "system"}} selected{{end}}>{{t "audit.actor_kind.system"}}</option>
+    <option value="local_admin"{{if eq .Data.filter.ActorType "local_admin"}} selected{{end}}>{{t "audit.actor_kind.local_admin"}}</option>
+    <option value="anonymous"{{if eq .Data.filter.ActorType "anonymous"}} selected{{end}}>{{t "audit.actor_kind.anonymous"}}</option>
+  </select>
+  <label class="ln-field__label" for="audit-actor-id">{{t "page.admin.audit.filter.actor_id"}}</label>
+  <input class="ln-input" id="audit-actor-id" name="actor_id" value="{{.Data.filter.ActorID}}">
+  <label class="ln-field__label" for="audit-action">{{t "page.admin.audit.filter.action"}}</label>
+  <input class="ln-input" id="audit-action" name="action" value="{{.Data.filter.Action}}">
+  <label class="ln-field__label" for="audit-outcome">{{t "page.admin.audit.filter.outcome"}}</label>
+  <select class="ln-input" id="audit-outcome" name="outcome">
+    <option value="">{{t "common.state.all"}}</option>
+    <option value="success"{{if eq .Data.filter.Outcome "success"}} selected{{end}}>{{t "audit.outcome.success"}}</option>
+    <option value="failure"{{if eq .Data.filter.Outcome "failure"}} selected{{end}}>{{t "audit.outcome.failure"}}</option>
+    <option value="denied"{{if eq .Data.filter.Outcome "denied"}} selected{{end}}>{{t "audit.outcome.denied"}}</option>
+  </select>
+  <label class="ln-field__label" for="audit-error">{{t "page.admin.audit.filter.error_code"}}</label>
+  <input class="ln-input" id="audit-error" name="error_code" value="{{.Data.filter.ErrorCode}}">
+  <label class="ln-field__label" for="audit-target-type">{{t "page.admin.audit.filter.target_type"}}</label>
+  <input class="ln-input" id="audit-target-type" name="target_type" value="{{.Data.filter.TargetType}}">
+  <label class="ln-field__label" for="audit-target-id">{{t "page.admin.audit.filter.target_id"}}</label>
+  <input class="ln-input" id="audit-target-id" name="target_id" value="{{.Data.filter.TargetID}}">
+  <label class="ln-field__label" for="audit-order">{{t "page.admin.audit.filter.order"}}</label>
+  <select class="ln-input" id="audit-order" name="order">
+    <option value="occurred_desc"{{if eq .Data.order "occurred_desc"}} selected{{end}}>{{t "page.admin.audit.filter.order_desc"}}</option>
+    <option value="occurred_asc"{{if eq .Data.order "occurred_asc"}} selected{{end}}>{{t "page.admin.audit.filter.order_asc"}}</option>
+  </select>
+  <input type="hidden" name="limit" value="{{format_number .Data.limit}}">
+  <button class="ln-button" type="submit">{{t "common.action.apply_filter"}}</button>
+  <a class="ln-button ln-button--secondary" href="{{route "admin.audit"}}">{{t "page.admin.audit.filter.clear"}}</a>
+</form>
+{{if .Data.invalid}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.audit.filter.invalid_summary") "description" (t "page.admin.audit.filter.invalid_help"))}}
+{{else if .Data.loadFailed}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.audit.list.load_failed") "description" (t "page.admin.audit.common.load_failed_help"))}}
+<a class="ln-button ln-button--secondary" href="{{route "admin.audit"}}">{{t "common.action.retry"}}</a>
+{{else}}
+<h2>{{t "page.admin.audit.list.results_title"}}</h2>
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.audit.list.title"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.audit.list.caption"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "page.admin.audit.column.occurred_at"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.actor"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.action"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.target"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.outcome"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.summary"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.error_code"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.request_id"}}</th>
+    <th scope="col">{{t "page.admin.audit.column.task_id"}}</th>
+    <th scope="col">{{t "common.label.actions"}}</th>
+  </tr></thead>
+  <tbody>{{range .Data.events}}<tr>
+    <td><time datetime="{{.OccurredAt.Format "2006-01-02T15:04:05Z07:00"}}">{{format_time .OccurredAt $.Data.timezone}}</time></td>
+    <td>{{t .ActorKindKey}}{{if .ActorID}}<br><code>{{.ActorID}}</code>{{end}}</td>
+    <td>{{.Action}}</td>
+    <td>{{.TargetType}}{{if .TargetID}}<br><code>{{.TargetID}}</code>{{end}}</td>
+    <td>{{t .OutcomeKey}}</td>
+    <td>{{.Summary}}</td>
+    <td>{{if .ErrorCode}}<a href="{{route "admin.error_codes"}}?code={{.ErrorCode}}"><code>{{.ErrorCode}}</code></a>{{else}}—{{end}}</td>
+    <td>{{if .RequestID}}<code>{{.RequestID}}</code><br><a href="{{route "admin.audit"}}?request_id={{.RequestID}}">{{t "page.admin.audit.list.same_request"}}</a>{{else}}—{{end}}</td>
+    <td>{{if .TaskID}}<code>{{.TaskID}}</code><br><a href="{{route "admin.audit"}}?task_id={{.TaskID}}">{{t "page.admin.audit.list.same_task"}}</a>{{else}}—{{end}}</td>
+    <td><a href="{{route "admin.audit_detail"}}?event_id={{.ID}}&occurred_at={{.OccurredAt.Format "2006-01-02T15:04:05Z07:00"}}">{{t "page.admin.audit.list.open_detail"}}</a></td>
+  </tr>{{else}}<tr><td colspan="10">{{if .Data.filtered}}{{t "page.admin.audit.list.filtered_empty"}}{{else}}{{t "page.admin.audit.list.empty"}}{{end}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+{{template "component.pagination" (dict "prev_url" .Data.prevURL "next_url" .Data.nextURL "limit" .Data.limit)}}
+{{end}}
+{{if .Data.capabilities.Export}}
+<section aria-labelledby="audit-export-title">
+  <h2 id="audit-export-title">{{t "page.admin.audit.export.create"}}</h2>
+  <p class="ln-meta">{{t "page.admin.audit.export.create_hint"}}</p>
+  <form method="post" action="{{route "admin.audit_export_create"}}">
+    {{csrf_field}}
+    <input type="hidden" name="from" value="{{.Data.fromValue}}">
+    <input type="hidden" name="to" value="{{.Data.toValue}}">
+    <input type="hidden" name="app_id" value="{{.Data.filter.AppID}}">
+    <input type="hidden" name="system_only" value="{{if .Data.filter.SystemOnly}}1{{end}}">
+    <input type="hidden" name="actor_type" value="{{.Data.filter.ActorType}}">
+    <input type="hidden" name="actor_id" value="{{.Data.filter.ActorID}}">
+    <input type="hidden" name="action" value="{{.Data.filter.Action}}">
+    <input type="hidden" name="outcome" value="{{.Data.filter.Outcome}}">
+    <input type="hidden" name="error_code" value="{{.Data.filter.ErrorCode}}">
+    <input type="hidden" name="filter_request_id" value="{{.Data.filter.RequestID}}">
+    <input type="hidden" name="task_id" value="{{.Data.filter.TaskID}}">
+    <input type="hidden" name="target_type" value="{{.Data.filter.TargetType}}">
+    <input type="hidden" name="target_id" value="{{.Data.filter.TargetID}}">
+    <input type="hidden" name="order" value="{{.Data.order}}">
+    <label class="ln-field__label" for="audit-export-format">{{t "page.admin.audit.export.format"}}</label>
+    <select class="ln-input" id="audit-export-format" name="format">
+      <option value="csv">CSV</option>
+      <option value="json">JSON</option>
+    </select>
+    <button class="ln-button" type="submit">{{t "page.admin.audit.export.submit"}}</button>
+    <a class="ln-button ln-button--secondary" href="{{route "admin.audit_exports"}}">{{t "page.admin.audit.export.open_list"}}</a>
+  </form>
+</section>
+{{else}}<p class="ln-meta">{{t "page.admin.audit.export.no_permission"}}</p>{{end}}
+{{end}}
+{{end}}

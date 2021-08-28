@@ -1209,6 +1209,17 @@ Python 只用于启动包辅助工具，不是将来 Go 产品的运行依赖。
 - **验证与限制**：页面契约测试（受控后端：11 条路由、三值/只读/无权限、预览未执行、自身保护额外确认、冲突草稿、整体与逐项恢复范围、秘密遮罩、空测试目标与未配置/失败状态、会话过期）与真实服务集成测试（临时 SQLite + 真实 `policy.Service`/sqlite/审计：root 写入与版本冲突、非 root 只读与写入拒绝、无读取许可不披露、再次认证失败、`ImmutableSensitive` 拒绝、恢复预览、本地捕获测试邮件成功/失败、秘密替换不回显）通过。已知缺口：运行时邮件模板/投递设置编辑与持久化契约未提供（页面只读并标注能力未提供）；普通管理员独立只读权限键由宿主映射，集成测试使用测试授权器；安全告知记录读取依赖宿主装配 `reauth.Service`；真实 SMTP 外发与真实浏览器视口/读屏/200% 文本未实测。详见 `.ai/lead/reports/step72-dev.md`。
 
 
+## 审计与错误诊断、错误码检索与 root 审计清理页面（步骤 74）
+
+新增 `WebUIOptions.PageAudit`/`UIPageAuditBackend` 与内置审计/诊断页面（13 条命名路由），`internal/uiadminadapter.NewAudit` 把真实 `internal/auditops` 查询/导出/清理能力接到页面；错误码检索读取同一根包注册表与手册生成的原因/建议/重试说明（`LookupErrorCode` + `LookupErrorCodeGuidance`，48 项逐项有文档覆盖测试）。
+
+- **审计列表与详情**：`admin.audit` 显示时间（显式时区）、操作者、动作、对象、结果、直白说明、错误码、request_id/task_id 与详情入口；筛选白名单（时间区间含当天、应用/系统范围、操作者、动作、结果、错误码、request_id、task_id、目标、排序、分页），非法值字段错误且不查询，分页链接保留筛选；列表常驻“当前可见数据范围”来自授权结果（不显示未授权应用名）。`admin.audit_detail` 展示事件事实、公开错误说明、关联编号、已裁剪差异（敏感值显示“已隐藏敏感值”）、关联任务摘要（由宿主注入任务只读存储时）与独立的受限诊断分区；查无记录/无权限/已过保留期/不可披露使用不同状态。
+- **公开与受限诊断**：公开区只用注册表/手册内容，未知码不猜原因；受限原因码只在宿主注入 `RestrictedDiagnosis` 独立授权通过后单列展示，页面/DOM/导出字段白名单均不携带，`reason_code` 默认 fail-closed 隐藏。
+- **我的安全活动**：`account.activity`/`account.activity_detail`（`UIAccessUser`）调用 `QueryOwnActivity`/`GetOwnEvent`，服务端固定操作者本人、忽略越权筛选、他人事件按不存在处理；页面不含管理、导出或受限诊断入口。
+- **导出任务**：`admin.audit_exports`/`_create`/`_cancel`/`_download` 复用真实 `auditops` 导出；创建使用当前筛选与时间范围快照、服务端 `request_id`（不接受客户端指定）与 CSRF，成功只显示“已提交 + task_id”；列表/详情呈现真实状态 `queued/running/succeeded/failed/cancelled/cancel_requested/timed_out`、行数/截断、错误说明与产物可用性；下载只在服务端确认成功且当前权限仍有效时返回受控字节（安全文件名，无服务器路径），取消请求被接受明确不等于实际取消。
+- **root 审计清理**：`admin.audit_maintenance`（+`_preview`/`_start`/`_cancel`）仅 root 可见且由 `auditops` 再次校验 root + `audit.purge` 敏感策略；只读预估（真实计数/截断/保留边界/保护审计/产物排除，不删除记录）→ 独立确认页复述范围/截止时间/上限/不可逆后果并说明“确认不是授权”→ 提交必须携带服务端预估摘要（缺失/过期返回冲突，表单回传原始整数）→ 展示真实运行计数与取消请求状态，达到上限时不写成全部完成。
+- **授权、留痕与限制**：所有路由 `UIAccessManagement`，每次读取/导出/下载/清理由 `auditops` 重新授权；错误码检索同样经宿主注入的 `auditops.Authorizer` 复核 `audit.read`；能力位来自真实授权判定（未装配授权器/失败为 false），页面级拒绝（能力位不足、CSRF 失败）经 `RecordDenial` 写失败审计。`UIPageAuditOptions.ValidateCSRF` 为必填，缺失时 `NewWebUI` 拒绝构造。宿主装配前置：`AuditOptions.Authorizer`（真实 authz）、`Recorder`（拒绝留痕）、`IsRoot`、可选 `RestrictedDiagnosis`/`Tasks`。已知缺口：`cmd/login-server` 页面装配、真实浏览器视口/读屏/无 JS、真实任务执行器跑完导出/清理、真实 authz/reauth/session 生产装配、导出权限撤销后下载时序、zh-CN 以外 i18n 未实测；继承 D73 的产物回收/导出幂等/拒绝审计限频与下载 SHA 后 TOCTOU 未在本步处理。详见 `.ai/lead/reports/step74-dev.md`。
+
 ### 步骤 72 安全修复轮（双审计后）
 
 - **M1 预览/再认证绑定**：`UISecurityPolicyPreview`/`UISecurityPolicyRestorePreview` 增加服务端一次性 `Token`，适配器以随机令牌绑定操作者/动作/作用域/目标/版本/完整六字段摘要或恢复清单摘要，保存/恢复必须带回并在服务端重算比较、一次性消费；换目标、换参数、重复使用返回 `CHALLENGE_INVALID`。再次认证回调收到同一 `UISecurityPolicyActionBinding` 作为参数摘要（未装配 `Reauth` 即 fail-closed `REAUTH_REQUIRED`）。
@@ -1226,4 +1237,4 @@ Python 只用于启动包辅助工具，不是将来 Go 产品的运行依赖。
 - **详情与保留期**：事件详情按当前授权重新判定，跨范围返回 `ACCESS_DENIED` 且不返回正文；`OccurredAtHint` 早于保留边界时区分 `ErrRetentionExpired` 与 `ErrNotFound`，仍存在但已过保留期的记录标记 `Stale`。默认保留 180 天（未设置时返回内置默认值与 `Configured=false`），root 可设置 1～3650 天并用版本 CAS 防止旧页面覆盖。
 - **受控导出**：导出是独立授权动作（`audit.export` + 敏感操作 `audit.export`），复用 `internal/task` 异步执行；创建时冻结筛选与数据范围快照，执行前重新授权并复核当前范围仍覆盖快照。字段白名单（事件 ID/时间/操作者/应用/动作/目标/结果/公开错误码/关联编号/已脱敏差异），不导出受限 `reason_code`；行数与字节上限、受控目录随机文件名 `O_EXCL` 独占创建、CSV 防公式注入、SHA-256 与大小记录；下载时再次授权、检查产物名称/类型/大小/过期并重算 SHA-256，权限撤销或产物归属不符时不可下载；执行失败写真实失败终态，不留下“已提交即成功”。
 - **root 清理**：仅 root 且通过 `audit.purge` 敏感策略；先只读预估（真实计数/截断标记、保留期边界、受保护范围、参数与计数摘要），提交必须带回同一摘要，参数或数据变化返回 `CONFLICT` 要求重新预估。清理复用 `internal/task`，按批删除、有条数上限、可取消、终态写真实扫描/清理计数与 `LimitReached`，并强制截止时间不得晚于保留期边界（保留期内数据只能经版本化策略调整）；保存请求、真实执行者/发起者、范围、截止时间、计数与结果。系统范围只清无应用快照事件，应用范围只清该应用快照事件；清理自身运行与 `audit_maintenance_log` 受保护追加记录（触发器禁止 UPDATE/DELETE）不被同次清理抹除，导出/报告/备份产物不在清理范围。
-- **验证与限制（Windows amd64，临时 SQLite）**：`internal/auditops` 30 个定向测试通过（跨范围查询/详情、本人活动、稳定分页与重复读取一致性、恶意筛选 15 类、导出独立授权与敏感校验、脱敏/公式注入/摘要/权限撤销、异步任务身份校验、保留期边界与版本冲突、分批清理/边界/应用范围隔离、取消终态、预估摘要随数据变化失效、受保护日志不可改删、任务摘要）；迁移 0040 结构测试与 4 处迁移计数断言同步；`gofmt`/`go vet`/`go build` 通过。尚未提供：HTTP/页面与 UI 适配器（步骤 74）、错误码检索注册表结构化读取、自动按保留策略定时清理（第一版只有 root 手动清理与策略边界）、导出产物过期清理、多实例/race/非 Windows 运行验证、真实浏览器联调。
+- **验证与限制（Windows amd64，临时 SQLite）**：`internal/auditops` 30 个定向测试通过（跨范围查询/详情、本人活动、稳定分页与重复读取一致性、恶意筛选 15 类、导出独立授权与敏感校验、脱敏/公式注入/摘要/权限撤销、异步任务身份校验、保留期边界与版本冲突、分批清理/边界/应用范围隔离、取消终态、预估摘要随数据变化失效、受保护日志不可改删、任务摘要）；迁移 0040 结构测试与 4 处迁移计数断言同步；`gofmt`/`go vet`/`go build` 通过。HTTP/页面与 UI 适配器已由步骤 74 提供（见下一节：审计列表/详情/关联、错误码检索、受控导出任务、root 清理页面）；尚未提供：自动按保留策略定时清理（第一版只有 root 手动清理与策略边界）、导出产物过期清理、多实例/race/非 Windows 运行验证、真实浏览器联调。

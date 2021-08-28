@@ -319,6 +319,8 @@ type WebUIOptions struct {
 	PageSupport *UIPageSupportOptions
 	// PageSecurityPolicy 非 nil 时注册步骤 72 敏感操作策略与安全通知设置页面。
 	PageSecurityPolicy *UIPageSecurityPolicyOptions
+	// PageAudit 非 nil 时注册步骤 74 审计记录/错误诊断/导出任务/审计清理页面。
+	PageAudit *UIPageAuditOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -366,6 +368,7 @@ type WebUI struct {
 	pageApps            *pageAppsPages
 	pageSupport         *pageSupportPages
 	pageSecurityPolicy  *pageSecurityPolicyPages
+	pageAudit           *pageAuditPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -475,6 +478,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageSecurityPolicy = pages
+	}
+	if options.PageAudit != nil {
+		pages, pageErr := newPageAuditPages(*options.PageAudit)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageAudit = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -669,6 +679,9 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageSecurityPolicy != nil {
 		routes = append(routes, ui.pageSecurityPolicy.routes...)
+	}
+	if ui.pageAudit != nil {
+		routes = append(routes, ui.pageAudit.routes...)
 	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
@@ -1087,6 +1100,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	if handler == nil && ui.pageSecurityPolicy != nil {
 		handler = ui.pageSecurityPolicy.handlers[route.Name]
 	}
+	if handler == nil && ui.pageAudit != nil {
+		handler = ui.pageAudit.handlers[route.Name]
+	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
 		if handleErr != nil {
@@ -1438,7 +1454,8 @@ func templateFuncs(state any) template.FuncMap {
 				return fmt.Sprintf("%v", value)
 			}
 		},
-		"mask": func(value string) string { return maskUIValue(value) },
+		"mask":             func(value string) string { return maskUIValue(value) },
+		"export_state_key": func(state string) string { return exportStateKey(state) },
 		"qr_svg": func(payload string) template.HTML {
 			svg, err := renderQRSVG(payload)
 			if err != nil {

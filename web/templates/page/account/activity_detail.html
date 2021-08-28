@@ -1,0 +1,42 @@
+{{define "page-title"}}{{t "page.account.activity.detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.notFound}}
+{{template "component.state" (dict "state" "empty" "title" (t "page.admin.audit.detail.not_found") "description" (t "page.admin.audit.detail.not_found_help"))}}
+{{else if .Data.retentionExpired}}
+{{template "component.state" (dict "state" "empty" "title" (t "page.admin.audit.detail.retention_expired") "description" (t "page.admin.audit.detail.retention_expired_help"))}}
+{{else if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "common.state.forbidden") "description" (t "page.admin.audit.common.forbidden_help"))}}
+{{else if .Data.loadFailed}}
+{{template "component.state" (dict "state" "error" "title" (t "page.account.activity.load_failed") "description" (t "page.admin.audit.common.load_failed_help"))}}
+{{else}}{{with .Data.detail}}
+{{if .Stale}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.audit.detail.stale"))}}{{end}}
+<h2>{{t "page.admin.audit.detail.event_title"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.audit.detail.occurred_at"}}</dt><dd><time datetime="{{.Event.OccurredAt.Format "2006-01-02T15:04:05Z07:00"}}">{{format_time .Event.OccurredAt $.Data.timezone}}</time></dd>
+  <dt>{{t "page.admin.audit.detail.outcome"}}</dt><dd>{{t .Event.OutcomeKey}}</dd>
+  <dt>{{t "page.admin.audit.detail.action"}}</dt><dd>{{.Event.Action}}</dd>
+  <dt>{{t "page.admin.audit.detail.target"}}</dt><dd>{{.Event.TargetType}}{{if .Event.TargetID}} · <code>{{.Event.TargetID}}</code>{{end}}</dd>
+  <dt>{{t "page.admin.audit.detail.request_id"}}</dt><dd>{{if .Event.RequestID}}<code>{{.Event.RequestID}}</code>{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.audit.detail.task_id"}}</dt><dd>{{if .Event.TaskID}}<code>{{.Event.TaskID}}</code>{{else}}—{{end}}</dd>
+</dl>
+{{if .ErrorCode}}
+<h2>{{t "page.admin.audit.detail.public_error"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "common.label.error_code"}}</dt><dd><code>{{.Error.Code}}</code> · {{.Error.Message}}</dd>
+  <dt>{{t "page.admin.errors.cause"}}</dt><dd>{{if .Error.HasGuidance}}{{.Error.Cause}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+  <dt>{{t "page.admin.errors.advice"}}</dt><dd>{{if .Error.HasGuidance}}{{.Error.Advice}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+  <dt>{{t "page.admin.errors.retry_conditions"}}</dt><dd>{{if .Error.HasGuidance}}{{.Error.Retry}}{{else}}{{t "page.admin.errors.guidance_missing"}}{{end}}</dd>
+</dl>
+{{end}}
+{{if .Changes}}
+<h2>{{t "page.admin.audit.detail.changes"}}</h2>
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.audit.detail.changes"}}">
+<table class="ln-table"><caption>{{t "page.admin.audit.detail.changes_caption"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.audit.detail.change_field"}}</th><th scope="col">{{t "page.admin.audit.detail.change_before"}}</th><th scope="col">{{t "page.admin.audit.detail.change_after"}}</th></tr></thead>
+<tbody>{{range .Changes}}<tr><td><code>{{.Field}}</code></td><td>{{if eq .Before "[REDACTED]"}}{{t "page.admin.audit.detail.redacted"}}{{else}}{{.Before}}{{end}}</td><td>{{if eq .After "[REDACTED]"}}{{t "page.admin.audit.detail.redacted"}}{{else}}{{.After}}{{end}}</td></tr>{{end}}</tbody></table>
+</div>
+{{else}}<p>{{t "page.admin.audit.detail.no_changes"}}</p>{{end}}
+<nav class="ln-actions"><a class="ln-button ln-button--secondary" href="{{route "account.activity"}}">{{t "page.account.activity.back"}}</a></nav>
+{{end}}{{end}}
+{{end}}

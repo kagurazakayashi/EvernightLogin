@@ -583,6 +583,27 @@
 // 显示直接角色/用户组来源与数据范围；预设差异只读计算（恢复执行仅受信通道）。页面
 // 契约 + 真实服务集成测试通过。未新增错误码/迁移/依赖；未做实浏览器视口/读屏实测。
 //
+// 步骤 74：公开 `WebUIOptions.PageAudit`/`UIPageAuditBackend` 与内置审计与错误诊断
+// 页面（13 条命名路由）：`admin.audit`/`admin.audit_detail`（授权范围列表、筛选/分页/
+// request_id 与 task_id 关联、公开错误说明、已裁剪差异、独立受限诊断分区，数据范围
+// 摘要来自授权结果）、`account.activity`/`account.activity_detail`（本人安全活动，服务端
+// 固定本人）、`admin.error_codes`（同一错误注册表与手册生成的原因/建议/重试说明，未知码
+// 不猜原因）、`admin.audit_exports`/`_create`/`_cancel`/`_download`（真实 auditops 导出
+// 状态机，服务端 request_id、筛选与时间范围快照、受控下载、取消请求不等于取消）、
+// `admin.audit_maintenance`/`_preview`/`_start`/`_cancel`（仅 root：保留策略只读、预估
+// 不删除、独立确认页复述范围与后果、提交绑定预估摘要与敏感策略、真实计数与达上限提示）。
+// 全部路由 `UIAccessManagement`（本人页 `UIAccessUser`），每次读取/导出/下载/清理由
+// `internal/auditops` 重新授权；错误码检索与能力位同样经宿主注入 `auditops.Authorizer`
+// 复核（未装配 fail-closed），页面级拒绝与 CSRF 失败经 `RecordDenial` 写失败审计。
+// `UIPageAuditOptions.ValidateCSRF` 必填；宿主需装配真实 Authorizer/Recorder/IsRoot，
+// 可选 RestrictedDiagnosis（受限原因码独立授权后单列展示）与 Tasks（详情关联任务摘要）。
+// `internal/uiadminadapter.NewAudit` 直连真实 auditops 服务，页面/视图不含 detail_json、
+// 服务器路径、Token、秘密或受限原因码；导出/清理失败不伪装成功。页面契约测试 + 真实
+// SQLite+audit+auditops 集成测试 + HTTP 页面联调通过；未新增迁移/错误码/依赖。已知缺口：
+// 真实浏览器视口/读屏/无 JS、真实任务执行器执行、真实 authz/reauth/session 生产装配、
+// cmd/login-server 页面接线、导出权限撤销后下载时序、zh-CN 以外 i18n 未实测；继承 D73
+// 的产物回收/导出幂等/拒绝审计限频与下载 SHA 后 TOCTOU 未在本步处理。
+//
 // 步骤 72：公开 `WebUIOptions.PageSecurityPolicy`/`UISecurityPolicyBackend` 与内置
 // root 敏感操作目录/三值对照/覆盖编辑/逐项与整体恢复默认页面和安全通知设置页
 // （11 条命名路由，全部 UIAccessManagement），`internal/uiadminadapter.NewSecurityPolicy`
