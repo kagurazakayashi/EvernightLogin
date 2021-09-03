@@ -321,6 +321,8 @@ type WebUIOptions struct {
 	PageSecurityPolicy *UIPageSecurityPolicyOptions
 	// PageAudit 非 nil 时注册步骤 74 审计记录/错误诊断/导出任务/审计清理页面。
 	PageAudit *UIPageAuditOptions
+	// PageStats 非 nil 时注册步骤 76 统计看板/活跃度与错误趋势/错误分类明细页面。
+	PageStats *UIPageStatsOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -369,6 +371,7 @@ type WebUI struct {
 	pageSupport         *pageSupportPages
 	pageSecurityPolicy  *pageSecurityPolicyPages
 	pageAudit           *pageAuditPages
+	pageStats           *pageStatsPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -485,6 +488,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageAudit = pages
+	}
+	if options.PageStats != nil {
+		pages, pageErr := newPageStatsPages(*options.PageStats)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageStats = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -682,6 +692,9 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageAudit != nil {
 		routes = append(routes, ui.pageAudit.routes...)
+	}
+	if ui.pageStats != nil {
+		routes = append(routes, ui.pageStats.routes...)
 	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
@@ -1102,6 +1115,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageAudit != nil {
 		handler = ui.pageAudit.handlers[route.Name]
+	}
+	if handler == nil && ui.pageStats != nil {
+		handler = ui.pageStats.handlers[route.Name]
 	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)

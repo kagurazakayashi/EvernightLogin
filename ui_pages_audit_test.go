@@ -867,3 +867,27 @@ func TestAuditPageDenialsAreRecorded(t *testing.T) {
 
 // 占位：确保 errors 包在测试文件内被使用（会话错误注入）。
 var _ = errors.New
+
+// TestAuditListHonorsControlledTimeZone 验证审计列表接受受控 tz 参数解释日期筛选，
+// 使统计看板下钻的同一自然日区间在非账户时区下仍一致；非法 tz 回退会话时区。
+func TestAuditListHonorsControlledTimeZone(t *testing.T) {
+	backend := baseAuditBackend()
+	env := newAuditPageEnv(t, backend, auditPageSessions{})
+	requireAuditBody(t, env.get("/admin/audit?from=2026-11-18&to=2026-11-18&tz=Asia/Tokyo"),
+		http.StatusOK, "Asia/Tokyo", `name="tz" value="Asia/Tokyo"`)
+	// 东京 2026-11-18 00:00 = UTC 2026-11-17 15:00。
+	if !backend.lastQuery.Filter.From.Equal(time.Date(2026, 11, 17, 15, 0, 0, 0, time.UTC)) {
+		t.Fatalf("tz 未生效，From = %v", backend.lastQuery.Filter.From)
+	}
+	// 结束日上界被服务端当前时间钳制（now=2026-11-18 12:00 UTC → now+1m）。
+	if !backend.lastQuery.Filter.To.Equal(time.Date(2026, 11, 18, 12, 1, 0, 0, time.UTC)) {
+		t.Fatalf("To = %v，期望钳制到 now+1m", backend.lastQuery.Filter.To)
+	}
+	// 拒绝 Local，回退会话时区 UTC 后仍正常解析。
+	backend.lastQuery = login.UIAuditQuery{}
+	requireAuditBody(t, env.get("/admin/audit?from=2026-11-01&to=2026-11-02&tz=Local"),
+		http.StatusOK)
+	if !backend.lastQuery.Filter.From.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("非法 tz 未回退会话时区，From = %v", backend.lastQuery.Filter.From)
+	}
+}

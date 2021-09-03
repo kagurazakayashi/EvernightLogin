@@ -66,6 +66,7 @@
     <option value="occurred_asc"{{if eq .Data.order "occurred_asc"}} selected{{end}}>{{t "page.admin.audit.filter.order_asc"}}</option>
   </select>
   <input type="hidden" name="limit" value="{{format_number .Data.limit}}">
+  <input type="hidden" name="tz" value="{{.Data.timezone}}">
   <button class="ln-button" type="submit">{{t "common.action.apply_filter"}}</button>
   <a class="ln-button ln-button--secondary" href="{{route "admin.audit"}}">{{t "page.admin.audit.filter.clear"}}</a>
 </form>
@@ -115,6 +116,7 @@
     {{csrf_field}}
     <input type="hidden" name="from" value="{{.Data.fromValue}}">
     <input type="hidden" name="to" value="{{.Data.toValue}}">
+    <input type="hidden" name="tz" value="{{.Data.timezone}}">
     <input type="hidden" name="app_id" value="{{.Data.filter.AppID}}">
     <input type="hidden" name="system_only" value="{{if .Data.filter.SystemOnly}}1{{end}}">
     <input type="hidden" name="actor_type" value="{{.Data.filter.ActorType}}">

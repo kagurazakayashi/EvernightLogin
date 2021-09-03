@@ -1,0 +1,116 @@
+{{define "page-title"}}{{t "page.admin.dashboard.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p class="ln-meta">{{t "page.admin.dashboard.description"}}</p>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.dashboard.forbidden") "description" (t "page.admin.statistics.common.forbidden_help"))}}
+{{else}}
+<div class="ln-stats-toolbar" data-ln-module="stats-refresh"
+  data-ln-loading="{{t "page.admin.dashboard.refresh_loading"}}"
+  data-ln-updated="{{t "page.admin.dashboard.refresh_done"}}"
+  data-ln-cancelled="{{t "page.admin.dashboard.refresh_cancelled"}}"
+  data-ln-ignored="{{t "page.admin.dashboard.response_ignored"}}"
+  data-ln-failed="{{t "page.admin.dashboard.refresh_failed"}}">
+  <a class="ln-button ln-button--secondary" href="{{.Data.refreshURL}}" data-ln-stats-refresh>{{t "page.admin.dashboard.refresh"}}</a>
+  <p class="ln-meta" data-ln-stats-status role="status" aria-live="polite"></p>
+</div>
+{{template "component.stats_filter" .}}
+{{if .Data.invalid}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.statistics.filter.invalid_summary") "description" (t "page.admin.statistics.filter.invalid_help"))}}
+{{else if .Data.loadFailed}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.statistics.dashboard.load_failed") "description" (t "page.admin.statistics.common.load_failed_help"))}}
+<a class="ln-button ln-button--secondary" href="{{.Data.dashboardURL}}">{{t "common.action.retry"}}</a>
+{{else}}
+<section aria-labelledby="stats-snapshot-title">
+  <h2 id="stats-snapshot-title">{{t "page.admin.dashboard.completeness_title"}}</h2>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.range_help" "start" .Data.rangeStartDate "end" .Data.rangeEndDate "timezone" .Data.timezone}}</p>
+  <p class="ln-meta">{{if .Data.inProgress}}{{t "page.admin.dashboard.in_progress_note"}}{{else}}{{t "page.admin.dashboard.closed_range_note"}}{{end}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.updated_at" "updated_at" (format_time .Data.updatedAt .Data.timezone)}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.scope_limited" "scope" .Data.scopeLabel}}</p>
+  <p class="ln-meta">{{t "page.admin.dashboard.current_notice"}}</p>
+  {{if .Data.completenessNotes}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.statistics.completeness.title"))}}{{end}}
+</section>
+<section aria-labelledby="stats-summary-title">
+  <h2 id="stats-summary-title">{{t "page.admin.dashboard.summary_title"}}</h2>
+  {{if .Data.empty}}
+  {{template "component.state" (dict "state" "empty" "title" (t "page.admin.dashboard.empty") "description" (t "common.state.no_results"))}}
+  {{else}}
+  <dl class="ln-stats-metrics">
+    <div class="ln-stats-metric"><dt>{{t "report.metric.active_users"}}</dt><dd>{{format_number .Data.overview.ActiveUsers}}</dd></div>
+    <div class="ln-stats-metric"><dt>{{t "report.metric.raw_events"}}</dt><dd>{{format_number .Data.overview.RawEvents}}</dd></div>
+    <div class="ln-stats-metric"><dt>{{t "report.metric.dedup_failed_requests"}}</dt><dd>{{format_number .Data.overview.FailedRequests}}</dd></div>
+    <div class="ln-stats-metric"><dt>{{t "report.metric.dedup_failed_tasks"}}</dt><dd>{{format_number .Data.overview.FailedTasks}}</dd></div>
+  </dl>
+  <p class="ln-meta">{{t "page.admin.statistics.chart_summary"}}</p>
+  <p class="ln-meta"><a href="{{.Data.statisticsURL}}">{{t "page.admin.dashboard.open_statistics"}}</a> · <a href="{{.Data.errorsURL}}">{{t "page.admin.dashboard.open_errors"}}</a></p>
+  {{end}}
+</section>
+{{if .Data.categorySummary}}
+<section aria-labelledby="stats-category-title">
+  <h2 id="stats-category-title">{{t "page.admin.dashboard.category_title"}}</h2>
+  <div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.dashboard.category_title"}}">
+    <table class="ln-table">
+      <caption>{{t "page.admin.dashboard.category_caption"}}</caption>
+      <thead><tr>
+        <th scope="col">{{t "page.admin.statistics.column.category"}}</th>
+        <th scope="col">{{t "page.admin.statistics.column.severity"}}</th>
+        <th scope="col">{{t "report.metric.raw_events"}}</th>
+        <th scope="col">{{t "report.metric.dedup_failed_requests"}}</th>
+        <th scope="col">{{t "report.metric.dedup_failed_tasks"}}</th>
+      </tr></thead>
+      <tbody>{{range .Data.categorySummary}}<tr>
+        <td><a href="{{index $.Data.categoryURLs .Category}}">{{t .CategoryKey}}</a></td>
+        <td>{{t .SeverityKey}}</td>
+        <td>{{format_number .RawEvents}}</td>
+        <td>{{format_number .FailedRequests}}</td>
+        <td>{{format_number .FailedTasks}}</td>
+      </tr>{{end}}</tbody>
+    </table>
+  </div>
+  <p class="ln-meta">{{t "page.admin.dashboard.category_help"}}</p>
+</section>
+{{end}}
+<section aria-labelledby="stats-health-title">
+  <h2 id="stats-health-title">{{t "page.admin.dashboard.health_title"}}</h2>
+  <p class="ln-meta">{{t "page.admin.dashboard.health_current_note"}}</p>
+  {{if .Data.healthUnavailable}}
+  {{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.dashboard.health_unavailable"))}}
+  {{else if .Data.health}}
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.health_observed" "observed_at" (format_time .Data.health.ObservedAt .Data.timezone)}}</p>
+  <div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.dashboard.health_title"}}">
+    <table class="ln-table">
+      <caption>{{t "page.admin.dashboard.health_caption"}}</caption>
+      <thead><tr>
+        <th scope="col">{{t "page.admin.dashboard.health_module"}}</th>
+        <th scope="col">{{t "common.label.status"}}</th>
+        <th scope="col">{{t "page.admin.dashboard.health_observed_at"}}</th>
+        <th scope="col">{{t "page.admin.dashboard.health_source"}}</th>
+        <th scope="col">{{t "page.admin.dashboard.health_detail"}}</th>
+      </tr></thead>
+      <tbody>{{range .Data.health.Modules}}<tr>
+        <td>{{t .ModuleKey}}</td>
+        <td>{{t .StateKey}}</td>
+        <td><time datetime="{{.ObservedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{format_time .ObservedAt $.Data.timezone}}</time></td>
+        <td><code>{{.Source}}</code></td>
+        <td>{{if .Reason}}{{t_fmt "page.admin.dashboard.health_reason" "reason" .Reason}}{{end}}{{if .LatencyMS}} {{t_fmt "page.admin.dashboard.health_latency" "latency" .LatencyMS}}{{end}}{{if .NotAfter}} {{t_fmt "page.admin.dashboard.health_not_after" "time" .NotAfter}}{{end}}{{if .RemainingHours}} {{t_fmt "page.admin.dashboard.health_remaining" "hours" .RemainingHours}}{{end}}{{if and (not .Reason) (not .LatencyMS) (not .NotAfter)}}—{{end}}</td>
+      </tr>{{end}}</tbody>
+    </table>
+  </div>
+  {{if .Data.health.NotEnabled}}<p class="ln-meta">{{t "page.admin.dashboard.health_not_enabled"}}</p>{{end}}
+  {{else}}
+  {{template "component.state" (dict "state" "unknown" "title" (t "page.admin.statistics.state.unknown") "description" (t "page.admin.dashboard.health_unavailable"))}}
+  {{end}}
+</section>
+{{if .Data.completenessNotes}}
+<section aria-labelledby="stats-completeness-title">
+  <h2 id="stats-completeness-title">{{t "page.admin.dashboard.completeness_title"}}</h2>
+  <p class="ln-meta">{{t_fmt "page.admin.statistics.completeness.retention_line" "days" (format_number .Data.completeness.RetentionDays) "cutoff" (format_time .Data.completeness.RetentionCutoff .Data.timezone)}}{{if not .Data.completeness.WindowWithinRetention}} {{t "page.admin.dashboard.retention_limited"}}{{end}}</p>
+  {{if .Data.completeness.ScopeTrimmed}}<p class="ln-meta">{{t "page.admin.dashboard.permission_trimmed"}}</p>{{end}}
+  {{if .Data.completeness.SourceTruncated}}<p class="ln-meta">{{t "page.admin.dashboard.source_truncated"}}</p>{{end}}
+  {{if .Data.completeness.MissingIntervals}}<ul class="ln-meta">{{range .Data.completeness.MissingIntervals}}<li>{{t_fmt "page.admin.statistics.completeness.interval" "start" (format_time .Start $.Data.timezone) "end" (format_time .End $.Data.timezone) "reason" .Reason}}</li>{{end}}</ul>{{end}}
+  {{if .Data.completeness.SamplingGaps}}<p class="ln-meta">{{t "page.admin.dashboard.sampling_gap_title"}}</p><ul class="ln-meta">{{range .Data.completeness.SamplingGaps}}<li>{{t_fmt "page.admin.statistics.completeness.interval" "start" (format_time .Start $.Data.timezone) "end" (format_time .End $.Data.timezone) "reason" .Reason}}</li>{{end}}</ul>{{else if not .Data.healthHistoryAvailable}}<p class="ln-meta">{{t "page.admin.dashboard.sampling_unavailable"}}</p>{{end}}
+</section>
+{{end}}
+{{end}}
+{{end}}
+{{end}}

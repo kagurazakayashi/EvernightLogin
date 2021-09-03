@@ -1,0 +1,88 @@
+{{define "page-title"}}{{t "page.admin.statistics_errors.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p class="ln-meta">{{t "page.admin.statistics_errors.description"}}</p>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.dashboard.forbidden") "description" (t "page.admin.statistics.common.forbidden_help"))}}
+{{else}}
+<div class="ln-stats-toolbar" data-ln-module="stats-refresh"
+  data-ln-loading="{{t "page.admin.dashboard.refresh_loading"}}"
+  data-ln-updated="{{t "page.admin.dashboard.refresh_done"}}"
+  data-ln-cancelled="{{t "page.admin.dashboard.refresh_cancelled"}}"
+  data-ln-ignored="{{t "page.admin.dashboard.response_ignored"}}"
+  data-ln-failed="{{t "page.admin.dashboard.refresh_failed"}}">
+  <a class="ln-button ln-button--secondary" href="{{.Data.refreshURL}}" data-ln-stats-refresh>{{t "page.admin.dashboard.refresh"}}</a>
+  <p class="ln-meta" data-ln-stats-status role="status" aria-live="polite"></p>
+</div>
+{{template "component.stats_filter" .}}
+{{if .Data.invalid}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.statistics.filter.invalid_summary") "description" (t "page.admin.statistics.filter.invalid_help"))}}
+{{else if .Data.loadFailed}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.statistics.errors.load_failed") "description" (t "page.admin.statistics.common.load_failed_help"))}}
+<a class="ln-button ln-button--secondary" href="{{.Data.errorsURL}}">{{t "common.action.retry"}}</a>
+{{else}}
+<section aria-labelledby="stats-errors-summary">
+  <h2 id="stats-errors-summary">{{t "page.admin.statistics_errors.summary_title"}}</h2>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.range_help" "start" .Data.rangeStartDate "end" .Data.rangeEndDate "timezone" .Data.timezone}}</p>
+  <p class="ln-meta">{{if .Data.inProgress}}{{t "page.admin.dashboard.in_progress_note"}}{{else}}{{t "page.admin.dashboard.closed_range_note"}}{{end}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.updated_at" "updated_at" (format_time .Data.updatedAt .Data.timezone)}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.scope_limited" "scope" .Data.scopeLabel}}</p>
+  <dl class="ln-stats-metrics">
+    <div class="ln-stats-metric"><dt>{{t "report.metric.raw_events"}}</dt><dd>{{format_number .Data.errors.TotalRawEvents}}</dd></div>
+    <div class="ln-stats-metric"><dt>{{t "report.metric.dedup_failed_requests"}}</dt><dd>{{format_number .Data.errors.FailedRequests}}</dd></div>
+    <div class="ln-stats-metric"><dt>{{t "report.metric.dedup_failed_tasks"}}</dt><dd>{{format_number .Data.errors.FailedTasks}}</dd></div>
+  </dl>
+  <p class="ln-meta">{{t "page.admin.statistics_errors.share_help"}}</p>
+  <p class="ln-meta">{{t "page.admin.statistics_errors.comparison_help"}}{{if .Data.comparisonEnabled}} {{t_fmt "page.admin.statistics_errors.comparison_window" "start" (format_time .Data.errors.ComparisonStart .Data.timezone) "end" (format_time .Data.errors.ComparisonEnd .Data.timezone)}}{{else}} {{t "page.admin.statistics_errors.comparison_unavailable"}}{{end}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.statistics_errors.sort_current" "sort" (t .Data.sortLabelKey) "order" (t (printf "page.admin.statistics_errors.order_%s" .Data.order))}}</p>
+  <p class="ln-meta"><a href="{{.Data.dashboardURL}}">{{t "page.admin.dashboard.title"}}</a> · <a href="{{.Data.statisticsURL}}">{{t "page.admin.statistics.title"}}</a></p>
+  {{if .Data.completenessNotes}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.statistics.completeness.title"))}}{{end}}
+</section>
+{{if .Data.empty}}
+{{template "component.state" (dict "state" "empty" "title" (t "page.admin.statistics_errors.empty") "description" (t "page.admin.statistics_errors.empty_help"))}}
+{{else}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.statistics_errors.title"}}">
+  <table class="ln-table">
+    <caption>{{t "page.admin.statistics_errors.caption"}}</caption>
+    <thead><tr>
+      <th scope="col">{{t "page.admin.statistics.column.error_code"}}</th>
+      <th scope="col">{{t "page.admin.statistics.column.category"}}</th>
+      <th scope="col">{{t "page.admin.statistics.column.severity"}}</th>
+      <th scope="col">{{t "page.admin.statistics.column.app"}}</th>
+      <th scope="col"><a href="{{index .Data.sortLinks "raw_events"}}" aria-label="{{t "page.admin.statistics_errors.sort.raw_events"}}"{{if eq .Data.errors.Sort "raw_events"}} aria-sort="{{if eq .Data.errors.Order "asc"}}ascending{{else}}descending{{end}}"{{end}}>{{t "page.admin.statistics_errors.sort.raw_events"}}</a></th>
+      <th scope="col"><a href="{{index .Data.sortLinks "share"}}" aria-label="{{t "page.admin.statistics_errors.sort.share"}}"{{if eq .Data.errors.Sort "share"}} aria-sort="{{if eq .Data.errors.Order "asc"}}ascending{{else}}descending{{end}}"{{end}}>{{t "page.admin.statistics_errors.sort.share"}}</a></th>
+      <th scope="col">{{t "report.metric.dedup_failed_requests"}}</th>
+      <th scope="col">{{t "report.metric.dedup_failed_tasks"}}</th>
+      <th scope="col"><a href="{{index .Data.sortLinks "first_seen"}}" aria-label="{{t "page.admin.statistics_errors.sort.first_seen"}}"{{if eq .Data.errors.Sort "first_seen"}} aria-sort="{{if eq .Data.errors.Order "asc"}}ascending{{else}}descending{{end}}"{{end}}>{{t "report.metric.first_seen"}}</a></th>
+      <th scope="col"><a href="{{index .Data.sortLinks "last_seen"}}" aria-label="{{t "page.admin.statistics_errors.sort.last_seen"}}"{{if eq .Data.errors.Sort "last_seen"}} aria-sort="{{if eq .Data.errors.Order "asc"}}ascending{{else}}descending{{end}}"{{end}}>{{t "report.metric.last_seen"}}</a></th>
+      <th scope="col"><a href="{{index .Data.sortLinks "growth"}}" aria-label="{{t "page.admin.statistics_errors.sort.growth"}}"{{if eq .Data.errors.Sort "growth"}} aria-sort="{{if eq .Data.errors.Order "asc"}}ascending{{else}}descending{{end}}"{{end}}>{{t "report.metric.growth"}}</a></th>
+      <th scope="col">{{t "page.admin.statistics.column.data_status"}}</th>
+      <th scope="col">{{t "common.label.actions"}}</th>
+    </tr></thead>
+    <tbody>{{range .Data.errors.Rows}}<tr>
+      <td>{{if .ErrorCode}}<code>{{.ErrorCode}}</code>{{else}}{{t "page.admin.statistics_errors.unregistered_code"}}{{end}}</td>
+      <td>{{t .CategoryKey}}</td>
+      <td>{{t .SeverityKey}}</td>
+      <td>{{if .AppID}}{{.AppID}}{{else}}{{t "page.admin.statistics.scope.system"}}{{end}}</td>
+      <td>{{format_number .RawEvents}}</td>
+      <td>{{if $.Data.shareZeroDenominator}}{{t "page.admin.statistics_errors.share_zero_denominator"}}{{else}}{{.ShareText}}{{end}}</td>
+      <td>{{format_number .FailedRequests}}</td>
+      <td>{{format_number .FailedTasks}}</td>
+      <td>{{if .FirstSeen.IsZero}}—{{else}}{{format_time .FirstSeen $.Data.timezone}}{{end}}</td>
+      <td>{{if .LastSeen.IsZero}}—{{else}}{{format_time .LastSeen $.Data.timezone}}{{end}}</td>
+      <td>{{if .GrowthKey}}{{t .GrowthKey}}{{else if .GrowthText}}{{.GrowthText}}{{else}}—{{end}}</td>
+      <td>{{t .StatusKey}}</td>
+      <td>{{if .DrilldownURL}}<a href="{{.DrilldownURL}}">{{t "page.admin.statistics.view_records"}}</a>{{else}}{{t "page.admin.dashboard.drilldown_forbidden"}}{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+</div>
+{{template "component.pagination" (dict "prev_url" .Data.prevURL "next_url" .Data.nextURL "limit" .Data.errors.Limit)}}
+{{end}}
+<p class="ln-meta">{{t "page.admin.statistics_errors.unregistered_help"}}</p>
+{{if .Data.completenessNotes}}
+<p class="ln-meta">{{t_fmt "page.admin.statistics.completeness.retention_line" "days" (format_number .Data.completeness.RetentionDays) "cutoff" (format_time .Data.completeness.RetentionCutoff .Data.timezone)}}</p>
+{{if .Data.completeness.SourceTruncated}}<p class="ln-meta">{{t "page.admin.dashboard.source_truncated"}}</p>{{end}}
+{{end}}
+{{end}}
+{{end}}
+{{end}}

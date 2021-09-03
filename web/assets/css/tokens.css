@@ -47,6 +47,13 @@
   --ln-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
   --ln-duration: 120ms;
   --ln-button-height: 40px;
+  /* 图表序列语义色：同时配合线型/点形文字，不单独承担语义。 */
+  --ln-chart-1: var(--ln-primitive-blue-700);
+  --ln-chart-2: var(--ln-primitive-red-700);
+  --ln-chart-3: var(--ln-primitive-amber-800);
+  --ln-chart-4: var(--ln-primitive-emerald-700);
+  --ln-chart-5: var(--ln-primitive-slate-600);
+  --ln-chart-6: var(--ln-primitive-slate-500);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-ln-theme="light"]) {
@@ -64,9 +71,21 @@
     --ln-color-warning: var(--ln-primitive-amber-300);
     --ln-color-danger: var(--ln-primitive-red-300);
     --ln-color-focus: var(--ln-primitive-blue-200);
+    --ln-chart-1: var(--ln-primitive-blue-300);
+    --ln-chart-2: var(--ln-primitive-red-300);
+    --ln-chart-3: var(--ln-primitive-amber-300);
+    --ln-chart-4: var(--ln-primitive-emerald-300, #6EE7B7);
+    --ln-chart-5: var(--ln-primitive-slate-300);
+    --ln-chart-6: var(--ln-primitive-slate-400);
   }
 }
 [data-ln-theme="dark"] {
+  --ln-chart-1: var(--ln-primitive-blue-300);
+  --ln-chart-2: var(--ln-primitive-red-300);
+  --ln-chart-3: var(--ln-primitive-amber-300);
+  --ln-chart-4: var(--ln-primitive-emerald-300, #6EE7B7);
+  --ln-chart-5: var(--ln-primitive-slate-300);
+  --ln-chart-6: var(--ln-primitive-slate-400);
   --ln-color-bg: var(--ln-primitive-slate-900);
   --ln-color-surface: var(--ln-primitive-slate-800);
   --ln-color-surface-subtle: var(--ln-primitive-slate-700);

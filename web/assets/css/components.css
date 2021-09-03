@@ -45,3 +45,53 @@
 
 .ln-qr-wrap { display: inline-block; padding: var(--ln-space-3); background: #FFFFFF; border: 1px solid var(--ln-color-border); border-radius: var(--ln-radius); max-width: 100%; }
 .ln-qr { width: 220px; height: 220px; max-width: 100%; height: auto; display: block; }
+
+/* 步骤 76 统计看板：筛选用普通表单，图表为服务端内联 SVG，数据表保留原生语义。 */
+.ln-stats-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ln-space-3); margin-bottom: var(--ln-space-4); }
+.ln-stats-filter { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--ln-space-2) var(--ln-space-4); align-items: start; margin-bottom: var(--ln-space-6); }
+.ln-stats-filter h2, .ln-stats-filter .ln-button, .ln-stats-filter .ln-field__error { grid-column: 1 / -1; }
+.ln-stats-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--ln-space-3); margin: 0 0 var(--ln-space-4); }
+.ln-stats-metric { border: 1px solid var(--ln-color-border); border-radius: var(--ln-radius); padding: var(--ln-space-3); background: var(--ln-color-surface); }
+.ln-stats-metric dt { color: var(--ln-color-text-muted); font-size: var(--ln-text-sm); }
+.ln-stats-metric dd { margin: var(--ln-space-1) 0 0; font-size: var(--ln-text-2xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ln-chart-figure { margin: 0 0 var(--ln-space-3); border: 1px solid var(--ln-color-border); border-radius: var(--ln-radius); background: var(--ln-color-surface); padding: var(--ln-space-3); }
+.ln-chart { display: block; width: 100%; height: auto; max-height: 320px; }
+.ln-chart__grid { stroke: var(--ln-color-border); stroke-width: 1; }
+.ln-chart__tick, .ln-chart__axis { fill: var(--ln-color-text-muted); font-size: 12px; }
+.ln-chart__line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ln-chart__point { stroke-width: 2; fill: var(--ln-color-surface); }
+.ln-chart__point--open { fill: var(--ln-color-surface-subtle); }
+.ln-chart__series.series-1 .ln-chart__line, .ln-chart__series.series-1 .ln-chart__point { stroke: var(--ln-chart-1); }
+.ln-chart__series.series-2 .ln-chart__line, .ln-chart__series.series-2 .ln-chart__point { stroke: var(--ln-chart-2); stroke-dasharray: 6 4; }
+.ln-chart__series.series-3 .ln-chart__line, .ln-chart__series.series-3 .ln-chart__point { stroke: var(--ln-chart-3); stroke-dasharray: 2 4; }
+.ln-chart__series.series-4 .ln-chart__line, .ln-chart__series.series-4 .ln-chart__point { stroke: var(--ln-chart-4); stroke-dasharray: 10 4 2 4; }
+.ln-chart__series.series-5 .ln-chart__line, .ln-chart__series.series-5 .ln-chart__point { stroke: var(--ln-chart-5); stroke-dasharray: 4 4; }
+.ln-chart__series.series-6 .ln-chart__line, .ln-chart__series.series-6 .ln-chart__point { stroke: var(--ln-chart-6); stroke-dasharray: 1 3; }
+.ln-chart-legend { list-style: none; display: flex; flex-wrap: wrap; gap: var(--ln-space-2) var(--ln-space-4); padding: 0; margin: 0 0 var(--ln-space-3); }
+.ln-chart-legend__item { display: inline-flex; align-items: center; gap: var(--ln-space-1); }
+.ln-chart-legend__swatch { display: inline-block; width: 24px; height: 0; border-top: 3px solid var(--ln-color-border-strong); }
+.ln-chart-legend__swatch.series-1 { border-top-color: var(--ln-chart-1); }
+.ln-chart-legend__swatch.series-2 { border-top-color: var(--ln-chart-2); border-top-style: dashed; }
+.ln-chart-legend__swatch.series-3 { border-top-color: var(--ln-chart-3); border-top-style: dotted; }
+.ln-chart-legend__swatch.series-4 { border-top-color: var(--ln-chart-4); border-top-style: double; }
+.ln-chart-legend__swatch.series-5 { border-top-color: var(--ln-chart-5); border-top-style: dashed; }
+.ln-chart-legend__swatch.series-6 { border-top-color: var(--ln-chart-6); border-top-style: dotted; }
+.ln-table td { font-variant-numeric: tabular-nums; }
+.ln-table th a { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; }
+[data-ln-stats-status]:empty { display: none; }
+@media (max-width: 639px) {
+  .ln-stats-filter { grid-template-columns: 1fr; }
+  .ln-stats-metrics { grid-template-columns: 1fr; }
+  .ln-stats-filter .ln-button { width: 100%; }
+  .ln-table { min-width: 720px; }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .ln-stats-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ln-chart * { transition: none; animation: none; }
+}
+@media (forced-colors: active) {
+  .ln-chart__line, .ln-chart__point, .ln-chart-legend__swatch { forced-color-adjust: none; }
+  .ln-stats-metric, .ln-chart-figure, .ln-table-scroll { border: 1px solid CanvasText; }
+}

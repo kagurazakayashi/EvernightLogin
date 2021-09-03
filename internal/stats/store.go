@@ -91,6 +91,38 @@ type FailureKeyCount struct {
 	DistinctTasks    int64
 }
 
+// ErrorFact 是一条“参与错误统计”的审计事件事实（候选行已由存储层按统计相关
+// 结果/动作/错误码粗筛）。服务层用 ClassifyEvent 统一分类、按时间桶分桶并计算
+// 行级去重失败请求/任务数，避免 SQL 与业务字典两套分类漂移。
+//
+// 安全不变量：本结构只含聚合所需的稳定字段，不含审计正文 detail_json、自由文本、
+// 凭据或内部地址；EventID 仅用于缺失关联编号时充当逻辑请求/任务的稳定身份。
+type ErrorFact struct {
+	OccurredAt time.Time
+	ErrorCode  string
+	AppID      string
+	Outcome    audit.Outcome
+	Action     string
+	EventID    string
+	RequestID  string
+	TaskID     string
+}
+
+// ErrorFactQuery 是错误趋势事实查询参数；Limit 是行数上限，超过时结果标记截断。
+type ErrorFactQuery struct {
+	From  time.Time
+	To    time.Time
+	Scope ScopeConstraint
+	Limit int
+}
+
+// ErrorFactPage 是错误事实查询结果。Truncated 表示达到行数上限，趋势与行级去重数
+// 都不完整，调用方必须显式标注而不是把截断后的值当作完整值。
+type ErrorFactPage struct {
+	Facts     []ErrorFact
+	Truncated bool
+}
+
 // BusinessActivityRecord 是可信业务活动上报记录。Source 固定为 app_server；
 // DedupeKey 唯一，重复上报按幂等处理。
 type BusinessActivityRecord struct {
@@ -158,6 +190,10 @@ type Store interface {
 	AggregateErrorGroups(ctx context.Context, query ErrorGroupQuery) ([]ErrorGroupRow, bool, error)
 	// CountFailureKeys 返回 [From, To) 内全局去重失败请求/任务数。
 	CountFailureKeys(ctx context.Context, query FailureKeyQuery) (FailureKeyCount, error)
+	// QueryErrorFacts 返回 [From, To) 内参与错误统计的候选事件事实（按发生时间与
+	// 事件 ID 稳定排序）；行数受 Limit 限制，超过时 Truncated=true。它是错误趋势
+	// 分桶的唯一数据来源，不返回原始审计正文。
+	QueryErrorFacts(ctx context.Context, query ErrorFactQuery) (ErrorFactPage, error)
 	// InsertBusinessActivity 幂等写入一条可信业务活动；已存在返回 inserted=false。
 	InsertBusinessActivity(ctx context.Context, record BusinessActivityRecord) (bool, error)
 	// QueryBusinessActivity 返回可信业务活动事实。

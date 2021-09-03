@@ -98,6 +98,22 @@ func pageLocation(page UIPageContext) *time.Location {
 	return time.UTC
 }
 
+// auditPageLocation 返回审计页日期筛选使用的时区：优先受控 tz 参数（可加载的 IANA
+// 名称，拒绝 Local），否则使用页面/会话时区。它让统计看板的同区间下钻在统计时区与
+// 账户时区不同时仍按同一自然日解释日期，避免明细区间整体偏移。tz 只影响日期解释，
+// 不改变任何授权或时间上界钳制。
+func auditPageLocation(page UIPageContext, values url.Values) (*time.Location, string) {
+	if values != nil {
+		raw := strings.TrimSpace(values.Get("tz"))
+		if raw != "" && raw != "Local" && len(raw) <= 64 {
+			if location, err := time.LoadLocation(raw); err == nil {
+				return location, raw
+			}
+		}
+	}
+	return pageLocation(page), page.TimeZone
+}
+
 // parseDateBound 解析 YYYY-MM-DD；empty 返回零值。
 func parseDateBound(value string, location *time.Location) (time.Time, bool) {
 	value = strings.TrimSpace(value)
@@ -284,8 +300,9 @@ func (h *auditPageHandlers) list(ctx context.Context, request *http.Request,
 		return UIPageOutcome{StatusCode: http.StatusForbidden, Data: data,
 			ErrorSummary: text("page.admin.audit.common.forbidden")}, nil
 	}
-	location := pageLocation(page)
 	values := request.URL.Query()
+	location, timeZone := auditPageLocation(page, values)
+	data["timezone"] = timeZone
 	filter, fieldErrors := parseAuditFilter(values, location, h.pages.options.Now())
 	limit, offset, pageOK := parsePageWindow(values)
 	if !pageOK {
@@ -530,12 +547,12 @@ func (h *auditPageHandlers) createExport(ctx context.Context, request *http.Requ
 			ErrorSummary: text("page.admin.audit.export.invalid_format"),
 			Data:         map[string]any{"capabilities": UIAuditCapabilities{}}}, nil
 	}
-	location := pageLocation(page)
+	location, _ := auditPageLocation(page, request.PostForm)
 	values := url.Values{"format": []string{format}}
 	// 筛选编号使用独立字段名，避免与本次导出请求编号复用；导出动作的 request_id
 	// 只取本请求由服务端生成的编号，绝不采用客户端表单值。
-	for _, key := range []string{"from", "to", "app_id", "actor_type", "actor_id", "action",
-		"outcome", "error_code", "task_id", "target_type", "target_id",
+	for _, key := range []string{"from", "to", "tz", "app_id", "actor_type", "actor_id",
+		"action", "outcome", "error_code", "task_id", "target_type", "target_id",
 		"system_only", "order"} {
 		if value := request.PostForm.Get(key); value != "" {
 			values.Set(key, value)

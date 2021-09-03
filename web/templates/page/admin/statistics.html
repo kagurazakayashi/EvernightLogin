@@ -1,0 +1,136 @@
+{{define "page-title"}}{{t "page.admin.statistics.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p class="ln-meta">{{t "page.admin.statistics.description"}}</p>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.dashboard.forbidden") "description" (t "page.admin.statistics.common.forbidden_help"))}}
+{{else}}
+<div class="ln-stats-toolbar" data-ln-module="stats-refresh"
+  data-ln-loading="{{t "page.admin.dashboard.refresh_loading"}}"
+  data-ln-updated="{{t "page.admin.dashboard.refresh_done"}}"
+  data-ln-cancelled="{{t "page.admin.dashboard.refresh_cancelled"}}"
+  data-ln-ignored="{{t "page.admin.dashboard.response_ignored"}}"
+  data-ln-failed="{{t "page.admin.dashboard.refresh_failed"}}">
+  <a class="ln-button ln-button--secondary" href="{{.Data.refreshURL}}" data-ln-stats-refresh>{{t "page.admin.dashboard.refresh"}}</a>
+  <p class="ln-meta" data-ln-stats-status role="status" aria-live="polite"></p>
+</div>
+{{template "component.stats_filter" .}}
+{{if .Data.invalid}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.statistics.filter.invalid_summary") "description" (t "page.admin.statistics.filter.invalid_help"))}}
+{{else if .Data.loadFailed}}
+{{template "component.state" (dict "state" "error" "title" (t "page.admin.statistics.statistics.load_failed") "description" (t "page.admin.statistics.common.load_failed_help"))}}
+<a class="ln-button ln-button--secondary" href="{{.Data.statisticsURL}}">{{t "common.action.retry"}}</a>
+{{else}}
+<section aria-labelledby="stats-status-summary">
+  <h2 id="stats-status-summary">{{t "page.admin.dashboard.completeness_title"}}</h2>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.range_help" "start" .Data.rangeStartDate "end" .Data.rangeEndDate "timezone" .Data.timezone}}</p>
+  <p class="ln-meta">{{if .Data.inProgress}}{{t "page.admin.dashboard.in_progress_note"}}{{else}}{{t "page.admin.dashboard.closed_range_note"}}{{end}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.updated_at" "updated_at" (format_time .Data.updatedAt .Data.timezone)}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.dashboard.scope_limited" "scope" .Data.scopeLabel}}</p>
+  {{if .Data.windowMismatch}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.statistics.window_mismatch"))}}{{end}}
+  {{if .Data.completenessNotes}}{{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.statistics.completeness.title"))}}{{end}}
+  <p class="ln-meta">{{t "page.admin.statistics.chart_summary"}}</p>
+  <p class="ln-meta"><a href="{{.Data.dashboardURL}}">{{t "page.admin.dashboard.title"}}</a> · <a href="{{.Data.errorsURL}}">{{t "page.admin.statistics_errors.title"}}</a></p>
+</section>
+<section aria-labelledby="stats-activity-title">
+  <h2 id="stats-activity-title">{{t "page.admin.statistics.activity_title"}}</h2>
+  <p class="ln-meta">{{t "page.admin.statistics.activity_help"}}</p>
+  <p class="ln-meta">{{t_fmt "page.admin.statistics.activity_total" "count" (format_number .Data.activity.TotalActiveUsers)}}{{if eq .Data.activity.DedupeScope "app"}} {{t "page.admin.statistics.activity_dedupe_app"}}{{else}} {{t "page.admin.statistics.cross_app_dedup"}}{{end}}</p>
+  {{if .Data.activityEmpty}}
+  {{template "component.state" (dict "state" "empty" "title" (t "page.admin.statistics.activity_empty") "description" (t "page.admin.statistics.chart_summary"))}}
+  {{else}}
+  <figure class="ln-chart-figure">
+    {{.Data.activityChartSVG}}
+    <figcaption class="ln-meta">{{t "page.admin.statistics.chart_summary"}}</figcaption>
+  </figure>
+  <div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.statistics.activity_title"}}">
+    <table class="ln-table">
+      <caption>{{t "page.admin.statistics.activity_caption"}}</caption>
+      <thead><tr>
+        <th scope="col">{{t "page.admin.statistics.column.bucket"}}</th>
+        <th scope="col">{{t "page.admin.statistics.column.range"}}</th>
+        <th scope="col">{{t "report.metric.active_users"}}</th>
+        <th scope="col">{{t "page.admin.statistics.column.data_status"}}</th>
+        <th scope="col">{{t "common.label.actions"}}</th>
+      </tr></thead>
+      <tbody>{{range .Data.activity.Points}}<tr>
+        <td>{{.BucketKey}}</td>
+        <td>{{format_time .Start $.Data.timezone}} – {{format_time .End $.Data.timezone}}</td>
+        <td>{{if .ValueAvailable}}{{format_number .ActiveUsers}}{{else}}—{{end}}</td>
+        <td>{{t .StatusKey}}</td>
+        <td>{{if .DrilldownURL}}<a href="{{.DrilldownURL}}">{{t "page.admin.statistics.view_records"}}</a>{{else}}{{t "page.admin.dashboard.drilldown_forbidden"}}{{end}}</td>
+      </tr>{{end}}</tbody>
+    </table>
+  </div>
+  <p class="ln-meta">{{t "page.admin.statistics.activity_table_help"}}</p>
+  {{end}}
+</section>
+<section aria-labelledby="stats-error-title">
+  <h2 id="stats-error-title">{{t "page.admin.statistics.error_trend_title"}}</h2>
+  <form method="get" action="{{.Data.filterAction}}" aria-labelledby="stats-metric-title">
+    <h3 id="stats-metric-title">{{t "page.admin.statistics.metric.title"}}</h3>
+    <input type="hidden" name="scope" value="{{.Data.scopeID}}">
+    <input type="hidden" name="tz" value="{{.Data.timezone}}">
+    <input type="hidden" name="range" value="{{.Data.range}}">
+    <input type="hidden" name="from" value="{{.Data.fromValue}}">
+    <input type="hidden" name="to" value="{{.Data.toValue}}">
+    <input type="hidden" name="granularity" value="{{.Data.granularity}}">
+    <input type="hidden" name="category" value="{{.Data.category}}">
+    <label class="ln-field__label" for="stats-metric">{{t "page.admin.statistics.metric.title"}}</label>
+    <select class="ln-input" id="stats-metric" name="metric">
+      {{range .Data.metricOptions}}<option value="{{.}}"{{if eq . $.Data.metric}} selected{{end}}>{{t (printf "page.admin.statistics.metric.%s" .)}}</option>{{end}}
+    </select>
+    <button class="ln-button ln-button--secondary" type="submit">{{t "common.action.apply_filter"}}</button>
+  </form>
+  <p class="ln-meta">{{t_fmt "page.admin.statistics.metric.summary" "metric" (t .Data.metricLabelKey) "raw" (format_number .Data.errorTrend.TotalRawEvents) "requests" (format_number .Data.errorTrend.FailedRequests) "tasks" (format_number .Data.errorTrend.FailedTasks)}}</p>
+  {{if .Data.errorEmpty}}
+  {{template "component.state" (dict "state" "empty" "title" (t "page.admin.statistics.error_empty") "description" (t "page.admin.statistics.chart_summary"))}}
+  {{else}}
+  <figure class="ln-chart-figure">
+    {{.Data.errorChartSVG}}
+    <figcaption class="ln-meta">{{t "page.admin.statistics.chart_summary"}}</figcaption>
+  </figure>
+  <ul class="ln-chart-legend">
+    {{range .Data.errorTrend.Categories}}<li class="ln-chart-legend__item"><span class="ln-chart-legend__swatch {{.ClassKey}}"></span>{{t .CategoryKey}}</li>{{end}}
+  </ul>
+  <div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.statistics.error_trend_title"}}">
+    <table class="ln-table">
+      <caption>{{t "page.admin.statistics.error_caption"}}</caption>
+      <thead><tr>
+        <th scope="col">{{t "page.admin.statistics.column.bucket"}}</th>
+        <th scope="col">{{t "page.admin.statistics.column.category"}}</th>
+        <th scope="col">{{t "report.metric.raw_events"}}</th>
+        <th scope="col">{{t "report.metric.dedup_failed_requests"}}</th>
+        <th scope="col">{{t "report.metric.dedup_failed_tasks"}}</th>
+        <th scope="col">{{t "page.admin.statistics.column.metric_value"}}</th>
+        <th scope="col">{{t "page.admin.statistics.column.data_status"}}</th>
+        <th scope="col">{{t "common.label.actions"}}</th>
+      </tr></thead>
+      <tbody>{{range .Data.errorTrend.Points}}<tr>
+        <td>{{.BucketKey}}</td>
+        <td>{{t .CategoryKey}}</td>
+        <td>{{if .ValueAvailable}}{{format_number .RawEvents}}{{else}}—{{end}}</td>
+        <td>{{if .ValueAvailable}}{{format_number .FailedRequests}}{{else}}—{{end}}</td>
+        <td>{{if .ValueAvailable}}{{format_number .FailedTasks}}{{else}}—{{end}}</td>
+        <td>{{if .ValueAvailable}}{{format_number .MetricValue}}{{else}}—{{end}}</td>
+        <td>{{t .StatusKey}}</td>
+        <td>{{if .DrilldownURL}}<a href="{{.DrilldownURL}}">{{t "page.admin.statistics.view_records"}}</a>{{else}}{{t "page.admin.dashboard.drilldown_forbidden"}}{{end}}</td>
+      </tr>{{end}}</tbody>
+    </table>
+  </div>
+  {{end}}
+  <p class="ln-meta">{{t "page.admin.statistics.error_table_help"}}</p>
+</section>
+{{if .Data.completenessNotes}}
+<section aria-labelledby="stats-completeness-title">
+  <h2 id="stats-completeness-title">{{t "page.admin.dashboard.completeness_title"}}</h2>
+  <p class="ln-meta">{{t_fmt "page.admin.statistics.completeness.retention_line" "days" (format_number .Data.completeness.RetentionDays) "cutoff" (format_time .Data.completeness.RetentionCutoff .Data.timezone)}}</p>
+  {{if .Data.completeness.SourceTruncated}}<p class="ln-meta">{{t "page.admin.dashboard.source_truncated"}}</p>{{end}}
+  {{if .Data.completeness.MissingIntervals}}<ul class="ln-meta">{{range .Data.completeness.MissingIntervals}}<li>{{t_fmt "page.admin.statistics.completeness.interval" "start" (format_time .Start $.Data.timezone) "end" (format_time .End $.Data.timezone) "reason" .Reason}}</li>{{end}}</ul>{{end}}
+  {{if .Data.completeness.ModulesNotEnabled}}<p class="ln-meta">{{t_fmt "page.admin.statistics.completeness.modules_not_enabled" "modules" (join .Data.completeness.ModulesNotEnabled ", ")}}</p>{{end}}
+  {{if .Data.completeness.SamplingGaps}}<ul class="ln-meta">{{range .Data.completeness.SamplingGaps}}<li>{{t_fmt "page.admin.statistics.completeness.interval" "start" (format_time .Start $.Data.timezone) "end" (format_time .End $.Data.timezone) "reason" .Reason}}</li>{{end}}</ul>{{end}}
+</section>
+{{end}}
+{{end}}
+{{end}}
+{{end}}

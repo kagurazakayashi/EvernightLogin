@@ -247,6 +247,46 @@ type ErrorResult struct {
 	GeneratedAt      time.Time
 }
 
+// ErrorTrendRequest 是错误趋势查询：与 Errors 使用同一筛选、时区与授权范围，但
+// 结果按窗口时间桶分桶，供步骤 76 的错误趋势图与同源数据表使用。
+type ErrorTrendRequest struct {
+	Caller     account.Caller
+	ScopeID    string
+	Window     WindowRequest
+	AppID      string
+	Categories []Category
+	// Metric 是趋势主指标：raw_events（默认）、dedup_failed_requests 或
+	// dedup_failed_tasks。数据表仍会同时给出三个真实指标，绝不互相换算。
+	Metric Metric
+}
+
+// ErrorTrendPoint 是一个时间桶中一个错误类别的统计值。RawEvents 是原始事件次数；
+// FailedRequests/FailedTasks 是该桶该类别内按 request_id/task_id 去重的数量（桶内
+// 去重，不与全局去重数相加比较）。
+type ErrorTrendPoint struct {
+	Bucket         Bucket
+	Category       Category
+	Severity       Severity
+	RawEvents      int64
+	FailedRequests int64
+	FailedTasks    int64
+	DataStatus     DataStatus
+}
+
+// ErrorTrendResult 是错误趋势结果：Points 按时间桶升序、类别稳定顺序排列；
+// TotalRawEvents/FailedRequests/FailedTasks 是窗口内全局值（不与桶求和混淆）。
+type ErrorTrendResult struct {
+	Window         Window
+	Metric         Metric
+	Points         []ErrorTrendPoint
+	Categories     []CategorySummary
+	TotalRawEvents int64
+	FailedRequests int64
+	FailedTasks    int64
+	Completeness   Completeness
+	GeneratedAt    time.Time
+}
+
 // OverviewRequest 是看板摘要查询（同一窗口/范围/截断点）。
 type OverviewRequest struct {
 	Caller  account.Caller
@@ -832,6 +872,243 @@ func (s *Service) Errors(ctx context.Context, request ErrorRequest) (ErrorResult
 		Sort: sortField, Order: order, Limit: limit, Offset: offset, HasMore: hasMore,
 		Completeness: completeness, GeneratedAt: s.now(),
 	}, nil
+}
+
+// ErrorTrend 聚合 [Start,End) 内错误统计的时间桶趋势。它与 Errors 使用同一
+// ClassifyEvent 分类与同一去重口径：原始事件次数按审计行计数；去重失败请求/任务数
+// 按稳定 request_id/task_id（缺失时以事件 ID）在桶内去重，不把桶内数量相加冒充
+// 全局去重数。分类过滤、权限裁剪、保留期与截断都如实表达，缺失不按零处理。
+func (s *Service) ErrorTrend(ctx context.Context,
+	request ErrorTrendRequest) (ErrorTrendResult, error) {
+	scope, err := s.authorize(ctx, request.Caller, request.ScopeID)
+	if err != nil {
+		return ErrorTrendResult{}, err
+	}
+	if err := validateAppFilter(request.AppID, scope); err != nil {
+		return ErrorTrendResult{}, err
+	}
+	window, err := NormalizeWindow(request.Window, s.now())
+	if err != nil {
+		return ErrorTrendResult{}, err
+	}
+	categories, err := normalizeCategories(request.Categories)
+	if err != nil {
+		return ErrorTrendResult{}, err
+	}
+	metric := request.Metric
+	if metric == "" {
+		metric = MetricRawEvents
+	}
+	switch metric {
+	case MetricRawEvents, MetricDedupFailedRequests, MetricDedupFailedTasks:
+	default:
+		return ErrorTrendResult{}, fmt.Errorf("%w: 趋势指标未登记", ErrInvalidRequest)
+	}
+	completeness, err := s.retentionInfo(ctx)
+	if err != nil {
+		return ErrorTrendResult{}, err
+	}
+	constraint := constraintForApp(scope.constraint, request.AppID)
+	page, err := s.opts.Store.QueryErrorFacts(ctx, ErrorFactQuery{
+		From: window.Start, To: window.End, Scope: constraint, Limit: s.maxFactRows,
+	})
+	if err != nil {
+		return ErrorTrendResult{}, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+	}
+	points, totals, summaries := aggregateErrorTrend(window, page.Facts,
+		categories, completeness.RetentionCutoff, page.Truncated)
+	completeness = finalizeCompleteness(completeness, window, scope, page.Truncated, nil)
+	return ErrorTrendResult{
+		Window: window, Metric: metric, Points: points, Categories: summaries,
+		TotalRawEvents: totals.rawEvents, FailedRequests: totals.failedRequests,
+		FailedTasks: totals.failedTasks, Completeness: completeness,
+		GeneratedAt: s.now(),
+	}, nil
+}
+
+// errorTrendTotals 是趋势聚合的全局计数（与桶值分开）。
+type errorTrendTotals struct {
+	rawEvents      int64
+	failedRequests int64
+	failedTasks    int64
+}
+
+// dedupeEligible 报告该事件是否进入“去重失败请求/任务”计数：只统计失败结果，并
+// 排除任务取消与数据质量警告码（与 NonFailureCodes/存储层 SQL 口径一致）。
+func dedupeEligible(outcome audit.Outcome, errorCode string) bool {
+	if outcome != audit.OutcomeFailure {
+		return false
+	}
+	if errorCode == "TASK_CANCELLED" || warningCodes[errorCode] {
+		return false
+	}
+	return true
+}
+
+// requestKey/taskKey 返回去重身份。请求优先稳定 request_id，缺失时用事件 ID 计
+// 一个逻辑请求（与存储层 COUNT(DISTINCT CASE ...) 语义一致）；任务只按稳定
+// task_id 归并，缺失 task_id 的事件不进入任务数量（缺失不是 0，也不按事件摊派）。
+func requestKey(fact ErrorFact) string {
+	if fact.RequestID != "" {
+		return "request:" + fact.RequestID
+	}
+	return "event:" + fact.EventID
+}
+
+func taskKey(fact ErrorFact) string {
+	if fact.TaskID != "" {
+		return "task:" + fact.TaskID
+	}
+	return ""
+}
+
+// aggregateErrorTrend 把错误事实按时间桶与类别聚合。实现保证：
+//   - 类别由 ClassifyEvent 统一判定，未登记错误码保留 unknown；
+//   - 每桶每类别的原始次数直接计数，去重请求/任务用集合去重；
+//   - 只有窗口内实际出现（且在类别过滤后）的类别生成序列；过滤指定类别时即使
+//     没有事件也生成真实零值序列；
+//   - 桶完全早于保留边界时状态为 unknown（有事件时为 partial），截断时 partial，
+//     进行中的桶标 in_progress；缺失从不伪装成完整 0。
+func aggregateErrorTrend(window Window, facts []ErrorFact,
+	categories map[Category]bool, retentionCutoff time.Time,
+	truncated bool) ([]ErrorTrendPoint, errorTrendTotals, []CategorySummary) {
+	type bucketAggregate struct {
+		rawEvents      int64
+		failedRequests int64
+		failedTasks    int64
+		requests       map[string]struct{}
+		tasks          map[string]struct{}
+		severity       Severity
+	}
+	aggregates := make(map[[2]int]*bucketAggregate, len(window.Buckets))
+	var totals errorTrendTotals
+	globalRequests := make(map[string]struct{})
+	globalTasks := make(map[string]struct{})
+	present := make(map[Category]bool)
+	severityByCategory := make(map[Category]Severity)
+	for _, fact := range facts {
+		classification := ClassifyEvent(fact.Outcome, fact.ErrorCode, fact.Action)
+		if !classification.Counted {
+			continue
+		}
+		if len(categories) > 0 && !categories[classification.Category] {
+			continue
+		}
+		index := bucketIndex(window.Buckets, fact.OccurredAt)
+		if index < 0 {
+			continue
+		}
+		key := [2]int{index, categoryOrderIndex(classification.Category)}
+		aggregate, exists := aggregates[key]
+		if !exists {
+			aggregate = &bucketAggregate{requests: map[string]struct{}{},
+				tasks: map[string]struct{}{}}
+			aggregates[key] = aggregate
+		}
+		aggregate.rawEvents++
+		present[classification.Category] = true
+		if rank := classification.Severity.Rank(); rank > severityByCategory[classification.Category].Rank() {
+			severityByCategory[classification.Category] = classification.Severity
+		}
+		totals.rawEvents++
+		if dedupeEligible(fact.Outcome, fact.ErrorCode) {
+			request := requestKey(fact)
+			aggregate.requests[request] = struct{}{}
+			globalRequests[request] = struct{}{}
+			if task := taskKey(fact); task != "" {
+				aggregate.tasks[task] = struct{}{}
+				globalTasks[task] = struct{}{}
+			}
+		}
+	}
+	totals.failedRequests = int64(len(globalRequests))
+	totals.failedTasks = int64(len(globalTasks))
+	points := make([]ErrorTrendPoint, 0, len(window.Buckets)*len(present))
+	for bucketIndex, bucket := range window.Buckets {
+		for position, category := range categoryOrder() {
+			if len(categories) > 0 {
+				if !categories[category] {
+					continue
+				}
+			} else if !present[category] {
+				continue
+			}
+			aggregate := aggregates[[2]int{bucketIndex, position}]
+			point := ErrorTrendPoint{Bucket: bucket, Category: category,
+				Severity: categoryDefaultSeverity(category)}
+			if severity, exists := severityByCategory[category]; exists {
+				point.Severity = severity
+			}
+			if aggregate != nil {
+				point.RawEvents = aggregate.rawEvents
+				point.FailedRequests = int64(len(aggregate.requests))
+				point.FailedTasks = int64(len(aggregate.tasks))
+			}
+			point.DataStatus = trendPointStatus(bucket, retentionCutoff, truncated,
+				point.RawEvents > 0)
+			points = append(points, point)
+		}
+	}
+	summaries := make([]CategorySummary, 0, len(categoryOrder()))
+	for _, category := range categoryOrder() {
+		if len(categories) > 0 && !categories[category] {
+			continue
+		}
+		summary := CategorySummary{Category: category,
+			Severity: categoryDefaultSeverity(category)}
+		hasData := false
+		for _, point := range points {
+			if point.Category != category {
+				continue
+			}
+			summary.RawEvents += point.RawEvents
+			if point.RawEvents > 0 {
+				hasData = true
+			}
+			if point.Severity.Rank() > summary.Severity.Rank() {
+				summary.Severity = point.Severity
+			}
+		}
+		// 没有数据且未被显式筛选的类别不进入摘要，避免把“未出现”冒充一个错误类别。
+		if hasData || len(categories) > 0 {
+			summaries = append(summaries, summary)
+		}
+	}
+	return points, totals, summaries
+}
+
+// trendPointStatus 计算趋势点完整性状态。
+func trendPointStatus(bucket Bucket, retentionCutoff time.Time, truncated bool,
+	hasEvents bool) DataStatus {
+	if bucket.InProgress {
+		return DataInProgress
+	}
+	if truncated {
+		return DataPartial
+	}
+	if !bucket.End.After(retentionCutoff) {
+		if hasEvents {
+			return DataPartial
+		}
+		return DataUnknown
+	}
+	return DataComplete
+}
+
+// categoryOrder 返回固定类别顺序（与 summarizeCategories 一致）。
+func categoryOrder() []Category {
+	return []Category{CategoryPending, CategoryDenied, CategoryCancelled,
+		CategoryWarning, CategoryFailure, CategoryUnknown}
+}
+
+// categoryOrderIndex 返回类别在固定顺序中的下标；未知类别返回最后。
+func categoryOrderIndex(category Category) int {
+	for index, candidate := range categoryOrder() {
+		if candidate == category {
+			return index
+		}
+	}
+	return len(categoryOrder())
 }
 
 // comparisonReason 返回比较窗口不可用原因，可用时返回空字符串。

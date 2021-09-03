@@ -198,6 +198,55 @@ func (s *Store) AggregateErrorGroups(ctx context.Context,
 	return groups, truncated, nil
 }
 
+// QueryErrorFacts 实现 stats.Store：返回参与错误统计的候选事件事实，供服务层按
+// 统计字典分类、分桶与行级去重。SQL 只做粗筛（与 AggregateErrorGroups 同一口径），
+// 最终类别由 stats.ClassifyEvent 统一判定；不返回 detail_json 或任何原始正文。
+func (s *Store) QueryErrorFacts(ctx context.Context,
+	query stats.ErrorFactQuery) (stats.ErrorFactPage, error) {
+	limit := query.Limit
+	if limit <= 0 {
+		limit = stats.MaxFactRows
+	}
+	conditions, condArgs := relevantConditions()
+	where, scopeArgs := scopeClause(query.Scope, "app_id_snapshot")
+	args := []any{query.From.UTC().UnixMilli(), query.To.UTC().UnixMilli()}
+	args = append(args, condArgs...)
+	args = append(args, scopeArgs...)
+	args = append(args, limit+1)
+	sqlText := `SELECT occurred_at_ms, COALESCE(error_code,''), COALESCE(app_id_snapshot,''),
+outcome, action, id, COALESCE(request_id,''), COALESCE(task_id,'')
+FROM audit_events
+WHERE occurred_at_ms >= ? AND occurred_at_ms < ?
+AND (` + strings.Join(conditions, " OR ") + ")" + where +
+		" ORDER BY occurred_at_ms, id LIMIT ?"
+	rows, err := s.store.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return stats.ErrorFactPage{}, err
+	}
+	defer rows.Close()
+	page := stats.ErrorFactPage{Facts: make([]stats.ErrorFact, 0, 64)}
+	for rows.Next() {
+		var occurredAtMS int64
+		var outcome string
+		var fact stats.ErrorFact
+		if err := rows.Scan(&occurredAtMS, &fact.ErrorCode, &fact.AppID, &outcome,
+			&fact.Action, &fact.EventID, &fact.RequestID, &fact.TaskID); err != nil {
+			return stats.ErrorFactPage{}, err
+		}
+		fact.OccurredAt = time.UnixMilli(occurredAtMS).UTC()
+		fact.Outcome = audit.Outcome(outcome)
+		page.Facts = append(page.Facts, fact)
+	}
+	if err := rows.Err(); err != nil {
+		return stats.ErrorFactPage{}, err
+	}
+	if len(page.Facts) > limit {
+		page.Facts = page.Facts[:limit]
+		page.Truncated = true
+	}
+	return page, nil
+}
+
 // CountFailureKeys 实现 stats.Store：全局去重失败请求/任务数只统计失败结果并排除
 // 取消与数据质量警告；正常拒绝不计入“失败”，但保留在原始事件次数中。
 func (s *Store) CountFailureKeys(ctx context.Context,

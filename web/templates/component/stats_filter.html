@@ -1,0 +1,48 @@
+{{define "component.stats_filter"}}
+{{/* 步骤 76 全局筛选：GET 无 JavaScript 可用；参数白名单由服务端校验并回显规范化结果。 */}}
+<form class="ln-stats-filter" method="get" action="{{.Data.filterAction}}" aria-labelledby="stats-filter-title">
+  <h2 id="stats-filter-title">{{t "page.admin.statistics.filter.title"}}</h2>
+  {{if field_error "scope"}}<p class="ln-field__error">{{field_error "scope"}}</p>{{end}}
+  <label class="ln-field__label" for="stats-scope">{{t "page.admin.statistics.filter.scope"}}</label>
+  <select class="ln-input" id="stats-scope" name="scope">
+    {{range .Data.scopes}}<option value="{{.}}"{{if eq . $.Data.scopeID}} selected{{end}}>{{if eq . "system"}}{{t "page.admin.statistics.scope.system"}}{{else}}{{t "page.admin.statistics.scope.app"}} {{.}}{{end}}</option>{{end}}
+  </select>
+  <label class="ln-field__label" for="stats-tz">{{t "common.label.time_zone"}}</label>
+  <select class="ln-input" id="stats-tz" name="tz">
+    {{range .Data.timezoneOptions}}<option value="{{.}}"{{if eq . $.Data.timezone}} selected{{end}}>{{.}}</option>{{end}}
+  </select>
+  {{if field_error "tz"}}<p class="ln-field__error">{{field_error "tz"}}</p>{{end}}
+  <label class="ln-field__label" for="stats-range">{{t "page.admin.statistics.filter.range"}}</label>
+  <select class="ln-input" id="stats-range" name="range">
+    <option value="7d"{{if eq .Data.range "7d"}} selected{{end}}>{{t "page.admin.statistics.range.days7"}}</option>
+    <option value="30d"{{if eq .Data.range "30d"}} selected{{end}}>{{t "page.admin.statistics.range.days30"}}</option>
+    <option value="custom"{{if eq .Data.range "custom"}} selected{{end}}>{{t "page.admin.statistics.range.custom"}}</option>
+  </select>
+  <label class="ln-field__label" for="stats-from">{{t "page.admin.statistics.filter.from"}}</label>
+  <input class="ln-input" id="stats-from" name="from" value="{{.Data.fromValue}}" placeholder="YYYY-MM-DD" inputmode="numeric">
+  {{if field_error "from"}}<p class="ln-field__error">{{field_error "from"}}</p>{{end}}
+  <label class="ln-field__label" for="stats-to">{{t "page.admin.statistics.filter.to"}}</label>
+  <input class="ln-input" id="stats-to" name="to" value="{{.Data.toValue}}" placeholder="YYYY-MM-DD" inputmode="numeric">
+  {{if field_error "to"}}<p class="ln-field__error">{{field_error "to"}}</p>{{end}}
+  <label class="ln-field__label" for="stats-granularity">{{t "page.admin.statistics.filter.granularity"}}</label>
+  <select class="ln-input" id="stats-granularity" name="granularity">
+    {{range .Data.granularityOptions}}<option value="{{.}}"{{if eq . $.Data.granularity}} selected{{end}}>{{t (printf "page.admin.statistics.granularity.%s" .)}}</option>{{end}}
+  </select>
+  {{if field_error "granularity"}}<p class="ln-field__error">{{field_error "granularity"}}</p>{{end}}
+  {{if .Data.showCategory}}
+  <label class="ln-field__label" for="stats-category">{{t "page.admin.statistics.filter.category"}}</label>
+  <select class="ln-input" id="stats-category" name="category">
+    <option value="">{{t "common.state.all"}}</option>
+    {{range .Data.categoryOptions}}<option value="{{.}}"{{if eq . $.Data.category}} selected{{end}}>{{t (printf "page.admin.statistics.filter.category_%s" .)}}</option>{{end}}
+  </select>
+  {{if field_error "category"}}<p class="ln-field__error">{{field_error "category"}}</p>{{end}}
+  {{end}}
+  <input type="hidden" name="metric" value="{{.Data.metric}}">
+  <input type="hidden" name="sort" value="{{.Data.sort}}">
+  <input type="hidden" name="order" value="{{.Data.order}}">
+  <button class="ln-button" type="submit">{{t "page.admin.dashboard.filter_submit"}}</button>
+  <a class="ln-button ln-button--secondary" href="{{.Data.resetURL}}">{{t "page.admin.dashboard.filter_reset"}}</a>
+  {{if field_error "range"}}<p class="ln-field__error">{{field_error "range"}}</p>{{end}}
+  {{if field_error "limit"}}<p class="ln-field__error">{{field_error "limit"}}</p>{{end}}
+</form>
+{{end}}
