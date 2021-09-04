@@ -67,6 +67,7 @@ const (
 	DomainSession     Domain = "session"
 	DomainProfile     Domain = "profile"
 	DomainRecovery    Domain = "recovery"
+	DomainReport      Domain = "report"
 )
 
 // knownDomains 是允许的业务域集合。
@@ -74,7 +75,7 @@ var knownDomains = map[Domain]bool{
 	DomainPassword: true, DomainEmail: true, DomainMFA: true,
 	DomainPermission: true, DomainApplication: true, DomainBackup: true,
 	DomainAudit: true, DomainSession: true, DomainProfile: true,
-	DomainRecovery: true,
+	DomainRecovery: true, DomainReport: true,
 }
 
 // Policy 是一条敏感操作的可配置策略。
@@ -579,6 +580,13 @@ func defaultOperations() []Operation {
 			RootOnly:           true,
 			ImmutableSensitive: true,
 			Implemented:        true,
+		},
+		{
+			ID: "reports.export", Domain: DomainReport, Name: "生成并导出统计报告",
+			Description:   "基于固定统计快照生成并下载统计报告产物（HTML/CSV/JSON 或后续 PDF/Markdown）；必须强认证与确认并告知，所有格式生成与下载都需要 reports.export 权限，报告按当前权限与数据范围裁剪、产物带校验和与受控存储引用、下载再次鉴权；不导出原始审计全量记录、凭证、秘密或隐藏字段。执行器已在 internal/reports 实现，cmd/login-server 装配与页面属后续步骤。",
+			Default:       strongReauth,
+			PermissionKey: "reports.export",
+			Implemented:   true,
 		},
 		{
 			ID: "root.recovery", Domain: DomainRecovery, Name: "root 受控恢复",
