@@ -583,7 +583,7 @@ func defaultOperations() []Operation {
 		},
 		{
 			ID: "reports.export", Domain: DomainReport, Name: "生成并导出统计报告",
-			Description:   "基于固定统计快照生成并下载统计报告产物（HTML/CSV/JSON 或后续 PDF/Markdown）；必须强认证与确认并告知，所有格式生成与下载都需要 reports.export 权限，报告按当前权限与数据范围裁剪、产物带校验和与受控存储引用、下载再次鉴权；不导出原始审计全量记录、凭证、秘密或隐藏字段。执行器已在 internal/reports 实现，cmd/login-server 装配与页面属后续步骤。",
+			Description:   "基于固定统计快照生成并下载统计报告产物（HTML/CSV/JSON/PDF/Markdown）；PDF 嵌入受信中文字体、Markdown 带机器可读元数据与不可信数据边界；必须强认证与确认并告知，所有格式生成与下载都需要 reports.export 权限，报告按当前权限与数据范围裁剪、产物带校验和与受控存储引用、下载再次鉴权；不导出原始审计全量记录、凭证、秘密或隐藏字段。执行器已在 internal/reports 实现，cmd/login-server 装配与页面属后续步骤。",
 			Default:       strongReauth,
 			PermissionKey: "reports.export",
 			Implemented:   true,

@@ -1,8 +1,10 @@
-// Package reports 实现基于固定统计快照的报告生成与结构化数据导出（步骤 77）。
+// Package reports 实现基于固定统计快照的报告生成与结构化数据导出（步骤 77/78）。
 //
 // 它复用 internal/stats 的可重复计算统计结果，不复制看板截图、不重新计算另一套
 // 数字：一次生成只取一个规范化窗口与一个统计截止点，图表、汇总与明细都来自同一
-// 快照对象；后续 PDF/Markdown（步骤 78）与定期报告（步骤 79）可在此模型上扩展。
+// 快照对象；HTML/CSV/JSON/PDF/Markdown 全部读取同一快照。PDF 用矢量绘制图表并
+// 嵌入受信 Noto Sans SC 静态字体；Markdown 用固定章节与 YAML front matter 保留
+// 统计表、错误码、证据编号与缺失说明。定期报告（步骤 79）可在此模型上扩展。
 //
 // 安全不变量：
 //   - 每次生成/查看/下载/取消都由服务端重新授权并重新检查当前数据范围是否仍覆盖
@@ -83,8 +85,10 @@ const (
 const (
 	// SchemaVersion 是 JSON/CSV 机器可读结构版本。
 	SchemaVersion = "report.v1"
-	// TemplateVersion 是 HTML 模板与固定章节版本。
-	TemplateVersion = 1
+	// TemplateVersion 是 HTML/Markdown 模板与固定章节版本。步骤 78 增加 Markdown
+	// 固定章节与证据编号、PDF 固定版式，提升为 2；SchemaVersion 未变（JSON/CSV
+	// 字段语义兼容）。
+	TemplateVersion = 2
 	// timeFormat 是报告中所有时间字段的格式声明（UTC）。
 	timeFormat = "RFC3339_UTC"
 )
@@ -172,7 +176,9 @@ func CodeOf(err error) ErrorCode {
 	}
 }
 
-// Format 是报告产物格式。本步骤实现 HTML/CSV/JSON；PDF/Markdown 属步骤 78。
+// Format 是报告产物格式。PDF/Markdown 在步骤 78 基于同一快照实现；PDF 需要受信
+// 中文字体（Options.FontPath），未配置时请求 PDF 会被拒绝而不是生成无中文字体的
+// 假 PDF。任何格式都不能以纯文本改扩展名伪装。
 type Format string
 
 const (
@@ -182,11 +188,21 @@ const (
 	FormatCSV Format = "csv"
 	// FormatJSON 是稳定 schema 的机器可读快照导出（数值为 JSON 数字）。
 	FormatJSON Format = "json"
+	// FormatPDF 是嵌入受信中文字体的多页 PDF（矢量图表 + 数据表，A4 横向）。
+	FormatPDF Format = "pdf"
+	// FormatMarkdown 是含 YAML front matter 与固定章节的 Markdown（证据编号 +
+	// 同源数据表 + 不可信数据边界）；产物扩展名为 .md。
+	FormatMarkdown Format = "markdown"
 )
 
 // Valid 报告格式是否已定义。
 func (f Format) Valid() bool {
-	return f == FormatHTML || f == FormatCSV || f == FormatJSON
+	switch f {
+	case FormatHTML, FormatCSV, FormatJSON, FormatPDF, FormatMarkdown:
+		return true
+	default:
+		return false
+	}
 }
 
 // Authorizer 与 RootChecker 复用统计服务的授权契约，确保装配层只有一套数据范围
@@ -244,6 +260,19 @@ type Options struct {
 	Tasks TaskReader
 	// OutputDir 是报告产物受控目录（绝对路径、已存在、非符号链接）；必填。
 	OutputDir string
+	// FontPath 是 PDF 嵌入字体的受信本地绝对路径（Noto Sans SC 静态 Regular TTF）。
+	// 为空表示 PDF 输出不可用：请求 PDF 格式会被拒绝（fail-closed），不会生成缺少
+	// 中文字体或伪装扩展名的产物。字体文件不进入 Git 仓库，由宿主部署时提供。
+	FontPath string
+	// FontSHA256 可选：字体文件 SHA-256。为空时强制预审通过的
+	// RequiredPDFFontSHA256；非空且不等于预审摘要时，必须同时把
+	// AllowUnreviewedPDFFont 置 true，否则拒绝构造。
+	FontSHA256 string
+	// AllowUnreviewedPDFFont 是受信宿主的显式例外开关：只有宿主自行完成字体
+	// 审查（或测试需要用其它 TTF）时才允许非预审摘要。默认 false 时只接受预审
+	// SHA-256，防止把未预审字体交给 gopdf 解析器。该选项不得来自请求参数或
+	// 外部可写运行期配置。
+	AllowUnreviewedPDFFont bool
 	// MaxDetailRows/MaxArtifactBytes 是明细条数/单产物字节上限；0 使用默认值，
 	// 超过硬上限拒绝构造。
 	MaxDetailRows    int
@@ -266,6 +295,8 @@ type Service struct {
 	maxArtifactBytes int64
 	artifactTTL      time.Duration
 	outputDir        string
+	// font 是构造时加载并校验的 PDF 字体；nil 表示 PDF 输出不可用。
+	font *pdfFont
 
 	mu      sync.Mutex
 	records map[string]*reportRecord
@@ -326,10 +357,25 @@ func New(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	// 配置了字体路径就在构造时读取并校验：摘要不符/类型错误直接拒绝构造，避免
+	// 生成阶段才发现字体问题；未配置字体时 PDF 输出不可用（请求 PDF 被拒绝）。
+	var font *pdfFont
+	if options.FontPath != "" {
+		loaded, err := loadPDFFont(options.FontPath, options.FontSHA256,
+			options.AllowUnreviewedPDFFont)
+		if err != nil {
+			return nil, err
+		}
+		font = loaded
+	}
 	return &Service{opts: options, maxDetailRows: maxDetailRows,
 		maxArtifactBytes: maxArtifactBytes, artifactTTL: artifactTTL,
-		outputDir: absolute, records: make(map[string]*reportRecord)}, nil
+		outputDir: absolute, font: font, records: make(map[string]*reportRecord)}, nil
 }
+
+// PDFAvailable 报告当前服务是否具备生成 PDF 的能力（已配置并通过校验的嵌入字体）。
+// 未配置字体时请求 PDF 会被拒绝，而不是生成缺字/乱码的无字体 PDF。
+func (s *Service) PDFAvailable() bool { return s.font != nil }
 
 // now 返回截断到 UTC 毫秒的当前时刻。
 func (s *Service) now() time.Time { return s.opts.Now().UTC().Truncate(time.Millisecond) }
@@ -455,6 +501,16 @@ func (s *Service) grantCovers(recorded dataScope, grant stats.ScopeGrant) bool {
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+// containsFormat 报告格式切片是否包含指定格式。
+func containsFormat(formats []Format, target Format) bool {
+	for _, format := range formats {
+		if format == target {
 			return true
 		}
 	}

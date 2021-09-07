@@ -957,9 +957,15 @@ func TestValidationAndDeniedPaths(t *testing.T) {
 	}
 	// 非法格式。
 	request = env.startRequest(t)
-	request.Formats = []Format{"pdf"}
+	request.Formats = []Format{"xml"}
 	if _, err := env.service.Start(ctx, request); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("非法格式错误 = %v", err)
+	}
+	// 未配置 PDF 字体时请求 PDF → 明确拒绝（不生成假 PDF）。
+	request = env.startRequest(t)
+	request.Formats = []Format{FormatPDF}
+	if _, err := env.service.Start(ctx, request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("未配置字体请求 PDF 错误 = %v，期望 ErrInvalidRequest", err)
 	}
 	// 明细上限超出服务配置。
 	request = env.startRequest(t)

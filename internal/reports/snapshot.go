@@ -539,14 +539,16 @@ func completenessNotes(info CompletenessInfo) []string {
 	return notes
 }
 
-// formatSortedFormats 返回稳定顺序（html、csv、json）并去重；空表示未请求格式。
+// formatSortedFormats 返回稳定顺序（html、csv、json、pdf、markdown）并去重；空
+// 表示未请求格式。
 func formatSortedFormats(formats []Format) []Format {
 	seen := make(map[Format]bool, len(formats))
 	for _, format := range formats {
 		seen[format] = true
 	}
-	ordered := make([]Format, 0, 3)
-	for _, candidate := range []Format{FormatHTML, FormatCSV, FormatJSON} {
+	ordered := make([]Format, 0, 5)
+	for _, candidate := range []Format{FormatHTML, FormatCSV, FormatJSON,
+		FormatPDF, FormatMarkdown} {
 		if seen[candidate] {
 			ordered = append(ordered, candidate)
 		}

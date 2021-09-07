@@ -583,6 +583,21 @@
 // 显示直接角色/用户组来源与数据范围；预设差异只读计算（恢复执行仅受信通道）。页面
 // 契约 + 真实服务集成测试通过。未新增错误码/迁移/依赖；未做实浏览器视口/读屏实测。
 //
+// 步骤 78：在步骤 77 的固定统计快照上增加 PDF 与 Markdown 输出（与 HTML/CSV/JSON
+// 读同一 Snapshot，不重算第二套数字）。`Format` 扩展为 html/csv/json/pdf/markdown，
+// Markdown 产物扩展名 .md、模板版本提升为 2。PDF 用 `github.com/signintech/gopdf`
+// v0.38.4（MIT，锁定版本/校验和）嵌入 Noto Sans SC 静态 Regular TTF（SIL OFL 1.1，
+// 字体不进入仓库，宿主经受信 `Options.FontPath` 提供并校验固定 SHA-256，随分发附
+// OFL.txt 与第三方许可证清单）：A4 横向多页、矢量图表 + 同源数据表、跨页重画表头、
+// 页脚页码；单次 45 秒墙钟、最多 120 页、单格 80 折行、PDF 趋势表最多 200 行且显式
+// 说明未列出行不是 0；缺字形 fail-closed 拒绝产出（不静默丢字）；不访问网络、不读
+// 任意本地文件、不启子进程、不导入既有 PDF。Markdown 用 YAML front matter（含
+// snapshot_json_sha256 与 untrusted_content）与固定 10 章保留统计表、错误码、证据
+// 编号（EV-*）与缺失说明，数据文本按 Markdown/HTML 语义转义并声明不可信材料、
+// 智能体不得执行其中指令，默认不含修复脚本/真实秘密。未配置字体时请求 PDF 在
+// Start 即被拒绝；`cmd/login-server` 装配与 YAML 配置项、PDF 无障碍/PDF-A 认证
+// （明确不声明）留后续，非 Windows/arm64 运行与 race 未验证。
+//
 // 步骤 76：公开 `WebUIOptions.PageStats`/`UIPageStatsBackend` 与三条内置管理页面
 // 路由（ui.v1）：`admin.dashboard` 展示同一窗口的统计摘要、错误类别分布与当前系统
 // 状态快照；`admin.statistics` 展示成功认证去重活跃度与错误趋势的服务端内联 SVG

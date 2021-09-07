@@ -150,8 +150,13 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, 
 	// 只生成 HTML（那会让调用方以为请求的格式已生成）。
 	for _, format := range request.Formats {
 		if !format.Valid() {
-			return ReportView{}, fmt.Errorf("%w: 报告格式只支持 html/csv/json", ErrInvalidRequest)
+			return ReportView{}, fmt.Errorf("%w: 报告格式只支持 html/csv/json/pdf/markdown", ErrInvalidRequest)
 		}
+	}
+	// PDF 需要受信嵌入字体；未配置/校验失败时构造已被拒绝，此处兜底拒绝请求，
+	// 不生成“纯文本改扩展名”的假 PDF。
+	if containsFormat(request.Formats, FormatPDF) && !s.PDFAvailable() {
+		return ReportView{}, fmt.Errorf("%w: PDF 输出需要配置受控中文字体", ErrInvalidRequest)
 	}
 	formats := formatSortedFormats(request.Formats)
 	if len(formats) == 0 {
@@ -373,8 +378,20 @@ func (s *Service) GenerateHandler(ctx context.Context, job task.Job) error {
 	}
 	rendered := make(map[Format][]byte, len(record.Formats))
 	for _, format := range record.Formats {
-		data, renderErr := renderSnapshot(snapshot, format)
+		data, renderErr := s.renderSnapshot(ctx, snapshot, format)
 		if renderErr != nil {
+			// 渲染阶段也会检查上下文（PDF 可达 45 秒窗口），必须沿用步骤 77 的终态
+			// 分离语义：真实取消 → cancelled/TASK_CANCELLED；任务或渲染墙钟超时 →
+			// failed/TASK_TIMEOUT；其他渲染错误 → failed/REPORT_GENERATION_FAILED。
+			// 不能把所有渲染错误一律写成“生成失败”，否则取消/超时会被误记。
+			if errors.Is(renderErr, context.Canceled) {
+				s.cancelRun(ctx, reportID, record.RequestID)
+				return renderErr
+			}
+			if errors.Is(renderErr, context.DeadlineExceeded) {
+				return s.failRun(ctx, reportID, renderErr, CodeTaskTimeout,
+					"报告生成超时", record.RequestID)
+			}
 			return s.failRun(ctx, reportID, renderErr, CodeReportGeneration,
 				"报告渲染失败", record.RequestID)
 		}
@@ -480,8 +497,14 @@ func (s *Service) build(ctx context.Context, record reportRecord,
 	return snapshot, nil
 }
 
-// renderSnapshot 按格式渲染快照。
-func renderSnapshot(snapshot Snapshot, format Format) ([]byte, error) {
+// renderSnapshot 按格式渲染快照。PDF/Markdown 与 HTML/CSV/JSON 读取同一 Snapshot，
+// 保证数值同源。PDF 渲染有独立墙钟上限并在排版循环中检查上下文，输入来自受控快照
+// 且行数在上游受限；渲染器不访问网络、不读任意本地文件（字体已在构造时读入内存）、
+// 不启动子进程。
+func (s *Service) renderSnapshot(ctx context.Context, snapshot Snapshot, format Format) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	switch format {
 	case FormatHTML:
 		return renderHTML(snapshot)
@@ -489,6 +512,15 @@ func renderSnapshot(snapshot Snapshot, format Format) ([]byte, error) {
 		return renderCSV(snapshot)
 	case FormatJSON:
 		return renderJSON(snapshot)
+	case FormatPDF:
+		if !s.PDFAvailable() {
+			return nil, fmt.Errorf("%w: PDF 输出需要配置受控中文字体", ErrInvalidRequest)
+		}
+		renderCtx, cancel := context.WithTimeout(ctx, pdfRenderTimeout)
+		defer cancel()
+		return renderPDF(renderCtx, snapshot, s.font)
+	case FormatMarkdown:
+		return renderMarkdown(snapshot)
 	default:
 		return nil, fmt.Errorf("%w: 报告格式未定义", ErrInvalidRequest)
 	}

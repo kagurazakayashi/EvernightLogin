@@ -42,17 +42,26 @@ type ArtifactFile struct {
 	ExpiresAt time.Time
 }
 
-// artifactFileName 返回服务端受控文件名：report_<报告编号>.<格式>。
-func artifactFileName(reportID string, format Format) string {
-	return reportFilePrefix + reportID + "." + string(format)
+// formatExtension 返回产物文件扩展名。markdown 是格式标识，产物扩展名用标准 .md，
+// 其余格式标识与扩展名一致（html/csv/json/pdf）。
+func formatExtension(format Format) string {
+	if format == FormatMarkdown {
+		return "md"
+	}
+	return string(format)
 }
 
-// validateArtifactName 校验文件名属于受控命名空间且格式后缀匹配。
+// artifactFileName 返回服务端受控文件名：report_<报告编号>.<格式扩展名>。
+func artifactFileName(reportID string, format Format) string {
+	return reportFilePrefix + reportID + "." + formatExtension(format)
+}
+
+// validateArtifactName 校验文件名属于受控命名空间且格式扩展名匹配。
 func validateArtifactName(name string, format Format) bool {
 	if filepath.Base(name) != name || !strings.HasPrefix(name, reportFilePrefix) {
 		return false
 	}
-	return strings.HasSuffix(name, "."+string(format))
+	return strings.HasSuffix(name, "."+formatExtension(format))
 }
 
 // writeArtifact 把已渲染字节写入受控目录：O_EXCL 独占创建、0600、字节上限、
