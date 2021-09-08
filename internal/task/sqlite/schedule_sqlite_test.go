@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -60,7 +61,7 @@ func openTestStoreWithClock(t *testing.T, clock *fakeClock) (*storagesqlite.Stor
 	return raw, store
 }
 
-// newClockExecutor 构造使用确定性时钟的执行器。
+// newClockExecutor 构造使用确定性时钟的执行器（供重试退避等依赖假时钟的用例）。
 func newClockExecutor(t *testing.T, store task.Store, handlers map[string]task.Handler, maxConcurrent int, clock *fakeClock, mutate func(*task.Options)) *task.Executor {
 	t.Helper()
 	options := task.Options{
@@ -70,6 +71,33 @@ func newClockExecutor(t *testing.T, store task.Store, handlers map[string]task.H
 		PollInterval:    task.MinPollInterval,
 		ShutdownTimeout: 3 * time.Second,
 		Now:             clock.Now,
+	}
+	if mutate != nil {
+		mutate(&options)
+	}
+	executor, err := task.New(store, options)
+	if err != nil {
+		t.Fatalf("构造执行器失败: %v", err)
+	}
+	return executor
+}
+
+// newScheduleExecutor 构造调度类测试使用的执行器：调度时间由假时钟驱动，任务
+// 执行超时按真实墙钟衡量（不注入假时钟）。
+//
+// 不能把同一个可跳变假时钟注入执行器：派发循环在 claim 前采样时钟、在事务内写入
+// started_at，测试若在该窗口内把时钟向前推进（模拟下一次计划窗口）并创建任务，
+// 任务会以跳变前的旧时刻入库，deadline 立刻早于当前时刻而被误记为
+// timed_out/TASK_TIMEOUT（历史 K01 时序 Flake）。执行器的墙钟超时行为由
+// sqlite_test.go 的 TestTimeout 用真实时钟覆盖，这里不需要假时钟。
+func newScheduleExecutor(t *testing.T, store task.Store, handlers map[string]task.Handler, maxConcurrent int, mutate func(*task.Options)) *task.Executor {
+	t.Helper()
+	options := task.Options{
+		Handlers:        handlers,
+		ExecutorID:      "exec-test-1",
+		MaxConcurrent:   maxConcurrent,
+		PollInterval:    task.MinPollInterval,
+		ShutdownTimeout: 3 * time.Second,
 	}
 	if mutate != nil {
 		mutate(&options)
@@ -173,10 +201,13 @@ func countAuditAction(t *testing.T, raw *storagesqlite.Store, action string) int
 }
 
 // queryStates 返回指定任务类型的任务状态摘要，仅用于失败诊断。
+// 同时输出创建/开始时间与墙钟上限，便于区分真实超时与时钟/互斥键假设导致的
+// 假超时（历史 K01 Flake 的症状之一是任务在假时钟未推进时被记为 timed_out）。
 func queryStates(t *testing.T, raw *storagesqlite.Store, kind string) string {
 	t.Helper()
 	rows, err := raw.QueryContext(context.Background(),
-		`SELECT id,state,error_code FROM jobs WHERE kind=? ORDER BY created_at_ms`, kind)
+		`SELECT id,state,error_code,attempt,created_at_ms,started_at_ms,timeout_seconds
+		 FROM jobs WHERE kind=? ORDER BY created_at_ms, id`, kind)
 	if err != nil {
 		return err.Error()
 	}
@@ -185,10 +216,17 @@ func queryStates(t *testing.T, raw *storagesqlite.Store, kind string) string {
 	for rows.Next() {
 		var id, state string
 		var errorCode sql.NullString
-		if err := rows.Scan(&id, &state, &errorCode); err != nil {
+		var attempt, createdAt int64
+		var startedAt sql.NullInt64
+		var timeoutSeconds int64
+		if err := rows.Scan(&id, &state, &errorCode, &attempt, &createdAt, &startedAt, &timeoutSeconds); err != nil {
 			return err.Error()
 		}
-		summary += id + "=" + state + "/" + errorCode.String + ";"
+		summary += id + "=" + state + "/" + errorCode.String +
+			" attempt=" + strconv.FormatInt(attempt, 10) +
+			" created=" + strconv.FormatInt(createdAt, 10) +
+			" started=" + strconv.FormatInt(startedAt.Int64, 10) +
+			" timeout_s=" + strconv.FormatInt(timeoutSeconds, 10) + ";"
 	}
 	return summary
 }
@@ -207,9 +245,9 @@ func waitJobsSettled(t *testing.T, raw *storagesqlite.Store, kind string) {
 func TestSchedulerFiresDailyAndDeduplicates(t *testing.T) {
 	clock := newFakeClock(time.Date(2021, 4, 25, 4, 0, 0, 0, time.UTC)) // 上海 12:00
 	raw, store := openTestStoreWithClock(t, clock)
-	executor := newClockExecutor(t, store, map[string]task.Handler{
+	executor := newScheduleExecutor(t, store, map[string]task.Handler{
 		"test.daily": func(context.Context, task.Job) error { return nil },
-	}, 2, clock, nil)
+	}, 2, nil)
 	startExecutor(t, executor)
 	scheduler := newTestScheduler(t, store, executor, clock, nil)
 	schedule := mustCreateSchedule(t, scheduler, dailyRequest("test.daily", "02:30", "Asia/Shanghai", task.MissedSkip, true))
@@ -304,7 +342,7 @@ func TestSchedulerCatchUpPolicies(t *testing.T) {
 		"test.all":    func(context.Context, task.Job) error { return nil },
 		"test.bound":  func(context.Context, task.Job) error { return nil },
 	}
-	executor := newClockExecutor(t, store, handlers, 2, clock, nil)
+	executor := newScheduleExecutor(t, store, handlers, 2, nil)
 	startExecutor(t, executor)
 	scheduler := newTestScheduler(t, store, executor, clock, nil)
 
@@ -371,9 +409,9 @@ func TestSchedulerCatchUpPolicies(t *testing.T) {
 func TestSchedulerRestartCatchUp(t *testing.T) {
 	clock := newFakeClock(time.Date(2021, 4, 25, 4, 0, 0, 0, time.UTC))
 	raw, store := openTestStoreWithClock(t, clock)
-	executor := newClockExecutor(t, store, map[string]task.Handler{
+	executor := newScheduleExecutor(t, store, map[string]task.Handler{
 		"test.restart": func(context.Context, task.Job) error { return nil },
-	}, 2, clock, nil)
+	}, 2, nil)
 	startExecutor(t, executor)
 	scheduler := newTestScheduler(t, store, executor, clock, nil)
 	mustCreateSchedule(t, scheduler, dailyRequest("test.restart", "02:30", "Asia/Shanghai", task.MissedAll, true))
@@ -425,10 +463,10 @@ func TestSchedulerRestartCatchUp(t *testing.T) {
 func TestSchedulerTimeZoneAndDST(t *testing.T) {
 	clock := newFakeClock(time.Date(2021, 4, 24, 12, 0, 0, 0, time.UTC))
 	raw, store := openTestStoreWithClock(t, clock)
-	executor := newClockExecutor(t, store, map[string]task.Handler{
+	executor := newScheduleExecutor(t, store, map[string]task.Handler{
 		"test.tokyo": func(context.Context, task.Job) error { return nil },
 		"test.dst":   func(context.Context, task.Job) error { return nil },
-	}, 2, clock, nil)
+	}, 2, nil)
 	startExecutor(t, executor)
 	scheduler := newTestScheduler(t, store, executor, clock, nil)
 	ctx := context.Background()
@@ -482,9 +520,9 @@ func TestSchedulerPermissionRevalidation(t *testing.T) {
 		}
 		return errors.New("执行身份权限已撤销")
 	}
-	executor := newClockExecutor(t, store, map[string]task.Handler{
+	executor := newScheduleExecutor(t, store, map[string]task.Handler{
 		"test.manage": func(context.Context, task.Job) error { return nil },
-	}, 2, clock, func(options *task.Options) {
+	}, 2, func(options *task.Options) {
 		options.PermissionCheck = check
 	})
 	startExecutor(t, executor)
@@ -523,7 +561,8 @@ func TestSchedulerPermissionRevalidation(t *testing.T) {
 		t.Fatalf("读取任务失败: %v", err)
 	}
 	if job.State != task.StateSucceeded {
-		t.Fatalf("权限复验通过后任务状态 = %s，期望 succeeded", job.State)
+		t.Fatalf("权限复验通过后任务状态 = %s，期望 succeeded（时钟 %s；状态：%s）",
+			job.State, clock.Now().Format(time.RFC3339Nano), queryStates(t, raw, "test.manage"))
 	}
 
 	// 计划要求权限但调度器没有可信回调时：创建被拒绝（默认拒绝）。
@@ -587,17 +626,17 @@ func TestSchedulerPauseResumeDeleteSemantics(t *testing.T) {
 			}
 		}
 	}
-	executor := newClockExecutor(t, store, map[string]task.Handler{
+	executor := newScheduleExecutor(t, store, map[string]task.Handler{
 		"test.pause.a":  blockingHandler(gateA),
 		"test.delete.b": blockingHandler(gateB),
-	}, 2, clock, nil)
+	}, 2, nil)
 	startExecutor(t, executor)
 	scheduler := newTestScheduler(t, store, executor, clock, nil)
 	ctx := context.Background()
 
 	// 阶段一：暂停不取消正在运行的任务，恢复后不补跑暂停期间触发。
 	pauseRequest := dailyRequest("test.pause.a", "02:30", "Asia/Shanghai", task.MissedSkip, true)
-	pauseRequest.TimeoutSeconds = task.MaxTimeoutSeconds // 假时钟前进时仍视为未超时
+	pauseRequest.TimeoutSeconds = task.MaxTimeoutSeconds // 任务阻塞等待测试放行，用最大墙钟上限避免真实执行期限误伤
 	scheduleA := mustCreateSchedule(t, scheduler, pauseRequest)
 	due := time.Date(2021, 4, 25, 18, 30, 0, 0, time.UTC) // 上海次日 02:30
 	clock.Set(due)
@@ -678,6 +717,7 @@ func TestSchedulerPauseResumeDeleteSemantics(t *testing.T) {
 
 	// 阶段二：删除计划不取消正在运行的任务，只停止后续触发。
 	deleteRequest := dailyRequest("test.delete.b", "02:30", "Asia/Shanghai", task.MissedSkip, true)
+	// 删除阶段同样有阻塞等待放行的任务，用最大墙钟上限避免真实执行期限误伤。
 	deleteRequest.TimeoutSeconds = task.MaxTimeoutSeconds
 	scheduleB := mustCreateSchedule(t, scheduler, deleteRequest)
 	// 创建时刻恰为 02:30；下一次严格晚于创建时刻的触发是次日同一时刻。
@@ -733,9 +773,9 @@ func TestSchedulerMutexKeySerializesExecution(t *testing.T) {
 		runningCount.Add(-1)
 		return nil
 	}
-	executor := newClockExecutor(t, store, map[string]task.Handler{
+	executor := newScheduleExecutor(t, store, map[string]task.Handler{
 		"test.lock": handler,
-	}, 2, clock, nil)
+	}, 2, nil)
 	startExecutor(t, executor)
 	scheduler := newTestScheduler(t, store, executor, clock, nil)
 
@@ -755,7 +795,8 @@ func TestSchedulerMutexKeySerializesExecution(t *testing.T) {
 	}
 	waitJobsSettled(t, raw, "test.lock")
 	if got := queryInt(t, raw, `SELECT COUNT(*) FROM jobs WHERE kind='test.lock' AND state='succeeded'`); got != 2 {
-		t.Fatalf("两个任务都应成功，实际 %d", got)
+		t.Fatalf("两个任务都应成功，实际 %d（时钟 %s；状态：%s）",
+			got, clock.Now().Format(time.RFC3339Nano), queryStates(t, raw, "test.lock"))
 	}
 	if got := maxRunning.Load(); got != 1 {
 		t.Fatalf("相同互斥键的任务最大并发 = %d，期望 1", got)
@@ -807,10 +848,10 @@ func TestSchedulerLifecycleNoLeakedGoroutines(t *testing.T) {
 func TestSchedulerMonthlyMonthEnd(t *testing.T) {
 	clock := newFakeClock(time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC))
 	raw, store := openTestStoreWithClock(t, clock)
-	executor := newClockExecutor(t, store, map[string]task.Handler{
+	executor := newScheduleExecutor(t, store, map[string]task.Handler{
 		"test.month31":   func(context.Context, task.Job) error { return nil },
 		"test.monthlast": func(context.Context, task.Job) error { return nil },
-	}, 2, clock, nil)
+	}, 2, nil)
 	startExecutor(t, executor)
 	scheduler := newTestScheduler(t, store, executor, clock, nil)
 	ctx := context.Background()

@@ -479,9 +479,13 @@ func TestShutdownCancelsRunningSystemSubject(t *testing.T) {
 	}
 	executor := newExecutor(t, store, map[string]task.Handler{"test.block": handler}, 1)
 	startExecutor(t, executor)
+	// 先入队并等它真正开始，再入队第二个：claim 顺序是 (created_at_ms, id)，
+	// 同一毫秒入队的任务按随机 ID 决胜，先入队不保证先领取；若一次入队两条再等
+	// started，无法确定停机时 running.ID 是先入队的那条（历史 K01 Flake 之一）。
 	running := mustEnqueue(t, executor, task.EnqueueRequest{Kind: "test.block", Actor: userActor("user-1")})
-	queued := mustEnqueue(t, executor, task.EnqueueRequest{Kind: "test.block", Actor: userActor("user-2")})
 	<-started
+	// 并发上限 1 已被占满，第二条任务保留在 queued，停机时只会取消运行中的第一条。
+	queued := mustEnqueue(t, executor, task.EnqueueRequest{Kind: "test.block", Actor: userActor("user-2")})
 	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := executor.Stop(stopCtx); err != nil {
