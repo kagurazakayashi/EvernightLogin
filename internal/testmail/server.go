@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,6 +42,9 @@ type Server struct {
 	sessWG   sync.WaitGroup
 	closeOne sync.Once
 	closeErr error
+
+	// sessionSeq 为调试轨迹分配自增会话编号；只用于区分并发连接。
+	sessionSeq atomic.Uint64
 }
 
 // New 校验配置并创建服务器（尚未监听端口）。
@@ -236,10 +240,13 @@ func (s *Server) serve(conn net.Conn) {
 		reader:     bufio.NewReader(conn),
 		writer:     bufio.NewWriter(conn),
 		remote:     conn.RemoteAddr().String(),
+		sessionID:  s.sessionSeq.Add(1),
 		sessionEnd: time.Now().Add(s.opts.SessionTimeout),
 	}
+	ss.emit(SessionEventConnected, "", "")
 	ss.greet()
 	ss.loop()
+	ss.emit(SessionEventClosed, "", "")
 }
 
 // Messages 返回匹配查询的消息快照（按接收顺序）。返回的消息与内部仓库共用

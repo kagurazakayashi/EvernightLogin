@@ -105,6 +105,12 @@ type Options struct {
 	// OnMessage 在消息成功保存后同步调用（在会话 goroutine 中）。回调不应
 	// 长时间阻塞，否则会拖慢该连接；其余连接不受影响。回调拿到的是消息副本。
 	OnMessage func(Message)
+	// OnSessionEvent 在每条可观察的会话事件（连接建立、命令、应答、STARTTLS、
+	// 认证成功、连接关闭）后同步调用，用于调试输出；nil 表示不产生轨迹，此时不会
+	// 触发回调、也不会产生输出（会话路径只保留少量 nil 判断与常量参数准备）。
+	// 回调在会话 goroutine 中执行，不应长时间阻塞。AUTH 命令参数只保留机制名，
+	// AUTH 客户端响应内容与正文内容都不会进入事件。
+	OnSessionEvent func(SessionEvent)
 }
 
 // AuthOptions 是显式的测试认证配置。

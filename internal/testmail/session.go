@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,6 +31,7 @@ type session struct {
 	reader     *bufio.Reader
 	writer     *bufio.Writer
 	remote     string
+	sessionID  uint64
 	tls        bool
 	sessionEnd time.Time
 
@@ -49,6 +51,21 @@ func (ss *session) greet() {
 	ss.reply(220, ss.srv.opts.Hostname+" ESMTP testmail ready")
 }
 
+// emit 向可选的调试轨迹回调发送一次会话事件。回调为 nil 时直接返回。
+func (ss *session) emit(kind SessionEventKind, command, parameter string) {
+	cb := ss.srv.opts.OnSessionEvent
+	if cb == nil {
+		return
+	}
+	cb(SessionEvent{
+		Kind:       kind,
+		SessionID:  ss.sessionID,
+		RemoteAddr: ss.remote,
+		Command:    command,
+		Parameter:  parameter,
+	})
+}
+
 // loop 读取并分发命令，直到客户端退出、连接出错或会话时长耗尽。
 func (ss *session) loop() {
 	for {
@@ -61,6 +78,10 @@ func (ss *session) loop() {
 				ss.reply(421, "4.4.2 Timeout, closing connection")
 			}
 			return
+		}
+		verb, arg := splitCommand(line)
+		if ss.srv.opts.OnSessionEvent != nil {
+			ss.emit(SessionEventCommand, strings.ToUpper(verb), redactCommandArg(verb, arg))
 		}
 		if !ss.handle(line) {
 			return
@@ -333,6 +354,7 @@ func (ss *session) handleStartTLS() bool {
 	ss.reader = bufio.NewReader(tlsConn)
 	ss.writer = bufio.NewWriter(tlsConn)
 	ss.tls = true
+	ss.emit(SessionEventTLS, "STARTTLS", "握手完成，后续命令与正文均已加密")
 	return true
 }
 
@@ -421,7 +443,11 @@ func (ss *session) finishAuth(user, pass string) bool {
 	if ss.credentialsMatch(user, pass) {
 		ss.authUser = user
 		ss.authAttempts = 0
-		return ss.reply(235, "2.7.0 Authentication successful")
+		ok := ss.reply(235, "2.7.0 Authentication successful")
+		if ok {
+			ss.emit(SessionEventAuth, "AUTH", user)
+		}
+		return ok
 	}
 	return ss.authFailure(535, "5.7.8 Authentication credentials invalid")
 }
@@ -523,10 +549,16 @@ func (ss *session) writeString(s string) bool {
 
 // reply 回复单行响应；text 为空时输出 "code" 单行（用于 334 空挑战）。
 func (ss *session) reply(code int, text string) bool {
+	var ok bool
 	if text == "" {
-		return ss.writeString(fmt.Sprintf("%d\r\n", code))
+		ok = ss.writeString(fmt.Sprintf("%d\r\n", code))
+	} else {
+		ok = ss.writeString(fmt.Sprintf("%d %s\r\n", code, text))
 	}
-	return ss.writeString(fmt.Sprintf("%d %s\r\n", code, text))
+	if ok {
+		ss.emit(SessionEventReply, strconv.Itoa(code), text)
+	}
+	return ok
 }
 
 // replyf 是带格式化文本的 reply。
@@ -547,7 +579,11 @@ func (ss *session) replyLines(code int, lines []string) bool {
 		}
 		fmt.Fprintf(&b, "%d-%s\r\n", code, line)
 	}
-	return ss.writeString(b.String())
+	if !ss.writeString(b.String()) {
+		return false
+	}
+	ss.emit(SessionEventReply, strconv.Itoa(code), strings.Join(lines, " | "))
+	return true
 }
 
 // isTimeout 判断错误是否为网络超时。

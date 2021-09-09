@@ -988,7 +988,7 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **通知与审计**：通知状态 `pending/sent/failed` 中 **sent 表示已成功交给可靠投递服务（入队成功）**，不代表外部邮件已送达；通知只发送到**已验证邮箱**（未验证地址不作为收件目标），发送失败不回滚邀请/审核主事务。审计动作区分 `invitation.create`/`invitation.cancel`/`invitation.accept`（含目标用户 ID）/`registration.approve`/`registration.reject`，失败审计记录稳定错误码，令牌与邮件正文不入库/日志。
 - **已知限制**：邀请令牌是一次性凭证，当前一次邀请只允许一次接受（多次使用需按接收者分别签发，留后续步骤；服务对 `MaxUses>1` 明确拒绝）；令牌在**授权事务之前**消费，若接受在事务内因邀请者撤权、应用停用、邀请取消/过期等失败，令牌不会恢复，邀请者需重新签发（数据库侧账户/成员/角色/接受记录会整体回滚，不会部分修改；先消费可防止重放与暴力尝试）；过期邀请不会主动落库为 expired（接受时按时间拒绝，清理/状态更新任务未实现）；邀请创建授权由宿主注入 `InviteAuthorizer`（未接线时普通用户 fail-closed）；邀请/审核的 HTTP 路由、启动装配、过期记录清理任务、邀请邮件重发、审核通知重发与多级审批引擎尚未实现。
 
-## 测试用本地邮件服务器（额外步骤 extra01）
+## 测试用本地邮件服务器（额外步骤 extra01、extra03）
 
 `internal/testmail` 是**仅供测试**的本地 SMTP 接收服务器，`tools/testmaild` 是只负责装配与运行它的独立工具。它把收到的邮件保存在内存中供测试断言，**不投递、不中继、不连接任何外部邮件服务**，默认只监听 `127.0.0.1` 的随机端口；两个包都不会被 `cmd/login-server` 装配，生产邮件实现必须另行编写。本包不是产品能力，也不替代步骤 32 已实现的通用邮件投递基础设施与步骤 39 的通知业务逻辑。
 
@@ -1002,9 +1002,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 go run .\tools\testmaild
 go run .\tools\testmaild -addr 127.0.0.1:0 -auth tester:test-pass -require-auth
 go run .\tools\testmaild -addr 127.0.0.1:0 -starttls
+go run .\tools\testmaild -config .\tools\testmaild\config.example.yaml
+go run .\tools\testmaild -config .\tools\testmaild\config.example.yaml -addr 127.0.0.1:0 -output debug
 ```
 
-常用参数还有 `-max-message-bytes`、`-max-recipients`、`-max-connections`、`-max-messages`、`-read-timeout`、`-session-timeout`、`-print-body`；只有显式加 `-allow-non-loopback` 才允许监听非回环地址（`-addr :0` 这类空主机名不会被当作回环，需显式写 `127.0.0.1:0` 或加该开关）。工具在收到消息时打印信封、主题、大小与认证用户摘要（不回显密码），按 Ctrl+C 或 SIGTERM 优雅关闭并释放端口。
+常用参数还有 `-config`（YAML 配置文件）、`-output`（`summary`/`detail`/`debug`）、`-body-limit`、`-trace-smtp`、`-max-message-bytes`、`-max-recipients`、`-max-connections`、`-max-messages`、`-read-timeout`、`-session-timeout`、`-print-body`；只有显式加 `-allow-non-loopback` 才允许监听非回环地址（`-addr :0` 这类空主机名不会被当作回环，需显式写 `127.0.0.1:0` 或加该开关）。工具在收到消息时打印信封、主题、大小与认证用户摘要；命令行 `-auth` 的密码不回显，配置文件里的模拟测试密码会在启动 banner 回显并标注「本地测试凭据、仅回环使用」；按 Ctrl+C 或 SIGTERM 优雅关闭并释放端口。
+
+### 配置文件、模拟账户与详细输出（额外步骤 extra03）
+
+`tools/testmaild/config.example.yaml` 是带逐字段中文注释的示例配置，用 `-config <path>` 加载；优先级为**命令行参数 > 配置文件 > 内置默认值**（未显式给出的命令行参数不会覆盖配置文件）。配置严格解析：未知字段、重复键、类型或时长格式错误会给出带文件路径与字段名的中文提示。字段分组：`listen`（`addr`/`hostname`/`allow_non_loopback`）、`limits`（消息字节、收件人、连接、保留数、`read_timeout`/`session_timeout`）、`starttls`（`enabled`/`cert_file`/`key_file`）、`auth`（`require_auth` 与 `accounts[].username`/`password`）、`output`（`level`/`print_body`/`max_body_bytes`/`trace_smtp`）。命令行 `-auth` 一旦出现会整体替换 `auth.accounts`；命令行证书对优先于配置文件；`-tls-cert`/`-tls-key` 必须同时给出。
+
+启动 banner 会打印模拟账户清单（明确标注**测试专用、非真实凭据**；告警在密码清单之前输出）、客户端连接参数（SMTP `host:port`、EHLO 主机名、是否需要 STARTTLS/自签证书信任、可用用户名）、`swaks` 与 `openssl s_client` 示例，以及 `smtp.host / smtp.port / smtp.username / smtp.password / starttls` 的产品配置片段样例（无模拟账户时省略 username/password，但仍给出 starttls 字段）。当前仓库根配置尚未提供 SMTP 节，宿主可用 `internal/mailer.SMTPOptions` 指向上面的地址（明文连接需 `AllowPlaintextLocal=true` 且目标为回环地址）。**风险提示**：配置文件中的测试密码会被回显以便本地连接测试，命令行 `-auth` 密码不回显；两者都只是模拟测试凭据，不要复用真实密码，也不要把服务暴露到非回环网络。如不想让测试密码出现在启动输出，可改用命令行 `-auth user:password`（不落盘、不回显），或把含密码的配置文件放在不纳入版本控制的位置。
+
+输出级别（`output.level` / `-output`）：`summary` 为默认值，每条消息一行摘要（与旧版一致）；`detail` 额外打印完整信封（MAIL FROM/RCPT TO）、全部头部原始值（保留折行）、解析出的 Subject/Date/Message-ID、TLS 与 AUTH 用户、字节数（总大小/正文/头部），`print_body` 打开时还打印正文；`debug` 在 detail 基础上默认开启会话级 SMTP 命令轨迹（连接、客户端命令、服务器应答、STARTTLS、认证成功、关闭）。正文输出受 `max_body_bytes`（默认 4096，`0` 表示不限制）约束，超出时按 UTF-8 字符边界截断并明确提示；正文、头部与轨迹中的终端控制字符（如 ESC）会被转义后再输出。`internal/testmail` 新增可选的 `Options.OnSessionEvent` 调试轨迹钩子：`AUTH` 命令参数只保留机制名，AUTH 客户端响应内容与邮件正文不会进入轨迹；未配置轨迹时不产生输出（会话路径仅保留少量判断）。
+
+更完整的使用说明（字段表、连接参数、产品配置示例与安全风险）见 `tools/testmaild/README.md`。
 
 在 Go 测试中直接复用（后续邮件发送模块的测试把 SMTP 地址指向 `srv.Addr()`，用 `Wait`/`Messages` 断言）：
 
@@ -1024,7 +1036,7 @@ msgs, err := srv.Wait(ctx, testmail.Query{To: "user@example.test"})
 srv.Clear() // 或 Take 按条件取出
 ```
 
-需要 STARTTLS 时用 `testmail.GenerateTestCertificate()` 生成自签证书注入 `Options.TLS`，测试客户端需显式信任该证书或跳过校验；AUTH 测试凭据只写在这里，不来自环境变量或配置文件。该包的"无外发"与"未被生产入口导入"有源码级测试守护（`internal/testmail/isolation_test.go`）。
+需要 STARTTLS 时用 `testmail.GenerateTestCertificate()` 生成自签证书注入 `Options.TLS`，测试客户端需显式信任该证书或跳过校验；`internal/testmail` 包本身不读配置文件、不读环境变量或凭证库，AUTH 测试凭据由调用方直接写在 `Options.Auth` 里（`tools/testmaild` 工具层的模拟账户才来自配置文件或命令行）。该包的"无外发"与"未被生产入口导入"有源码级测试守护（`internal/testmail/isolation_test.go`）。
 
 运行本步测试（Windows amd64 实测）：
 

@@ -1,10 +1,12 @@
 // Command testmaild 启动一个本地测试 SMTP 服务器，用于人工验收与调试邮件相关功能。
 //
-// 它只做装配与运行：解析命令行参数、构造 internal/testmail 服务器、打印实际监听
-// 地址与能力，收到消息时打印摘要，收到中断信号后优雅退出并释放端口。它不导入任何
-// 产品业务逻辑，也不会被 cmd/login-server 装配；生产服务器不会启动本工具。
+// 它只做装配与运行：解析命令行参数与可选 YAML 配置文件、构造 internal/testmail
+// 服务器、打印实际监听地址、模拟账户清单与客户端连接参数，收到消息时按配置的详细
+// 程度打印摘要或完整内容。它不导入任何产品业务逻辑，也不会被 cmd/login-server
+// 装配；生产服务器不会启动本工具。
 //
-// 默认只监听 127.0.0.1 的随机端口；不向任何真实地址投递邮件。
+// 默认只监听 127.0.0.1 的随机端口；不向任何真实地址投递邮件。配置文件的字段与
+// 中文注释见同目录的 config.example.yaml，完整使用说明见同目录的 README.md。
 package main
 
 import (
@@ -71,11 +73,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "用法: testmaild [选项]\n\n")
-		fmt.Fprintf(stderr, "只用于测试的本地 SMTP 接收服务器：消息只保存在内存中，不投递、不中继。\n\n")
+		fmt.Fprintf(stderr, "只用于测试的本地 SMTP 接收服务器：消息只保存在内存中，不投递、不中继。\n")
+		fmt.Fprintf(stderr, "优先级：命令行参数 > 配置文件（-config）> 内置默认值。\n\n")
 		fmt.Fprintf(stderr, "选项:\n")
 		fs.PrintDefaults()
 	}
 
+	configPath := fs.String("config", "", "YAML 配置文件路径（字段与中文注释见 config.example.yaml）")
 	addr := fs.String("addr", testmail.DefaultAddr, "监听地址；默认仅回环随机端口")
 	hostname := fs.String("hostname", testmail.DefaultHostname, "SMTP 问候语使用的主机名")
 	allowNonLoopback := fs.Bool("allow-non-loopback", false, "显式允许监听非回环地址（仍然只做本地捕获）")
@@ -88,8 +92,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	startsTLS := fs.Bool("starttls", false, "启用 STARTTLS 并生成临时自签测试证书")
 	certFile := fs.String("tls-cert", "", "STARTTLS 证书 PEM 文件（与 --tls-key 同时给出时优先于 --starttls）")
 	keyFile := fs.String("tls-key", "", "STARTTLS 私钥 PEM 文件")
-	requireAuth := fs.Bool("require-auth", false, "要求先通过 AUTH 才能发信（需配合 --auth）")
+	requireAuth := fs.Bool("require-auth", false, "要求先通过 AUTH 才能发信（需配合 --auth 或配置文件 auth.accounts）")
 	printBody := fs.Bool("print-body", false, "打印收到的消息正文（默认只打印信封与头部摘要）")
+	outputFlag := fs.String("output", "", "消息输出级别：summary（默认简洁摘要）、detail（信封/全部头部/正文）、debug（detail + SMTP 命令轨迹）")
+	bodyLimit := fs.Int("body-limit", defaultMaxBodyBytes, "详细输出中正文最多打印的字节数，0 表示不限制（默认 4096）")
+	traceSMTP := fs.Bool("trace-smtp", false, "打印会话级 SMTP 命令轨迹（调试用；AUTH 凭据不会进入轨迹）")
 	var users credentials = make(map[string]string)
 	fs.Var(users, "auth", "启用 AUTH 并添加测试凭据，格式 user:password，可重复")
 
@@ -100,42 +107,99 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("未知参数: %s", strings.Join(fs.Args(), " "))
 	}
 
-	opts := testmail.Options{
-		Addr:             *addr,
-		Hostname:         *hostname,
-		AllowNonLoopback: *allowNonLoopback,
-		MaxMessageBytes:  *maxMessageBytes,
-		MaxRecipients:    *maxRecipients,
-		MaxConnections:   *maxConnections,
-		MaxMessages:      *maxMessages,
-		ReadTimeout:      *readTimeout,
-		SessionTimeout:   *sessionTimeout,
-	}
-	if len(users) > 0 {
-		opts.Auth = &testmail.AuthOptions{Users: users, RequireAuth: *requireAuth}
-	} else if *requireAuth {
-		return errors.New("--require-auth 需要至少一个 --auth user:password")
+	// 记录哪些参数被命令行显式给出，用于实现“命令行 > 配置文件 > 默认值”。
+	explicit := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	cli := cliOverrides{
+		set:              explicit,
+		addr:             addr,
+		hostname:         hostname,
+		allowNonLoopback: allowNonLoopback,
+		maxMessageBytes:  maxMessageBytes,
+		maxRecipients:    maxRecipients,
+		maxConnections:   maxConnections,
+		maxMessages:      maxMessages,
+		readTimeout:      readTimeout,
+		sessionTimeout:   sessionTimeout,
+		startTLS:         startsTLS,
+		tlsCert:          certFile,
+		tlsKey:           keyFile,
+		requireAuth:      requireAuth,
+		auth:             users,
+		printBody:        printBody,
+		output:           outputFlag,
+		bodyLimit:        bodyLimit,
+		traceSMTP:        traceSMTP,
 	}
 
-	cert, err := loadCertificate(*startsTLS, *certFile, *keyFile)
+	fileCfg := defaultFileConfig()
+	if strings.TrimSpace(*configPath) != "" {
+		loaded, err := loadConfigFile(*configPath)
+		if err != nil {
+			return err
+		}
+		fileCfg = loaded
+	}
+	cfg, err := resolveConfig(fileCfg, cli)
 	if err != nil {
 		return err
 	}
-	if cert != nil {
+	if strings.TrimSpace(*configPath) != "" {
+		cfg.ConfigPath = *configPath
+	}
+
+	opts := testmail.Options{
+		Addr:             cfg.Addr,
+		Hostname:         cfg.Hostname,
+		AllowNonLoopback: cfg.AllowNonLoopback,
+		MaxMessageBytes:  cfg.MaxMessageBytes,
+		MaxRecipients:    cfg.MaxRecipients,
+		MaxConnections:   cfg.MaxConnections,
+		MaxMessages:      cfg.MaxMessages,
+		ReadTimeout:      cfg.ReadTimeout,
+		SessionTimeout:   cfg.SessionTimeout,
+	}
+	if len(cfg.Accounts) > 0 {
+		authUsers := make(map[string]string, len(cfg.Accounts))
+		for _, account := range cfg.Accounts {
+			authUsers[account.Username] = account.Password
+		}
+		opts.Auth = &testmail.AuthOptions{Users: authUsers, RequireAuth: cfg.RequireAuth}
+	}
+
+	var tlsDescription string
+	switch {
+	case cfg.TLSCertFile != "" || cfg.TLSKeyFile != "":
+		cert, err := loadCertificate(false, cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return err
+		}
 		opts.TLS = &testmail.TLSOptions{Certificate: *cert}
+		tlsDescription = fmt.Sprintf("证书文件 %s 与 %s；客户端需显式信任该证书", cfg.TLSCertFile, cfg.TLSKeyFile)
+	case cfg.StartTLSEnabled:
+		cert, err := loadCertificate(true, "", "")
+		if err != nil {
+			return err
+		}
+		opts.TLS = &testmail.TLSOptions{Certificate: *cert}
+		tlsDescription = "自签测试证书 CN=testmail.local，覆盖 localhost/127.0.0.1/::1，有效期 24 小时；客户端需显式信任或跳过校验"
 	}
 
 	logger := log.New(stdout, "", log.LstdFlags)
 	opts.OnMessage = func(m testmail.Message) {
-		logger.Printf("收到邮件 id=%s from=<%s> to=%v subject=%q size=%d tls=%t auth=%q",
-			m.ID, m.EnvelopeFrom, m.EnvelopeTo, m.Subject, len(m.Data), m.TLS, m.AuthUser)
-		if *printBody {
-			logger.Printf("--- 消息正文 id=%s ---\n%s", m.ID, m.Body())
+		printMessage(logger, cfg, m)
+	}
+	if cfg.TraceSMTP {
+		opts.OnSessionEvent = func(ev testmail.SessionEvent) {
+			printSessionEvent(logger, ev)
 		}
 	}
 
 	srv, err := testmail.New(opts)
 	if err != nil {
+		if cfg.ConfigPath != "" {
+			return fmt.Errorf("合并后的测试服务器配置无效（默认值 + 配置文件 %s + 命令行显式参数）：%w", cfg.ConfigPath, err)
+		}
 		return err
 	}
 	if err := srv.Start(); err != nil {
@@ -145,23 +209,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		_ = srv.Close()
 	}()
 
-	// 只打印地址与能力摘要；不打印测试密码。
-	fmt.Fprintf(stdout, "testmaild: 监听 %s\n", srv.Addr())
-	fmt.Fprintf(stdout, "testmaild: 主机名 %s\n", opts.Hostname)
-	fmt.Fprintf(stdout, "testmaild: 限制 消息=%d字节 收件人=%d 连接=%d 保留=%d\n",
-		opts.MaxMessageBytes, opts.MaxRecipients, opts.MaxConnections, opts.MaxMessages)
-	if opts.Auth != nil {
-		names := make([]string, 0, len(opts.Auth.Users))
-		for name := range opts.Auth.Users {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		fmt.Fprintf(stdout, "testmaild: AUTH 已启用，测试用户 %v（密码见启动参数；要求先认证=%t）\n", names, opts.Auth.RequireAuth)
-	}
-	if opts.TLS != nil {
-		fmt.Fprintf(stdout, "testmaild: STARTTLS 已启用（自签测试证书，客户端需显式信任或跳过校验）\n")
-	}
-	fmt.Fprintf(stdout, "testmaild: 等待邮件；按 Ctrl+C 或发送 SIGTERM 优雅退出\n")
+	printStartup(stdout, cfg, srv, tlsDescription)
 
 	<-ctx.Done()
 
