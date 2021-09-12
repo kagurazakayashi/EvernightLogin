@@ -51,7 +51,8 @@ WHERE user_id=? ORDER BY created_at_ms DESC,rowid DESC LIMIT ?`
 'audit.read','audit.export','audit.purge','backups.create','backups.restore','backups.export',
 'security.policy.manage','settings.manage','diagnostics.read','recovery.request','recovery.approve',
 'recovery.mfa.approve','support.cases.read','support.cases.create','support.cases.update',
-'authorization.check','reports.read','reports.generate','reports.export','reports.schedule.manage'`
+'authorization.check','reports.read','reports.generate','reports.export','reports.schedule.manage',
+'reports.cleanup'`
 
 	// selectSensitivePermissionSQL 判断账户是否（直接或经组角色）持有高敏感系统
 	// 权限；root_only 权限一律视为高敏感。角色与权限都必须启用且属于系统范围。

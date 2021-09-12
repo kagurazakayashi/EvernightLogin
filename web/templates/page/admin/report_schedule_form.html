@@ -1,0 +1,47 @@
+{{define "page-title"}}{{if .Data.editing}}{{t "page.admin.reports.form.edit_title"}}{{else}}{{t "page.admin.reports.form.create_title"}}{{end}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.reports.common.forbidden") "description" (t "page.admin.reports.schedules.forbidden_help"))}}
+{{else}}{{with .Data.form}}
+<nav aria-label="{{t "page.admin.reports.nav"}}"><a href="{{$.Data.schedulesURL}}">{{t "page.admin.reports.schedules.title"}}</a></nav>
+<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.reports.form.boundary"}}</p></div>
+<form method="post" action="{{if $.Data.editing}}{{route "admin.report_schedule_update"}}{{else}}{{route "admin.report_schedule_create"}}{{end}}">{{csrf_field}}
+{{if $.Data.planID}}<input type="hidden" name="plan_id" value="{{$.Data.planID}}">{{end}}
+<input type="hidden" name="version" value="{{.Version}}">
+<input type="hidden" name="scope_id" value="{{.ScopeID}}">
+<p><label class="ln-field__label" for="plan-name">{{t "page.admin.reports.schedules.name"}}</label>
+<input class="ln-input" id="plan-name" name="name" value="{{.Name}}" required maxlength="120">
+{{if field_error "name"}}<span class="ln-field__error">{{t "page.admin.reports.form.name_invalid"}}</span>{{end}}</p>
+<p><label class="ln-field__label" for="plan-type">{{t "page.admin.reports.form.period"}}</label>
+<select class="ln-input" id="plan-type" name="schedule_type">{{range $.Data.scheduleTypeOptions}}<option value="{{.}}"{{if eq $.Data.form.ScheduleType .}} selected{{end}}>{{t (printf "page.admin.reports.schedule_type.%s" .)}}</option>{{end}}</select></p>
+<p><label class="ln-field__label" for="plan-expression">{{t "page.admin.reports.form.expression"}}</label>
+<input class="ln-input" id="plan-expression" name="expression" value="{{.Expression}}" required maxlength="128">
+<span class="ln-meta">{{t "page.admin.reports.form.expression_hint"}}</span></p>
+<p><label class="ln-field__label" for="plan-timezone">{{t "page.admin.reports.form.timezone"}}</label>
+<select class="ln-input" id="plan-timezone" name="time_zone">{{range $.Data.timezoneOptions}}<option value="{{.}}"{{if eq $.Data.form.TimeZone .}} selected{{end}}>{{.}}</option>{{end}}</select></p>
+<p><label class="ln-field__label" for="plan-granularity">{{t "page.admin.reports.form.granularity"}}</label>
+<select class="ln-input" id="plan-granularity" name="granularity">{{range $.Data.granularityOptions}}<option value="{{.}}"{{if eq $.Data.form.Granularity .}} selected{{end}}>{{t (printf "page.admin.reports.granularity.%s" .)}}</option>{{end}}</select></p>
+<p><label class="ln-field__label" for="plan-window">{{t "page.admin.reports.form.window_days"}}</label>
+<input class="ln-input" id="plan-window" name="window_days" type="number" min="1" max="90" value="{{.WindowDays}}"></p>
+<p>{{t "page.admin.reports.form.formats"}}<br>
+{{range $.Data.formatOptions}}<label><input type="checkbox" name="formats" value="{{.}}"{{if contains $.Data.form.Formats .}} checked{{end}}> {{.}}</label> {{end}}</p>
+<p>{{t "page.admin.reports.form.categories"}}<br>
+{{range $.Data.categoryOptions}}<label><input type="checkbox" name="categories" value="{{.}}"{{if contains $.Data.form.Categories .}} checked{{end}}> {{t (printf "page.admin.reports.category.%s" .)}}</label> {{end}}</p>
+<p><label class="ln-field__label" for="plan-detail-rows">{{t "page.admin.reports.form.detail_rows"}}</label>
+<input class="ln-input" id="plan-detail-rows" name="detail_rows" type="number" min="1" max="200" value="{{.DetailRows}}"></p>
+<p><label class="ln-field__label" for="plan-missed">{{t "page.admin.reports.form.missed_policy"}}</label>
+<select class="ln-input" id="plan-missed" name="missed_policy">{{range $.Data.missedPolicyOptions}}<option value="{{.}}"{{if eq $.Data.form.MissedPolicy .}} selected{{end}}>{{t (printf "page.admin.reports.missed_policy.%s" .)}}</option>{{end}}</select></p>
+<p><label class="ln-field__label" for="plan-catch-up">{{t "page.admin.reports.form.max_catch_up"}}</label>
+<input class="ln-input" id="plan-catch-up" name="max_catch_up" type="number" min="1" max="1000" value="{{.MaxCatchUp}}"></p>
+<p><label class="ln-field__label" for="plan-timeout">{{t "page.admin.reports.form.timeout"}}</label>
+<input class="ln-input" id="plan-timeout" name="timeout_seconds" type="number" min="10" max="3600" value="{{.TimeoutSeconds}}"></p>
+<p><label class="ln-field__label" for="plan-attempts">{{t "page.admin.reports.form.max_attempts"}}</label>
+<input class="ln-input" id="plan-attempts" name="max_attempts" type="number" min="1" max="10" value="{{.MaxAttempts}}"></p>
+<p><label><input type="checkbox" name="enabled" value="1"{{if .Enabled}} checked{{end}}> {{t "page.admin.reports.form.enabled"}}</label></p>
+<p><label class="ln-field__label" for="plan-reason">{{t "page.admin.reports.form.reason"}}</label>
+<input class="ln-input" id="plan-reason" name="reason" value="{{.Reason}}" maxlength="256">
+<span class="ln-meta">{{t "page.admin.reports.form.reason_hint"}}</span></p>
+<button class="ln-button" type="submit">{{if $.Data.editing}}{{t "page.admin.reports.form.save"}}{{else}}{{t "page.admin.reports.form.create"}}{{end}}</button>
+</form>
+{{end}}{{end}}{{end}}

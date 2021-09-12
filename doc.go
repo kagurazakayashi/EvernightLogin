@@ -598,6 +598,38 @@
 // Start 即被拒绝；`cmd/login-server` 装配与 YAML 配置项、PDF 无障碍/PDF-A 认证
 // （明确不声明）留后续，非 Windows/arm64 运行与 race 未验证。
 //
+// 步骤 79：公开 `WebUIOptions.PageReports`/`UIPageReportsBackend` 与 16 条内置报告
+// 管理路由（ui.v1）：`admin.reports` 历史列表（筛选/游标加载）、`admin.report_detail`
+// 详情与可用格式、`admin.report_download`（POST 表单 + 页面 CSRF 校验后由领域服务签发
+// 一次性短期令牌并立即兑换，响应 `no-store`/`no-referrer`/`nosniff` + attachment，无
+// 公开永久分享）、`admin.report_schedules` 计划列表、`admin.report_schedule_detail`
+// 计划详情与执行记录、`..._new/create/edit/update` 计划创建编辑（行版本乐观并发，
+// 计划 ID/所有者不可改）、`..._state` 启停、`..._delete_preview/delete` 删除预览与
+// 确认、`admin.report_retention` 保留策略说明、`admin.report_cleanup` 报告文件清理
+// 确认；`admin.report_retry`（POST+CSRF+敏感操作复核）重试失败/取消/超时报告并创建
+// 新运行记录（`RetryOf` 链式关联、原记录保留）、`admin.report_cancel`（POST+CSRF
+// +原因，调用既有取消能力；受理不等于实际取消），`admin.report_detail` 通过适配器
+// `Preview` 暴露同一固定快照的受控预览（缺失/未知数据标记而不补零）。公开类型包括 `UIReportsCapabilities`、`UIReportPlan`、`UIReportPlanRequest`、
+// `UIReportPlanDeletePreview`、`UIReportHistoryQuery/Entry/Page`、`UIReportDetail`、
+// `UIReportArtifact`、`UIReportFile`、`UIReportRetentionPolicy`、
+// `UIReportCleanupPreview/Target/Result/Failure`、`UIReportPreview`、
+// `UIReportPreviewRow`、`UIReportsError` 与
+// `UIPageReportsOptions{Backend, ValidateCSRF, Now}`；缺 CSRF 校验器拒绝构造。页面
+// 状态覆盖加载/空/失败/无权限/非法/冲突/CSRF；能力位只影响呈现，每次读取、计划变更、
+// 下载与清理都由适配器重建可信 Caller 交给 `internal/reports` 重新授权（reports.read/
+// generate/export/schedule.manage/cleanup 与数据范围）。后端公开能力（内部包）包括
+// `Service.HistoryList/GetSnapshot/OpenFile/IssueDownloadTicket/RedeemDownloadTicket/
+// CleanupPreview/CleanupExecute`、`PlanService.Update/ReconcilePlans/DisableRevokedPlans/
+// CheckExecutionPermission`、`PlanProjectionStore`/`HistoryStore`/`Notifier` 契约与迁移
+// `0042_report_lifecycle.sql`；计划/历史/清理分别授权，乱序状态不回退终态，清理与原始
+// 审计删除严格分离。已知限制：`cmd/login-server` 本阶段仍为 CLI-only（不建 DB/HTTP/
+// 后台组件），`Instance` 无业务服务注册，宿主真实装配未完成（参考接线见
+// `examples/report-schedule`，示例不等于生产装配）；`internal/mailer` 报告通知模板/Kind
+// 未新增，通知真实投递未接线（仅契约+测试替身，失败不污染生成/历史状态）；页面真实
+// 浏览器/响应式/读屏未实测；适配器真实服务集成测试已补（真实 SQLite/reports/plan
+// 服务）；计划编辑页统计范围按计划回填，创建页默认 `system` 为已知限制；全量
+// `go test ./...`/race/非 Windows/非 SQLite 未验证。
+//
 // 步骤 76：公开 `WebUIOptions.PageStats`/`UIPageStatsBackend` 与三条内置管理页面
 // 路由（ui.v1）：`admin.dashboard` 展示同一窗口的统计摘要、错误类别分布与当前系统
 // 状态快照；`admin.statistics` 展示成功认证去重活跃度与错误趋势的服务端内联 SVG

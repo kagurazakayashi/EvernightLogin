@@ -1,0 +1,38 @@
+{{define "page-title"}}{{t "page.admin.reports.schedule_detail.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.reports.common.forbidden") "description" (t "page.admin.reports.schedules.forbidden_help"))}}
+{{else}}{{with .Data.plan}}
+<nav aria-label="{{t "page.admin.reports.nav"}}"><a href="{{$.Data.schedulesURL}}">{{t "page.admin.reports.schedules.title"}}</a></nav>
+<h2>{{t "page.admin.reports.schedule_detail.basic"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.reports.schedules.name"}}</dt><dd>{{.Name}}</dd>
+  <dt>{{t "page.admin.reports.schedule_detail.plan_id"}}</dt><dd><code>{{.ID}}</code></dd>
+  <dt>{{t "page.admin.reports.schedule_detail.version"}}</dt><dd>{{format_number .Version}}</dd>
+  <dt>{{t "page.admin.reports.schedules.state"}}</dt><dd>{{if .Enabled}}{{t "page.admin.reports.schedules.enabled"}}{{else}}{{t "page.admin.reports.schedules.disabled"}}{{end}}</dd>
+  <dt>{{t "page.admin.reports.schedule_detail.permission"}}</dt><dd>{{.PermissionState}} {{.PermissionReason}}</dd>
+  <dt>{{t "page.admin.reports.schedules.period"}}</dt><dd>{{.PeriodDescription}} · {{.TimeZone}}</dd>
+  <dt>{{t "page.admin.reports.schedule_detail.scope"}}</dt><dd>{{.ScopeKind}} · <code>{{.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.reports.schedule_detail.granularity"}}</dt><dd>{{.Granularity}} / {{format_number .WindowDays}}{{t "page.admin.reports.schedule_detail.days"}}</dd>
+  <dt>{{t "page.admin.reports.schedule_detail.formats"}}</dt><dd>{{range $index, $format := .Formats}}{{if $index}} · {{end}}{{$format}}{{end}}</dd>
+  <dt>{{t "page.admin.reports.schedules.owner"}}</dt><dd>{{.Owner}}（执行身份 {{.ExecutionActor}}）</dd>
+  <dt>{{t "page.admin.reports.schedules.next_run"}}</dt><dd>{{if .NextRunUnknown}}{{t "page.admin.reports.schedules.next_unknown"}}{{else}}{{format_time .NextRun $.Data.timezone}}{{end}}</dd>
+</dl>
+{{if $.Data.canManage}}
+<div class="ln-actions">
+  <form method="post" action="{{route "admin.report_schedule_state"}}">{{csrf_field}}
+    <input type="hidden" name="plan_id" value="{{.ID}}">
+    <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}">
+    <button class="ln-button" type="submit">{{if .Enabled}}{{t "page.admin.reports.schedules.disable"}}{{else}}{{t "page.admin.reports.schedules.enable"}}{{end}}</button>
+  </form>
+  <a class="ln-button ln-button--secondary" href="{{route "admin.report_schedule_edit"}}?plan_id={{.ID}}">{{t "page.admin.reports.schedules.edit"}}</a>
+  <a class="ln-button ln-button--danger" href="{{route "admin.report_schedule_delete_preview"}}?plan_id={{.ID}}">{{t "page.admin.reports.schedules.delete"}}</a>
+</div>
+{{end}}
+<h2>{{t "page.admin.reports.schedule_detail.runs"}}</h2>
+{{if $.Data.runsLoadFailed}}<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.reports.schedule_detail.runs_failed"}}</p></div>{{end}}
+{{if $.Data.runs}}<div class="ln-table-scroll" tabindex="0" role="region"><table class="ln-table"><caption>{{t "page.admin.reports.schedule_detail.runs_caption"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.reports.history.report_id"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.admin.reports.history.created_at"}}</th><th scope="col">{{t "page.admin.reports.detail.error"}}</th></tr></thead>
+<tbody>{{range $.Data.runs}}<tr><td><a href="{{route "admin.report_detail"}}?report_id={{.ID}}"><code>{{.ID}}</code></a></td><td>{{t (printf "page.admin.reports.state.%s" .State)}}</td><td>{{format_time .CreatedAt $.Data.timezone}}</td><td>{{if .ErrorCode}}<code>{{.ErrorCode}}</code>{{else}}—{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="ln-meta">{{t "page.admin.reports.schedule_detail.no_runs"}}</p>{{end}}
+{{end}}{{end}}{{end}}

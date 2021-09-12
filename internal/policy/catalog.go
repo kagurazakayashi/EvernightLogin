@@ -589,6 +589,13 @@ func defaultOperations() []Operation {
 			Implemented:   true,
 		},
 		{
+			ID: "reports.cleanup", Domain: DomainReport, Name: "清理已过期报告文件",
+			Description:   "按服务端保留策略清理已到期且超过宽限期的报告产物文件；必须强认证与确认并告知，服务端重新计算目标与范围、单次数量有界、只删除受控输出目录中的报告文件并推进历史清理状态，记录真实操作者/数量/失败结果；不删除原始安全审计记录，原始审计清理是独立的 root 受控流程。",
+			Default:       strongReauth,
+			PermissionKey: "reports.cleanup",
+			Implemented:   true,
+		},
+		{
 			ID: "root.recovery", Domain: DomainRecovery, Name: "root 受控恢复",
 			Description:        "仅限本地受控应急通道处理的 root 恢复；必须强认证与确认并告知，不开放匿名远程入口，不能读取原密码或秘密。",
 			Default:            strongReauthShort,

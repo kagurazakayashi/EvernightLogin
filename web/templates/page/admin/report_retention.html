@@ -1,0 +1,54 @@
+{{define "page-title"}}{{t "page.admin.reports.retention.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.reports.common.forbidden") "description" (t "page.admin.reports.retention.forbidden_help"))}}
+{{else}}
+<nav aria-label="{{t "page.admin.reports.nav"}}"><a href="{{.Data.reportsURL}}">{{t "page.admin.reports.history.title"}}</a> · <a href="{{.Data.schedulesURL}}">{{t "page.admin.reports.schedules.title"}}</a></nav>
+{{if .Data.loadFailed}}{{template "component.state" (dict "state" "error" "title" (t "page.admin.reports.common.load_failed") "description" (t "page.admin.reports.retention.load_failed_help"))}}
+{{else}}{{with .Data.policy}}
+<h2>{{t "page.admin.reports.retention.policy"}}</h2>
+<div class="ln-banner ln-banner--info" role="status"><p>{{.Source}}</p></div>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.reports.retention.artifact_ttl"}}</dt><dd>{{format_duration .ArtifactTTL}}</dd>
+  <dt>{{t "page.admin.reports.retention.grace"}}</dt><dd>{{format_duration .CleanupGrace}}</dd>
+  <dt>{{t "page.admin.reports.retention.eligible_before"}}</dt><dd>{{format_time .EligibleBefore $.Data.timezone}}</dd>
+  <dt>{{t "page.admin.reports.retention.history_note"}}</dt><dd>{{.HistoryNote}}</dd>
+  <dt>{{t "page.admin.reports.retention.raw_audit"}}</dt><dd>{{.RawAuditNote}}</dd>
+</dl>
+{{end}}
+{{with .Data.preview}}
+<h2>{{t "page.admin.reports.retention.preview"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.reports.retention.targets"}}</dt><dd>{{format_number .TargetCount}}</dd>
+  <dt>{{t "page.admin.reports.retention.bytes"}}</dt><dd>{{format_number .TotalBytes}}</dd>
+  <dt>{{t "page.admin.reports.retention.oldest"}}</dt><dd>{{if .OldestExpiresAt}}{{format_time .OldestExpiresAt $.Data.timezone}}{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.reports.retention.newest"}}</dt><dd>{{if .NewestExpiresAt}}{{format_time .NewestExpiresAt $.Data.timezone}}{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.reports.retention.note"}}</dt><dd>{{.Note}}</dd>
+</dl>
+{{if .Targets}}<div class="ln-table-scroll" tabindex="0" role="region"><table class="ln-table"><caption>{{t "page.admin.reports.retention.preview_caption"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.reports.history.report_id"}}</th><th scope="col">{{t "common.label.scope"}}</th><th scope="col">{{t "page.admin.reports.retention.expires"}}</th><th scope="col">{{t "page.admin.reports.detail.size"}}</th></tr></thead>
+<tbody>{{range .Targets}}<tr><td><code>{{.ReportID}}</code></td><td>{{.ScopeID}}</td><td>{{format_time .ExpiresAt $.Data.timezone}}</td><td>{{format_number .Bytes}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{end}}
+{{with .Data.result}}
+<h2>{{t "page.admin.reports.retention.result"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.reports.retention.result.requested"}}</dt><dd>{{format_number .RequestedCount}}</dd>
+  <dt>{{t "page.admin.reports.retention.result.cleaned"}}</dt><dd>{{format_number .CleanedCount}}</dd>
+  <dt>{{t "page.admin.reports.retention.result.failed"}}</dt><dd>{{format_number .FailedCount}}</dd>
+  <dt>{{t "page.admin.reports.retention.result.files"}}</dt><dd>{{format_number .DeletedFiles}}</dd>
+  <dt>{{t "page.admin.reports.retention.result.bytes"}}</dt><dd>{{format_number .FreedBytes}}</dd>
+  <dt>{{t "page.admin.reports.retention.result.audit"}}</dt><dd>{{.RawAuditNote}}</dd>
+</dl>
+{{if .Failures}}<ul>{{range .Failures}}<li><code>{{.ReportID}}</code> · {{.Reason}}</li>{{end}}</ul>{{end}}
+{{end}}
+{{if .Data.canCleanup}}
+<h2>{{t "page.admin.reports.retention.cleanup"}}</h2>
+<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.reports.retention.cleanup_warning"}}</p></div>
+<form method="post" action="{{route "admin.report_cleanup"}}">{{csrf_field}}
+<p><label class="ln-field__label" for="cleanup-reason">{{t "page.admin.reports.form.reason"}}</label>
+<input class="ln-input" id="cleanup-reason" name="reason" required maxlength="256"></p>
+<button class="ln-button ln-button--danger" type="submit">{{t "page.admin.reports.retention.cleanup_button"}}</button>
+</form>
+{{else}}<p class="ln-meta">{{t "page.admin.reports.retention.no_cleanup"}}</p>{{end}}
+{{end}}{{end}}{{end}}

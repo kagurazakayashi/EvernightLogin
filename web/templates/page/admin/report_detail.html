@@ -1,0 +1,80 @@
+{{define "page-title"}}{{t "page.admin.reports.detail.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.cancelRequested}}<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.reports.cancel.already_requested"}}</p></div>{{end}}
+{{with .Data.cancelResult}}<div class="ln-banner ln-banner--info" role="status"><p>{{.Note}}</p></div>{{end}}
+{{if .Data.cancelable}}<section aria-labelledby="cancel-report-title">
+<h2 id="cancel-report-title">{{t "page.admin.reports.cancel.title"}}</h2>
+<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.reports.cancel.warning"}}</p></div>
+<form method="post" action="{{route "admin.report_cancel"}}">{{csrf_field}}
+<input type="hidden" name="report_id" value="{{.Data.reportID}}">
+<p><label class="ln-field__label" for="cancel-reason">{{t "page.admin.reports.form.reason"}}</label>
+<input class="ln-input" id="cancel-reason" name="reason" required maxlength="256"></p>
+<button class="ln-button ln-button--danger" type="submit">{{t "page.admin.reports.cancel.button"}}</button>
+</form>
+</section>{{end}}
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.reports.common.forbidden") "description" (t "page.admin.reports.detail.forbidden_help"))}}
+{{else}}{{with .Data.report}}
+<nav aria-label="{{t "page.admin.reports.nav"}}"><a href="{{$.Data.reportsURL}}">{{t "page.admin.reports.history.title"}}</a></nav>
+<h2>{{t "page.admin.reports.detail.metadata"}}</h2>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.reports.history.report_id"}}</dt><dd><code>{{.ID}}</code></dd>
+  <dt>{{t "common.label.status"}}</dt><dd>{{t (printf "page.admin.reports.state.%s" .State)}}</dd>
+  <dt>{{t "common.label.scope"}}</dt><dd>{{.ScopeKind}} · <code>{{.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.reports.history.owner"}}</dt><dd>{{.RequestedBy}}</dd>
+  <dt>{{t "page.admin.reports.history.created_at"}}</dt><dd>{{format_time .CreatedAt $.Data.timezone}}</dd>
+  <dt>{{t "page.admin.reports.history.generated_at"}}</dt><dd>{{if .GeneratedAt}}{{format_time .GeneratedAt $.Data.timezone}}{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.reports.detail.overall"}}</dt><dd>{{if .OverallStatus}}{{.OverallStatus}}{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.reports.detail.task"}}</dt><dd>{{if .TaskID}}<code>{{.TaskID}}</code>{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.reports.detail.error"}}</dt><dd>{{if .ErrorCode}}<code>{{.ErrorCode}}</code>{{else}}—{{end}} {{.FailureReason}}</dd>
+  <dt>{{t "page.admin.reports.detail.expires"}}</dt><dd>{{if .ArtifactExpiresAt}}{{format_time .ArtifactExpiresAt $.Data.timezone}}{{else}}—{{end}}</dd>
+  <dt>{{t "page.admin.reports.detail.cleanup"}}</dt><dd>{{if .Artifacts}}{{else}}{{t "page.admin.reports.detail.no_artifacts"}}{{end}}</dd>
+</dl>
+<h2>{{t "page.admin.reports.detail.download"}}</h2>
+<div class="ln-banner ln-banner--info" role="status"><p>{{t_fmt "page.admin.reports.detail.download_hint" "minutes" (format_number $.Data.downloadTTLMinutes)}}</p></div>
+{{if .Artifacts}}<div class="ln-table-scroll" tabindex="0" role="region">
+<table class="ln-table"><caption>{{t "page.admin.reports.detail.artifacts_caption"}}</caption>
+<thead><tr><th scope="col">{{t "common.label.format"}}</th><th scope="col">{{t "page.admin.reports.detail.size"}}</th><th scope="col">{{t "page.admin.reports.detail.available"}}</th><th scope="col">{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Artifacts}}<tr>
+<td>{{.Format}}</td><td>{{format_number .Bytes}}</td>
+<td>{{if .Available}}{{format_time .ExpiresAt $.Data.timezone}}{{else}}{{t "page.admin.reports.detail.unavailable"}}{{end}}</td>
+<td>{{if .Available}}<form method="post" action="{{$.Data.downloadPath}}">{{csrf_field}}
+<input type="hidden" name="report_id" value="{{$.Data.reportID}}"><input type="hidden" name="format" value="{{.Format}}">
+<button class="ln-button ln-button--secondary" type="submit">{{t "page.admin.reports.detail.download_button"}}</button></form>{{else}}—{{end}}</td>
+</tr>{{end}}</tbody></table></div>{{else}}
+{{template "component.state" (dict "state" "empty" "title" (t "page.admin.reports.detail.no_artifacts") "description" (t "page.admin.reports.detail.no_artifacts_help"))}}
+{{end}}
+{{if $.Data.previewFailed}}<h2>{{t "page.admin.reports.detail.preview"}}</h2>
+<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.reports.detail.preview_failed"}}</p></div>{{end}}
+{{with $.Data.preview}}
+<h2>{{t "page.admin.reports.detail.preview"}}</h2>
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.reports.detail.preview_hint"}}</p></div>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.reports.detail.overall"}}</dt><dd>{{.OverallStatus}}</dd>
+  <dt>{{t "page.admin.reports.history.generated_at"}}</dt><dd>{{format_time .GeneratedAt $.Data.timezone}}</dd>
+  <dt>{{t "page.admin.reports.detail.preview.active_users"}}</dt><dd>{{format_number .ActivityTotal}}</dd>
+  <dt>{{t "page.admin.reports.detail.preview.raw_events"}}</dt><dd>{{format_number .RawEvents}}</dd>
+  <dt>{{t "page.admin.reports.detail.preview.failed_requests"}}</dt><dd>{{format_number .FailedRequests}}</dd>
+  <dt>{{t "page.admin.reports.detail.preview.failed_tasks"}}</dt><dd>{{format_number .FailedTasks}}</dd>
+  <dt>{{t "page.admin.reports.detail.preview.window_retention"}}</dt><dd>{{if .WindowWithinRetention}}{{t "common.state.yes"}}{{else}}{{t "page.admin.reports.detail.preview.retention_unknown"}}{{format_number .RetentionDays}}{{t "page.admin.reports.schedule_detail.days"}}{{end}}</dd>
+  <dt>{{t "page.admin.reports.detail.preview.trimmed"}}</dt><dd>{{if .ScopeTrimmed}}{{t "page.admin.reports.detail.preview.trimmed_yes"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+  <dt>{{t "page.admin.reports.detail.preview.truncated"}}</dt><dd>{{if .SourceTruncated}}{{t "page.admin.reports.detail.preview.truncated_yes"}}{{else}}{{t "common.state.no"}}{{end}}{{if .DetailRowsTruncated}} · {{t "page.admin.reports.detail.preview.rows_truncated"}}{{end}}</dd>
+</dl>
+{{if .MissingReasons}}<p class="ln-meta">{{t "page.admin.reports.detail.preview.missing"}} {{range $index, $reason := .MissingReasons}}{{if $index}} · {{end}}{{$reason}}{{end}}</p>{{end}}
+{{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{if .ErrorRows}}<div class="ln-table-scroll" tabindex="0" role="region"><table class="ln-table"><caption>{{t "page.admin.reports.detail.preview.rows_caption"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.reports.detail.preview.error_code"}}</th><th scope="col">{{t "page.admin.reports.category.failure"}}</th><th scope="col">{{t "page.admin.reports.detail.preview.raw_events"}}</th><th scope="col">{{t "page.admin.reports.detail.preview.failed_requests"}}</th></tr></thead>
+<tbody>{{range .ErrorRows}}<tr><td><code>{{.ErrorCode}}</code></td><td>{{.Category}}</td><td>{{format_number .RawEvents}}</td><td>{{format_number .FailedRequests}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="ln-meta">{{t "page.admin.reports.detail.preview.empty_rows"}}</p>{{end}}
+{{end}}
+{{if $.Data.retryable}}
+<h2>{{t "page.admin.reports.retry.title"}}</h2>
+<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.reports.retry.warning"}}</p></div>
+<form method="post" action="{{route "admin.report_retry"}}">{{csrf_field}}
+<input type="hidden" name="report_id" value="{{$.Data.reportID}}">
+<p><label class="ln-field__label" for="retry-reason">{{t "page.admin.reports.form.reason"}}</label>
+<input class="ln-input" id="retry-reason" name="reason" required maxlength="256"></p>
+<button class="ln-button" type="submit">{{t "page.admin.reports.retry.button"}}</button>
+</form>
+{{end}}
+{{end}}{{end}}{{end}}

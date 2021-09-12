@@ -568,6 +568,11 @@ func catalogPermissionsV1() []PermissionDefinition {
 			Scope: "仅获准数据范围；任务不能超出所有者当前权限。", Limits: "不能创建超出权限范围的任务，不能修改他人报告。",
 			Implemented: false, DefaultRoles: []string{"system_admin", "auditor"},
 		},
+		{
+			Key: "reports.cleanup", Name: "清理过期报告文件", Summary: "按保留策略清理已到期的报告产物文件。",
+			Scope: "仅获准数据范围；必须强认证并记录实际目标与结果。", Limits: "不能删除原始审计记录，不能清理未到期或范围外文件。",
+			Implemented: false, DefaultRoles: []string{"system_admin"},
+		},
 		// 备份。
 		{
 			Key: "backups.create", Name: "创建备份", Summary: "创建备份任务。",
@@ -636,6 +641,7 @@ func catalogRolesV1() []RoleTemplate {
 				"applications.credentials.manage", "applications.members.manage",
 				"sessions.revoke", "audit.read", "audit.export", "reports.read",
 				"reports.generate", "reports.export", "reports.schedule.manage",
+				"reports.cleanup",
 				"backups.create", "backups.read", "backups.cancel", "settings.manage",
 				"diagnostics.read",
 			},

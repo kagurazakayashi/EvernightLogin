@@ -258,6 +258,20 @@ type Options struct {
 	Canceller  Canceller
 	// Tasks 可选：提供后报告视图附带真实任务状态摘要。
 	Tasks TaskReader
+	// History 可选：提供后报告真实终态会写入持久历史；未装配时历史仅存在于
+	// 进程内，不把内存记录伪装成持久历史。实现 reports.HistoryStore（同时具备
+	// 受控读取能力）时，Get/List/预览/下载在进程内记录未命中时回源持久历史并
+	// 按当前权限重新授权；只实现写入契约的替身不会被当作可回源历史。
+	History HistoryRecorder
+	// CleanupGracePeriod 是报告产物到期后保留多久才允许文件清理；0 使用默认
+	// 7 天，超过硬上限拒绝构造。清理只针对报告产物文件，不删除原始审计记录。
+	CleanupGracePeriod time.Duration
+	// DownloadTicketTTL 是短期下载令牌有效期；0 使用默认 5 分钟，超过 15 分钟
+	// 拒绝构造。令牌是一次性的，不能当永久分享链接使用。
+	DownloadTicketTTL time.Duration
+	// Notifier 可选：报告生成完成/失败/取消后向宿主发送受控结果通知。通知失败
+	// 只记录告警，不改变报告终态；未装配时不发任何通知。
+	Notifier Notifier
 	// OutputDir 是报告产物受控目录（绝对路径、已存在、非符号链接）；必填。
 	OutputDir string
 	// FontPath 是 PDF 嵌入字体的受信本地绝对路径（Noto Sans SC 静态 Regular TTF）。
@@ -297,6 +311,12 @@ type Service struct {
 	outputDir        string
 	// font 是构造时加载并校验的 PDF 字体；nil 表示 PDF 输出不可用。
 	font *pdfFont
+	// history 是历史持久化的可选读取能力；只实现写入的替身不参与回源。
+	history HistoryStore
+	// tickets 是短期下载令牌（绑定报告/格式/调用者/到期，一次性兑换）。
+	tickets *downloadTickets
+	// cleanupGrace 是报告产物到期后允许清理的宽限期。
+	cleanupGrace time.Duration
 
 	mu      sync.Mutex
 	records map[string]*reportRecord
@@ -312,6 +332,12 @@ func New(options Options) (*Service, error) {
 	// 可选依赖也拒绝 typed-nil：接口非 nil 但底层指针为 nil 时调用会 panic。
 	if options.Tasks != nil && isNil(options.Tasks) {
 		return nil, fmt.Errorf("%w: 任务读取依赖为 typed-nil", ErrOptionsInvalid)
+	}
+	if options.History != nil && isNil(options.History) {
+		return nil, fmt.Errorf("%w: 历史持久化依赖为 typed-nil", ErrOptionsInvalid)
+	}
+	if err := validateNotifierOptions(options.Notifier); err != nil {
+		return nil, err
 	}
 	maxDetailRows := options.MaxDetailRows
 	if maxDetailRows == 0 {
@@ -368,9 +394,35 @@ func New(options Options) (*Service, error) {
 		}
 		font = loaded
 	}
+	cleanupGrace := options.CleanupGracePeriod
+	if cleanupGrace == 0 {
+		cleanupGrace = DefaultCleanupGracePeriod
+	}
+	if cleanupGrace < time.Hour || cleanupGrace > MaxCleanupGracePeriod {
+		return nil, fmt.Errorf("%w: 报告清理宽限期超出范围", ErrOptionsInvalid)
+	}
+	ticketTTL := options.DownloadTicketTTL
+	if ticketTTL == 0 {
+		ticketTTL = DefaultDownloadTicketTTL
+	}
+	if ticketTTL < time.Minute || ticketTTL > MaxDownloadTicketTTL {
+		return nil, fmt.Errorf("%w: 下载令牌有效期超出范围", ErrOptionsInvalid)
+	}
+	// 只有同时具备受控读取能力的历史实现才允许回源；仅实现写入的测试替身仍可
+	// 验证终态写入，但不会被服务当作持久历史读取来源。
+	var history HistoryStore
+	if options.History != nil {
+		store, ok := options.History.(HistoryStore)
+		if ok && !isNil(store) {
+			history = store
+		}
+	}
 	return &Service{opts: options, maxDetailRows: maxDetailRows,
 		maxArtifactBytes: maxArtifactBytes, artifactTTL: artifactTTL,
-		outputDir: absolute, font: font, records: make(map[string]*reportRecord)}, nil
+		outputDir: absolute, font: font, history: history,
+		tickets:      newDownloadTickets(ticketTTL, options.Now, options.Random),
+		cleanupGrace: cleanupGrace,
+		records:      make(map[string]*reportRecord)}, nil
 }
 
 // PDFAvailable 报告当前服务是否具备生成 PDF 的能力（已配置并通过校验的嵌入字体）。

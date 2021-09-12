@@ -1,0 +1,25 @@
+{{define "page-title"}}{{t "page.admin.reports.schedules.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.reports.schedules.boundary"}}</p></div>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.reports.common.forbidden") "description" (t "page.admin.reports.schedules.forbidden_help"))}}
+{{else}}
+<nav aria-label="{{t "page.admin.reports.nav"}}"><a href="{{.Data.reportsURL}}">{{t "page.admin.reports.history.title"}}</a> · <a href="{{.Data.retentionURL}}">{{t "page.admin.reports.retention.title"}}</a></nav>
+{{if .Data.canManage}}<p><a class="ln-button" href="{{.Data.newPlanURL}}">{{t "page.admin.reports.schedules.create"}}</a></p>{{else}}<p class="ln-meta">{{t "page.admin.reports.schedules.no_manage"}}</p>{{end}}
+{{if .Data.loadFailed}}{{template "component.state" (dict "state" "error" "title" (t "page.admin.reports.common.load_failed") "description" (t "page.admin.reports.schedules.load_failed_help"))}}
+{{else if .Data.empty}}{{template "component.state" (dict "state" "empty" "title" (t "page.admin.reports.schedules.empty") "description" (t "page.admin.reports.schedules.empty_help"))}}
+{{else}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.reports.schedules.title"}}">
+<table class="ln-table"><caption>{{t "page.admin.reports.schedules.caption"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.reports.schedules.name"}}</th><th scope="col">{{t "page.admin.reports.schedules.state"}}</th><th scope="col">{{t "page.admin.reports.schedules.period"}}</th><th scope="col">{{t "page.admin.reports.schedules.next_run"}}</th><th scope="col">{{t "page.admin.reports.schedules.owner"}}</th><th scope="col">{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Data.plans}}<tr>
+<td><code>{{.ID}}</code><br>{{.Name}}</td>
+<td>{{if .Enabled}}{{t "page.admin.reports.schedules.enabled"}}{{else}}{{t "page.admin.reports.schedules.disabled"}}{{end}}
+{{if eq .PermissionState "revoked"}}<br><span class="ln-badge">{{t "page.admin.reports.schedules.revoked"}}</span>{{else if eq .PermissionState "unknown"}}<br><span class="ln-badge">{{t "page.admin.reports.schedules.unknown"}}</span>{{end}}</td>
+<td>{{.PeriodDescription}}<br><span class="ln-meta">{{.TimeZone}}</span></td>
+<td>{{if .NextRunUnknown}}{{t "page.admin.reports.schedules.next_unknown"}}{{else}}{{format_time .NextRun $.Data.timezone}}{{end}}</td>
+<td>{{.Owner}}</td>
+<td><a href="{{route "admin.report_schedule_detail"}}?plan_id={{.ID}}">{{t "page.admin.reports.schedules.view"}}</a></td>
+</tr>{{end}}</tbody></table></div>
+{{end}}{{end}}{{end}}

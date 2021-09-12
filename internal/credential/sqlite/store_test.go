@@ -55,8 +55,8 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载迁移失败: %v", err)
 	}
-	if len(migrationSet) != 41 {
-		t.Fatalf("迁移数量 = %d，期望 41", len(migrationSet))
+	if len(migrationSet) != 42 {
+		t.Fatalf("迁移数量 = %d，期望 42", len(migrationSet))
 	}
 	// 第一次只执行到 0001，模拟步骤 08 已部署的数据库。
 	if _, err := store.Migrate(ctx, migrationSet[:1]); err != nil {
@@ -83,7 +83,7 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 41 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" || versions[25] != "0026" || versions[26] != "0027" || versions[27] != "0028" || versions[28] != "0029" || versions[29] != "0030" || versions[30] != "0031" || versions[31] != "0032" || versions[32] != "0033" || versions[33] != "0034" || versions[34] != "0035" || versions[35] != "0036" || versions[36] != "0037" || versions[37] != "0038" || versions[38] != "0039" || versions[39] != "0040" || versions[40] != "0041" {
+	if len(versions) != 42 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" || versions[25] != "0026" || versions[26] != "0027" || versions[27] != "0028" || versions[28] != "0029" || versions[29] != "0030" || versions[30] != "0031" || versions[31] != "0032" || versions[32] != "0033" || versions[33] != "0034" || versions[34] != "0035" || versions[35] != "0036" || versions[36] != "0037" || versions[37] != "0038" || versions[38] != "0039" || versions[39] != "0040" || versions[40] != "0041" || versions[41] != "0042" {
 		t.Fatalf("升级后迁移历史 = %v", versions)
 	}
 }
@@ -112,7 +112,7 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 41 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" || versions[25] != "0026" || versions[26] != "0027" || versions[27] != "0028" || versions[28] != "0029" || versions[29] != "0030" || versions[30] != "0031" || versions[31] != "0032" || versions[32] != "0033" || versions[33] != "0034" || versions[34] != "0035" || versions[35] != "0036" || versions[36] != "0037" || versions[37] != "0038" || versions[38] != "0039" || versions[39] != "0040" || versions[40] != "0041" {
+	if len(versions) != 42 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" || versions[25] != "0026" || versions[26] != "0027" || versions[27] != "0028" || versions[28] != "0029" || versions[29] != "0030" || versions[30] != "0031" || versions[31] != "0032" || versions[32] != "0033" || versions[33] != "0034" || versions[34] != "0035" || versions[35] != "0036" || versions[36] != "0037" || versions[37] != "0038" || versions[38] != "0039" || versions[39] != "0040" || versions[40] != "0041" || versions[41] != "0042" {
 		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012]", versions)
 	}
 

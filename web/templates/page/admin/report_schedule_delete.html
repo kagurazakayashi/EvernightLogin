@@ -1,0 +1,25 @@
+{{define "page-title"}}{{t "page.admin.reports.schedule_delete.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.reports.common.forbidden") "description" (t "page.admin.reports.schedules.forbidden_help"))}}
+{{else}}{{with .Data.preview}}
+<nav aria-label="{{t "page.admin.reports.nav"}}"><a href="{{$.Data.schedulesURL}}">{{t "page.admin.reports.schedules.title"}}</a></nav>
+<h2>{{t "page.admin.reports.schedule_delete.confirm"}}</h2>
+<div class="ln-banner ln-banner--warning" role="alert"><p>{{t "page.admin.reports.schedule_delete.warning"}}</p></div>
+<dl class="ln-keyvalue">
+  <dt>{{t "page.admin.reports.schedules.name"}}</dt><dd>{{.Name}} · <code>{{.PlanID}}</code></dd>
+  <dt>{{t "common.label.scope"}}</dt><dd><code>{{.ScopeID}}</code></dd>
+  <dt>{{t "page.admin.reports.schedules.state"}}</dt><dd>{{if .Enabled}}{{t "page.admin.reports.schedules.enabled"}}{{else}}{{t "page.admin.reports.schedules.disabled"}}{{end}}</dd>
+  <dt>{{t "page.admin.reports.schedule_delete.active_tasks"}}</dt><dd>{{.ActiveTasksNote}}</dd>
+  <dt>{{t "page.admin.reports.schedule_delete.history"}}</dt><dd>{{.HistoryNote}}</dd>
+  <dt>{{t "page.admin.reports.schedule_delete.raw_audit"}}</dt><dd>{{.RawAuditNote}}</dd>
+</dl>
+<form method="post" action="{{route "admin.report_schedule_delete"}}">{{csrf_field}}
+<input type="hidden" name="plan_id" value="{{.PlanID}}">
+<p><label class="ln-field__label" for="delete-reason">{{t "page.admin.reports.form.reason"}}</label>
+<input class="ln-input" id="delete-reason" name="reason" required maxlength="256"></p>
+<button class="ln-button ln-button--danger" type="submit">{{t "page.admin.reports.schedule_delete.confirm_button"}}</button>
+<a class="ln-button ln-button--secondary" href="{{$.Data.schedulesURL}}">{{t "common.action.cancel"}}</a>
+</form>
+{{end}}{{end}}{{end}}

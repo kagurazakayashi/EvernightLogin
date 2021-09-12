@@ -38,6 +38,7 @@ import (
 	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -323,6 +324,8 @@ type WebUIOptions struct {
 	PageAudit *UIPageAuditOptions
 	// PageStats 非 nil 时注册步骤 76 统计看板/活跃度与错误趋势/错误分类明细页面。
 	PageStats *UIPageStatsOptions
+	// PageReports 非 nil 时注册步骤 79 报告计划/历史/下载/保留清理页面。
+	PageReports *UIPageReportsOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -372,6 +375,7 @@ type WebUI struct {
 	pageSecurityPolicy  *pageSecurityPolicyPages
 	pageAudit           *pageAuditPages
 	pageStats           *pageStatsPages
+	pageReports         *pageReportsPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -495,6 +499,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageStats = pages
+	}
+	if options.PageReports != nil {
+		pages, pageErr := newPageReportsPages(*options.PageReports)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageReports = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -695,6 +706,9 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageStats != nil {
 		routes = append(routes, ui.pageStats.routes...)
+	}
+	if ui.pageReports != nil {
+		routes = append(routes, ui.pageReports.routes...)
 	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
@@ -1119,6 +1133,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	if handler == nil && ui.pageStats != nil {
 		handler = ui.pageStats.handlers[route.Name]
 	}
+	if handler == nil && ui.pageReports != nil {
+		handler = ui.pageReports.handlers[route.Name]
+	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
 		if handleErr != nil {
@@ -1375,6 +1392,36 @@ type renderFuncState struct {
 }
 
 // templateFuncs 构造模板函数集合（无 raw_html 通用函数）。
+// formatUIDuration 把时长格式化为直白中文（天数/小时/分钟）。
+func formatUIDuration(value time.Duration) string {
+	if value <= 0 {
+		return "0 分钟"
+	}
+	days := int(value.Hours()) / 24
+	hours := int(value.Hours()) % 24
+	minutes := int(value.Minutes()) % 60
+	var builder strings.Builder
+	if days > 0 {
+		builder.WriteString(strconv.Itoa(days))
+		builder.WriteString(" 天")
+	}
+	if hours > 0 {
+		if builder.Len() > 0 {
+			builder.WriteString(" ")
+		}
+		builder.WriteString(strconv.Itoa(hours))
+		builder.WriteString(" 小时")
+	}
+	if minutes > 0 && days == 0 {
+		if builder.Len() > 0 {
+			builder.WriteString(" ")
+		}
+		builder.WriteString(strconv.Itoa(minutes))
+		builder.WriteString(" 分钟")
+	}
+	return builder.String()
+}
+
 func templateFuncs(state any) template.FuncMap {
 	return template.FuncMap{
 		"t": func(key string) string {
@@ -1457,6 +1504,9 @@ func templateFuncs(state any) template.FuncMap {
 		},
 		"format_time": func(value time.Time, timezone string) string {
 			return formatUITime(value, timezone)
+		},
+		"format_duration": func(value time.Duration) string {
+			return formatUIDuration(value)
 		},
 		"format_number": func(value any) string {
 			switch typed := value.(type) {

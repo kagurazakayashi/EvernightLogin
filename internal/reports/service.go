@@ -83,16 +83,23 @@ type ReportView struct {
 	Artifacts         []ArtifactView
 	ArtifactExpiresAt time.Time
 	Task              *TaskSummary
+	// RetryOf 是重试来源报告编号（页面用于链式追踪）。
+	RetryOf string
 }
 
 // reportRecord 是进程内即时报告记录。历史持久化与定期计划属于步骤 79；本步骤
 // 不把内存记录伪装成持久历史。
 type reportRecord struct {
-	ID            string
-	ScopeID       string
-	ScopeKind     string
-	RequestedBy   audit.Actor
-	State         string
+	ID          string
+	PlanID      string
+	Name        string
+	Template    string
+	ScopeID     string
+	ScopeKind   string
+	RequestedBy audit.Actor
+	State       string
+	// RetryOf 是本次运行重试的原报告编号（空表示不是重试）；链式重试保留历史。
+	RetryOf       string
 	Formats       []Format
 	Window        stats.Window
 	AppID         string
@@ -207,7 +214,8 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, 
 	}
 	now := s.now()
 	record := &reportRecord{
-		ID: reportID, ScopeID: scope.ID, ScopeKind: scope.Kind,
+		ID: reportID, Name: "即时统计报告", Template: "standard",
+		ScopeID: scope.ID, ScopeKind: scope.Kind,
 		RequestedBy: actor, State: StateQueued, Formats: formats,
 		Window: window, AppID: request.AppID, Categories: categories,
 		TrendMetric: trendMetric, DetailRows: detailRows,
@@ -230,6 +238,7 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, 
 		current.TaskID = job.ID
 		return true
 	})
+	s.persistHistory(ctx, reportID)
 	s.notifySensitive(ctx, sensitiveResult)
 	// 直接用已授权创建结果构造视图，避免任务已受理后再次授权失败导致“返回错误
 	// 但任务仍在跑”的歧义；之后查询/下载仍逐次重新授权。
@@ -336,6 +345,17 @@ func (s *Service) GenerateHandler(ctx context.Context, job task.Job) error {
 	if !started {
 		return ErrTaskTerminal
 	}
+	return s.runGeneration(ctx, record, job)
+}
+
+// runGeneration 执行已进入 running 状态的报告记录：再次按当前权限与数据范围
+// 复核（权限/范围收缩后不因曾有权限而成功）、构建同一固定快照、渲染并写受控
+// 产物，最后以真实终态提交。GenerateHandler（即时报告）与
+// GenerateScheduledHandler（计划触发）共用该实现，避免两套生成语义。
+func (s *Service) runGeneration(ctx context.Context, record reportRecord, job task.Job) error {
+	_ = job // 生成核心不需要任务字段；签名保留以确保调用方传入真实触发上下文。
+	reportID := record.ID
+	s.persistHistory(ctx, reportID) // 运行中状态（真实任务状态，不是进度百分比）
 	caller, err := callerFromActor(record.RequestedBy)
 	if err != nil {
 		return s.failRun(ctx, reportID, ErrAccessDenied, CodeReportAccessDenied,
@@ -450,6 +470,8 @@ func (s *Service) GenerateHandler(ctx context.Context, job task.Job) error {
 			record.RequestID)
 		return fmt.Errorf("%w: 生成成功审计写入失败", ErrAuditUnavailable)
 	}
+	s.persistHistory(ctx, reportID)
+	s.notifyReportResult(ctx, reportID)
 	return nil
 }
 
@@ -476,6 +498,7 @@ func (s *Service) rollbackSuccessAfterAuditFailure(ctx context.Context, reportID
 	}
 	s.recordFailure(ctx, record.RequestedBy, ActionGenerateFinish, record.ScopeID,
 		"audit_write_failed_after_success", CodeAuditWriteFailed, requestID, reportID)
+	s.persistHistory(ctx, reportID)
 }
 
 // build 用冻结参数构建快照并补全报告元数据（编号/发起者/生成时间）。
@@ -545,7 +568,8 @@ func (s *Service) GetSnapshot(ctx context.Context, caller account.Caller,
 	}
 	record, found := s.get(reportID)
 	if !found {
-		return Snapshot{}, ErrNotFound
+		// 进程重启后回源持久历史：重新按当前权限与数据范围授权并写导出审计。
+		return s.getHistorySnapshot(ctx, caller, reportID)
 	}
 	if err := s.authorizeSnapshotExport(ctx, caller, record); err != nil {
 		return Snapshot{}, err
@@ -603,7 +627,16 @@ func (s *Service) view(ctx context.Context, reportID string, caller account.Call
 	permission string) (ReportView, error) {
 	record, found := s.get(reportID)
 	if !found {
-		return ReportView{}, ErrNotFound
+		// 进程内记录未命中（例如进程重启）时回源持久历史；回源不跳过任何当前
+		// 权限与数据范围检查，旧 ID 在失权后仍返回拒绝。
+		if !s.historyAvailable() {
+			return ReportView{}, ErrNotFound
+		}
+		historyRecord, err := s.historyForRead(ctx, caller, reportID)
+		if err != nil {
+			return ReportView{}, err
+		}
+		return s.historyReportView(ctx, caller, historyRecord), nil
 	}
 	grant, err := s.authorizeScope(ctx, caller, permission, record.ScopeID)
 	if err != nil {
@@ -627,6 +660,7 @@ func (s *Service) viewFromRecord(ctx context.Context, record reportRecord) Repor
 		ErrorCode: record.ErrorCode, FailureReason: record.FailureReason,
 		RequestID: record.RequestID, ArtifactExpiresAt: record.ExpiresAt,
 		SchemaVersion: SchemaVersion, TemplateVersion: TemplateVersion,
+		RetryOf: record.RetryOf,
 	}
 	if record.Snapshot != nil {
 		view.GeneratedAt = record.Snapshot.Report.GeneratedAt
@@ -673,72 +707,97 @@ func (s *Service) viewFromRecord(ctx context.Context, record reportRecord) Repor
 	return view
 }
 
+// resolvedArtifact 是“已通过当前鉴权与产物校验”的下载解析结果；它只在打开文件
+// 与签发/兑换短期下载令牌时内部使用，不含公开 API 语义。
+type resolvedArtifact struct {
+	file      ArtifactFile
+	scopeID   string
+	requestID string
+}
+
+// resolveArtifact 复核下载权限并打开受控产物（不写下载审计）。进程内记录未命中
+// 时回源持久历史；回源同样按当前权限与生成时数据范围重新授权。它供 OpenFile 与
+// 下载令牌签发共用，避免两套鉴权语义。
+func (s *Service) resolveArtifact(ctx context.Context, caller account.Caller,
+	reportID string, format Format) (resolvedArtifact, error) {
+	if !validReportID(reportID) {
+		return resolvedArtifact{}, fmt.Errorf("%w: 报告编号格式无效", ErrInvalidRequest)
+	}
+	if !format.Valid() {
+		return resolvedArtifact{}, fmt.Errorf("%w: 报告格式未定义", ErrInvalidRequest)
+	}
+	record, found := s.get(reportID)
+	if !found {
+		// 进程重启后内存记录不存在：回源持久历史并重新授权；历史能力未装配时
+		// 按不存在处理，不伪造可下载状态。
+		return s.resolveHistoryArtifact(ctx, caller, reportID, format)
+	}
+	// 下载同时要求查看与导出权限：撤销 reports.read 后不得继续下载已生成产物。
+	readGrant, err := s.authorizeScope(ctx, caller, PermissionRead, record.ScopeID)
+	if err != nil {
+		return resolvedArtifact{}, err
+	}
+	if !s.grantCovers(record.DataScope, readGrant) {
+		s.recordDenied(ctx, caller.Actor(), record.ScopeID, PermissionRead, "data_scope_shrunk")
+		return resolvedArtifact{}, ErrAccessDenied
+	}
+	grant, err := s.authorizeScope(ctx, caller, PermissionExport, record.ScopeID)
+	if err != nil {
+		return resolvedArtifact{}, err
+	}
+	if !s.grantCovers(record.DataScope, grant) {
+		s.recordDenied(ctx, caller.Actor(), record.ScopeID, PermissionExport, "data_scope_shrunk")
+		return resolvedArtifact{}, ErrAccessDenied
+	}
+	if record.RequestedBy != caller.Actor() && !s.isRoot(ctx, caller) {
+		s.recordFailure(ctx, caller.Actor(), ActionExportDownload, record.ScopeID,
+			"download_not_owner", CodeReportAccessDenied, record.RequestID, reportID)
+		return resolvedArtifact{}, ErrAccessDenied
+	}
+	if record.State != StateSucceeded {
+		return resolvedArtifact{}, fmt.Errorf("%w: 报告尚未成功完成", ErrConflict)
+	}
+	artifact, exists := record.Artifacts[format]
+	if !exists {
+		return resolvedArtifact{}, fmt.Errorf("%w: 该格式产物不存在", ErrNotFound)
+	}
+	now := s.now()
+	if artifact.ExpiresAt.IsZero() || !now.Before(artifact.ExpiresAt) {
+		return resolvedArtifact{}, fmt.Errorf("%w: 报告产物已过期", ErrConflict)
+	}
+	path, err := s.openArtifact(artifact)
+	if err != nil {
+		return resolvedArtifact{}, err
+	}
+	return resolvedArtifact{
+		file: ArtifactFile{ReportID: reportID, Format: format, HostPath: path,
+			Bytes: artifact.Bytes, SHA256: artifact.SHA256,
+			ExpiresAt: artifact.ExpiresAt},
+		scopeID: record.ScopeID, requestID: record.RequestID,
+	}, nil
+}
+
 // OpenFile 返回受控报告产物的宿主下载句柄（路径只给宿主文件流）。下载再次鉴权
 // 并复核数据范围；只有成功、产物存在、未过期且当前权限覆盖生成时范围才允许；
 // 产物绑定发起者或 root（最小可见原则）。产物摘要不符拒绝下发。
 func (s *Service) OpenFile(ctx context.Context, caller account.Caller,
 	reportID string, format Format) (ArtifactFile, error) {
-	if !validReportID(reportID) {
-		return ArtifactFile{}, fmt.Errorf("%w: 报告编号格式无效", ErrInvalidRequest)
-	}
-	if !format.Valid() {
-		return ArtifactFile{}, fmt.Errorf("%w: 报告格式未定义", ErrInvalidRequest)
-	}
-	record, found := s.get(reportID)
-	if !found {
-		return ArtifactFile{}, ErrNotFound
-	}
-	// 下载同时要求查看与导出权限：撤销 reports.read 后不得继续下载已生成产物。
-	readGrant, err := s.authorizeScope(ctx, caller, PermissionRead, record.ScopeID)
-	if err != nil {
-		return ArtifactFile{}, err
-	}
-	if !s.grantCovers(record.DataScope, readGrant) {
-		s.recordDenied(ctx, caller.Actor(), record.ScopeID, PermissionRead, "data_scope_shrunk")
-		return ArtifactFile{}, ErrAccessDenied
-	}
-	grant, err := s.authorizeScope(ctx, caller, PermissionExport, record.ScopeID)
-	if err != nil {
-		return ArtifactFile{}, err
-	}
-	if !s.grantCovers(record.DataScope, grant) {
-		s.recordDenied(ctx, caller.Actor(), record.ScopeID, PermissionExport, "data_scope_shrunk")
-		return ArtifactFile{}, ErrAccessDenied
-	}
-	if record.RequestedBy != caller.Actor() && !s.isRoot(ctx, caller) {
-		s.recordFailure(ctx, caller.Actor(), ActionExportDownload, record.ScopeID,
-			"download_not_owner", CodeReportAccessDenied, record.RequestID, reportID)
-		return ArtifactFile{}, ErrAccessDenied
-	}
-	if record.State != StateSucceeded {
-		return ArtifactFile{}, fmt.Errorf("%w: 报告尚未成功完成", ErrConflict)
-	}
-	artifact, exists := record.Artifacts[format]
-	if !exists {
-		return ArtifactFile{}, fmt.Errorf("%w: 该格式产物不存在", ErrNotFound)
-	}
-	now := s.now()
-	if artifact.ExpiresAt.IsZero() || !now.Before(artifact.ExpiresAt) {
-		return ArtifactFile{}, fmt.Errorf("%w: 报告产物已过期", ErrConflict)
-	}
-	path, err := s.openArtifact(artifact)
+	resolved, err := s.resolveArtifact(ctx, caller, reportID, format)
 	if err != nil {
 		return ArtifactFile{}, err
 	}
 	// 下载是真正的“导出”动作：成功必须留下审计；审计不可用时拒绝下发句柄
 	// （fail-closed），不出现“文件已交宿主但无持久审计”的静默导出。
 	event := audit.Event{
-		Actor: caller.Actor(), AppID: appIDForScope(record.ScopeID),
+		Actor: caller.Actor(), AppID: appIDForScope(resolved.scopeID),
 		Action: ActionExportDownload, Target: audit.Target{Type: "report", ID: reportID},
-		Outcome: audit.OutcomeSuccess, RequestID: record.RequestID,
+		Outcome: audit.OutcomeSuccess, RequestID: resolved.requestID,
 		Changes: []audit.FieldChange{{Field: "format", After: string(format)}},
 	}
 	if err := s.opts.Audit.Record(ctx, event); err != nil {
 		return ArtifactFile{}, fmt.Errorf("%w: 下载审计写入失败", ErrAuditUnavailable)
 	}
-	return ArtifactFile{ReportID: reportID, Format: format, HostPath: path,
-		Bytes: artifact.Bytes, SHA256: artifact.SHA256,
-		ExpiresAt: artifact.ExpiresAt}, nil
+	return resolved.file, nil
 }
 
 // Cancel 请求取消报告生成任务。提交取消请求不等于实际取消；真实终态以任务状态
@@ -827,6 +886,8 @@ func (s *Service) failRecord(ctx context.Context, reportID string, cause error,
 	}
 	s.recordFailure(ctx, record.RequestedBy, ActionGenerateFinish, record.ScopeID,
 		string(code), code, requestID, reportID)
+	s.persistHistory(ctx, reportID)
+	s.notifyReportResult(ctx, reportID)
 }
 
 // cancelRun 把记录写为真实取消终态并清理产物。
@@ -862,6 +923,8 @@ func (s *Service) finalizeCancelled(ctx context.Context, reportID, requestID str
 	s.cleanupArtifacts(stale)
 	s.recordFailure(ctx, record.RequestedBy, ActionGenerateFinish, record.ScopeID,
 		"cancelled", CodeTaskCancelled, requestID, reportID)
+	s.persistHistory(ctx, reportID)
+	s.notifyReportResult(ctx, reportID)
 }
 
 // parseScope 解析作用范围："system" 或应用 ID。
