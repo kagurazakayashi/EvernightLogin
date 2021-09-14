@@ -1,0 +1,31 @@
+{{define "page-title"}}{{t "page.admin.backups.schedules.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.backups.boundary"}}</p></div>
+<nav aria-label="{{t "page.admin.backups.common.nav"}}"><a href="{{.Data.jobsURL}}">{{t "page.admin.backups.nav.jobs"}}</a> · <a href="{{.Data.backupsURL}}">{{t "page.admin.backups.nav.history"}}</a> · <a href="{{.Data.retentionURL}}">{{t "page.admin.backups.nav.retention"}}</a></nav>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.backups.common.forbidden") "description" (t "page.admin.backups.schedules.no_manage"))}}
+{{else}}
+<h1>{{t "page.admin.backups.schedules.title"}}</h1>
+<p class="ln-meta">{{t "page.admin.backups.schedules.description"}}</p>
+{{if .Data.canCreate}}<p><a class="ln-button" href="{{route "admin.backup_schedule_new"}}">{{t "page.admin.backups.schedules.create"}}</a></p>{{else}}<p class="ln-meta">{{t "page.admin.backups.schedules.no_manage"}}</p>{{end}}
+{{if .Data.loadFailed}}{{template "component.state" (dict "state" "error" "title" (t "page.admin.backups.common.load_failed") "description" (t "page.admin.backups.common.load_failed"))}}
+{{else if .Data.empty}}{{template "component.state" (dict "state" "empty" "title" (t "page.admin.backups.schedules.empty") "description" (t "page.admin.backups.schedules.form_help"))}}
+{{else}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.backups.schedules.title"}}">
+<table class="ln-table"><caption>{{t "page.admin.backups.schedules.title"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.backups.schedules.name"}}</th><th scope="col">{{t "page.admin.backups.schedules.state"}}</th><th scope="col">{{t "page.admin.backups.schedules.type"}}</th><th scope="col">{{t "page.admin.backups.schedules.time_zone"}}</th><th scope="col">{{t "page.admin.backups.schedules.next_run"}}</th><th scope="col">{{t "page.admin.backups.schedules.owner"}}</th><th scope="col">{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Data.schedules}}<tr>
+<td><code>{{.ID}}</code><br>{{.Name}}</td>
+<td>{{if .Enabled}}{{t "page.admin.backups.schedules.enabled"}}{{else}}{{t "page.admin.backups.schedules.disabled"}}{{end}}</td>
+<td>{{.PeriodDescription}}<br><span class="ln-meta">{{.MissedPolicy}}</span></td>
+<td>{{.TimeZone}}</td>
+<td>{{if .NextRunUnknown}}{{t "page.admin.backups.schedules.next_unknown"}}{{else}}{{format_time .NextRun $.Data.timezone}}{{end}}</td>
+<td>{{.Owner}}</td>
+<td><a href="{{route "admin.backup_schedule_edit"}}?schedule_id={{.ID}}">{{t "page.admin.backups.schedules.edit"}}</a>
+{{if $.Data.canCreate}}<form method="post" action="{{route "admin.backup_schedule_state"}}">{{csrf_field}}<input type="hidden" name="schedule_id" value="{{.ID}}"><input type="hidden" name="enabled" value="{{if .Enabled}}{{else}}1{{end}}"><input type="hidden" name="reason" value="admin toggle"><button type="submit" class="ln-button">{{if .Enabled}}{{t "page.admin.backups.schedules.pause"}}{{else}}{{t "page.admin.backups.schedules.resume"}}{{end}}</button></form>
+<form method="post" action="{{route "admin.backup_schedule_delete"}}">{{csrf_field}}<input type="hidden" name="schedule_id" value="{{.ID}}"><input type="hidden" name="reason" value="admin delete"><button type="submit" class="ln-button">{{t "page.admin.backups.schedules.delete"}}</button></form>{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+<p class="ln-meta">{{t "page.admin.backups.schedules.pause_hint"}}</p>
+<p class="ln-meta">{{t "page.admin.backups.schedules.delete_hint"}}</p>
+{{end}}{{end}}{{end}}

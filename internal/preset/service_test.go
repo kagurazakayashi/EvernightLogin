@@ -289,10 +289,17 @@ func TestCatalogIntegrity(t *testing.T) {
 	if !strings.Contains(string(data), `"version": "1.0.0"`) {
 		t.Fatalf("机器可读目录缺少版本: %s", string(data))
 	}
-	// 未实现的权限必须显式标记，不能伪装成功；第一版业务操作尚未接入，全部应为 false。
+	// 未实现的权限必须显式标记，不能伪装成功。步骤 81 已把备份管理相关权限接入
+	// 真实服务（创建/查看/取消/下载/保留策略/清理），其余第一版业务操作仍未接入。
+	implemented := map[string]bool{
+		"backups.create": true, "backups.read": true, "backups.cancel": true,
+		"backups.export": true, "backups.retention": true, "backups.cleanup": true,
+	}
 	for _, definition := range catalog.Permissions {
-		if definition.Implemented {
-			t.Fatalf("权限 %q 标记为已实现，但本步未实现对应业务操作", definition.Key)
+		want := implemented[definition.Key]
+		if definition.Implemented != want {
+			t.Fatalf("权限 %q Implemented = %v，期望 %v（未实现能力不得标记为已实现）",
+				definition.Key, definition.Implemented, want)
 		}
 	}
 }

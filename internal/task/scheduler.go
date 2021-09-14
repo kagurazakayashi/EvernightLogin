@@ -34,6 +34,10 @@ type SchedulerOptions struct {
 	Executor *Executor
 	// PermissionCheck 是运行前权限复验的可信回调；计划要求权限时必填。
 	PermissionCheck PermissionCheck
+	// OnJobEnqueued 是可选的成功入队回调（best-effort）：在 FireSchedule 事务提交
+	// 后调用，用于让管理域记录任务索引与阶段。回调失败不影响已入队任务；实现必须
+	// 幂等、不得阻塞调度循环。
+	OnJobEnqueued func(ctx context.Context, schedule Schedule, jobID string)
 	// TickInterval 是周期检查间隔；0 使用默认值，范围 100ms～5m。
 	TickInterval time.Duration
 	// CatchUpGrace 是准点宽限窗口；0 使用默认值（1 分钟），上限 1 小时。
@@ -58,6 +62,7 @@ type Scheduler struct {
 	executor        *Executor
 	schedulerID     string
 	permissionCheck PermissionCheck
+	onJobEnqueued   func(ctx context.Context, schedule Schedule, jobID string)
 	tickInterval    time.Duration
 	catchUpGrace    time.Duration
 	now             func() time.Time
@@ -108,6 +113,7 @@ func NewScheduler(options SchedulerOptions) (*Scheduler, error) {
 		executor:        options.Executor,
 		schedulerID:     options.SchedulerID,
 		permissionCheck: options.PermissionCheck,
+		onJobEnqueued:   options.OnJobEnqueued,
 		tickInterval:    tickInterval,
 		catchUpGrace:    catchUpGrace,
 		now:             now,
@@ -339,6 +345,9 @@ func (s *Scheduler) fire(ctx context.Context, schedule Schedule, scheduledAt, no
 		return FireResult{}, err
 	}
 	if result.Fired {
+		if s.onJobEnqueued != nil && result.JobID != "" {
+			s.onJobEnqueued(ctx, schedule, result.JobID)
+		}
 		if s.executor != nil {
 			s.executor.Wake()
 		}

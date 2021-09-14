@@ -1,0 +1,30 @@
+{{define "page-title"}}{{t "page.admin.backups.history.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.backups.history.download_hint"}}</p></div>
+<nav aria-label="{{t "page.admin.backups.common.nav"}}"><a href="{{.Data.schedulesURL}}">{{t "page.admin.backups.nav.schedules"}}</a> · <a href="{{.Data.jobsURL}}">{{t "page.admin.backups.nav.jobs"}}</a> · <a href="{{.Data.retentionURL}}">{{t "page.admin.backups.nav.retention"}}</a></nav>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.backups.common.forbidden") "description" (t "page.admin.backups.history.description"))}}
+{{else}}
+<h1>{{t "page.admin.backups.history.title"}}</h1>
+<p class="ln-meta">{{t "page.admin.backups.history.description"}}</p>
+{{if .Data.canReconcile}}<form method="post" action="{{route "admin.backup_reconcile"}}">{{csrf_field}}<button type="submit" class="ln-button">{{t "page.admin.backups.history.reconcile"}}</button><span class="ln-meta">{{t "page.admin.backups.history.reconcile_hint"}}</span></form>{{end}}
+<p><a href="{{.Data.backupsURL}}">{{t "page.admin.backups.history.filter_all"}}</a> · <a href="{{.Data.backupsURL}}?verification=verified">{{t "page.admin.backups.verification.verified"}}</a> · <a href="{{.Data.backupsURL}}?verification=unknown">{{t "page.admin.backups.verification.unknown"}}</a> · <a href="{{.Data.backupsURL}}?cleanup=cleaned">{{t "page.admin.backups.cleanup.cleaned"}}</a></p>
+{{if .Data.loadFailed}}{{template "component.state" (dict "state" "error" "title" (t "page.admin.backups.common.load_failed") "description" (t "page.admin.backups.history.description"))}}
+{{else if .Data.empty}}{{template "component.state" (dict "state" "empty" "title" (t "page.admin.backups.history.empty") "description" (t "page.admin.backups.history.no_results"))}}
+{{else}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.backups.history.title"}}">
+<table class="ln-table"><caption>{{t "page.admin.backups.history.title"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.backups.history.backup_id"}}</th><th scope="col">{{t "page.admin.backups.history.verification"}}</th><th scope="col">{{t "page.admin.backups.history.cleanup"}}</th><th scope="col">{{t "page.admin.backups.history.published"}}</th><th scope="col">{{t "page.admin.backups.history.size"}}</th><th scope="col">{{t "page.admin.backups.history.protection"}}</th><th scope="col">{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Data.artifacts}}<tr>
+<td><code>{{.BackupID}}</code><br><span class="ln-meta">{{.Origin}}</span></td>
+<td>{{.Verification}}{{if .IsLastUsable}}<br>{{t "page.admin.backups.history.last_usable"}}{{end}}</td>
+<td>{{.Cleanup}}</td>
+<td>{{format_time .PublishedAt $.Data.timezone}}</td>
+<td>{{format_number .SizeBytes}}</td>
+<td>{{if .ProtectionReason}}{{.ProtectionReason}}{{else}}—{{end}}</td>
+<td><a href="{{route "admin.backup_detail"}}?backup_id={{.BackupID}}">{{t "page.admin.backups.history.view"}}</a>{{if and $.Data.canDownload .Downloadable}}<form method="post" action="{{route "admin.backup_download"}}">{{csrf_field}}<input type="hidden" name="backup_id" value="{{.BackupID}}"><button type="submit" class="ln-button">{{t "page.admin.backups.history.download"}}</button></form>{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+{{if .Data.hasMore}}<p><a href="{{.Data.backupsURL}}?limit={{.Data.filter.Limit}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{if gt .Data.filter.Offset 0}}<p><a href="{{.Data.backupsURL}}?limit={{.Data.filter.Limit}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
+{{end}}{{end}}{{end}}

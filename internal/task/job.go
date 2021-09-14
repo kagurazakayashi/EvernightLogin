@@ -176,6 +176,10 @@ func NewJobID() (string, error) {
 	return jobIDPrefix + hex.EncodeToString(buffer), nil
 }
 
+// ValidateJobID 校验任务编号格式（job_ 加 32 位小写十六进制），供管理页面在查询
+// 前做受控输入校验；它不访问存储、不判定任务是否存在。
+func ValidateJobID(id string) error { return validateJobID(id) }
+
 // validateJobID 校验任务编号格式：job_ 加 32 位小写十六进制。
 func validateJobID(id string) error {
 	if len(id) != len(jobIDPrefix)+2*jobIDRandomBytes || !strings.HasPrefix(id, jobIDPrefix) {

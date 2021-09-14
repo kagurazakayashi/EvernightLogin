@@ -454,7 +454,7 @@ func TestCreateBackupWithAttachmentsAndConfig(t *testing.T) {
 	if !report.Authenticated || !report.ManifestAvailable {
 		t.Fatalf("校验报告未标记认证通过：%+v", report)
 	}
-	if report.BackupID != result.BackupID || report.Database.SchemaVersionNumber != 42 {
+	if report.BackupID != result.BackupID || report.Database.SchemaVersionNumber != 43 {
 		t.Fatalf("校验报告元数据不一致：%+v", report)
 	}
 	if len(report.Entries) != 3 {
@@ -480,8 +480,8 @@ func TestCreateBackupWithAttachmentsAndConfig(t *testing.T) {
 		`SELECT version FROM schema_history ORDER BY version DESC LIMIT 1`).Scan(&version); err != nil {
 		t.Fatalf("读取提取快照迁移版本失败：%v", err)
 	}
-	if !strings.HasPrefix(version, "0042") {
-		t.Fatalf("提取快照最高迁移 = %s，期望 0042", version)
+	if !strings.HasPrefix(version, "0043") {
+		t.Fatalf("提取快照最高迁移 = %s，期望 0043", version)
 	}
 	var integrity string
 	if err := snapshot.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {

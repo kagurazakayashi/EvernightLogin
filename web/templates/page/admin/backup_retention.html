@@ -1,0 +1,48 @@
+{{define "page-title"}}{{t "page.admin.backups.retention.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.backups.retention.description"}}</p></div>
+<nav aria-label="{{t "page.admin.backups.common.nav"}}"><a href="{{.Data.schedulesURL}}">{{t "page.admin.backups.nav.schedules"}}</a> · <a href="{{.Data.jobsURL}}">{{t "page.admin.backups.nav.jobs"}}</a> · <a href="{{.Data.backupsURL}}">{{t "page.admin.backups.nav.history"}}</a></nav>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.backups.common.forbidden") "description" (t "page.admin.backups.retention.description"))}}
+{{else}}{{with .Data.retention}}
+<h1>{{t "page.admin.backups.retention.title"}}</h1>
+{{if .IsDefault}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.backups.retention.is_default"}}</p></div>{{end}}
+{{if $.Data.saved}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.backups.retention.saved"}}</p></div>{{end}}
+<dl class="ln-keyvalue">
+<dt>{{t "page.admin.backups.retention.current_version"}}</dt><dd>{{.Version}}</dd>
+<dt>{{t "page.admin.backups.retention.max_count"}}</dt><dd>{{.MaxCount}}</dd>
+<dt>{{t "page.admin.backups.retention.max_age_days"}}</dt><dd>{{.MaxAgeDays}}</dd>
+<dt>{{t "page.admin.backups.retention.max_total_bytes"}}</dt><dd>{{format_number .MaxTotalBytes}}</dd>
+<dt>{{t "page.admin.backups.retention.updated_by"}}</dt><dd>{{.UpdatedBy}}</dd>
+<dt>{{t "page.admin.backups.retention.updated_at"}}</dt><dd>{{format_time .UpdatedAt $.Data.timezone}}</dd>
+<dt>{{t "page.admin.backups.retention.reason"}}</dt><dd>{{if .Reason}}{{.Reason}}{{else}}—{{end}}</dd>
+</dl>
+{{end}}
+{{if .Data.canRetention}}<form method="post" action="{{route "admin.backup_retention_save"}}">{{csrf_field}}<input type="hidden" name="expected_version" value="{{.Data.retention.Version}}">
+<label for="retention-count">{{t "page.admin.backups.retention.max_count"}}</label><input id="retention-count" name="max_count" type="number" min="0" value="{{.Data.retention.MaxCount}}">
+<label for="retention-age">{{t "page.admin.backups.retention.max_age_days"}}</label><input id="retention-age" name="max_age_days" type="number" min="0" value="{{.Data.retention.MaxAgeDays}}">
+<label for="retention-bytes">{{t "page.admin.backups.retention.max_total_bytes"}}</label><input id="retention-bytes" name="max_total_bytes" type="number" min="0" value="{{.Data.retention.MaxTotalBytes}}">
+<p class="ln-meta">{{t "page.admin.backups.retention.zero_hint"}}</p>
+<label for="retention-reason">{{t "page.admin.backups.retention.reason"}}</label><input id="retention-reason" name="reason" maxlength="256" required><p class="ln-meta">{{t "page.admin.backups.retention.reason_help"}}</p>
+<button type="submit" class="ln-button">{{t "page.admin.backups.retention.save"}}</button></form>{{end}}
+{{if .Data.canCleanup}}
+<p><a class="ln-button" href="{{route "admin.backup_cleanup_preview"}}">{{t "page.admin.backups.retention.preview"}}</a></p>
+{{with .Data.preview}}
+<h2>{{t "page.admin.backups.retention.preview_title"}}</h2>
+<dl class="ln-keyvalue">
+<dt>{{t "page.admin.backups.retention.targets"}}</dt><dd>{{len .Targets}}</dd>
+<dt>{{t "page.admin.backups.retention.target_bytes"}}</dt><dd>{{format_number .TargetBytes}}</dd>
+<dt>{{t "page.admin.backups.retention.total_retained"}}</dt><dd>{{.TotalRetained}}</dd>
+<dt>{{t "page.admin.backups.retention.total_bytes"}}</dt><dd>{{format_number .TotalBytes}}</dd>
+<dt>{{t "page.admin.backups.retention.previewed_at"}}</dt><dd>{{format_time .PreviewedAt $.Data.timezone}}</dd>
+<dt>{{t "page.admin.backups.retention.note"}}</dt><dd>{{.Note}}</dd>
+</dl>
+{{if .Targets}}<div class="ln-table-scroll" tabindex="0" role="region"><table class="ln-table"><caption>{{t "page.admin.backups.retention.targets"}}</caption><thead><tr><th scope="col">{{t "page.admin.backups.history.backup_id"}}</th><th scope="col">{{t "page.admin.backups.history.size"}}</th><th scope="col">{{t "page.admin.backups.retention.reason_label"}}</th></tr></thead><tbody>{{range .Targets}}<tr><td><code>{{.Artifact.BackupID}}</code></td><td>{{format_number .Artifact.SizeBytes}}</td><td>{{.Reason}}</td></tr>{{end}}</tbody></table></div>
+<form method="post" action="{{route "admin.backup_cleanup"}}">{{csrf_field}}<p class="ln-meta">{{t "page.admin.backups.retention.cleanup_warning"}}</p><button type="submit" class="ln-button">{{t "page.admin.backups.retention.cleanup_confirm"}}</button></form>
+{{else}}<p class="ln-meta">{{t "page.admin.backups.retention.no_targets"}}</p>{{end}}
+{{if .Protected}}<h2>{{t "page.admin.backups.retention.protected"}}</h2><div class="ln-table-scroll" tabindex="0" role="region"><table class="ln-table"><caption>{{t "page.admin.backups.retention.protected"}}</caption><thead><tr><th scope="col">{{t "page.admin.backups.history.backup_id"}}</th><th scope="col">{{t "page.admin.backups.retention.reason_label"}}</th></tr></thead><tbody>{{range .Protected}}<tr><td><code>{{.Artifact.BackupID}}</code></td><td>{{.Reason}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{end}}
+{{end}}
+{{with .Data.retention}}{{with .LastCleanup}}<h2>{{t "page.admin.backups.retention.last_cleanup"}}</h2><dl class="ln-keyvalue"><dt>{{t "page.admin.backups.jobs.state"}}</dt><dd>{{.State}}</dd><dt>{{t "page.admin.backups.retention.requested"}}</dt><dd>{{.RequestedCount}}</dd><dt>{{t "page.admin.backups.retention.cleaned_count"}}</dt><dd>{{.CleanedCount}}</dd><dt>{{t "page.admin.backups.retention.failed_count"}}</dt><dd>{{.FailedCount}}</dd><dt>{{t "page.admin.backups.retention.protected_count"}}</dt><dd>{{.ProtectedCount}}</dd><dt>{{t "page.admin.backups.retention.freed_bytes"}}</dt><dd>{{format_number .FreedBytes}}</dd><dt>{{t "page.admin.backups.jobs.finished"}}</dt><dd>{{format_time .FinishedAt $.Data.timezone}}</dd></dl>{{end}}{{end}}
+{{end}}{{end}}

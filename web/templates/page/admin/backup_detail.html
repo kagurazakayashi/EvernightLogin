@@ -1,0 +1,28 @@
+{{define "page-title"}}{{t "page.admin.backups.history.detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p><a href="{{.Data.backupsURL}}">{{t "page.admin.backups.history.back"}}</a></p>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.backups.common.forbidden") "description" (t "page.admin.backups.history.description"))}}
+{{else}}{{with .Data.artifact}}
+<h1>{{t "page.admin.backups.history.detail_title"}}</h1>
+<dl class="ln-keyvalue">
+<dt>{{t "page.admin.backups.history.backup_id"}}</dt><dd><code>{{.BackupID}}</code></dd>
+<dt>{{t "page.admin.backups.history.verification"}}</dt><dd>{{.Verification}}{{if .VerifiedAt}}（{{format_time .VerifiedAt $.Data.timezone}}）{{end}}</dd>
+<dt>{{t "page.admin.backups.history.cleanup"}}</dt><dd>{{.Cleanup}}{{if .CleanedAt}}（{{format_time .CleanedAt $.Data.timezone}}）{{end}}</dd>
+<dt>{{t "page.admin.backups.history.protection"}}</dt><dd>{{if .ProtectionReason}}{{.ProtectionReason}}{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.history.manifest_version"}}</dt><dd>{{.FormatVersion}}</dd>
+<dt>{{t "page.admin.backups.history.database_version"}}</dt><dd>{{.SchemaVersion}}</dd>
+<dt>{{t "page.admin.backups.history.content_scope"}}</dt><dd>database={{if .ContentDatabase}}included{{else}}excluded{{end}}; attachments={{.ContentAttach}}; config={{.ContentConfig}}</dd>
+<dt>{{t "page.admin.backups.history.size"}}</dt><dd>{{format_number .SizeBytes}}</dd>
+<dt>{{t "page.admin.backups.history.sha256"}}</dt><dd>{{if .FileSHA256}}<code>{{.FileSHA256}}</code>{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.history.published"}}</dt><dd>{{format_time .PublishedAt $.Data.timezone}}</dd>
+<dt>{{t "page.admin.backups.jobs.schedule"}}</dt><dd>{{if .ScheduleID}}{{.ScheduleID}}{{else}}—{{end}}</dd>
+</dl>
+{{if eq .Cleanup "cleaned"}}<div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.backups.history.cleaned"}}</p></div>{{end}}
+{{if and $.Data.canDownload .Downloadable}}<form method="post" action="{{route "admin.backup_download"}}">{{csrf_field}}<input type="hidden" name="backup_id" value="{{.BackupID}}"><button type="submit" class="ln-button">{{t "page.admin.backups.history.download"}}</button></form><p class="ln-meta">{{t "page.admin.backups.history.data_warning"}}</p>{{else}}<p class="ln-meta">{{t "page.admin.backups.history.cleaned"}}</p>{{end}}
+{{end}}
+{{if .Data.notifications}}<h2>{{t "page.admin.backups.history.notifications"}}</h2><div class="ln-table-scroll" tabindex="0" role="region"><table class="ln-table"><caption>{{t "page.admin.backups.history.notifications"}}</caption><thead><tr><th scope="col">{{t "page.admin.backups.notification.state"}}</th><th scope="col">{{t "page.admin.backups.jobs.created"}}</th></tr></thead><tbody>{{range .Data.notifications}}<tr><td>{{t (printf "page.admin.backups.notification.%s" .State)}}{{if .ErrorCode}}（<code>{{.ErrorCode}}</code>）{{end}}</td><td>{{format_time .CreatedAt $.Data.timezone}}</td></tr>{{end}}</tbody></table></div>{{end}}
+<h2>{{t "page.admin.backups.history.restore"}}</h2>
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.backups.history.restore_unavailable"}}</p><p class="ln-meta">{{t "page.admin.backups.history.download_not_restore"}}</p></div>
+{{end}}{{end}}

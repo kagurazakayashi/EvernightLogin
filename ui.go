@@ -326,6 +326,8 @@ type WebUIOptions struct {
 	PageStats *UIPageStatsOptions
 	// PageReports 非 nil 时注册步骤 79 报告计划/历史/下载/保留清理页面。
 	PageReports *UIPageReportsOptions
+	// PageBackups 非 nil 时注册步骤 81 备份计划/任务/历史/下载/保留清理页面。
+	PageBackups *UIPageBackupOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -376,6 +378,7 @@ type WebUI struct {
 	pageAudit           *pageAuditPages
 	pageStats           *pageStatsPages
 	pageReports         *pageReportsPages
+	pageBackups         *pageBackupPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -506,6 +509,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageReports = pages
+	}
+	if options.PageBackups != nil {
+		pages, pageErr := newPageBackupPages(*options.PageBackups)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageBackups = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -709,6 +719,9 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageReports != nil {
 		routes = append(routes, ui.pageReports.routes...)
+	}
+	if ui.pageBackups != nil {
+		routes = append(routes, ui.pageBackups.routes...)
 	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
@@ -1135,6 +1148,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageReports != nil {
 		handler = ui.pageReports.handlers[route.Name]
+	}
+	if handler == nil && ui.pageBackups != nil {
+		handler = ui.pageBackups.handlers[route.Name]
 	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)

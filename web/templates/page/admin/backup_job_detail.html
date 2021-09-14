@@ -1,0 +1,33 @@
+{{define "page-title"}}{{t "page.admin.backups.jobs.detail_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p><a href="{{.Data.jobsURL}}">{{t "page.admin.backups.nav.jobs"}}</a></p>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.backups.common.forbidden") "description" (t "page.admin.backups.jobs.description"))}}
+{{else}}{{with .Data.job}}
+<h1>{{t "page.admin.backups.jobs.detail_title"}}</h1>
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.backups.jobs.cancel_hint"}}</p></div>
+<dl class="ln-keyvalue">
+<dt>{{t "page.admin.backups.jobs.state"}}</dt><dd>{{t (printf "page.admin.backups.job_state.%s" .State)}}</dd>
+<dt>{{t "page.admin.backups.jobs.kind"}}</dt><dd>{{if eq .Kind "backup.cleanup"}}{{t "page.admin.backups.jobs.kind.cleanup"}}{{else}}{{t "page.admin.backups.jobs.kind.create"}}{{end}} · {{t (printf "page.admin.backups.jobs.origin.%s" .Origin)}}</dd>
+<dt>{{t "page.admin.backups.jobs.stage"}}</dt><dd>{{if .StageDescription}}{{.StageDescription}}{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.progress"}}</dt><dd>{{if .ProgressDone}}{{t "page.admin.backups.jobs.progress_value"}}{{else}}{{t "page.admin.backups.jobs.progress_unknown"}}{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.attempt"}}</dt><dd>{{.Attempt}}/{{.MaxAttempts}}</dd>
+<dt>{{t "page.admin.backups.jobs.schedule"}}</dt><dd>{{if .ScheduleID}}{{.ScheduleID}}{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.initiator"}}</dt><dd>{{.Initiator}}</dd>
+<dt>{{t "page.admin.backups.jobs.canceller"}}</dt><dd>{{if .Canceller}}{{.Canceller}}{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.created"}}</dt><dd>{{format_time .CreatedAt $.Data.timezone}}</dd>
+<dt>{{t "page.admin.backups.jobs.started"}}</dt><dd>{{if .StartedAt}}{{format_time .StartedAt $.Data.timezone}}{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.finished"}}</dt><dd>{{if .FinishedAt}}{{format_time .FinishedAt $.Data.timezone}}{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.updated"}}</dt><dd>{{format_time .UpdatedAt $.Data.timezone}}</dd>
+<dt>{{t "page.admin.backups.jobs.error_code"}}</dt><dd>{{if .ErrorCode}}<code>{{.ErrorCode}}</code>{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.failure_reason"}}</dt><dd>{{if .FailureReason}}{{.FailureReason}}{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.request_id"}}</dt><dd>{{if .RequestID}}<code>{{.RequestID}}</code>{{else}}—{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.backup_link"}}</dt><dd>{{if .BackupID}}<a href="{{route "admin.backup_detail"}}?backup_id={{.BackupID}}">{{.BackupID}}</a>{{else}}{{t "page.admin.backups.jobs.no_artifact"}}{{end}}</dd>
+<dt>{{t "page.admin.backups.jobs.notifications"}}</dt><dd>{{t (printf "page.admin.backups.notification.%s" .NotificationState)}}</dd>
+</dl>
+{{if .ResultSummary}}<p class="ln-meta">{{t "page.admin.backups.jobs.result_summary"}}: <code>{{.ResultSummary}}</code></p>{{end}}
+{{if $.Data.canCancel}}<form method="post" action="{{route "admin.backup_cancel"}}">{{csrf_field}}<input type="hidden" name="job_id" value="{{.ID}}"><label for="cancel-reason">{{t "page.admin.backups.jobs.cancel_reason"}}</label><input id="cancel-reason" name="reason" maxlength="256" required><button type="submit" class="ln-button">{{t "page.admin.backups.jobs.cancel_submit"}}</button></form>{{end}}
+{{end}}
+{{if .Data.notifications}}<h2>{{t "page.admin.backups.jobs.notifications"}}</h2><div class="ln-table-scroll" tabindex="0" role="region"><table class="ln-table"><caption>{{t "page.admin.backups.jobs.notifications"}}</caption><thead><tr><th scope="col">{{t "page.admin.backups.notification.state"}}</th><th scope="col">{{t "page.admin.backups.jobs.updated"}}</th></tr></thead><tbody>{{range .Data.notifications}}<tr><td>{{t (printf "page.admin.backups.notification.%s" .State)}}</td><td>{{format_time .CreatedAt $.Data.timezone}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{end}}{{end}}

@@ -1,0 +1,45 @@
+{{define "page-title"}}{{if .Data.editing}}{{t "page.admin.backups.schedules.edit_title"}}{{else}}{{t "page.admin.backups.schedules.create_title"}}{{end}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.backups.common.forbidden") "description" (t "page.admin.backups.schedules.no_manage"))}}
+{{else}}
+<p><a href="{{.Data.schedulesURL}}">{{t "page.admin.backups.schedules.back"}}</a></p>
+<h1>{{if .Data.editing}}{{t "page.admin.backups.schedules.edit_title"}}{{else}}{{t "page.admin.backups.schedules.create_title"}}{{end}}</h1>
+<p class="ln-meta">{{t "page.admin.backups.schedules.form_help"}}</p>
+{{$current := .Data.schedule}}{{$type := ""}}{{$missed := ""}}{{$name := ""}}{{$expression := ""}}{{$timezone := ""}}{{$notifyFailures := false}}{{$notifySuccess := false}}{{$id := ""}}
+{{with .Data.schedule}}{{$id = .ID}}{{$name = .Name}}{{$type = .ScheduleType}}{{$expression = .Expression}}{{$timezone = .TimeZone}}{{$missed = .MissedPolicy}}{{$notifyFailures = .NotifyFailures}}{{$notifySuccess = .NotifySuccess}}{{end}}
+<form method="post" action="{{route "admin.backup_schedule_save"}}">
+{{csrf_field}}
+{{if $id}}<input type="hidden" name="schedule_id" value="{{$id}}">{{end}}
+<fieldset><legend>{{t "page.admin.backups.schedules.name"}}</legend>
+<label for="backup-name">{{t "page.admin.backups.schedules.name"}}</label>
+<input id="backup-name" name="name" maxlength="120" required value="{{$name}}">
+</fieldset>
+<fieldset><legend>{{t "page.admin.backups.schedules.type"}}</legend>
+{{range .Data.scheduleTypes}}<label><input type="radio" name="schedule_type" value="{{.}}"{{if eq . $type}} checked{{end}}>{{t (printf "page.admin.backups.schedules.%s" .)}}</label>{{end}}
+<label for="backup-expression">{{t "page.admin.backups.schedules.expression"}}</label>
+<input id="backup-expression" name="expression" required value="{{$expression}}">
+<label for="backup-timezone">{{t "page.admin.backups.schedules.time_zone"}}</label>
+<select id="backup-timezone" name="time_zone">{{range .Data.timezones}}<option value="{{.}}"{{if eq . $timezone}} selected{{end}}>{{.}}</option>{{end}}</select>
+</fieldset>
+<fieldset><legend>{{t "page.admin.backups.schedules.missed_policy"}}</legend>
+{{range .Data.missedPolicies}}<label><input type="radio" name="missed_policy" value="{{.}}"{{if eq . $missed}} checked{{end}}>{{t (printf "page.admin.backups.schedules.missed_%s" .)}}</label>{{end}}
+<label for="backup-catchup">{{t "page.admin.backups.schedules.max_catch_up"}}</label>
+<input id="backup-catchup" name="max_catch_up" type="number" min="1" max="1000" value="24">
+<label for="backup-timeout">{{t "page.admin.backups.schedules.timeout"}}</label>
+<input id="backup-timeout" name="timeout_seconds" type="number" min="60" max="86400" value="3600">
+<label for="backup-attempts">{{t "page.admin.backups.schedules.max_attempts"}}</label>
+<input id="backup-attempts" name="max_attempts" type="number" min="1" max="10" value="1">
+</fieldset>
+<fieldset><legend>{{t "page.admin.backups.schedules.notify_failures"}}</legend>
+<label><input type="checkbox" name="notify_failures" value="1"{{if $notifyFailures}} checked{{end}}>{{t "page.admin.backups.schedules.notify_failures"}}</label>
+<label><input type="checkbox" name="notify_success" value="1"{{if $notifySuccess}} checked{{end}}>{{t "page.admin.backups.schedules.notify_success"}}</label>
+<label><input type="checkbox" name="enabled" value="1" checked>{{t "page.admin.backups.schedules.enabled_hint"}}</label>
+</fieldset>
+<label for="backup-reason">{{t "page.admin.backups.schedules.reason"}}</label>
+<input id="backup-reason" name="reason" maxlength="256">
+<p class="ln-meta">{{t "page.admin.backups.schedules.reason_help"}}</p>
+<button type="submit" class="ln-button">{{t "page.admin.backups.schedules.save"}}</button>
+</form>
+{{end}}{{end}}

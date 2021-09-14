@@ -1,0 +1,27 @@
+{{define "page-title"}}{{t "page.admin.backups.jobs.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<div class="ln-banner ln-banner--info" role="status"><p>{{t "page.admin.backups.jobs.description"}}</p></div>
+<nav aria-label="{{t "page.admin.backups.common.nav"}}"><a href="{{.Data.schedulesURL}}">{{t "page.admin.backups.nav.schedules"}}</a> · <a href="{{.Data.backupsURL}}">{{t "page.admin.backups.nav.history"}}</a> · <a href="{{.Data.retentionURL}}">{{t "page.admin.backups.nav.retention"}}</a></nav>
+{{if .Data.forbidden}}
+{{template "component.state" (dict "state" "forbidden" "title" (t "page.admin.backups.common.forbidden") "description" (t "page.admin.backups.jobs.description"))}}
+{{else}}
+<h1>{{t "page.admin.backups.jobs.title"}}</h1>
+{{if .Data.canCreate}}<form method="post" action="{{route "admin.backup_run"}}">{{csrf_field}}<button type="submit" class="ln-button">{{t "page.admin.backups.jobs.run"}}</button></form>{{end}}
+<p><a href="{{.Data.jobsURL}}?kind=">{{t "page.admin.backups.jobs.filter_all"}}</a> · <a href="{{.Data.jobsURL}}?kind=backup.create">{{t "page.admin.backups.jobs.kind.create"}}</a> · <a href="{{.Data.jobsURL}}?kind=backup.cleanup">{{t "page.admin.backups.jobs.kind.cleanup"}}</a></p>
+{{if .Data.loadFailed}}{{template "component.state" (dict "state" "error" "title" (t "page.admin.backups.common.load_failed") "description" (t "page.admin.backups.jobs.description"))}}
+{{else if .Data.empty}}{{template "component.state" (dict "state" "empty" "title" (t "page.admin.backups.jobs.empty") "description" (t "page.admin.backups.jobs.no_results"))}}
+{{else}}
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.backups.jobs.title"}}">
+<table class="ln-table"><caption>{{t "page.admin.backups.jobs.title"}}</caption>
+<thead><tr><th scope="col">{{t "page.admin.backups.jobs.kind"}}</th><th scope="col">{{t "page.admin.backups.jobs.state"}}</th><th scope="col">{{t "page.admin.backups.jobs.stage"}}</th><th scope="col">{{t "page.admin.backups.jobs.progress"}}</th><th scope="col">{{t "page.admin.backups.jobs.updated"}}</th><th scope="col">{{t "common.label.actions"}}</th></tr></thead>
+<tbody>{{range .Data.jobs}}<tr>
+<td><code>{{.ID}}</code><br>{{if eq .Kind "backup.cleanup"}}{{t "page.admin.backups.jobs.kind.cleanup"}}{{else}}{{t "page.admin.backups.jobs.kind.create"}}{{end}} · {{t (printf "page.admin.backups.jobs.origin.%s" .Origin)}}</td>
+<td>{{t (printf "page.admin.backups.job_state.%s" .State)}}</td><td>{{if .StageDescription}}{{.StageDescription}}{{else}}—{{end}}</td>
+<td>{{if .ProgressDone}}{{t "page.admin.backups.jobs.progress_value"}}<progress value="{{.ProgressDone}}" max="{{.ProgressTotal}}"></progress>{{else}}{{t "page.admin.backups.jobs.progress_unknown"}}{{end}}</td>
+<td>{{format_time .UpdatedAt $.Data.timezone}}</td>
+<td><a href="{{route "admin.backup_job_detail"}}?job_id={{.ID}}">{{t "page.admin.backups.jobs.view_detail"}}</a></td>
+</tr>{{end}}</tbody></table></div>
+{{if .Data.hasMore}}<p><a href="{{.Data.jobsURL}}?kind={{.Data.kind}}&limit={{.Data.limit}}&offset={{.Data.nextOffset}}">{{t "page.admin.backups.jobs.next_page"}}</a></p>{{end}}
+{{if gt .Data.offset 0}}<p><a href="{{.Data.jobsURL}}?kind={{.Data.kind}}&limit={{.Data.limit}}&offset={{.Data.prevOffset}}">{{t "page.admin.backups.jobs.prev_page"}}</a></p>{{end}}
+{{end}}{{end}}{{end}}
