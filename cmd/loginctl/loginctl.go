@@ -43,6 +43,24 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, factory Promp
 	switch args[0] {
 	case "root-recover":
 		return runRootRecover(args[1:], stdin, stdout, stderr, factory)
+	case "restore-preflight":
+		return runRestorePreflight(args[1:], stdout, stderr)
+	case "restore-apply":
+		return runRestoreApply(args[1:], stdout, stderr)
+	case "restore-init-state":
+		return runRestoreInitState(args[1:], stdout, stderr)
+	case "maintenance-enter":
+		return runMaintenanceEnter(args[1:], stdout, stderr)
+	case "maintenance-exit":
+		return runMaintenanceExit(args[1:], stdout, stderr)
+	case "restore-merge-audit":
+		return runRestoreMergeAudit(args[1:], stdout, stderr)
+	case "restore-disposition":
+		return runRestoreDisposition(args[1:], stdout, stderr)
+	case "restore-review":
+		return runRestoreReview(args[1:], stdout, stderr)
+	case "restore-reenable":
+		return runRestoreReenable(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return ExitOK
@@ -150,12 +168,30 @@ func runRootRecover(args []string, stdin io.Reader, stdout, stderr io.Writer,
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "loginctl - login 身份服务本地管理命令（步骤 48 仅含 root 应急恢复）")
+	fmt.Fprintln(out, "loginctl - login 身份服务本地管理命令")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "用法：")
 	fmt.Fprintln(out, "  loginctl root-recover --database <path> --reason <原因> \\")
 	fmt.Fprintln(out, "      (--service-stopped | --maintenance) [--reset-password] [--reset-mfa] \\")
 	fmt.Fprintln(out, "      [--revoke-login-passkeys] [--request-id <id>]")
+	fmt.Fprintln(out, "  loginctl restore-preflight --database <path> --state-dir <dir> \\")
+	fmt.Fprintln(out, "      --key-file <path> --backup <file> --backup-output <dir> \\")
+	fmt.Fprintln(out, "      --operator <id> [--avatars <dir>] [--config <file>] [--json]")
+	fmt.Fprintln(out, "  loginctl restore-apply --database <path> --state-dir <dir> \\")
+	fmt.Fprintln(out, "      --key-file <path> --backup <file> --backup-output <dir> \\")
+	fmt.Fprintln(out, "      --operator <id> --reason <原因> --confirm RESTORE \\")
+	fmt.Fprintln(out, "      [--avatars <dir>] [--config <file>] [--json]")
+	fmt.Fprintln(out, "  loginctl restore-init-state --database <path> --state-dir <dir> \\")
+	fmt.Fprintln(out, "      --key-file <path> --backup-output <dir> --operator <id> --reason <原因> --confirm RESTORE")
+	fmt.Fprintln(out, "  loginctl maintenance-enter --database <path> --state-dir <dir> \\")
+	fmt.Fprintln(out, "      --operator <id> --reason <原因>")
+	fmt.Fprintln(out, "  loginctl maintenance-exit --database <path> --state-dir <dir> \\")
+	fmt.Fprintln(out, "      --operator <id> --reason <原因> [--force]")
+	fmt.Fprintln(out, "  loginctl restore-merge-audit --database <path> --state-dir <dir> --operator <id>")
+	fmt.Fprintln(out, "  loginctl restore-disposition --database <path> --state-dir <dir> --operator <id> [--json]")
+	fmt.Fprintln(out, "  loginctl restore-review --database <path> --state-dir <dir> --operator <id> [--restore-id <id>]")
+	fmt.Fprintln(out, "  loginctl restore-reenable --database <path> --state-dir <dir> --operator <id> \\")
+	fmt.Fprintln(out, "      --reason <原因> [--kind schedule,webhook] [--restore-id <id>]")
 	fmt.Fprintln(out, "  loginctl help | version")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "安全要求：")
@@ -163,6 +199,8 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  - 新密码通过隐藏输入取得，不接受命令行参数或环境变量。")
 	fmt.Fprintln(out, "  - 主登录 Passkey 默认保留；只有显式 --revoke-login-passkeys 并二次确认才撤销。")
 	fmt.Fprintln(out, "  - 取消确认不会对数据库做任何修改。")
+	fmt.Fprintln(out, "  - 备份恢复仅允许本地应急管理员：先 restore-preflight 预演，再 restore-apply 执行；")
+	fmt.Fprintln(out, "    恢复在维护状态与库外排他锁下进行，失败默认保持维护，需显式 maintenance-exit。")
 }
 
 // ===== 终端交互实现 =====

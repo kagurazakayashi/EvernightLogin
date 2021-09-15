@@ -53,6 +53,12 @@ type Options struct {
 	ConnMaxIdleTime time.Duration
 	// Retry 是打开事务时的有界重试策略；零值使用 DefaultRetryPolicy。
 	Retry storage.RetryPolicy
+	// WriteGuard 可选的维护写入门闸：每次通过 Store 开始写事务或执行写语句前调用，
+	// 返回的释放函数在写入结束后调用。它用于维护模式下阻止新写入（步骤 82 恢复流程：
+	// 接 internal/maintenance.Gate.Guard）。返回错误时写入被拒绝并原样返回给调用方
+	// （维护状态错误应映射 RESTORE_MAINTENANCE_REQUIRED，而不是 DB_UNAVAILABLE）。
+	// nil 表示不检查；宿主未接线时必须在维护期间自行停止服务。
+	WriteGuard func(ctx context.Context) (func(), error)
 }
 
 // DefaultOptions 返回给定路径的默认 SQLite 配置。
@@ -269,6 +275,9 @@ func (s *Store) ensureOpen() error {
 // Transaction 在事务中执行 fn。成功提交，fn 返回错误、panic 或提交失败时回滚。
 // 由于 DSN 设置 _txlock=immediate，该事务从开始即取得写锁，适合写操作；只读查询
 // 应直接使用 DB/WithConn，避免不必要地阻塞其他写事务。
+//
+// 配置了 WriteGuard 时，开始事务前先通过门闸登记写入；维护状态激活时直接拒绝
+// （门闸错误原样返回，调用方按 RESTORE_MAINTENANCE_REQUIRED 处理）。
 func (s *Store) Transaction(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -276,6 +285,11 @@ func (s *Store) Transaction(ctx context.Context, fn func(context.Context, *sql.T
 	if err := s.ensureOpen(); err != nil {
 		return err
 	}
+	release, err := s.enterWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	tx, err := s.beginTxWithRetry(ctx)
 	if err != nil {
 		return err
@@ -290,6 +304,28 @@ func (s *Store) Transaction(ctx context.Context, fn func(context.Context, *sql.T
 		return mapError(err)
 	}
 	return nil
+}
+
+// AcquireWriteGuard 为必须使用原生 DB()/BeginTx 的既有写路径显式登记维护写入门闸，
+// 返回幂等释放函数。新代码应优先使用 Transaction/ExecContext；该入口用于收敛历史
+// raw 写路径，维护状态激活时返回 maintenance.ErrMaintenanceActive 同类错误。
+func (s *Store) AcquireWriteGuard(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
+	return s.enterWrite(ctx)
+}
+
+// enterWrite 在配置了维护写入门闸时登记一次写入，返回幂等释放函数。未配置时返回
+// 空实现；门闸错误原样返回（不能伪装成 DB_UNAVAILABLE）。
+func (s *Store) enterWrite(ctx context.Context) (func(), error) {
+	if s == nil || s.options.WriteGuard == nil {
+		return func() {}, nil
+	}
+	return s.options.WriteGuard(ctx)
 }
 
 // mapDriverError 只映射驱动原始错误，保留业务/存储哨兵错误不变。
@@ -344,7 +380,8 @@ func (s *Store) WithConn(ctx context.Context, fn func(context.Context, *sql.Conn
 }
 
 // ExecContext 执行写语句，并把驱动错误映射为安全 storage.Error。仓储代码应优先
-// 使用本方法而不是直接使用 DB()，以统一唯一性、锁、权限等错误类别。
+// 使用本方法而不是直接使用 DB()，以统一唯一性、锁、权限等错误类别。配置了
+// WriteGuard 时先通过门闸登记写入（维护状态拒绝新写）。
 func (s *Store) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -352,6 +389,11 @@ func (s *Store) ExecContext(ctx context.Context, query string, args ...any) (sql
 	if err := s.ensureOpen(); err != nil {
 		return nil, err
 	}
+	release, err := s.enterWrite(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return nil, mapError(err)

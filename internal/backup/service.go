@@ -452,6 +452,15 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Result, er
 	return s.finishFailure(ctx, state, requestID, startedAt, attempts, lastErr)
 }
 
+// OutputDir 返回受控输出目录绝对路径。它只供诊断与恢复前容量检查使用，不暴露
+// 密钥材料；调用方不得把它当公开下载路径。
+func (s *Service) OutputDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.outputDir
+}
+
 // RequestCancel 提交一次取消请求。权限、任务存在性与状态由服务端检查；请求被
 // 接受只表示执行器会观察到它，不表示任务已取消。实际终止由执行器在清理完成后
 // 写 ActionCancelled 终态事件。

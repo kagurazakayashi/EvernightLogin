@@ -29,6 +29,17 @@ import (
 )
 
 // Store 是报告计划/历史的 SQLite 仓储。
+// execWrite 是报告仓储的原生写语句入口：先登记存储维护写入门闸，再执行原生 SQL，
+// 使维护状态（步骤 82 恢复）下这些历史 raw 写路径与新代码一样被拒绝。
+func (s *Store) execWrite(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	release, err := s.store.AcquireWriteGuard(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.store.DB().ExecContext(ctx, query, args...)
+}
+
 type Store struct {
 	store *storagesqlite.Store
 }
@@ -248,7 +259,7 @@ func (s *Store) CreatePlan(ctx context.Context, plan PlanRecord) (PlanRecord, er
 	if plan.UpdatedAt.IsZero() {
 		plan.UpdatedAt = plan.CreatedAt
 	}
-	if _, err := s.store.DB().ExecContext(ctx, `INSERT INTO report_plans(
+	if _, err := s.execWrite(ctx, `INSERT INTO report_plans(
 id,name,owner_type,owner_id,execution_actor_type,execution_actor_id,scope_id,scope_kind,
 app_id,template,schedule_type,schedule_expression,time_zone,granularity,window_days,
 categories_json,trend_metric,formats_json,detail_rows,missed_policy,max_catch_up,
@@ -453,7 +464,7 @@ func (s *Store) UpdatePlan(ctx context.Context, plan PlanRecord,
 	if updatedAt.IsZero() {
 		updatedAt = time.Now().UTC()
 	}
-	result, err := s.store.DB().ExecContext(ctx, `UPDATE report_plans SET
+	result, err := s.execWrite(ctx, `UPDATE report_plans SET
 name = ?, scope_id = ?, scope_kind = ?, app_id = ?, template = ?,
 schedule_type = ?, schedule_expression = ?, time_zone = ?, granularity = ?,
 window_days = ?, categories_json = ?, trend_metric = ?, formats_json = ?,
@@ -491,7 +502,7 @@ func (s *Store) SetPlanEnabled(ctx context.Context, planID string, enabled bool,
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	result, err := s.store.DB().ExecContext(ctx,
+	result, err := s.execWrite(ctx,
 		`UPDATE report_plans SET enabled = ?, version = version + 1, updated_at_ms = ?
 WHERE id = ? AND version = ?`,
 		boolToInt(enabled), timeToMS(now), planID, expectedVersion)
@@ -517,7 +528,7 @@ func (s *Store) DeletePlan(ctx context.Context, planID string, expectedVersion i
 	if strings.TrimSpace(planID) == "" || expectedVersion < 1 {
 		return fmt.Errorf("%w: 计划编号或版本无效", reports.ErrInvalidRequest)
 	}
-	result, err := s.store.DB().ExecContext(ctx,
+	result, err := s.execWrite(ctx,
 		`DELETE FROM report_plans WHERE id = ? AND version = ?`, planID, expectedVersion)
 	if err != nil {
 		return err
@@ -692,7 +703,7 @@ WHEN 'cancel_requested' THEN 2 ELSE 3 END))
 OR excluded.state = report_history.state
 OR (report_history.state = 'succeeded' AND excluded.state = 'failed'
 AND excluded.error_code = 'AUDIT_WRITE_FAILED')`
-	_, err = s.store.DB().ExecContext(ctx, `INSERT INTO report_history(
+	_, err = s.execWrite(ctx, `INSERT INTO report_history(
 id,plan_id,retry_of,name,owner_type,owner_id,scope_id,scope_kind,app_id,template,state,
 formats_json,categories_json,trend_metric,detail_rows,data_scope_json,window_json,
 snapshot_json,artifacts_json,task_id,executor_id,error_code,failure_reason,request_id,
@@ -882,7 +893,7 @@ func (s *Store) MarkHistoryCleanup(ctx context.Context, reportID, cleanupState s
 		return fmt.Errorf("%w: 报告清理状态无效", reports.ErrInvalidRequest)
 	}
 	// 只允许从 none/pending 前进到 pending/cleaned，避免并发回退已清理状态。
-	result, err := s.store.DB().ExecContext(ctx, `UPDATE report_history
+	result, err := s.execWrite(ctx, `UPDATE report_history
 SET cleanup_state = ? WHERE id = ? AND cleanup_state IN('none','pending')
 AND (cleanup_state = 'none' OR ? = 'cleaned')`, state, reportID, state)
 	if err != nil {

@@ -287,6 +287,11 @@ func (s *Store) UsableSecrets(ctx context.Context, endpointID string,
 // CreateEventWithDeliveries 在一个事务内创建事件与投递。
 func (s *Store) CreateEventWithDeliveries(ctx context.Context, event webhook.EventRecord,
 	deliveries []webhook.DeliveryRecord) (webhook.EventRecord, bool, error) {
+	release, err := s.store.AcquireWriteGuard(ctx)
+	if err != nil {
+		return webhook.EventRecord{}, false, webhook.ErrStoreUnavailable
+	}
+	defer release()
 	tx, err := s.store.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return webhook.EventRecord{}, false, webhook.ErrStoreUnavailable

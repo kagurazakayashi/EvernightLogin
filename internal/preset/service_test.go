@@ -294,6 +294,7 @@ func TestCatalogIntegrity(t *testing.T) {
 	implemented := map[string]bool{
 		"backups.create": true, "backups.read": true, "backups.cancel": true,
 		"backups.export": true, "backups.retention": true, "backups.cleanup": true,
+		"backups.restore": true,
 	}
 	for _, definition := range catalog.Permissions {
 		want := implemented[definition.Key]

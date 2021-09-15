@@ -13,6 +13,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/rootrecovery"
+	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
@@ -263,5 +264,118 @@ func TestRunRootRecoverPasskeyConfirmation(t *testing.T) {
 	}
 	if version != 2 {
 		t.Fatalf("取消 Passkey 撤销后 security_version 被修改: %d", version)
+	}
+}
+
+// TestRunRestoreCommandsUsageAndConfirmation 覆盖步骤 82 本地恢复命令的最小安全边界：
+// restore-apply 缺少 --service-stopped 或未输入确认词时必须在触碰数据前退出。
+func TestRunRestoreCommandsUsageAndConfirmation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	common := []string{"--database", "C:\\test\\login.db", "--state-dir", "C:\\test\\state",
+		"--key-file", "C:\\test\\key.json", "--backup", "C:\\test\\b.elnbak",
+		"--backup-output", "C:\\test\\backups", "--operator", "os:tester@host",
+		"--reason", "测试确认"}
+	args := append([]string{"restore-apply"}, common...)
+	args = append(args, "--confirm", "RESTORE")
+	if code := Run(args, strings.NewReader(""), &stdout, &stderr, nil); code != ExitUsage {
+		t.Fatalf("缺少 --service-stopped 时退出码 = %d，期望 %d（用法错误）", code, ExitUsage)
+	}
+	args = append([]string{"restore-apply"}, common...)
+	args = append(args, "--service-stopped")
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(args, strings.NewReader(""), &stdout, &stderr, nil); code != restoreExitCancelled {
+		t.Fatalf("未输入确认词时退出码 = %d，期望 %d（取消）", code, restoreExitCancelled)
+	}
+	stdout.Reset()
+	if code := Run([]string{"help"}, strings.NewReader(""), &stdout, &stderr, nil); code != ExitOK {
+		t.Fatalf("help 退出码 = %d", code)
+	}
+	if !strings.Contains(stdout.String(), "restore-preflight") ||
+		!strings.Contains(stdout.String(), "restore-init-state") {
+		t.Fatal("help 未列出步骤 82 恢复命令")
+	}
+}
+
+// TestRunRestoreStateCommandsWithRealKeyring 覆盖修复轮 B1：六个状态命令必须在
+// “已初始化状态 + 真实主密钥文件 + 已迁移临时数据库”下可用（不是只测 usage）。
+func TestRunRestoreStateCommandsWithRealKeyring(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("创建数据目录失败：%v", err)
+	}
+	database := filepath.Join(dataDir, "login.db")
+	stateDir := filepath.Join(dir, "restore-state")
+	keyFile := filepath.Join(dir, "master-key.json")
+	store, err := storagesqlite.Open(context.Background(), storagesqlite.DefaultOptions(database))
+	if err != nil {
+		t.Fatalf("打开临时数据库失败：%v", err)
+	}
+	migrations, err := migrate.LoadMigrations(migrations.SQLite)
+	if err != nil {
+		t.Fatalf("加载迁移失败：%v", err)
+	}
+	if _, err := store.Migrate(context.Background(), migrations); err != nil {
+		t.Fatalf("迁移临时数据库失败：%v", err)
+	}
+	// 造一条“已完成恢复”记录与暂停项，供 disposition/review/reenable 主路径使用。
+	nowMS := time.Now().UTC().UnixMilli()
+	if _, err := store.ExecContext(context.Background(), `INSERT INTO restore_runs(
+restore_id,generation,backup_id,backup_sha256,backup_schema_version,operator_type,
+operator_id,status,started_at_ms,completed_at_ms,reason,rollback_backup_file,result_json)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, "rst_cli_test", 1, "bkp_cli", "",
+		"0044", "local_admin", "os:tester@test-host", "completed",
+		nowMS, nowMS, "CLI 测试", "", "{}"); err != nil {
+		t.Fatalf("写入恢复运行记录失败：%v", err)
+	}
+	if _, err := store.ExecContext(context.Background(), `INSERT INTO restore_paused_items(
+restore_id,kind,target_id,previous_state,paused_at_ms) VALUES(?,?,?,?,?)`,
+		"rst_cli_test", "schedule", "sch_cli", "enabled", nowMS); err != nil {
+		t.Fatalf("写入恢复暂停项失败：%v", err)
+	}
+	closeStore := func() { _ = store.Close() }
+	ring, err := secrets.GenerateKeyring("k1", time.Now().UTC())
+	if err != nil {
+		closeStore()
+		t.Fatalf("生成测试密钥环失败：%v", err)
+	}
+	document, err := ring.Document()
+	if err != nil {
+		closeStore()
+		t.Fatalf("导出密钥环文档失败：%v", err)
+	}
+	if err := secrets.WriteProtectedFile(keyFile, document); err != nil {
+		closeStore()
+		t.Fatalf("写入受保护主密钥文件失败：%v", err)
+	}
+	closeStore()
+	run := func(command string, extra ...string) (int, string) {
+		args := append([]string{command, "--database", database, "--state-dir", stateDir,
+			"--key-file", keyFile, "--operator", "os:tester@test-host"}, extra...)
+		var stdout, stderr bytes.Buffer
+		code := Run(args, strings.NewReader(""), &stdout, &stderr, nil)
+		return code, stdout.String() + stderr.String()
+	}
+	if code, output := run("restore-init-state", "--reason", "CLI 功能测试", "--confirm", "RESTORE"); code != ExitOK {
+		t.Fatalf("restore-init-state 退出码 = %d，输出：%s", code, output)
+	}
+	if code, output := run("restore-disposition"); code != ExitOK {
+		t.Fatalf("restore-disposition 退出码 = %d，输出：%s", code, output)
+	}
+	if code, output := run("restore-review"); code != ExitOK {
+		t.Fatalf("restore-review 退出码 = %d，输出：%s", code, output)
+	}
+	if code, output := run("restore-reenable", "--reason", "CLI 功能测试重新启用"); code != ExitOK {
+		t.Fatalf("restore-reenable 退出码 = %d，输出：%s", code, output)
+	}
+	if code, output := run("restore-merge-audit"); code != ExitOK {
+		t.Fatalf("restore-merge-audit 退出码 = %d，输出：%s", code, output)
+	}
+	if code, output := run("maintenance-enter", "--reason", "CLI 功能测试进入维护"); code != ExitOK {
+		t.Fatalf("maintenance-enter 退出码 = %d，输出：%s", code, output)
+	}
+	if code, output := run("maintenance-exit", "--reason", "CLI 功能测试退出维护"); code != ExitOK {
+		t.Fatalf("maintenance-exit 退出码 = %d，输出：%s", code, output)
 	}
 }

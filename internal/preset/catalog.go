@@ -605,9 +605,9 @@ func catalogPermissionsV1() []PermissionDefinition {
 			RequiresReauth: true, Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
-			Key: "backups.restore", Name: "恢复备份", Summary: "用备份恢复系统数据。",
-			Scope: "全系统高风险操作。", Limits: "仅 root；不能通过普通角色分配下放。",
-			RootOnly: true, RequiresReauth: true, Implemented: false,
+			Key: "backups.restore", Name: "恢复备份", Summary: "用备份恢复系统数据（维护模式 + 预演 + 凭证失效）。",
+			Scope: "全系统高风险操作。", Limits: "仅 root 或受控本地应急管理员；不能通过普通角色分配下放。",
+			RootOnly: true, RequiresReauth: true, Implemented: true,
 		},
 		{
 			Key: "audit.purge", Name: "清理安全记录", Summary: "按保留策略清理安全审计记录。",

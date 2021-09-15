@@ -1002,15 +1002,22 @@
 // 区分校验失败与解密失败）。多用户 Windows 部署需注意：.elnbak 成品为认证加密，
 // 但备份期间输出目录会短暂出现明文数据库快照，机密性依赖 NTFS ACL；CLI 启动会输出
 // icacls 收紧目录权限的告警与示例。本包不启动常驻协程、不监听端口、不提供 HTTP 路由；
-// 定时计划/页面（步骤 81）、恢复（步骤 82+）、独立备份查看/导出工具（步骤 94）与
-// 非 SQLite 备份适配尚未实现，也不宣称“绝对安全”。步骤 81 已把本包接入
-// internal/task 调度与 internal/backupadmin（持久任务/阶段/保留策略/清理/独立下载/
-// 通知/孤儿对账），并提供 WebUIOptions.PageBackups 管理页面；恢复仍保持未实现。
+// 定时计划/页面（步骤 81）已把本包接入 internal/task 调度与 internal/backupadmin
+// （持久任务/阶段/保留策略/清理/独立下载/通知/孤儿对账），并提供
+// WebUIOptions.PageBackups 管理页面；恢复（步骤 82）由 internal/restore 与
+// internal/maintenance 实现：仅 root 或受控本地应急管理员在维护状态与库外排他锁下
+// 执行，先预演（解密/完整性/数据库版本/容量/外部密钥依赖），创建新的加密回退备份，
+// 暂存验证后原子切换，失败默认保持维护并可回退；恢复后在同一事务内使会话/刷新族/
+// 授权码/恢复代码/验证链接/扫码请求/一次性凭证/令牌签名密钥失效（恢复代际权威副本
+// 在库外并由主密钥 HMAC 封装，缺失不静默重建；审计日志链末锚点同样写入该受保护
+// 状态，尾部截断/整链重写可检出），恢复审计先写库外追加日志再合并。本地 CLI 见
+// cmd/loginctl 的 restore-preflight/restore-apply/maintenance-* 命令。独立备份查看/
+// 导出工具（步骤 94）与非 SQLite 备份适配尚未实现，也不宣称“绝对安全”。
 //
 // 密码登录/退出/会话校验的 HTTP 路由与启动装配、自助注册 HTTP 路由与启动装配、OAuth/OIDC Token 联合校验与完整
 // 授权执行、应用成员/用户组/权限目录/角色/有效权限 HTTP 接口、OAuth 凭据/回调、Web 页面与
-// 恢复流程尚未实现（本步骤已提供本地手动加密热备份与离线校验，见 cmd/login-backup；步骤 81 已提供
-// 备份计划/任务/历史/独立下载/保留清理管理页面与 internal/backupadmin，见 WebUIOptions.PageBackups）；
+// 备份恢复已由步骤 82 提供维护模式恢复、恢复前预演与恢复后凭证失效（internal/restore +
+// internal/maintenance + cmd/loginctl 本地应急命令；页面恢复区仍为占位）；
 // 会话能力已由 internal/session 提供受信 Go API，但管理强认证（MFA）未
 // 实现前管理访问保持拒绝，设备列表与管理强制下线同样只有 Go API（未暴露 HTTP 路由），
 // 数据范围裁剪也尚未接入强制下线。首次初始化不提供完整 CLI 或启动装配（cmd/loginctl 目前只实现步骤 48 的 root-recover 应急恢复命令），

@@ -20,3 +20,6 @@ func syncDir(path string) error {
 	}
 	return nil
 }
+
+// isWindowsPlatform 报告当前平台是否为 Windows（用于平台化权限差异）。
+func isWindowsPlatform() bool { return false }

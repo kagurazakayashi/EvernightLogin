@@ -579,12 +579,12 @@ func defaultOperations() []Operation {
 		},
 		{
 			ID: "backup.restore", Domain: DomainBackup, Name: "恢复备份",
-			Description:        "用备份恢复系统数据；仅 root 可执行，必须强认证与确认并告知，需要维护/停机与排他锁，失败必须回滚且记录真实操作者。",
+			Description:        "用备份恢复系统数据；仅 root 或受控本地应急管理员可执行（不开放匿名远程接口），必须强认证与确认并告知；先预演校验解密/完整性/数据库版本/容量/外部密钥，进入维护状态并在库外排他锁下创建回退备份后暂存验证、原子切换；失败默认保持维护并回退到恢复前状态；恢复后旧会话/刷新族/授权码/恢复代码/验证链接/扫码请求与签名密钥全部失效，审计独立保存后合并。",
 			Default:            strongReauth,
 			PermissionKey:      "backups.restore",
 			RootOnly:           true,
 			ImmutableSensitive: true,
-			Implemented:        false,
+			Implemented:        true,
 		},
 		{
 			ID: "audit.export", Domain: DomainAudit, Name: "导出安全审计记录",

@@ -124,6 +124,10 @@ func CodeOf(err error) ErrorCode {
 	}
 }
 
+// CodeString 返回错误的稳定错误码文本；nil 返回空串。它只用于日志/审计投影，
+// 不改变 errors.Is 语义。
+func CodeString(err error) string { return string(CodeOf(err)) }
+
 // retryable 报告失败是否属于可重试的并发/瞬时不一致。审计不可用、权限、取消、
 // 超时、参数错误和磁盘容量错误一律不重试；附件在快照后变化与 SQLite BUSY 属于
 // 可重试的瞬时状态。

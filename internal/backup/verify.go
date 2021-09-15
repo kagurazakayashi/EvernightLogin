@@ -147,7 +147,7 @@ func VerifyFile(ctx context.Context, path string, keyring *secrets.Keyring) (Ver
 	}
 	digest := headerHash(headerRaw)
 	limited := &io.LimitedReader{R: tee, N: header.Encryption.PayloadCipherBytes}
-	parser := newPayloadParser(header, digest)
+	parser := newPayloadParser(header, digest, nil)
 	cipherDigest, err := decryptPayload(limited, header.Encryption, dataKey, digest,
 		parser.consume)
 	if err != nil {
@@ -256,11 +256,24 @@ func reportFromHeader(header Header, fileSize int64) VerifyReport {
 	}
 }
 
+// entrySink 接收解密解析过程中的清单与条目正文，用于恢复流程的受控暂存提取。
+// 所有方法在 payloadParser.consume 内同步调用；返回错误会立即终止认证解密。
+// 它只用于本包内部（VerifyFile 传 nil，Extract 传文件写入器）。
+type entrySink interface {
+	// OnManifest 在清单通过交叉校验后调用一次，用于记录条目计划。
+	OnManifest(manifest Manifest) error
+	// BeginEntry 在开始消费某条目正文前调用；返回的写入器接收该条目原文。
+	BeginEntry(entry ManifestEntry) (io.Writer, error)
+	// EndEntry 在条目正文大小与 SHA-256 校验通过后调用。
+	EndEntry(entry ManifestEntry) error
+}
+
 // payloadParser 是解密明文的流式解析器：先读清单帧（4 字节大端长度 + 清单
 // JSON），再按清单顺序逐条流式校验条目大小与 SHA-256，最后要求恰好消费完毕。
 type payloadParser struct {
 	header       Header
 	headerDigest [32]byte
+	sink         entrySink
 
 	lengthBuffer   []byte
 	manifestLength int
@@ -272,14 +285,15 @@ type payloadParser struct {
 	entryIndex  int
 	entrySize   int64
 	entryHasher hash.Hash
+	entryWriter io.Writer
 	entriesSeen int
 	consumed    int64
 	finishedOK  bool
 }
 
-// newPayloadParser 构造解析器。
-func newPayloadParser(header Header, headerDigest [32]byte) *payloadParser {
-	return &payloadParser{header: header, headerDigest: headerDigest}
+// newPayloadParser 构造解析器；sink 为 nil 时只校验不落盘。
+func newPayloadParser(header Header, headerDigest [32]byte, sink entrySink) *payloadParser {
+	return &payloadParser{header: header, headerDigest: headerDigest, sink: sink}
 }
 
 // consume 接收一块解密明文并推进解析状态。任何顺序/长度/摘要错误立即失败。
@@ -331,8 +345,23 @@ func (p *payloadParser) consume(data []byte) error {
 			if p.entryHasher == nil {
 				p.entryHasher = sha256.New()
 			}
+			if p.sink != nil && p.entryWriter == nil {
+				writer, err := p.sink.BeginEntry(entry)
+				if err != nil {
+					return err
+				}
+				if writer == nil {
+					writer = io.Discard
+				}
+				p.entryWriter = writer
+			}
 			if _, err := p.entryHasher.Write(data[:take]); err != nil {
 				return fmt.Errorf("%w: 计算条目摘要失败", ErrInternal)
+			}
+			if p.entryWriter != nil {
+				if _, err := p.entryWriter.Write(data[:take]); err != nil {
+					return fmt.Errorf("%w: 写入条目 %s 失败", ErrBackupIO, entry.Name)
+				}
 			}
 			p.entrySize += take
 			p.consumed += take
@@ -342,10 +371,16 @@ func (p *payloadParser) consume(data []byte) error {
 				if hex.EncodeToString(sum) != entry.SHA256 {
 					return fmt.Errorf("%w: 条目 %s 摘要不一致", ErrIntegrityFailed, entry.Name)
 				}
+				if p.sink != nil {
+					if err := p.sink.EndEntry(entry); err != nil {
+						return err
+					}
+				}
 				p.entriesSeen++
 				p.entryIndex++
 				p.entrySize = 0
 				p.entryHasher = nil
+				p.entryWriter = nil
 				if p.entryIndex == len(p.manifest.Entries) {
 					p.finishedOK = true
 				}
@@ -370,6 +405,11 @@ func (p *payloadParser) startEntries() error {
 	p.manifestSHA = manifestSHA
 	if len(manifest.Entries) == 0 {
 		return fmt.Errorf("%w: 清单没有条目", ErrIntegrityFailed)
+	}
+	if p.sink != nil {
+		if err := p.sink.OnManifest(manifest); err != nil {
+			return err
+		}
 	}
 	return nil
 }
