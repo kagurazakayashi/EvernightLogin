@@ -116,6 +116,14 @@ func isTrustedPrincipal(sid *windows.SID, me, system, admins *windows.SID) bool 
 	return sid.Equals(me) || sid.Equals(system) || sid.Equals(admins)
 }
 
+// protectExistingFile 为已存在的普通文件设置受保护 DACL（不复制/临时替换内容）。
+func protectExistingFile(path string) error {
+	if err := setProtectedDACL(path); err != nil {
+		return err
+	}
+	return nil
+}
+
 // writeProtectedFile 原子地写入受保护文件：先创建临时文件，立刻收紧 DACL，
 // 再写入内容并重命名；重命名后重新检查权限。这样内容不会在任何时间段出现在
 // 权限未收紧的文件中。

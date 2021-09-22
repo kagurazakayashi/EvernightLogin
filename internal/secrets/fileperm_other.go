@@ -17,6 +17,14 @@ func checkFileProtection(_ *os.File, info os.FileInfo) error {
 	return validateUnixFileModePerm(info.Mode().Perm())
 }
 
+// protectExistingFile 把已存在文件的权限位设为 0600（覆盖继承的宽松权限）。
+func protectExistingFile(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("%w: 无法收紧文件权限", ErrInsecurePermissions)
+	}
+	return nil
+}
+
 // writeProtectedFile 原子地写入受保护文件：在目标目录创建 0600 临时文件，
 // 写入并同步后重命名覆盖目标，最后重新检查权限。
 func writeProtectedFile(path string, data []byte) error {

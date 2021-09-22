@@ -27,11 +27,14 @@ import (
 
 // 稳定退出码；测试会逐项断言。
 const (
-	ExitOK            = 0
-	ExitError         = 1
-	ExitUsage         = 2
-	ExitVerifyFailed  = 3
-	ExitDecryptFailed = 4
+	ExitOK             = 0
+	ExitError          = 1
+	ExitUsage          = 2
+	ExitVerifyFailed   = 3
+	ExitDecryptFailed  = 4
+	ExitOutputConflict = 5
+	ExitQueryInvalid   = 6
+	ExitCancelled      = 130
 )
 
 const programName = "login-backup"
@@ -50,6 +53,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runVerify(args[1:], stdout, stderr)
 	case "info":
 		return runInfo(args[1:], stdout, stderr)
+	case "list":
+		return runList(args[1:], stdout, stderr)
+	case "tables":
+		return runTables(args[1:], stdout, stderr)
+	case "preview":
+		return runPreview(args[1:], stdout, stderr)
+	case "export":
+		return runExport(args[1:], stdout, stderr)
+	case "extract":
+		return runExtract(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return ExitOK
@@ -65,7 +78,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // printUsage 输出中文帮助与稳定退出码说明。
 func printUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `login-backup：login 备份的本地手动触发与离线校验工具（步骤 80）
+	fmt.Fprintln(writer, `login-backup：login 备份的本地手动触发、离线校验与只读查看/导出工具（步骤 80/83）
 
 用法：
   login-backup create --database <SQLite 数据库路径> --key-file <主密钥环文件> \
@@ -74,6 +87,18 @@ func printUsage(writer io.Writer) {
         [--request-id <请求编号>] [--timeout 10m] [--progress] [--json]
   login-backup verify --file <备份文件> --key-file <主密钥环文件> [--json]
   login-backup info --file <备份文件> [--json]
+  login-backup list --file <备份文件> --key-file <主密钥环文件> [--json]
+  login-backup tables --file <备份文件> --key-file <主密钥环文件> [--json]
+  login-backup preview --file <备份文件> --key-file <主密钥环文件> --table <表名> \
+        [--columns a,b,c] [--where "字段=值"]... [--where "字段 IN (a,b)"]... \
+        [--order-by 字段[:asc|:desc]]... [--limit 20] [--include-sensitive] [--json]
+  login-backup export --file <备份文件> --key-file <主密钥环文件> --table <表名> \
+        --format csv|json --output <绝对输出文件> \
+        [--columns a,b] [--where ...]... [--order-by ...]... [--limit 1000] \
+        [--include-sensitive] [--operator <标识>] [--oplog <记录文件>] [--json]
+  login-backup extract --file <备份文件> --key-file <主密钥环文件> \
+        --entry <清单条目名> --output <绝对输出文件> \
+        [--include-sensitive] [--operator <标识>] [--oplog <记录文件>] [--json]
   login-backup help | version
 
 说明：
@@ -82,12 +107,28 @@ func printUsage(writer io.Writer) {
   verify 用主密钥认证解密并校验清单、条目大小与 SHA-256；失败时明确区分
          校验失败（3）与解密失败（4）。
   info   只读取明文头部做结构与密文摘要检查，不声称认证通过。
-  create 会把请求/开始/成功/失败/取消事件写入本地数据库的安全审计；需要操作
-         系统层面的数据库与密钥文件访问权限，不是远程认证通道，也不做恢复。
+  list   认证解密后列出格式/数据库版本（含 schema_history）、创建时间、条目
+         清单与大小、完整性/认证状态与内容范围；只读，不执行备份内脚本。
+  tables 列出受限查询目录（静态表白名单）与该备份实际可用字段；敏感字段明确标记。
+  preview 对认证解包出的 SQLite 逻辑数据做受限只读预览：只允许白名单表、受控
+         操作符（= != < <= > >= LIKE IN，AND 连接）、受控排序与行数上限；禁止
+         任意 SQL；SQLite 连接使用 mode=ro + PRAGMA query_only。
+  export 把受限查询结果导出为 CSV（UTF-8，防公式注入）或 JSON（纯数据编码）。
+         输出文件必须使用绝对路径、父目录存在、默认不覆盖已有文件；高敏字段
+         默认排除，--include-sensitive 才包含且落地后收紧文件权限（Windows
+         显式 DACL、非 Windows 要求输出目录 0700）。CSV 文本单元格若以
+         = + - @ 制表/回车开头会前置单引号；数值列保持数字。
+  extract 逐项提取清单条目（附件 attachments/...、配置 config/... 等）；原始
+         数据库条目包含认证秘密，必须显式 --include-sensitive 且输出受保护。
+  离线查看/导出不启动身份服务器、不联网、不自动连接或写回生产数据库；每次
+  export/extract 在输出目录追加 .login-backup-viewer-oplog.jsonl 本地操作记录
+  （只含元数据，不含数据内容/过滤值/密钥）。该记录不能防止主机管理员删除。
   安全提示：加密备份本身安全，但备份期间输出目录会短暂出现明文数据库快照；
          多用户 Windows 请用 NTFS ACL（icacls）限制输出目录仅当前账户访问。
 
-退出码：0 成功；1 执行失败；2 参数/用法错误；3 备份校验失败；4 解密失败。`)
+退出码：0 成功；1 执行失败；2 参数/用法错误；3 备份校验失败/不支持；
+        4 解密失败；5 输出冲突或输出位置不安全；6 受限查询/高敏确认被拒绝；
+        130 已取消（临时文件与不完整输出已清理）。`)
 }
 
 // localOperatorAuthorizer 是本地 CLI 的授权器：只允许显式指定的本地操作者执行

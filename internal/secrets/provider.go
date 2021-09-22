@@ -174,6 +174,31 @@ func WriteProtectedFile(path string, data []byte) error {
 	return writeProtectedFile(path, data)
 }
 
+// ProtectFile 把已存在的普通文件收紧为平台受保护的权限，并在收紧后复核：
+// Windows 设置显式 DACL（仅当前进程用户、SYSTEM、Administrators），非 Windows
+// 设为 0600。它供离线导出工具在写入高敏数据后收紧落地文件，避免高敏内容停留
+// 在从父目录继承的宽松 ACL 下。调用方必须传入已存在的普通文件绝对路径；函数
+// 不接受目录、符号链接或相对路径，失败时不做静默降级。
+func ProtectFile(path string) error {
+	if path == "" {
+		return fmt.Errorf("%w: 文件路径为空", ErrFileInvalid)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%w: 文件必须使用绝对路径", ErrFileInvalid)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("%w: 无法读取文件状态", ErrFileInvalid)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: 必须是已存在的普通文件", ErrFileInvalid)
+	}
+	if err := protectExistingFile(path); err != nil {
+		return err
+	}
+	return CheckProtectedFile(path)
+}
+
 // normalizeContext 把 nil ctx 当成 Background 处理，避免调用方因漏传上下文而
 // panic；取消与期限语义由非 nil ctx 提供。
 func normalizeContext(ctx context.Context) context.Context {

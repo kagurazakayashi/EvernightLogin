@@ -434,30 +434,11 @@ func PayloadChunks(plainBytes int64, chunkSize int) int64 {
 }
 
 // validateEntryName 校验条目安全相对名：只允许固定 ASCII 字符与 `/` 分隔，
-// 拒绝空段、`.`、`..`、反斜杠、绝对路径与控制字符，并按类型检查固定前缀。
+// 拒绝空段、`.`、`..`、反斜杠、绝对路径与控制字符、Windows 保留设备名与尾随
+// 点/空格，并按类型检查固定前缀。
 func validateEntryName(kind, name string) error {
-	if name == "" || len(name) > MaxEntryNameBytes {
-		return fmt.Errorf("%w: 条目名长度非法", ErrInvalidRequest)
-	}
-	if strings.Contains(name, `\`) || strings.HasPrefix(name, "/") {
-		return fmt.Errorf("%w: 条目名包含非法分隔符", ErrInvalidRequest)
-	}
-	for i := 0; i < len(name); i++ {
-		char := name[i]
-		allowed := char == '/' || char == '.' || char == '_' || char == '-' ||
-			(char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9')
-		if !allowed {
-			return fmt.Errorf("%w: 条目名包含不允许的字符", ErrInvalidRequest)
-		}
-	}
-	if strings.HasSuffix(name, "/") || strings.Contains(name, "//") {
-		return fmt.Errorf("%w: 条目名包含空路径段", ErrInvalidRequest)
-	}
-	for _, segment := range strings.Split(name, "/") {
-		if segment == "" || segment == "." || segment == ".." {
-			return fmt.Errorf("%w: 条目名包含危险路径段", ErrInvalidRequest)
-		}
+	if err := validateEntryNameShape(name); err != nil {
+		return err
 	}
 	switch kind {
 	case EntryKindDatabase:
@@ -527,4 +508,64 @@ func validHexDigest(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil && value == strings.ToLower(value)
+}
+
+// validateEntryNameShape 校验条目名的通用形状（不校验 kind 固定前缀），供清单
+// 校验与离线单项提取的用户输入共用：只允许受控 ASCII 相对路径；拒绝空段、
+// `.`/`..`、反斜杠、绝对路径、控制字符、Windows 保留设备名（CON/PRN/AUX/NUL/
+// COM1-9/LPT1-9，含带扩展名形式）以及尾随点/空格（Windows 会静默去除，可能
+// 造成同名覆盖/别名绕过）。主机平台无关地统一拒绝，避免同类备份跨平台行为不同。
+func validateEntryNameShape(name string) error {
+	if name == "" || len(name) > MaxEntryNameBytes {
+		return fmt.Errorf("%w: 条目名长度非法", ErrInvalidRequest)
+	}
+	if strings.Contains(name, `\`) || strings.HasPrefix(name, "/") {
+		return fmt.Errorf("%w: 条目名包含非法分隔符", ErrInvalidRequest)
+	}
+	for i := 0; i < len(name); i++ {
+		char := name[i]
+		allowed := char == '/' || char == '.' || char == '_' || char == '-' ||
+			(char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9')
+		if !allowed {
+			return fmt.Errorf("%w: 条目名包含不允许的字符", ErrInvalidRequest)
+		}
+	}
+	if strings.HasSuffix(name, "/") || strings.Contains(name, "//") {
+		return fmt.Errorf("%w: 条目名包含空路径段", ErrInvalidRequest)
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("%w: 条目名包含危险路径段", ErrInvalidRequest)
+		}
+		if err := validateWindowsSafeSegment(segment); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateWindowsSafeSegment 拒绝 Windows 保留设备名与尾随点/空格。保留名匹配
+// 不区分大小写，且按“第一个点之前的主名”判断（CON.txt 同样是设备名）。
+func validateWindowsSafeSegment(segment string) error {
+	if segment == "" {
+		return fmt.Errorf("%w: 条目名包含空路径段", ErrInvalidRequest)
+	}
+	if strings.HasSuffix(segment, ".") || strings.HasSuffix(segment, " ") {
+		return fmt.Errorf("%w: 条目名包含尾随点或空格", ErrInvalidRequest)
+	}
+	base := segment
+	if index := strings.IndexByte(segment, '.'); index >= 0 {
+		base = segment[:index]
+	}
+	upper := strings.ToUpper(base)
+	switch upper {
+	case "CON", "PRN", "AUX", "NUL":
+		return fmt.Errorf("%w: 条目名是 Windows 保留设备名", ErrInvalidRequest)
+	}
+	if len(upper) == 4 && (strings.HasPrefix(upper, "COM") ||
+		strings.HasPrefix(upper, "LPT")) && upper[3] >= '1' && upper[3] <= '9' {
+		return fmt.Errorf("%w: 条目名是 Windows 保留设备名", ErrInvalidRequest)
+	}
+	return nil
 }

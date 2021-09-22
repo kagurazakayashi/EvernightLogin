@@ -52,6 +52,17 @@ var (
 	ErrStoreUnavailable = errors.New("备份存储暂时不可用")
 	// ErrInternal 表示未分类内部错误（只用于映射，不外泄细节）。
 	ErrInternal = errors.New("备份内部错误")
+	// ErrOutputExists 表示导出目标文件已存在；离线查看/导出默认拒绝覆盖已有文件。
+	ErrOutputExists = errors.New("输出文件已存在，拒绝覆盖")
+	// ErrQueryInvalid 表示受限查询语法不合法（未授权表/字段、未知操作符、超限参数等）。
+	// 本工具从不执行任意 SQL：所有标识符来自受控目录，过滤值一律参数化。
+	ErrQueryInvalid = errors.New("预览/导出查询参数无效")
+	// ErrSensitiveRequired 表示请求触及默认排除的高敏字段/条目，但未显式确认
+	// （--include-sensitive）。默认拒绝，避免静默批量泄露认证秘密。
+	ErrSensitiveRequired = errors.New("需要显式确认高敏字段导出")
+	// ErrDatabaseUnsupported 表示当前工具只支持解析 SQLite 备份数据；其他引擎的
+	// 原生备份只能列出与逐项提取原始文件，不伪称能够解析其内部数据。
+	ErrDatabaseUnsupported = errors.New("当前工具不支持解析该备份的数据库引擎")
 )
 
 // ErrorCode 是本领域对根包错误码注册表的投影。以下错误码全部已在根包
@@ -103,6 +114,14 @@ func CodeOf(err error) ErrorCode {
 		return CodeBackupInvalid
 	case errors.Is(err, ErrOutputDirUnsafe):
 		return CodeExportPathUnsafe
+	case errors.Is(err, ErrOutputExists):
+		return CodeConflict
+	case errors.Is(err, ErrQueryInvalid):
+		return CodeReqInvalid
+	case errors.Is(err, ErrSensitiveRequired):
+		return CodeAccessDenied
+	case errors.Is(err, ErrDatabaseUnsupported):
+		return CodeBackupVersionUnsupported
 	case errors.Is(err, ErrAuditUnavailable):
 		return CodeAuditWriteFailed
 	case errors.Is(err, ErrSnapshotFailed),

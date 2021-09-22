@@ -1011,8 +1011,16 @@
 // 授权码/恢复代码/验证链接/扫码请求/一次性凭证/令牌签名密钥失效（恢复代际权威副本
 // 在库外并由主密钥 HMAC 封装，缺失不静默重建；审计日志链末锚点同样写入该受保护
 // 状态，尾部截断/整链重写可检出），恢复审计先写库外追加日志再合并。本地 CLI 见
-// cmd/loginctl 的 restore-preflight/restore-apply/maintenance-* 命令。独立备份查看/
-// 导出工具（步骤 94）与非 SQLite 备份适配尚未实现，也不宣称“绝对安全”。
+// cmd/loginctl 的 restore-preflight/restore-apply/maintenance-* 命令。离线查看/预览/
+// 单项导出（步骤 83）由本包的 Viewer 与 cmd/login-backup 的 list/tables/preview/
+// export/extract 提供：认证解密后把数据库条目解包到 0700 临时目录，用
+// mode=ro&immutable=1 + PRAGMA query_only 的只读 SQLite 连接访问；表名只允许静态
+// 白名单、字段名来自认证快照 schema 且不拼接用户输入、过滤值全部参数化，操作符
+// 仅 = != < <= > >= LIKE IN（AND 连接），排序与行数受控，不执行任意 SQL；敏感字段
+// （会话秘密/CSRF 摘要等）默认排除，--include-sensitive 显式确认后才导出并在落地
+// 前收紧文件权限（配置快照与原始数据库条目按高敏提取处理，未确认即拒绝）；输出默认不覆盖已有文件、失败/取消删除不完整输出，export/extract
+// 追加只含元数据的本地操作记录。非 SQLite 原生备份不伪称可解析内部数据，容器格式
+// 版本 1 只定义 SQLite 数据库条目的解析；本包仍不宣称“绝对安全”。
 //
 // 密码登录/退出/会话校验的 HTTP 路由与启动装配、自助注册 HTTP 路由与启动装配、OAuth/OIDC Token 联合校验与完整
 // 授权执行、应用成员/用户组/权限目录/角色/有效权限 HTTP 接口、OAuth 凭据/回调、Web 页面与
