@@ -118,3 +118,20 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 - 已审查但被否决的方案：`notofonts/noto-cjk` 的 OTF/OTC 为 CFF 轮廓，gopdf 解析器
   不支持；`google/fonts` 的 `NotoSansSC[wght].ttf` 是可变字体且默认实例为 Thin，
   gopdf 忽略 `fvar`/`gvar`，会嵌入 Thin 字重。
+
+## 3. MySQL 驱动：go-sql-driver/mysql v1.10.2（MPL-2.0）及其传递依赖
+
+- 模块：`github.com/go-sql-driver/mysql`，固定版本 **v1.10.2**
+  （2026-11-17 发布，tag `v1.10.2`，commit `69ff5442bda1ca7cbc1e524387d832b8559ffa57`）。
+- 来源：<https://github.com/go-sql-driver/mysql>，Go `database/sql` 官方推荐 MySQL 驱动。
+- 许可证：Mozilla Public License 2.0（MPL-2.0，文件级 copyleft）。本项目只以
+  `import` 方式使用、未修改其源码，驱动文件仍受 MPL-2.0 约束；再分发时保留上游
+  许可证与版权声明。
+- 传递依赖：`filippo.io/edwards25519 v1.2.0`（BSD-3-Clause，用于 `caching_sha2_password`
+  / Ed25519 认证），未修改、无更深传递依赖。
+- 安全审查：选择 v1.10.2 而不是 v1.10.0，是因为 v1.10.2 修复了握手截断包 panic
+  （GHSA-9qjq-77h9-895w）与 `LOAD DATA LOCAL INFILE` 失败后连接复用问题。`go mod verify`
+  通过；未引入 ORM 或其他数据库依赖。
+- 用途：`internal/storage/mysql` 的 MySQL 8.0+ 方言、迁移后端与仓储 SQL 重写驱动器。
+  首次版本只做编译/静态/SQL 生成检查，未连接真实 MySQL 运行验证。
+- 分发要求：保留本文件与 `go.sum`；不得删除上游许可证文本；驱动源码未经修改。

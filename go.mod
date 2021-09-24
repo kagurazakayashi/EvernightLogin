@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/go-jose/go-jose/v4 v4.1.9
+	github.com/go-sql-driver/mysql v1.10.2
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/signintech/gopdf v0.38.4
 	github.com/spf13/cobra v1.10.2
@@ -18,6 +19,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect

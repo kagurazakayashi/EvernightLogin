@@ -124,6 +124,11 @@ type Store struct {
 	ownsDB  bool
 	options Options
 	closed  atomic.Bool
+	// txOptions 传给 BeginTx；WrapHostDB 用于注入方言事务隔离级别，nil 表示驱动默认。
+	txOptions *sql.TxOptions
+	// errorMapper 可选方言错误映射；nil 使用本包 SQLite 映射。WrapHostDB 由方言包
+	// 注入（例如 MySQL 错误码映射），既有 SQLite 路径行为不变。
+	errorMapper func(error) error
 }
 
 // Open 创建或打开 SQLite 数据库文件并验证关键 PRAGMA。
@@ -193,6 +198,26 @@ func WrapDB(host *sql.DB, options Options) (*Store, error) {
 	return store, nil
 }
 
+// WrapHostDB 使用宿主提供的 *sql.DB 构造 Store，不执行 SQLite 专属 PRAGMA 校验。
+//
+// 它用于让宿主以其他方言（如 MySQL）准备的连接复用现有仓储代码。方言适配包负责
+// 在构造连接前验证该方言的服务器设置与官方驱动；本函数只负责连接池设置、写入门闸、
+// 重试策略、事务选项与错误映射注入。宿主持有并关闭 db（Close 不会关闭它）。
+// 该入口是 additive 的：不改变 Open/WrapDB 的 SQLite 行为。
+func WrapHostDB(host *sql.DB, options Options, txOptions *sql.TxOptions, errorMapper func(error) error) (*Store, error) {
+	if host == nil {
+		return nil, storage.New(storage.ErrUnavailable, "宿主数据库连接为空", nil)
+	}
+	normalized, err := options.normalize(false)
+	if err != nil {
+		return nil, storage.New(storage.ErrUnavailable, "存储配置不合法", err)
+	}
+	host.SetMaxOpenConns(normalized.MaxOpenConns)
+	host.SetMaxIdleConns(normalized.MaxIdleConns)
+	host.SetConnMaxIdleTime(normalized.ConnMaxIdleTime)
+	return &Store{db: host, ownsDB: false, options: normalized, txOptions: txOptions, errorMapper: errorMapper}, nil
+}
+
 // verify 抽样验证连接 PRAGMA，避免“以为启用了外键/忙等待”的假安全。
 func (s *Store) verify(ctx context.Context) error {
 	conn, err := s.db.Conn(ctx)
@@ -242,7 +267,7 @@ func (s *Store) Ping(ctx context.Context) error {
 		return err
 	}
 	if err := s.db.PingContext(ctx); err != nil {
-		return mapError(err)
+		return s.mapError(err)
 	}
 	return nil
 }
@@ -255,7 +280,7 @@ func (s *Store) Close() error {
 	}
 	if s.ownsDB && s.db != nil {
 		if err := s.db.Close(); err != nil {
-			return mapError(err)
+			return s.mapError(err)
 		}
 	}
 	return nil
@@ -270,6 +295,17 @@ func (s *Store) ensureOpen() error {
 		return storage.New(storage.ErrClosed, "存储已关闭", nil)
 	}
 	return nil
+}
+
+// mapError 使用注入的方言错误映射；未注入时使用 SQLite 映射。
+func (s *Store) mapError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if s != nil && s.errorMapper != nil {
+		return s.errorMapper(err)
+	}
+	return mapError(err)
 }
 
 // Transaction 在事务中执行 fn。成功提交，fn 返回错误、panic 或提交失败时回滚。
@@ -298,10 +334,10 @@ func (s *Store) Transaction(ctx context.Context, fn func(context.Context, *sql.T
 		_ = tx.Rollback() // 提交成功后返回 sql.ErrTxDone，可忽略。
 	}()
 	if err := fn(ctx, tx); err != nil {
-		return mapDriverError(err)
+		return s.mapDriverError(err)
 	}
 	if err := tx.Commit(); err != nil {
-		return mapError(err)
+		return s.mapError(err)
 	}
 	return nil
 }
@@ -328,6 +364,21 @@ func (s *Store) enterWrite(ctx context.Context) (func(), error) {
 	return s.options.WriteGuard(ctx)
 }
 
+// mapDriverError 使用注入的方言映射，语义同 mapDriverError。
+func (s *Store) mapDriverError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if s != nil && s.errorMapper != nil {
+		var storageError *storage.Error
+		if errors.As(err, &storageError) {
+			return err
+		}
+		return s.errorMapper(err)
+	}
+	return mapDriverError(err)
+}
+
 // mapDriverError 只映射驱动原始错误，保留业务/存储哨兵错误不变。
 func mapDriverError(err error) error {
 	if err == nil {
@@ -348,9 +399,9 @@ func (s *Store) beginTxWithRetry(ctx context.Context) (*sql.Tx, error) {
 	}
 	var tx *sql.Tx
 	err := storage.Retry(ctx, s.options.Retry, storage.Retryable, func(attemptCtx context.Context) error {
-		begun, err := s.db.BeginTx(attemptCtx, nil)
+		begun, err := s.db.BeginTx(attemptCtx, s.txOptions)
 		if err != nil {
-			return mapError(err)
+			return s.mapError(err)
 		}
 		tx = begun
 		return nil
@@ -373,7 +424,7 @@ func (s *Store) WithConn(ctx context.Context, fn func(context.Context, *sql.Conn
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return mapError(err)
+		return s.mapError(err)
 	}
 	defer conn.Close()
 	return fn(ctx, conn)
@@ -396,7 +447,7 @@ func (s *Store) ExecContext(ctx context.Context, query string, args ...any) (sql
 	defer release()
 	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return nil, mapError(err)
+		return nil, s.mapError(err)
 	}
 	return result, nil
 }
@@ -412,7 +463,7 @@ func (s *Store) QueryContext(ctx context.Context, query string, args ...any) (*s
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, mapError(err)
+		return nil, s.mapError(err)
 	}
 	return rows, nil
 }
