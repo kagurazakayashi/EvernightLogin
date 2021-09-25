@@ -6,6 +6,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-sql-driver/mysql v1.10.2
 	github.com/go-webauthn/webauthn v0.18.2
+	github.com/lib/pq v1.12.3
 	github.com/signintech/gopdf v0.38.4
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.6

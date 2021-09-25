@@ -135,3 +135,23 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 - 用途：`internal/storage/mysql` 的 MySQL 8.0+ 方言、迁移后端与仓储 SQL 重写驱动器。
   首次版本只做编译/静态/SQL 生成检查，未连接真实 MySQL 运行验证。
 - 分发要求：保留本文件与 `go.sum`；不得删除上游许可证文本；驱动源码未经修改。
+
+## 4. PostgreSQL 驱动：lib/pq v1.12.3（MIT）
+
+- 模块：`github.com/lib/pq`，固定版本 **v1.12.3**（2026-04-03 发布，tag `v1.12.3`，
+  `go.mod` 无 `require`，**零传递依赖**）。
+- 来源：<https://github.com/lib/pq>，Go 标准 `database/sql` 的 PostgreSQL 驱动。
+- 许可证：MIT。本项目只以 `import` 方式使用、未修改其源码；再分发时保留上游许可证与
+  版权声明（`Copyright (c) 2011-2013, 'pq' Contributors. Portions Copyright (c) 2011
+  Blake Mizerany`）。
+- 维护状态（如实登记）：上游处于**维护模式**（仅接受安全/缺陷修复，不再新增特性）。
+  本项目的步骤 86 是静态/编译/不连接真实 PostgreSQL 的适配，可以接受该状态；未来若需要
+  生产级 PostgreSQL 支持（连接池、COPY、类型系统、pgx 原生协议能力），应评估迁移到
+  `github.com/jackc/pgx/v5`，属后续独立评估项，不在本步范围。
+- 安全审查：v1.12.3 含 `2026-04-03` 的 datestyle 启动参数修复（改善与 EnterpriseDB 等
+  兼容），v1.12.2 修复 `io.ErrUnexpectedEOF` 未按 `driver.ErrBadConn` 处理导致连接永久
+  损坏的问题。版本在 `go.mod` 固定，`go.sum` 校验，`go mod verify` 通过；本机 Go module
+  cache 已有完整模块（可离线核验）。未引入 ORM 或其他数据库依赖。
+- 用途：`internal/storage/postgres` 的 PostgreSQL 方言、服务器设置校验、迁移后端与
+  仓储 SQL 重写驱动器。首次版本只做编译/静态/SQL 生成检查，未连接真实 PostgreSQL 运行验证。
+- 分发要求：保留本文件与 `go.sum`；不得删除上游许可证文本；驱动源码未经修改。
