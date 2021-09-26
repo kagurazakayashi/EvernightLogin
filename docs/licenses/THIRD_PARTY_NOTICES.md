@@ -155,3 +155,32 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 - 用途：`internal/storage/postgres` 的 PostgreSQL 方言、服务器设置校验、迁移后端与
   仓储 SQL 重写驱动器。首次版本只做编译/静态/SQL 生成检查，未连接真实 PostgreSQL 运行验证。
 - 分发要求：保留本文件与 `go.sum`；不得删除上游许可证文本；驱动源码未经修改。
+
+## 5. SQL Server 驱动：microsoft/go-mssqldb v1.12.0（BSD-3-Clause）及其传递依赖
+
+- 模块：`github.com/microsoft/go-mssqldb`，固定版本 **v1.12.0**
+  （2026-11-17 发布，tag `v1.12.0`，commit `39125defe60f0fbb54b27bd4086c5c6097bdfba0`）。
+- 来源：<https://github.com/microsoft/go-mssqldb>，Microsoft 官方维护的 Microsoft SQL Server
+  Go 驱动，纯 Go 实现 TDS 协议，不使用 CGO/ODBC。
+- 许可证：**BSD-3-Clause**（`LICENSE.txt`：Go Authors 与 Microsoft Corporation 的三条款 BSD）。
+  注意：步骤 87 的任务提示写“MIT”，与实际 `LICENSE.txt` 不一致；本文件按**实际许可证**
+  登记。本项目只以 `import` 方式使用、未修改其源码；再分发时保留上游许可证与版权声明。
+- 传递依赖（root 包实际编译依赖，`go list -deps` 核对）：
+  - `github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9`（Apache-2.0）；
+  - `github.com/golang-sql/sqlexp v0.1.0`（BSD-3-Clause）；
+  - `github.com/shopspring/decimal v1.4.0`（MIT）；
+  - `github.com/google/uuid v1.6.0`（BSD-3-Clause，项目已有间接依赖，未升级）；
+  - `golang.org/x/crypto v0.55.0` / `golang.org/x/text v0.41.0`（BSD-3-Clause，项目已有
+    更高版本 v0.58.0 / v0.44.0，未升级、未降级）。
+  以上模块未经修改、均为宽松许可证。模块的 `go.mod` 还声明了 Azure AD/杀软工具链相关
+  模块（如 `azure-sdk-for-go`、`azidentity`、`shopspring/decimal` 等）供 `azuread`/`aecmk`
+  子包使用；本适配器只导入 root 包与 `msdsn`，实际构建依赖仅上述 6 个模块
+  （`go mod tidy -diff` 为空，`go mod verify` 通过）。
+- 安全审查（2026-11-20）：上游活跃（v1.12.0 于 2026-11-17 发布），Snyk/deps.dev 未发现
+  直接 CVE；v1.11.x 修复了 NTLM challenge 越界 panic、PRELOGIN 选项越界与 SQL Browser DAC
+  响应解析 panic 等 DoS 问题，仓库含 fuzz 测试与 `SECURITY.md`。`go.sum` 校验，
+  `go mod verify` → `all modules verified`。
+- 用途：`internal/storage/sqlserver` 的 T-SQL 方言、服务器设置校验、迁移后端与仓储 SQL
+  重写驱动器；首次版本只做编译/静态/SQL 生成/fake driver 检查，**未连接真实 SQL Server
+  运行验证**。
+- 分发要求：保留本文件与 `go.sum`；不得删除上游许可证文本；驱动源码未经修改。
