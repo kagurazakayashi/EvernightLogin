@@ -26,6 +26,10 @@
 /coverage/
 __pycache__/
 *.pyc
+# 外部消费示例是独立 Go module，构建输出默认落在示例目录，不应提交
+/examples/external-consumer/*.exe
+/examples/external-consumer/*.test
+/examples/external-consumer/evernightlogin-external-consumer
 # 压缩包包含本地 AI 文件，不应提交包本身
 /login_开发启动包*.zip
 SHA256SUMS.txt
