@@ -1,0 +1,49 @@
+<!--
+  login WinSW 服务包装样例（步骤 89）
+
+  用途：把 login-server 交给 Windows 服务管理器托管。WinSW 需单独下载合法版本并
+  重命名为 winsw.exe 放在应用目录（本仓库不分发 WinSW）。
+
+  注意：当前 cmd/login-server 只提供 --version/--help，会立即退出；本样例用于预置
+  服务配置，装配完成后的服务进程可直接复用。不要把本文件当作"服务已可用"的证明。
+
+  安装（管理员 PowerShell）：
+    .\winsw.exe install .\winsw-evernight-login.xml
+    .\winsw.exe start   .\winsw-evernight-login.xml
+  验证：
+    sc.exe query EvernightLogin
+    Get-Content .\logs\evernight-login.err.log
+-->
+<service>
+  <!-- 稳定服务 ID，避免与系统服务冲突。 -->
+  <id>EvernightLogin</id>
+  <name>EvernightLogin Identity Service</name>
+  <description>EvernightLogin 身份服务（独立部署）。秘密只通过受限文件或机器级环境变量提供。</description>
+
+  <!-- 工作目录必须显式设置：相对路径配置依赖它。 -->
+  <workingdirectory>C:\apps\evernight-login</workingdirectory>
+  <executable>C:\apps\evernight-login\bin\login-server.exe</executable>
+  <arguments></arguments>
+
+  <!-- 失败恢复：有限次数重启，避免快速重启循环。 -->
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <onfailure action="restart" delay="10 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>20 sec</stoptimeout>
+
+  <!-- 日志重定向到受控目录，由统一轮转清理；不要无限增长。 -->
+  <logpath>C:\apps\evernight-login\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+
+  <!-- 非秘密环境变量可在此显式声明；秘密禁止写进 XML。 -->
+  <env name="LOGIN_LOGGING_FORMAT" value="json"/>
+  <!--
+    可选：机器级非秘密配置目录。敏感配置请使用受限 ACL 的 secrets 目录，
+    不要把主密钥或 client secret 放进本文件或普通环境文件。
+    <env name="LOGIN_DATABASE_PATH" value="C:\apps\evernight-login\data\login.db"/>
+  -->
+</service>

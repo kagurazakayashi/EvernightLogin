@@ -1,0 +1,54 @@
+# login systemd 单元样例（步骤 89）
+# 注意：当前 cmd/login-server 只提供 --version/--help，注册后服务会立即退出；
+# 本单元用于预置权限模型，装配完成后的服务进程可直接复用。
+#
+# 安装：
+#   sudo install -m 0644 docs/deployment/samples/evernight-login.service \
+#        /etc/systemd/system/evernight-login.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now evernight-login.service
+#   journalctl -u evernight-login.service -f
+
+[Unit]
+Description=EvernightLogin identity service
+Documentation=file:///opt/evernight-login/docs/deployment/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=evernight
+Group=evernight
+WorkingDirectory=/opt/evernight-login
+ExecStart=/opt/evernight-login/bin/login-server
+
+# 只放非秘密配置；秘密通过受限文件或 LoadCredential 提供。
+EnvironmentFile=-/etc/evernight-login/login.env
+Environment=LOGIN_DATABASE_PATH=/var/lib/evernight-login/login.db
+
+# 加固：可写路径只列数据/日志/备份目录。
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/evernight-login /var/log/evernight-login /var/backups/evernight-login
+ReadOnlyPaths=/etc/evernight-login /opt/evernight-login
+
+# 与 server.shutdown_timeout_seconds 对齐（样例 10 秒 + 余量）。
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+# 按容量设置内存上限，不要无限放宽。
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

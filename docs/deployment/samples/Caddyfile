@@ -1,0 +1,38 @@
+# login 反向代理样例：Caddy（自动 HTTPS，根路径）
+#
+# 对应 login 配置：
+#   server.listen_addr       = "127.0.0.1:8080"
+#   server.public_base_url   = "https://login.example.com"
+#   server.path_prefix       = ""
+#   server.trusted_proxies   = ["127.0.0.1/32"]   # 同机 Caddy
+#   server.tls_terminating_proxy = true
+#
+# 注意：本样例未做真实联调；上线前必须在目标环境验证转发头与前缀行为。
+
+login.example.com {
+    encode zstd gzip
+
+    # Caddy 会自动申请/续期证书。若使用企业 CA，改为 tls <cert> <key>。
+    reverse_proxy 127.0.0.1:8080 {
+        # 保留原始 Host 与转发头，供 login 的可信代理边界判断。
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # 不缓存鉴权响应。
+        header_down Cache-Control "no-store"
+    }
+
+    # 不当代理任何内部诊断路径。
+    respond /metrics 404
+    respond /debug* 404
+
+    log {
+        output file /var/log/caddy/login-access.log {
+            roll_size 50mb
+            roll_keep 10
+        }
+        # 不要在访问日志里记录 Authorization/Cookie 敏感头。
+        format console
+    }
+}

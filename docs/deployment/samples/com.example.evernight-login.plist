@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  login launchd 样例（步骤 89，macOS）
+
+  用途：把 login-server 交给 launchd 托管。当前 cmd/login-server 只提供
+  --version/--help，会立即退出；KeepAlive 在装配完成前保持 false，避免反复拉起
+  立即退出的进程。
+
+  安装（当前用户）：
+    cp com.example.evernight-login.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.example.evernight-login.plist
+  系统级：
+    sudo cp com.example.evernight-login.plist /Library/LaunchDaemons/
+    sudo launchctl load /Library/LaunchDaemons/com.example.evernight-login.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.evernight-login</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/evernight-login/bin/login-server</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/opt/evernight-login</string>
+
+  <key>UserName</key>
+  <string>evernight</string>
+  <key>GroupName</key>
+  <string>evernight</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/var/log/evernight-login/service.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/evernight-login/service.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LOGIN_LOGGING_FORMAT</key>
+    <string>json</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>

@@ -1,0 +1,104 @@
+# login 部署配置样例（步骤 89）
+#
+# 本文件是**样例**：域名、路径、ID、证书文件名都是占位符，直接使用前必须替换。
+# 不含任何真实秘密：秘密只能通过 env: 或 file: 来源提供，不要写进本文件。
+#
+# 覆盖顺序（后者覆盖前者）：内置默认值 < 本文件 < LOGIN_ 环境变量 < 宿主显式选项。
+# 未知字段、重复键、类型错误、null、越界值或非法组合都会让加载失败，且加载器本身
+# 不产生监听、数据库或文件写入副作用。
+#
+# 校验方式（当前可执行，需 Go 环境）：
+#   go run ./examples/config-load -config docs/deployment/samples/login.server.example.yaml
+
+server:
+  # 生产建议只监听回环/内网，由反向代理对外；默认值就是 127.0.0.1:8080。
+  listen_addr: "127.0.0.1:8080"
+  # 额外监听地址（可选）。所有地址全部绑定成功才进入服务状态，任一失败整体回滚。
+  # extra_listen_addrs:
+  #   - "[::1]:8080"
+  # 固定路径前缀（可选）：独立服务所有路由挂在 ${prefix}/...；与 public_base_url
+  # 的路径部分必须一致。部署在子路径 /login 时取消下面两行注释并同步修改代理。
+  # path_prefix: "/login"
+  # public_base_url: "https://login.example.com/login"
+  # 外部公开地址；留空表示尚未配置。使用 http 公开地址时只能监听回环地址。
+  public_base_url: "https://login.example.com"
+  # 显式允许的 Host（可选）；配置 public_base_url 时其主机自动被接受。
+  # allowed_hosts:
+  #   - "login.example.com"
+  # 可信反向代理 IP/CIDR：只有这些直连来源的 Forwarded/X-Forwarded-* 生效。
+  # 未配置时完全忽略转发头（默认安全）。
+  trusted_proxies:
+    - "127.0.0.1/32"
+    - "10.0.0.0/8"
+  # 明文本地监听只部署在受信任 TLS 终止代理后端时，必须显式设为 true，
+  # 且要求 trusted_proxies 非空、public_base_url 为 https。与本地 TLS 互斥。
+  tls_terminating_proxy: true
+  # 本地 TLS（二选一，不能与 tls_terminating_proxy 同时启用）：
+  # tls_cert_files:
+  #   - "/etc/evernight-login/tls/server-fullchain.pem"
+  # tls_key_files:
+  #   - "/etc/evernight-login/tls/server-key.pem"
+  # tls_ca_file: "/etc/evernight-login/tls/ca-chain.pem"
+  # tls_pfx_file: "/etc/evernight-login/tls/server.pfx"
+  # 证书到期告警窗口（天），默认 30；只影响状态报告，不发送通知。
+  tls_expiry_warning_days: 30
+  # 可选双向 TLS（mTLS）：默认 disabled。启用后必须同时配置本地 TLS、
+  # 独立的客户端信任 CA 与显式身份映射；客户端信任 CA 与服务器证书链必须分开。
+  # tls_client_auth: "required"
+  # tls_client_ca_files:
+  #   - "/etc/evernight-login/tls/client-ca.pem"
+  # tls_client_identities:
+  #   - dns_name: "backup.internal.example.com"
+  #     service: "backup-agent"
+  # 安全关闭墙钟上限（秒），默认 10。可热更新。
+  shutdown_timeout_seconds: 10
+
+logging:
+  # debug / info / warn / error；可热更新。
+  level: info
+  # text / json；可热更新。
+  format: text
+
+database:
+  # 当前版本只接受 sqlite；其他数据库适配未运行实测。
+  driver: sqlite
+  # 数据库路径。生产使用独立数据目录，权限仅服务账号可访问。
+  path: "/srv/evernight-login/data/login.db"
+  wal: true
+  busy_timeout_ms: 5000
+
+# Passkey/WebAuthn 依赖方配置（可选）。启用时必须配置 RP ID 与至少一个允许来源；
+# RP ID 是可注册域名（不能带协议/端口/路径，也不能是 IP）。
+# passkey:
+#   enabled: true
+#   rp_id: "login.example.com"
+#   rp_display_name: "示例统一登录"
+#   allowed_origins:
+#     - "https://login.example.com"
+#   user_verification: "required"
+
+# 已登录 APP 扫码确认网页登录（可选）。启用时必须配置应用白名单。
+# app_qr_login:
+#   enabled: true
+#   allowed_client_ids:
+#     - "app_00000000000000000000000000000001"
+#   request_ttl_seconds: 120
+#   claim_interval_seconds: 1
+
+# 自主注册（默认关闭）。启用前确认邮箱验证/审核能力与投递通道已装配。
+# registration:
+#   enabled: false
+#   require_review: true
+#   require_email_verification: true
+#   default_role_ids: []
+
+# 秘密：只能来自受保护来源，不能直接写在本文件里。取消注释后按需二选一。
+# secrets:
+#   master_key:
+#     # 非 Windows 平台要求该文件仅所有者可读写，且与数据库/备份分开保存。
+#     file: "/etc/evernight-login/secrets/master.key"
+#   # 也可以使用受保护的环境变量（进程环境的读取边界由部署侧控制）：
+#   # master_key:
+#   #   env: LOGIN_MASTER_KEY
+#   # tls_pfx_password:
+#   #   env: LOGIN_TLS_PFX_PASSWORD

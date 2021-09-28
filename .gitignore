@@ -23,6 +23,8 @@
 # 构建、测试与缓存
 /bin/
 /dist/
+/build/
+/release/
 /coverage/
 __pycache__/
 *.pyc

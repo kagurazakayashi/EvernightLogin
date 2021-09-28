@@ -1,0 +1,50 @@
+# login 容器编排样例（步骤 89）
+# 注意：当前 cmd/login-server 尚未装配 HTTP 服务，本 compose 不能得到可用服务；
+# 样例用于表达卷、权限与配置契约，装配完成后可直接复用。
+#
+# 使用前：
+#   1. 替换 VERSION/域名/路径；
+#   2. 准备 ./config/login.yaml、./secrets/master.key（受限权限）与 ./data 目录；
+#   3. 不要把秘密写进 compose 或镜像；秘密只通过只读挂载或运行时注入。
+
+services:
+  login:
+    image: evernight-login:dev
+    build:
+      context: ../..
+      dockerfile: docs/deployment/samples/Dockerfile
+      args:
+        VERSION: "0.1.0-dev"
+        COMMIT: "unknown"
+        BUILD_TIME: "unknown"
+    # 禁止直接映射到公网；只暴露给本机反向代理。
+    ports:
+      - "127.0.0.1:8080:8080"
+    # 只读根文件系统 + 可写 tmpfs；进程只能写挂载卷。
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    user: "65532:65532"
+    working_dir: /app
+    environment:
+      # 非秘密配置可以用环境变量覆盖 YAML；秘密不要写在这里。
+      LOGIN_LOGGING_FORMAT: json
+    volumes:
+      - ./config:/app/config:ro
+      - ./secrets:/app/secrets:ro
+      - ./data:/app/data:rw
+      - ./backups:/app/backups:rw
+      - ./logs:/app/logs:rw
+      # PDF 报告字体（可选，只读；不内嵌镜像）
+      # - ./assets/fonts:/app/assets/fonts:ro
+    # 当前版本没有服务端点，不要配置固定健康检查来制造"健康"假象。
+    # healthcheck:
+    #   test: ["CMD", "/app/bin/login-server", "--version"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+    restart: "no"
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
