@@ -8,6 +8,7 @@
 
 | 文档 | 内容 |
 |---|---|
+| [../guide/README.md](../guide/README.md) | 面向新手的产品使用指南（快速开始、配置参考、错误码与排障等集中入口） |
 | [standalone-service.md](standalone-service.md) | 独立服务安全启动前置条件、配置加载顺序、监听/TLS/代理边界、停机与托管 |
 | [first-run.md](first-run.md) | 首次配置（root 受限初始化）的真实流程、状态与防锁死要求 |
 | [reverse-proxy.md](reverse-proxy.md) | 反向代理、可信转发头、路径前缀/子路径、公开地址的配置与样例 |
@@ -38,7 +39,7 @@
 | 首次配置的 CLI/HTTP 入口 | **未实现** | 领域能力在 `internal/bootstrap`（仅本模块可导入），未暴露给独立部署 |
 | OAuth/OIDC、设备码、扫码、管理接口的 HTTP 路由 | **未实现** | 只有内嵌页面路由与受信 Go API；业务接入约定见 `integration.md` |
 | 备份创建与离线查看工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
-| 本地管理/应急命令 `cmd/loginctl` | 部分实现 | root 应急恢复、恢复/维护命令；常规管理命令依赖宿主装配，当前为工作树内未提交改动 |
+| 本地管理/应急命令 `cmd/loginctl` | 部分实现 | root 应急恢复、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 本地命令；组/角色/应用/权限/通知在线管理命令尚未接通，详见 `../guide/root-cli.md` |
 | 数据库迁移 | 已实现（SQLite 为主） | `migrations/` 内嵌，按版本追加；MySQL/PostgreSQL/SQL Server 适配**未运行实测** |
 
 > 结论：本版本**还不能作为独立 HTTP 身份服务直接对外部署**。发布包里的二进制可用于
