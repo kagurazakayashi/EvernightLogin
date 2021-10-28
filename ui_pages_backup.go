@@ -899,7 +899,8 @@ func (h *backupPageHandlers) download(ctx context.Context, request *http.Request
 	headers.Set("Referrer-Policy", "no-referrer")
 	headers.Set("X-Content-Type-Options", "nosniff")
 	// 备份文件是下载用的二进制附件，禁止其被当作文档执行/同源加载。
-	headers.Set("Content-Security-Policy", "sandbox")
+	// 与报告下载响应保持一致：先 default-src 'none' 兜底，再 sandbox 隔离。
+	headers.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	headers.Set("Content-Disposition", "attachment; filename=\""+
 		backupDownloadName(file.FileName)+"\"")
 	headers.Set("X-Content-SHA256", file.SHA256)

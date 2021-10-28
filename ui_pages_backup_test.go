@@ -255,7 +255,8 @@ func TestBackupPagesRenderAndStates(t *testing.T) {
 	for header, want := range map[string]string{
 		"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
 		"X-Content-Type-Options": "nosniff", "X-Content-SHA256": strings.Repeat("a", 64),
-		"Content-Type": "application/octet-stream",
+		"Content-Security-Policy": "default-src 'none'; sandbox",
+		"Content-Type":            "application/octet-stream",
 	} {
 		if got := download.Header().Get(header); !strings.Contains(got, want) {
 			t.Fatalf("下载响应头 %s = %q，期望包含 %q", header, got, want)
