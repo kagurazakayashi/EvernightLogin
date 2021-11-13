@@ -3,6 +3,7 @@ package testmail_test
 import (
 	"go/parser"
 	"go/token"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -132,5 +133,82 @@ func TestNotImportedByProductionEntrypoints(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("没有检查到任何生产入口文件，检查逻辑可能失效")
+	}
+}
+
+// TestNetProtoListenersAreLoopbackOnly 是新监听器（IMAP/POP3）的隔离守护：
+//   - 启动后三个监听器的实际绑定地址都必须回环；
+//   - IMAP/POP3 必须配置模拟账户才能启用（不允许匿名读取收件箱）；
+//   - 明文 IMAP/POP3 即使显式 AllowNonLoopback 也拒绝非回环地址；
+//   - 非回环监听必须同时启用隐式 TLS 并显式 AllowNonLoopback。
+//
+// 测试只做 New 阶段的配置校验，不真实绑定非回环地址，避免在测试机上开放对外端口。
+func TestNetProtoListenersAreLoopbackOnly(t *testing.T) {
+	auth := &testmail.AuthOptions{Users: map[string]string{"tester": "test-pass"}}
+	cert, err := testmail.GenerateTestCertificate()
+	if err != nil {
+		t.Fatalf("生成测试证书失败: %v", err)
+	}
+
+	srv := startServer(t, testmail.Options{
+		Auth: auth,
+		IMAP: &testmail.IMAPOptions{},
+		POP3: &testmail.POP3Options{},
+	})
+	listeners := map[string]net.Addr{
+		"SMTP": srv.Addr(),
+		"IMAP": srv.IMAPAddr(),
+		"POP3": srv.POP3Addr(),
+	}
+	for name, addr := range listeners {
+		if addr == nil {
+			t.Fatalf("%s 监听地址为空（监听器未启动）", name)
+		}
+		tcpAddr, ok := addr.(*net.TCPAddr)
+		if !ok || tcpAddr.IP == nil || !tcpAddr.IP.IsLoopback() {
+			t.Errorf("%s 实际绑定地址 %s 不是回环地址；测试邮件服务器不得对网络暴露", name, addr)
+		}
+	}
+
+	// IMAP/POP3 没有模拟账户时必须在 New 阶段拒绝（默认拒绝，不允许匿名收件箱）。
+	if _, err := testmail.New(testmail.Options{IMAP: &testmail.IMAPOptions{}}); err == nil {
+		t.Error("未配置 Auth 的 IMAP 应在 New 阶段被拒绝")
+	}
+	if _, err := testmail.New(testmail.Options{POP3: &testmail.POP3Options{}}); err == nil {
+		t.Error("未配置 Auth 的 POP3 应在 New 阶段被拒绝")
+	}
+
+	// 明文非回环：即使 AllowNonLoopback=true 也必须拒绝（明文只允许回环）。
+	if _, err := testmail.New(testmail.Options{
+		Auth:             auth,
+		AllowNonLoopback: true,
+		IMAP:             &testmail.IMAPOptions{Addr: "0.0.0.0:0"},
+	}); err == nil {
+		t.Error("明文 IMAP 监听 0.0.0.0:0 应被拒绝")
+	}
+	if _, err := testmail.New(testmail.Options{
+		Auth:             auth,
+		AllowNonLoopback: true,
+		POP3:             &testmail.POP3Options{Addr: ":0"},
+	}); err == nil {
+		t.Error("明文 POP3 空主机名监听应被拒绝")
+	}
+
+	// 非回环 + TLS 但未显式 AllowNonLoopback：仍然拒绝（两道开关缺一不可）。
+	if _, err := testmail.New(testmail.Options{
+		Auth: auth,
+		IMAP: &testmail.IMAPOptions{Addr: "0.0.0.0:0", TLS: &testmail.TLSOptions{Certificate: cert}},
+	}); err == nil {
+		t.Error("TLS IMAP 未显式 AllowNonLoopback 时监听 0.0.0.0:0 应被拒绝")
+	}
+
+	// 非回环 + TLS + 显式 AllowNonLoopback：配置校验通过（这里不真正监听）。
+	if _, err := testmail.New(testmail.Options{
+		Auth:             auth,
+		AllowNonLoopback: true,
+		IMAP:             &testmail.IMAPOptions{Addr: "0.0.0.0:0", TLS: &testmail.TLSOptions{Certificate: cert}},
+		POP3:             &testmail.POP3Options{Addr: "0.0.0.0:0", TLS: &testmail.TLSOptions{Certificate: cert}},
+	}); err != nil {
+		t.Errorf("TLS + AllowNonLoopback 的非回环配置不应被拒绝: %v", err)
 	}
 }

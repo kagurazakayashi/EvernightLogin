@@ -9,13 +9,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // 默认值与硬性上下界。上下界只用于拒绝明显不合理的测试配置，不追求生产级弹性。
 const (
-	// DefaultAddr 是默认监听地址：仅回环、随机端口。
+	// DefaultAddr 是默认 SMTP 监听地址：仅回环、随机端口。
 	DefaultAddr = "127.0.0.1:0"
-	// DefaultHostname 是默认 SMTP 问候语中的主机名。
+	// DefaultIMAPAddr 是默认 IMAP 监听地址：仅回环、随机端口。
+	DefaultIMAPAddr = "127.0.0.1:0"
+	// DefaultPOP3Addr 是默认 POP3 监听地址：仅回环、随机端口。
+	DefaultPOP3Addr = "127.0.0.1:0"
+	// DefaultHostname 是默认问候语中的主机名。
 	DefaultHostname = "testmail.local"
 
 	// DefaultMaxMessageBytes 是单条消息（DATA 内容，含头部）默认上限。
@@ -102,6 +109,12 @@ type Options struct {
 	Auth *AuthOptions
 	// TLS 配置可选 STARTTLS；nil 表示不支持 STARTTLS。
 	TLS *TLSOptions
+	// IMAP 配置可选的只读 IMAP4rev1 收件箱监听；nil 表示不启动 IMAP。
+	// 启用时必须配置 Auth（模拟账户），收件箱按账户隔离并且只读。
+	IMAP *IMAPOptions
+	// POP3 配置可选的只读 POP3 收件箱监听；nil 表示不启动 POP3。
+	// 启用时必须配置 Auth（模拟账户），收件箱按账户隔离并且只读。
+	POP3 *POP3Options
 	// OnMessage 在消息成功保存后同步调用（在会话 goroutine 中）。回调不应
 	// 长时间阻塞，否则会拖慢该连接；其余连接不受影响。回调拿到的是消息副本。
 	OnMessage func(Message)
@@ -125,11 +138,35 @@ type AuthOptions struct {
 	RequireAuth bool
 }
 
-// TLSOptions 是可选 STARTTLS 配置。
+// TLSOptions 是可选 STARTTLS / 隐式 TLS 配置。
 type TLSOptions struct {
-	// Certificate 是 STARTTLS 使用的证书；测试通常用 GenerateTestCertificate
+	// Certificate 是 TLS 使用的证书；测试通常用 GenerateTestCertificate
 	// 生成自签证书，客户端需要显式信任或跳过校验。
 	Certificate tls.Certificate
+}
+
+// IMAPOptions 是只读 IMAP4rev1 收件箱监听配置。
+//
+// 安全边界：收件箱按模拟账户隔离，登录只接受 AuthOptions 中显式配置的测试凭据；
+// 服务端不投递、不中继、不执行邮件内容，仅返回本机内存中的消息。写操作
+// （STORE/EXPUNGE/APPEND/COPY/MOVE/DELE）一律被拒绝。
+type IMAPOptions struct {
+	// Addr 是监听地址，空字符串表示 DefaultIMAPAddr（仅回环、随机端口）。
+	Addr string
+	// TLS 配置隐式 TLS（整条连接从建立即加密）；nil 表示明文。明文只允许
+	// 回环地址，非回环地址必须启用 TLS 并显式 AllowNonLoopback。
+	TLS *TLSOptions
+}
+
+// POP3Options 是只读 POP3 收件箱监听配置。
+//
+// 安全边界与 IMAPOptions 相同：按模拟账户隔离、只读；DELE 仅在本会话内隐藏消息，
+// QUIT 或断开连接后消息仍在共享内存仓库中（不会真正删除）。
+type POP3Options struct {
+	// Addr 是监听地址，空字符串表示 DefaultPOP3Addr（仅回环、随机端口）。
+	Addr string
+	// TLS 配置隐式 TLS；nil 表示明文。明文只允许回环地址。
+	TLS *TLSOptions
 }
 
 // normalize 填充默认值并校验所有字段，返回一份不与其他调用方共享可变状态的副本。
@@ -198,10 +235,59 @@ func (o Options) normalize() (Options, error) {
 		tlsCopy := &TLSOptions{Certificate: o.TLS.Certificate}
 		o.TLS = tlsCopy
 	}
+	if o.IMAP != nil {
+		addr, tlsOpt, err := normalizeNetProto("IMAP", o.IMAP.Addr, DefaultIMAPAddr, o.IMAP.TLS, o.AllowNonLoopback, o.Auth != nil)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			o.IMAP = &IMAPOptions{Addr: addr, TLS: tlsOpt}
+		}
+	}
+	if o.POP3 != nil {
+		addr, tlsOpt, err := normalizeNetProto("POP3", o.POP3.Addr, DefaultPOP3Addr, o.POP3.TLS, o.AllowNonLoopback, o.Auth != nil)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			o.POP3 = &POP3Options{Addr: addr, TLS: tlsOpt}
+		}
+	}
 	if len(errs) > 0 {
 		return Options{}, fmt.Errorf("%w: %v", ErrInvalidOptions, errors.Join(errs...))
 	}
 	return o, nil
+}
+
+// normalizeNetProto 填充并校验 IMAP/POP3 监听配置（只读收件协议）。
+//
+// 安全策略：两个协议都要求先认证（必须有模拟账户）；明文监听强制仅回环，因为
+// 明文凭据会直接暴露在网络上。监听非回环地址必须同时启用隐式 TLS 并显式设置
+// AllowNonLoopback，两道开关缺一不可。
+func normalizeNetProto(name, addr, defaultAddr string, protoTLS *TLSOptions, allowNonLoopback, hasAuth bool) (string, *TLSOptions, error) {
+	if !hasAuth {
+		return "", nil, fmt.Errorf("启用 %s 需要配置 Auth.Users（收件箱按模拟账户认证与隔离，不能匿名读取）", name)
+	}
+	if addr == "" {
+		addr = defaultAddr
+	}
+	// 先做语法校验（允许任意主机名写法），再按是否有 TLS 套用回环策略。
+	if err := validateAddr(addr, true); err != nil {
+		return "", nil, fmt.Errorf("%s.Addr: %w", name, err)
+	}
+	if protoTLS == nil {
+		if err := validateAddr(addr, false); err != nil {
+			return "", nil, fmt.Errorf("%s 明文监听只允许回环地址（例如 127.0.0.1:0）；如确需监听非回环地址，请启用隐式 TLS 并显式设置 AllowNonLoopback", name)
+		}
+	} else if err := validateAddr(addr, allowNonLoopback); err != nil {
+		return "", nil, fmt.Errorf("%s.Addr: %w", name, err)
+	}
+	var tlsCopy *TLSOptions
+	if protoTLS != nil {
+		if len(protoTLS.Certificate.Certificate) == 0 {
+			return "", nil, fmt.Errorf("%s.TLS.Certificate 为空", name)
+		}
+		tlsCopy = &TLSOptions{Certificate: protoTLS.Certificate}
+	}
+	return addr, tlsCopy, nil
 }
 
 func normalizeAuth(a *AuthOptions) (*AuthOptions, error) {
@@ -209,6 +295,11 @@ func normalizeAuth(a *AuthOptions) (*AuthOptions, error) {
 		return nil, fmt.Errorf("Auth.Users 不能为空")
 	}
 	users := make(map[string]string, len(a.Users))
+	// 认证按字节精确比较，而收件箱可见性按 EqualFold 比较本地部分；如果两个
+	// 用户名只差大小写或 Unicode 归一化形式，它们会共享同一个收件箱且无法区分
+	// 归属。这里在配置校验阶段拒绝这种歧义（与产品 internal/account 的规范化
+	// 口径一致：NFKC + 大小写折叠 + NFC）。
+	foldedNames := make(map[string]string, len(a.Users))
 	for name, pass := range a.Users {
 		if err := validateAuthText(name); err != nil {
 			return nil, fmt.Errorf("Auth 用户名非法: %w", err)
@@ -216,9 +307,24 @@ func normalizeAuth(a *AuthOptions) (*AuthOptions, error) {
 		if err := validateAuthText(pass); err != nil {
 			return nil, fmt.Errorf("Auth 用户 %q 的密码非法: %w", name, err)
 		}
+		key := normalizeAccountName(name)
+		if existing, dup := foldedNames[key]; dup {
+			return nil, fmt.Errorf("Auth 用户名 %q 与 %q 在大小写/Unicode 归一化后相同，会导致收件箱归属歧义；请使用互不相同的用户名", name, existing)
+		}
+		foldedNames[key] = name
 		users[name] = pass
 	}
 	return &AuthOptions{Users: users, RequireAuth: a.RequireAuth}, nil
+}
+
+// normalizeAccountName 返回账号唯一性/歧义比较键：NFKC + 大小写折叠 + NFC。
+//
+// 该口径与产品账户模块（internal/account）一致；这里只用于配置校验阶段拒绝
+// “认证精确、可见性大小写不敏感”导致的收件箱共享歧义，不改变认证本身的精确比较。
+func normalizeAccountName(name string) string {
+	compatibility := norm.NFKC.String(name)
+	folded := cases.Fold().String(compatibility)
+	return norm.NFC.String(folded)
 }
 
 func validateAuthText(v string) error {

@@ -39,6 +39,7 @@ func printStartup(stdout io.Writer, cfg runConfig, srv *testmail.Server, tlsDesc
 		cfg.Level, cfg.PrintBody, describeBodyLimit(cfg.MaxBodyBytes), cfg.TraceSMTP)
 	printAccounts(stdout, cfg)
 	printConnectionParams(stdout, cfg, addr, tlsDescription)
+	printNetProtoParams(stdout, cfg, srv)
 	fmt.Fprintf(stdout, "testmaild: 等待邮件；按 Ctrl+C 或发送 SIGTERM 优雅退出\n")
 }
 
@@ -310,6 +311,74 @@ func limitBytes(data []byte, limit int) ([]byte, bool) {
 		truncated = truncated[:len(truncated)-1]
 	}
 	return truncated, true
+}
+
+// describeCertificate 返回测试 TLS 证书来源说明（STARTTLS 与 IMAP/POP3 隐式 TLS
+// 共用同一张证书）。仅用于本地测试输出，不包含任何真实密钥内容。
+func describeCertificate(cfg runConfig) string {
+	if cfg.TLSCertFile != "" {
+		return fmt.Sprintf("证书文件 %s 与 %s；客户端需显式信任该证书", cfg.TLSCertFile, cfg.TLSKeyFile)
+	}
+	return "自签测试证书 CN=testmail.local，覆盖 localhost/127.0.0.1/::1，有效期 24 小时；客户端需显式信任或跳过校验"
+}
+
+// printNetProtoParams 打印只读 IMAP/POP3 收件箱的客户端连接参数、账号信息与
+// Thunderbird/Outlook 配置示例；未启用的协议也会给出启用提示，便于用户发现能力。
+func printNetProtoParams(w io.Writer, cfg runConfig, srv *testmail.Server) {
+	printProtocolParams(w, "IMAP", "-imap", cfg.IMAP, srv.IMAPAddr(), cfg)
+	printProtocolParams(w, "POP3", "-pop3", cfg.POP3, srv.POP3Addr(), cfg)
+}
+
+// printProtocolParams 打印单个只读收件协议（IMAP 或 POP3）的连接参数与客户端
+// 配置示例。配置文件来源的模拟测试密码会回显（客户端配置需要它）并标注测试专用；
+// 命令行 -auth 来源的密码不回显。
+func printProtocolParams(w io.Writer, name, enableFlag string, runtime protoRuntime, addr net.Addr, cfg runConfig) {
+	lowerName := strings.ToLower(name)
+	if !runtime.Enabled || addr == nil {
+		fmt.Fprintf(w, "testmaild: %s 未启用（用 %s 或配置文件 %s.enabled: true 启用只读收件箱；需要模拟账户）\n",
+			name, enableFlag, lowerName)
+		return
+	}
+	host, port, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		host, port = addr.String(), ""
+	}
+	fmt.Fprintf(w, "testmaild: ── %s 只读收件箱（供 Thunderbird/Outlook/Foxmail 等客户端连接）──\n", name)
+	fmt.Fprintf(w, "testmaild:   %s 地址（host:port）: %s\n", name, sanitizeLine(addr.String()))
+	if runtime.TLS {
+		fmt.Fprintf(w, "testmaild:   加密: 隐式 TLS（整条连接从建立即加密；客户端勾选 SSL/TLS）；%s\n",
+			sanitizeLine(describeCertificate(cfg)))
+		fmt.Fprintln(w, "testmaild:   信任自签证书: 客户端需导入该证书为受信任根证书或临时关闭证书校验；仅本地测试使用")
+	} else {
+		fmt.Fprintln(w, "testmaild:   加密: 无（明文）；用户名与密码会明文传输，因此只允许回环地址")
+	}
+	if len(cfg.Accounts) == 0 {
+		fmt.Fprintln(w, "testmaild:   未配置模拟账户：IMAP/POP3 需要模拟账户认证，请用 -auth user:password 或 auth.accounts 添加")
+		return
+	}
+	fmt.Fprintf(w, "testmaild:   可用用户名: %s\n", sanitizeLine(accountNames(cfg.Accounts)))
+	if cfg.AccountSource == accountSourceConfig {
+		fmt.Fprintln(w, "testmaild:   测试密码: 见上方模拟账户清单（本地测试凭据、仅回环使用）")
+	} else {
+		fmt.Fprintln(w, "testmaild:   测试密码: <命令行 -auth 给出的测试密码不回显>")
+	}
+	fmt.Fprintln(w, "testmaild:   警告 以上为本地测试凭据、仅回环使用；不要复用任何真实账户密码")
+	first := cfg.Accounts[0]
+	fmt.Fprintf(w, "testmaild:   Thunderbird 设置: 协议 %s；服务器 %s；端口 %s；连接安全性 %s；认证方式 普通密码；用户名 %s；密码 %s\n",
+		name, sanitizeLine(host), sanitizeLine(port), securityHint(runtime.TLS),
+		sanitizeLine(first.Username), sanitizeLine(displayPassword(cfg, first)))
+	fmt.Fprintf(w, "testmaild:   Outlook/Foxmail 设置: 账户类型 %s；接收服务器 %s；端口 %s；加密方法 %s；用户名 %s\n",
+		name, sanitizeLine(host), sanitizeLine(port), securityHint(runtime.TLS), sanitizeLine(first.Username))
+	fmt.Fprintln(w, "testmaild:   只读说明: 拒绝 STORE/EXPUNGE/APPEND/COPY/MOVE 等写操作；POP3 DELE 只在本会话隐藏，QUIT 不删除共享存储")
+	fmt.Fprintln(w, "testmaild:   同步说明: 收件箱内容来自 SMTP 内存捕获；会话期间新到的邮件需重新选择邮箱/重新登录后可见（不主动推送）")
+}
+
+// securityHint 返回客户端配置中的连接安全选项说明。
+func securityHint(tlsEnabled bool) string {
+	if tlsEnabled {
+		return "SSL/TLS（隐式 TLS）"
+	}
+	return "无（明文）"
 }
 
 // sanitizeLine 把单行文本中的控制字符转义成可见形式。

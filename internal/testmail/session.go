@@ -3,8 +3,6 @@ package testmail
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -462,22 +460,10 @@ func (ss *session) authFailure(code int, text string) bool {
 	return ss.reply(code, text)
 }
 
-// credentialsMatch 以恒定时间比较检查凭据。遍历全部配置用户，避免因为提前返回
-// 而暴露用户名是否存在的时序差异（测试凭据数量很少，开销可忽略）。
+// credentialsMatch 以恒定时间比较检查凭据。实现见 auth.go 的包级函数，SMTP 与
+// IMAP/POP3 共用同一份比较逻辑，避免不同协议出现认证行为差异。
 func (ss *session) credentialsMatch(user, pass string) bool {
-	gotUser := sha256.Sum256([]byte(user))
-	gotPass := sha256.Sum256([]byte(pass))
-	matched := false
-	for wantUser, wantPass := range ss.srv.opts.Auth.Users {
-		wu := sha256.Sum256([]byte(wantUser))
-		wp := sha256.Sum256([]byte(wantPass))
-		userOK := subtle.ConstantTimeCompare(gotUser[:], wu[:]) == 1
-		passOK := subtle.ConstantTimeCompare(gotPass[:], wp[:]) == 1
-		if userOK && passOK {
-			matched = true
-		}
-	}
-	return matched
+	return credentialsMatch(ss.srv.opts.Auth.Users, user, pass)
 }
 
 // decodeBase64 解码 AUTH 响应；容忍省略尾部填充的写法。

@@ -56,6 +56,16 @@ func (m Message) Body() []byte {
 	return m.Data[m.bodyOffset:]
 }
 
+// HeaderBlock 返回原始头部块，包含头部与正文之间的空行（行尾 CRLF）。返回切片与
+// Data 共用底层数组，调用方应视为只读；IMAP 的 BODY[HEADER] 与 POP3 的 TOP 直接
+// 使用该结果，保证与 SMTP 捕获的原始字节一致。
+func (m Message) HeaderBlock() []byte {
+	if m.bodyOffset <= 0 || m.bodyOffset > len(m.Data) {
+		return nil
+	}
+	return m.Data[:m.bodyOffset]
+}
+
 // Header 返回首个名称不区分大小写匹配的头部值。
 func (m Message) Header(name string) (string, bool) {
 	for _, h := range m.Headers {
@@ -156,6 +166,14 @@ func (st *store) count() int {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return len(st.msgs)
+}
+
+// nextSeq 返回下一个将被分配的消息编号；IMAP 的 UIDNEXT 使用该值。编号在同一
+// 服务器实例内单调递增且不会复用（Clear/Take 也不会回退），因此 UID 空间稳定。
+func (st *store) nextSeq() uint64 {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.seq + 1
 }
 
 // query 返回匹配消息的只读快照。返回的消息与仓库共用 Data 底层数组，调用方不应

@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
 )
@@ -50,6 +54,8 @@ type fileConfig struct {
 	StartTLS startTLSSection `yaml:"starttls"`
 	Auth     authSection     `yaml:"auth"`
 	Output   outputSection   `yaml:"output"`
+	IMAP     protoSection    `yaml:"imap"`
+	POP3     protoSection    `yaml:"pop3"`
 }
 
 // listenSection 是监听相关配置。
@@ -86,6 +92,21 @@ type authSection struct {
 type testAccount struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+}
+
+// protoSection 是只读收件协议（IMAP/POP3）配置。
+//
+// 两个协议共用 auth.accounts 中的模拟账户：邮件按信封收件人与 To/Cc/Bcc 的本地
+// 部分映射到账户收件箱，非收件账户不可见；服务端拒绝全部写操作。明文监听只允许
+// 回环地址；非回环监听必须同时开启 tls 并显式 allow_non_loopback。
+type protoSection struct {
+	// Enabled 是否启动该协议监听器；默认 false。
+	Enabled bool `yaml:"enabled"`
+	// Addr 是监听地址 host:port；空字符串表示默认仅回环随机端口。
+	Addr string `yaml:"addr"`
+	// TLS 是否使用隐式 TLS（整条连接从建立即加密）。证书复用 starttls 段的
+	// cert_file/key_file；未提供证书文件时自动生成一次性自签测试证书。
+	TLS bool `yaml:"tls"`
 }
 
 // outputSection 是输出详细程度配置。
@@ -133,6 +154,8 @@ func defaultFileConfig() fileConfig {
 			Level:        string(outputSummary),
 			MaxBodyBytes: defaultMaxBodyBytes,
 		},
+		IMAP: protoSection{Addr: testmail.DefaultIMAPAddr},
+		POP3: protoSection{Addr: testmail.DefaultPOP3Addr},
 	}
 }
 
@@ -217,7 +240,20 @@ func validateFileConfig(cfg fileConfig, path string) error {
 	if (cfg.StartTLS.CertFile == "") != (cfg.StartTLS.KeyFile == "") {
 		return fail("starttls.cert_file 与 starttls.key_file 必须同时给出")
 	}
-	seen := make(map[string]struct{}, len(cfg.Auth.Accounts))
+	for _, proto := range []struct {
+		name    string
+		section protoSection
+	}{{"imap", cfg.IMAP}, {"pop3", cfg.POP3}} {
+		if strings.TrimSpace(proto.section.Addr) == "" {
+			return fail("%s.addr 不能为空（默认 %s，示例：127.0.0.1:0 或 127.0.0.1:1143）",
+				proto.name, testmail.DefaultIMAPAddr)
+		}
+		if !proto.section.TLS && !isLoopbackListenAddr(proto.section.Addr) {
+			return fail("%s.addr %q 是明文监听，只允许回环地址；如需非回环请设置 %s.tls: true 并在 listen.allow_non_loopback 中显式允许",
+				proto.name, proto.section.Addr, proto.name)
+		}
+	}
+	seen := make(map[string]string, len(cfg.Auth.Accounts))
 	for i, account := range cfg.Auth.Accounts {
 		name := strings.TrimSpace(account.Username)
 		if name == "" {
@@ -226,10 +262,14 @@ func validateFileConfig(cfg fileConfig, path string) error {
 		if account.Password == "" {
 			return fail("auth.accounts[%d].password 不能为空（仅用于本地测试，不要填真实密码）", i)
 		}
-		if _, dup := seen[name]; dup {
-			return fail("auth.accounts 中用户名 %q 重复", name)
+		key := normalizeTestAccountName(name)
+		if existing, dup := seen[key]; dup {
+			if existing == name {
+				return fail("auth.accounts 中用户名 %q 重复", name)
+			}
+			return fail("auth.accounts 中用户名 %q 与 %q 在大小写/Unicode 归一化后相同，会导致收件箱归属歧义；请使用互不相同的用户名", name, existing)
 		}
-		seen[name] = struct{}{}
+		seen[key] = name
 	}
 	return nil
 }
@@ -258,6 +298,12 @@ type cliOverrides struct {
 	output           *string
 	bodyLimit        *int
 	traceSMTP        *bool
+	imap             *bool
+	imapAddr         *string
+	imapTLS          *bool
+	pop3             *bool
+	pop3Addr         *string
+	pop3TLS          *bool
 }
 
 // has 报告某个 flag 是否被命令行显式给出。
@@ -287,6 +333,16 @@ type runConfig struct {
 	MaxBodyBytes     int
 	TraceSMTP        bool
 	ConfigPath       string
+	// IMAP/POP3 是只读收件协议运行配置。
+	IMAP protoRuntime
+	POP3 protoRuntime
+}
+
+// protoRuntime 是合并后的 IMAP/POP3 运行配置。
+type protoRuntime struct {
+	Enabled bool
+	Addr    string
+	TLS     bool
 }
 
 // sourceDescription 返回启动信息中的配置来源说明。
@@ -317,6 +373,16 @@ func resolveConfig(fileCfg fileConfig, cli cliOverrides) (runConfig, error) {
 		PrintBody:        fileCfg.Output.PrintBody,
 		MaxBodyBytes:     fileCfg.Output.MaxBodyBytes,
 		TraceSMTP:        fileCfg.Output.TraceSMTP,
+		IMAP: protoRuntime{
+			Enabled: fileCfg.IMAP.Enabled,
+			Addr:    fileCfg.IMAP.Addr,
+			TLS:     fileCfg.IMAP.TLS,
+		},
+		POP3: protoRuntime{
+			Enabled: fileCfg.POP3.Enabled,
+			Addr:    fileCfg.POP3.Addr,
+			TLS:     fileCfg.POP3.TLS,
+		},
 	}
 
 	// 监听与限制：命令行显式值覆盖配置文件。
@@ -367,6 +433,15 @@ func resolveConfig(fileCfg fileConfig, cli cliOverrides) (runConfig, error) {
 	default:
 		cfg.AccountSource = accountSourceNone
 	}
+	seenAccounts := make(map[string]string, len(cfg.Accounts))
+	for _, account := range cfg.Accounts {
+		key := normalizeTestAccountName(account.Username)
+		if existing, dup := seenAccounts[key]; dup && existing != account.Username {
+			return runConfig{}, fmt.Errorf("模拟账户用户名 %q 与 %q 在大小写/Unicode 归一化后相同，会导致收件箱归属歧义；请使用互不相同的用户名",
+				account.Username, existing)
+		}
+		seenAccounts[key] = account.Username
+	}
 	if cli.has("require-auth") {
 		cfg.RequireAuth = *cli.requireAuth
 	}
@@ -394,6 +469,41 @@ func resolveConfig(fileCfg fileConfig, cli cliOverrides) (runConfig, error) {
 			}
 			// 给出证书文件即表示启用 STARTTLS（与命令行行为一致）。
 			cfg.StartTLSEnabled = false
+		}
+	}
+
+	// 只读收件协议（IMAP/POP3）：命令行显式值覆盖配置文件。
+	if cli.has("imap") {
+		cfg.IMAP.Enabled = *cli.imap
+	}
+	if cli.has("imap-addr") {
+		cfg.IMAP.Addr = *cli.imapAddr
+	}
+	if cli.has("imap-tls") {
+		cfg.IMAP.TLS = *cli.imapTLS
+	}
+	if cli.has("pop3") {
+		cfg.POP3.Enabled = *cli.pop3
+	}
+	if cli.has("pop3-addr") {
+		cfg.POP3.Addr = *cli.pop3Addr
+	}
+	if cli.has("pop3-tls") {
+		cfg.POP3.TLS = *cli.pop3TLS
+	}
+	for _, proto := range []struct {
+		name string
+		cfg  protoRuntime
+	}{{"IMAP", cfg.IMAP}, {"POP3", cfg.POP3}} {
+		if !proto.cfg.Enabled {
+			continue
+		}
+		if len(cfg.Accounts) == 0 {
+			return runConfig{}, fmt.Errorf("%s 只读收件箱需要模拟账户：请用 -auth user:password（可重复）或配置文件 auth.accounts 添加", proto.name)
+		}
+		if !proto.cfg.TLS && !isLoopbackListenAddr(proto.cfg.Addr) {
+			return runConfig{}, fmt.Errorf("%s 明文监听只允许回环地址（当前 %q）；如确需非回环监听请启用 TLS 并显式 allow-non-loopback",
+				proto.name, proto.cfg.Addr)
 		}
 	}
 
@@ -426,4 +536,30 @@ func resolveConfig(fileCfg fileConfig, cli cliOverrides) (runConfig, error) {
 		cfg.TraceSMTP = true
 	}
 	return cfg, nil
+}
+
+// isLoopbackListenAddr 判断监听地址是否回环（host:port 形式，空主机名不算回环）。
+// 只用于在解析配置阶段给出更早、更清晰的中文错误；最终绑定仍由 internal/testmail
+// 在 Listen 之后复核，双重校验不可绕过。
+func isLoopbackListenAddr(addr string) bool {
+	host, portText, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil || portText == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
+// normalizeTestAccountName 返回模拟账户用户名的唯一性比较键：NFKC + 大小写折叠
+// + NFC，与 internal/testmail 的配置校验口径一致，用于在工具层提前给出中文错误。
+func normalizeTestAccountName(name string) string {
+	compatibility := norm.NFKC.String(name)
+	folded := cases.Fold().String(compatibility)
+	return norm.NFC.String(folded)
 }

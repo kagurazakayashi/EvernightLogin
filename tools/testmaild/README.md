@@ -1,15 +1,19 @@
 # testmaild：本地测试邮件服务器
 
-`testmaild` 是登录项目自带的**仅供测试**的本地 SMTP 接收服务器工具，底层使用
-`internal/testmail`。它把收到的邮件保存在内存中，**不投递、不中继、不连接任何外部
-邮件服务**，默认只监听 `127.0.0.1` 的随机端口；`cmd/login-server` 等生产入口不会
-装配它，生产邮件发送实现必须另行编写（见 `internal/mailer`）。
+`testmaild` 是登录项目自带的**仅供测试**的本地邮件服务器工具，底层使用
+`internal/testmail`。它提供 SMTP 收信，并可选择开启**只读 IMAP/POP3 收件箱**，
+让 Thunderbird、Outlook、Foxmail 等真实邮件客户端连接查看模拟账户收到的测试邮件。
+收到的邮件只保存在内存中，**不投递、不中继、不连接任何外部邮件服务**，默认只监听
+`127.0.0.1` 的随机端口；`cmd/login-server` 等生产入口不会装配它，生产邮件发送实现
+必须另行编写（见 `internal/mailer`）。
 
 典型用途：
 
 - 手工验证登录项目的邮件相关功能（验证邮件、邀请邮件、安全告知等）；
 - 用固定的 SMTP 地址、模拟账户与预置限制反复测试邮件客户端行为；
-- 观察收到的完整邮件内容（信封、全部头部、正文）与会话级 SMTP 命令轨迹。
+- 观察收到的完整邮件内容（信封、全部头部、正文）与会话级 SMTP 命令轨迹；
+- 用真实邮件客户端（Thunderbird/Outlook/Foxmail）连接只读 IMAP/POP3 收件箱，
+  像检查真实邮箱一样查看模拟账户收到的测试邮件（按账户隔离，不泄露他人邮件）。
 
 > 本工具不是产品能力，也不能替代 `internal/mailer` 的真实投递实现；它只做本地
 > 内存捕获。
@@ -43,7 +47,22 @@ go run .\tools\testmaild -addr 127.0.0.1:0 -starttls -auth tester:test-pass -req
 go run .\tools\testmaild -addr 127.0.0.1:0 -output debug -print-body
 ```
 
-按 `Ctrl+C` 或发送 SIGTERM 优雅关闭，打印共接收的邮件数并释放端口。
+同时开启只读 IMAP 与 POP3 收件箱（随机回环端口，启动信息会打印实际端口）：
+
+```bat
+go run .\tools\testmaild -addr 127.0.0.1:0 -auth tester:test-pass -imap -pop3
+```
+
+只想固定端口时显式指定（示例 1143/1110 为常见测试端口，需确认本机空闲）：
+
+```bat
+go run .\tools\testmaild -addr 127.0.0.1:0 -auth tester:test-pass -imap -imap-addr 127.0.0.1:1143 -pop3 -pop3-addr 127.0.0.1:1110
+```
+
+`config.example.yaml` 已默认启用 IMAP/POP3（回环随机端口）并提供两个模拟账户，
+直接运行上面的示例配置命令即可用邮件客户端连接（端口看启动 banner）。
+
+按 `Ctrl+C` 或发送 SIGTERM 优雅关闭，打印共接收的邮件数并释放 SMTP/IMAP/POP3 端口。
 
 ## 优先级与配置来源
 
@@ -84,6 +103,12 @@ go run .\tools\testmaild -addr 127.0.0.1:0 -output debug -print-body
 | `output.print_body` | bool | `false` | 是否打印邮件正文 |
 | `output.max_body_bytes` | int | `4096` | 正文最多打印字节数，`0` 表示不限制 |
 | `output.trace_smtp` | bool | `false` | 是否打印会话级 SMTP 命令轨迹 |
+| `imap.enabled` | bool | `false` | 启用只读 IMAP 收件箱；需要 `auth.accounts` 或 `-auth` |
+| `imap.addr` | string | `127.0.0.1:0` | IMAP 监听地址；明文只允许回环地址 |
+| `imap.tls` | bool | `false` | IMAP 使用隐式 TLS（复用 STARTTLS 证书或自签证书） |
+| `pop3.enabled` | bool | `false` | 启用只读 POP3 收件箱；需要模拟账户 |
+| `pop3.addr` | string | `127.0.0.1:0` | POP3 监听地址；明文只允许回环地址 |
+| `pop3.tls` | bool | `false` | POP3 使用隐式 TLS（证书来源同 `imap.tls`） |
 
 时长字段使用 Go 时长字符串（如 `30s`、`5m`、`500ms`），不要写纯数字。相对路径按
 运行工具时的当前目录解析。配置解析错误示例：
@@ -108,6 +133,86 @@ testmaild: 配置文件 "x.yaml" 解析失败：yaml: unmarshal errors:
   端口的人都可以看到并使用这些测试凭据（告警会在账户/密码清单之前输出）。
 - 如不想让测试密码出现在启动输出，可改用命令行 `-auth user:password`（不落盘、
   不回显），或把含密码的配置文件放在不纳入版本控制的位置。
+- **配置文件权限**：配置文件里可能包含明文测试密码，请放在受控位置并限制访问权限
+  （POSIX 建议 `chmod 600`；Windows 建议只给当前用户读写权限），不要提交到版本
+  控制、不要放在共享目录或会被同步到云端的路径；这些密码虽然不是真实账户秘密，
+  但仍不应被其他本机用户或日志收集器读到。
+- **命令行 `-auth` 的暴露面**：`-auth user:password` 的参数会出现在进程命令行中，
+  同一台机器上的其他用户/进程管理工具（任务管理器、WMI、审计日志）可能读到它，也
+  可能留在 shell 历史里；只建议使用一次性测试密码，并优先选择“受控位置的配置文件”。
+  两种来源都只用于本地回环测试，不要填写任何真实账户密码。
+
+## 只读 IMAP/POP3 收件箱（邮件客户端连接）
+
+测试服务器可以把通过 SMTP 捕获的邮件按模拟账户映射成只读收件箱，供真实邮件客户端
+查看。协议实现是 `internal/testmail` 内手写的最小只读子集，不引入第三方 IMAP/POP3
+库，**不投递、不中继、不连接外部服务器**。
+
+### 支持的命令子集
+
+- IMAP4rev1：`CAPABILITY`、`NOOP`、`LOGIN`、`LIST`/`LSUB`（只有 INBOX）、
+  `SELECT`/`EXAMINE`（INBOX，返回 `[READ-ONLY]`）、`FETCH`/`UID FETCH`
+  （支持 `UID`、`FLAGS`、`INTERNALDATE`、`SIZE`/`RFC822.SIZE`、`BODY[]`、
+  `BODY.PEEK[]`、`RFC822`、`BODY[HEADER]`、`RFC822.HEADER`、`BODY[TEXT]`、
+  `RFC822.TEXT`、`BODY[HEADER.FIELDS (...)]`、`ENVELOPE`，宏 `FAST`/`ALL`）、
+  `STATUS`、`CLOSE`、`LOGOUT`。
+- POP3：`USER`/`PASS`、`STAT`、`LIST`、`RETR`、`TOP`、`DELE`（仅本会话隐藏）、
+  `RSET`、`NOOP`、`QUIT`、`CAPA`。
+- 未支持的命令或参数返回标准 `BAD`/`NO`（IMAP）或 `-ERR`（POP3），连接保持可用，
+  服务端不会崩溃。`BODYSTRUCTURE`、`BODY[1]` 等高级 FETCH 项**未实现**，请求时会
+  得到 BAD；客户端可能因此不显示附件结构，但正文与常用头部可以正常查看。
+
+### 账户与收件箱映射
+
+- IMAP/POP3 与 SMTP 共用 `auth.accounts` 中的模拟账户；启用前必须至少配置一个账户；
+- 邮件按收件人映射到账户：SMTP 信封收件人（RCPT TO）或头部 `To`/`Cc`/`Bcc` 中
+  任一地址的本地部分（`@` 之前）等于账户用户名时，该账户可见；
+- 没有命中的账户完全看不到这封邮件（EXISTS/STAT/RETR/FETCH 都不含），测试多个账户
+  时不会互相泄露内容；
+- 只有 `INBOX` 一个邮箱；`UIDVALIDITY` 固定为 1，UID 即服务内单调递增的消息编号，
+  `UIDNEXT` 为下一个将要分配的编号；`SELECT` 后新到达的邮件不会主动推送，重新
+  `SELECT`/`EXAMINE` 或重新登录后可见（不实现 IDLE）；
+- 服务端不维护 `\Seen` 等标记：`FLAGS ()`，`PERMANENTFLAGS ()`，只读。
+
+### 只读语义
+
+- IMAP 的 `STORE`、`EXPUNGE`、`APPEND`、`COPY`、`MOVE`、`UID STORE`、`UID EXPUNGE`
+  等写操作一律返回 `NO [READ-ONLY]`，不会修改共享内存仓库；
+- POP3 的 `DELE` **只在本会话内隐藏**该邮件（本次会话的 STAT/LIST/RETR 不再返回），
+  `QUIT` 或断开连接后消息仍在共享内存仓库中，其他会话与 IMAP 客户端仍能看到，
+  不会真正删除；`RSET` 可取消本会话的删除标记；
+- 邮件内容不会被转发、投递或写入磁盘。
+
+### 客户端配置步骤（以 Thunderbird 为例）
+
+1. 启动工具（例如 `-auth tester:test-pass -imap -pop3`），记下 banner 中
+   `IMAP 地址（host:port）` / `POP3 地址（host:port）` 的主机与端口；
+2. Thunderbird → 账户设置 → 添加邮件账户 → 手动配置，协议选 `IMAP`（或 `POP3`），
+   服务器填 `127.0.0.1`，端口填 banner 显示的端口；
+3. 连接安全性：明文模式下选「无」；`imap.tls`/`pop3.tls` 开启时选「SSL/TLS」
+   （隐式 TLS），并接受自签证书例外（见下一节）；
+4. 认证方式选「普通密码」，用户名填 `auth.accounts` 中的模拟用户名，密码填对应
+   测试密码（banner 会提示用户名；配置文件来源的测试密码会回显并标注
+   「本地测试凭据、仅回环使用」，命令行 `-auth` 来源的密码不回显，需要你自己记得）；
+5. Outlook/Foxmail：账户类型选 IMAP 或 POP3，接收服务器填 `127.0.0.1`、端口与
+   加密方法按 banner 的「Outlook/Foxmail 设置」行填写，用户名/密码同第 4 步。
+
+#### 自签证书信任
+
+`imap.tls`/`pop3.tls` 开启时默认使用一次性自签测试证书（CN=testmail.local，覆盖
+localhost/127.0.0.1/::1，有效期 24 小时）；也可以把自备测试证书放在 `starttls.cert_file`
+与 `starttls.key_file` 复用。客户端会提示证书不受信任：在只用于本地测试的客户端
+配置中可临时接受例外/关闭证书校验；**不要**把该证书或其信任配置用于任何真实服务。
+
+### 常见问题
+
+- 客户端连不上：确认协议已启用（banner 有对应地址行）、端口抄对、客户端与工具在
+  同一台机器；明文协议只允许回环地址，非回环必须 `tls: true` 并在
+  `listen.allow_non_loopback` 显式允许；
+- 收件箱为空：邮件是否真的投递给了该账户（检查信封 RCPT TO 与 To/Cc/Bcc 本地部分
+  是否等于用户名）；另外 `SELECT` 之后的快照不会自动刷新，重新选择邮箱再看；
+- 附件显示异常：`BODYSTRUCTURE` 未实现属于已知限制，本工具用于验证收发内容而非
+  完整 MIME 渲染。
 
 ## 启动输出（连接参数）
 
@@ -198,6 +303,8 @@ testmaild: SMTP 轨迹 [会话 1 127.0.0.1:55308] 认证成功: tester
 | `-print-body` | 打印正文 |
 | `-body-limit` | 正文最多打印字节数（默认 4096，0 表示不限制） |
 | `-trace-smtp` | 打印会话级 SMTP 命令轨迹（AUTH 凭据不会进入轨迹） |
+| `-imap` / `-imap-addr` / `-imap-tls` | 启用 IMAP 收件箱 / 监听地址 / 隐式 TLS |
+| `-pop3` / `-pop3-addr` / `-pop3-tls` | 启用 POP3 收件箱 / 监听地址 / 隐式 TLS |
 
 `-addr :0` 这类空主机名不会被当作回环地址，必须显式写 `127.0.0.1:0` 或加
 `-allow-non-loopback`。
@@ -209,6 +316,9 @@ Go 测试直接使用 `internal/testmail` 即可，不需要启动本工具：
 ```go
 srv, err := testmail.New(testmail.Options{
     Auth: &testmail.AuthOptions{Users: map[string]string{"tester": "test-pass"}},
+    // 可选：只读 IMAP/POP3 收件箱（真实邮件客户端可连接）。
+    IMAP: &testmail.IMAPOptions{},
+    POP3: &testmail.POP3Options{},
     // 可选：调试轨迹钩子（AUTH 参数已脱敏）。
     OnSessionEvent: func(ev testmail.SessionEvent) { t.Logf("%s %s", ev.Kind, ev.Command) },
 })
@@ -235,8 +345,21 @@ msgs, err := srv.Wait(ctx, testmail.Query{To: "user@example.test"})
   测试密码并明确标注其测试用途。如不希望密码出现在启动输出，可改用命令行
   `-auth user:password`（不落盘、不回显），或把含密码的配置文件放在不纳入版本
   控制的位置。
+- IMAP/POP3 收件箱是**只读**能力：拒绝标记/删除/追加/复制，POP3 的 DELE 只在本会话
+  隐藏消息；收件箱按模拟账户隔离，非收件账户看不到邮件内容；
+- 明文 IMAP/POP3 只允许回环地址；监听非回环必须启用隐式 TLS 并显式
+  `allow_non_loopback`。未启用 TLS 时登录凭据会明文传输，只建议本机测试；
+- 每个协议监听器各自使用 `max_connections` 并发额度（SMTP/IMAP/POP3 互不占用），
+  读取超时与单连接总时长上限复用 `limits.read_timeout` / `limits.session_timeout`；
+- 不使用 BODYSTRUCTURE 等高级 IMAP 扩展；仅支持 INBOX，不实现 IDLE 推送。
+- 会话级调试轨迹（`-trace-smtp` / `output.trace_smtp`）只覆盖 SMTP；IMAP/POP3 的
+  协议应答使用标准英文（`BAD`/`NO`/`-ERR` 等，POP3 惯例），中文说明以本文档与
+  启动 banner 为准。
 - 内存占用上限约为 `max_message_bytes × max_messages`（默认约 128 MiB），
   `max_connections` 还会叠加并发缓冲；高负载或长时间测试请调低这些参数。
+- 含测试密码的配置文件应限制访问权限（POSIX `chmod 600`；Windows 仅当前用户），
+  不要提交到版本控制、共享目录或云端同步路径；命令行 `-auth user:password` 的密码会
+  出现在进程命令行与 shell 历史中，仅建议一次性测试密码。
 - 该工具是测试基础设施，不得导入 `cmd/login-server` 或其他生产装配路径；生产邮件
   发送请使用 `internal/mailer`。
 
