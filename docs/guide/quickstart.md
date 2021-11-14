@@ -1,8 +1,9 @@
 # 快速开始
 
 本文给出一条**当前版本真实可执行**的最短路径：从空配置开始，校验配置、迁移一个临时
-数据库、做本地诊断、装配自检。最后如实说明“从空配置到安全初始化”卡在哪里、为什么
-不能跳过。
+数据库、做本地诊断、执行首次安全初始化，并真实启动独立 HTTP 服务。每一步都给出可
+复现命令与预期结果；未实现的能力（OAuth/OIDC、管理 JSON API、强认证绑定等）在文末
+如实列出，不把规划写成可用。
 
 > 运行环境：Windows 11 / amd64 / Go 1.27.4（本项目唯一运行实测平台）。
 > 全部命令默认**在仓库根目录**执行，示例使用 cmd 语法；PowerShell 请把
@@ -110,54 +111,79 @@ if not exist %TEMP%\login-begin\data mkdir %TEMP%\login-begin\data
 维护状态与证书、邮件诊断的完整要求见 [root-cli.md](root-cli.md) 与
 `docs/deployment/standalone-service.md`。
 
-## 6. 第 5 步：装配自检（Go 嵌入路径）
+## 6. 第 5 步：真实启动独立服务（本轮新增能力）
 
-当前版本唯一能“真正启动服务”的路径是宿主用 Go API 装配。仓库提供了两个**不监听端口**
-的自检示例：
+`login-server` 现在可以真实启动 HTTP 服务；它复用与嵌入模式相同的配置、页面、HTTP
+处理器与监听组件，不是第二套实现。
+
+先准备一个只用于本机验证的最小配置（数据库放临时目录，不碰仓库内 `database/login.db`）：
+
+```bat
+(
+echo server:
+echo   listen_addr: "127.0.0.1:18080"
+echo   shutdown_timeout_seconds: 5
+echo logging:
+echo   level: error
+echo   format: text
+echo database:
+echo   driver: sqlite
+echo   path: '%TEMP%\login-begin\data\login.db'
+echo   wal: true
+echo   busy_timeout_ms: 5000
+) > %TEMP%\login-begin\login.yaml
+```
+
+首次安全初始化（交互式终端输入密码，不回显、二次确认；主密钥文件不存在时自动生成）：
+
+```bat
+"%TEMP%\login-begin\login-server.exe" init --config "%TEMP%\login-begin\login.yaml" ^
+  --operator os:quickstart --master-key-file "%TEMP%\login-begin\secrets\master.key"
+```
+
+预期：退出码 0，输出 root 用户 ID、`初始化状态: setup_verified`、`security_version`；
+不输出密码、一次性配置凭证或主密钥材料。重复执行同一命令会以非零退出并说明
+「拒绝重复初始化」。
+
+启动服务（显式迁移；未迁移数据库默认拒绝启动）：
+
+```bat
+"%TEMP%\login-begin\login-server.exe" serve --config "%TEMP%\login-begin\login.yaml" ^
+  --master-key-file "%TEMP%\login-begin\secrets\master.key" --migrate=apply
+```
+
+另开一个终端验证：
+
+```bat
+curl -s -o NUL -w "%%{http_code}" http://127.0.0.1:18080/healthz
+curl -s -o NUL -w "%%{http_code}" http://127.0.0.1:18080/login
+curl -s -o NUL -w "%%{http_code}" http://127.0.0.1:18080/no-such-page
+```
+
+预期：`/healthz` 与 `/login` 为 **200**，未知路径为 **404**。停止用 `Ctrl+C`，
+进程在 `server.shutdown_timeout_seconds` 内有界关闭。
+
+> 说明：root 初始化后仍要求强认证绑定（MFA/Passkey），绑定流程尚未装配到页面/CLI，
+> 因此 root 现在不能通过内置登录页完成完整登录；普通账户登录页可用，但注册默认关闭。
+> 完整命令与限制见 [../deployment/standalone-service.md](../deployment/standalone-service.md)
+> 与 [../deployment/first-run.md](../deployment/first-run.md)。
+
+## 7. 第 6 步（可选）：嵌入模式装配自检
+
+如果要在自己的 Go 程序里集成 login，仓库提供了两个**不监听端口**的自检示例：
 
 ```bat
 :: 配置加载 + 内置页面 + HTTP Handler + 监听组件构造（只构造，不 Start）
-go run .\examples\deployment-minimal -config docs\deployment\samples\login.server.example.yaml
+go run .\examples\deployment-minimal -config %TEMP%\login-begin\login.yaml
 
 :: 外部 module 仅用公开 API 的完整示例（独立 go.mod）
 cd examples\external-consumer
 go run .
 ```
 
-预期（Windows amd64 实测）：
-
-- `deployment-minimal` 退出码 0，输出“装配检查通过（未监听端口）”。
-- `external-consumer` 退出码 0，输出“示例通过：外部模块仅用公开 API …”，覆盖配置、
-  扩展注册、HTTP 挂载、生命周期、失败传播与 fail-closed 判定。
-
-这两个示例证明公开 API 可编译、可装配；**它们不监听端口、不启动真实身份服务**，不能
-当作已部署完成的证据。
-
-## 7. 第 6 步（阻塞）：安全初始化
-
-目标流程是：创建唯一 root → 获得一次性配置凭证 → 兑换凭证 → 设置正式密码并配置强认证
-→ 进入 `ready`。当前版本**无法由外部部署者完成**：
-
-| 环节 | 当前状态 | 结论 |
-|---|---|---|
-| 领域服务 `internal/bootstrap`（初始化/兑换/重发/状态/强认证授权） | 已实现并有测试 | 能力存在 |
-| `cmd/login-server` 的首次配置 CLI/HTTP 入口 | **未实现**（只有 `--version`/`--help`） | 不能从命令行初始化 |
-| HTTP 首次配置页面/接口 | **未实现**（也没有匿名远程入口） | 不能从浏览器初始化 |
-| `internal/bootstrap` 的外部导入 | 不可能（Go `internal` 规则） | 外部宿主也不能直接调用 |
-| 已初始化 root 的应急恢复 | `loginctl root-recover` 可用（本地、停服/维护 + 排他锁） | 仅用于已初始化实例 |
-
-```bat
-:: 实测：服务入口不会假装启动
-%TEMP%\login-begin\login-server.exe
-```
-
-预期：退出码 **1**，stderr 明确说明 HTTP 监听与 OAuth/OIDC/管理接口尚未实现。
-**不要**尝试用示例程序或自建脚本“先造一个 root”绕过初始化流程；那会得到一个无法证明
-身份来源、也缺少受限初始化语义的账户，违反项目安全边界。
-
-因此，本版本从空配置能安全走到的是：**配置校验 → 迁移 → 本地诊断 → 嵌入装配自检**；
-再往后的“首次初始化 + 对外服务”需要“服务启动装配 + 首次配置入口”先实现（见
-`docs/deployment/first-run.md` 第 2 节）。
+预期（Windows amd64 实测）：`deployment-minimal` 退出码 0，输出「装配检查通过（未监听
+端口）」；`external-consumer` 退出码 0，输出「示例通过：外部模块仅用公开 API …」。
+这两个示例证明公开 API 可编译、可装配；它们不监听端口，不是部署完成证据。
 
 ## 8. 清理临时文件
 
@@ -178,7 +204,9 @@ rmdir /s /q %TEMP%\login-begin
 | `loginctl migrate apply --confirm MIGRATE --service-stopped` | 0/1/2 | 2 表示缺少确认/参数错误 |
 | `loginctl diag database` | 0/1 | 1 表示检查未通过 |
 | `loginctl diag health` | 0/1 | 维护状态未验证时为 1（degraded） |
-| `login-server`（无参数） | 1 | 明确报告服务功能尚未实现 |
+| `login-server`（无参数） | 1 | 明确提示使用 `serve`/`init` 子命令 |
+| `login-server init --config <path>` | 0/1 | 首次初始化；重复初始化返回 1 |
+| `login-server serve --config <path>` | 0/1 | 真实启动 HTTP 服务；配置/迁移/秘密问题返回 1 |
 | `go run ./examples/deployment-minimal` | 0 | 装配自检，不监听端口 |
 
 下一步阅读：[deployment-modes.md](deployment-modes.md)（选部署形态）→

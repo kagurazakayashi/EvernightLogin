@@ -1,7 +1,9 @@
 # ----- login 容器样例（步骤 89）-----
 # 多阶段构建：静态 Go 二进制 + 最小运行镜像。
-# 注意：当前 cmd/login-server 只提供 --version/--help，不会常驻监听；本镜像不能
-# 对外提供 HTTP 服务，只用于版本核对、受控分发与装配完成后的复用。
+# 注意：镜像 ENTRYPOINT 需按部署配置补 `serve --config <挂载配置>` 参数才会常驻
+# 监听；首次初始化 `init` 应作为一次性运维任务单独执行（不在容器启动脚本内创建 root）。
+# 当前独立服务为宿主装配 MVP：健康检查/OpenAPI/账户入口页可用，OAuth/OIDC/管理 API
+# 与强认证绑定仍未实现，不能当作完整对外身份服务。
 #
 # 构建（在仓库根目录）：
 #   docker build -f docs/deployment/samples/Dockerfile -t evernight-login:dev .

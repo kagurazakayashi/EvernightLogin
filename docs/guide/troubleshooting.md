@@ -104,7 +104,7 @@
 
 | 现象 | 结论 |
 |---|---|
-| `login-server` 启动即失败、不监听端口 | **正常**：独立服务 HTTP 装配尚未实现；请见 [deployment-modes.md](deployment-modes.md) |
+| `login-server serve` 启动即失败、不监听端口 | 按 stderr 的明确原因处理：配置校验失败、数据库未迁移（需 `--migrate=apply`）、维护状态缺失（先 `login-server init` 或受控 `--init-maintenance-state`）、数据库未初始化（先 `init`；仅开发用 `--allow-uninitialized`）、密钥环/TLS 证书问题；见 [deployment-modes.md](deployment-modes.md) 与 `docs/deployment/standalone-service.md` |
 | `diag health` 退出码 1（degraded） | 可能只是维护状态未验证或邮件通道未装配；看具体 check，不要据此断定数据库坏了 |
 | `diag mail` 报不可用 | CLI 不持有真实发件通道，不会伪成功、不会发信 |
 | 浏览器打不开任何页面 | 当前没有独立服务在监听；内置页面需要宿主 Go 装配，见 `docs/embedding/host_integration.md` |

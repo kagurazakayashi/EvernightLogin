@@ -4,8 +4,9 @@
   用途：把 login-server 交给 Windows 服务管理器托管。WinSW 需单独下载合法版本并
   重命名为 winsw.exe 放在应用目录（本仓库不分发 WinSW）。
 
-  注意：当前 cmd/login-server 只提供 --version/--help，会立即退出；本样例用于预置
-  服务配置，装配完成后的服务进程可直接复用。不要把本文件当作"服务已可用"的证明。
+  注意：args 需按实际配置补 `serve --config <配置>`（必要时加 --master-key-file）；
+  首次初始化用 login-server init 一次性执行，不要放进服务启动参数。不要把本文件
+  当作"完整对外身份服务已可用"的证明。
 
   安装（管理员 PowerShell）：
     .\winsw.exe install .\winsw-evernight-login.xml

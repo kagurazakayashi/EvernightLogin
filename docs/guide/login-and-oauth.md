@@ -146,7 +146,7 @@ go run .\examples\app-qr-login
 
 ## 9. 未实现/未实测（如实登记）
 
-- OAuth/OIDC/设备码/扫码/管理 API 的 **HTTP 路由与独立服务装配未实现**，标准 HTTP
+- OAuth/OIDC/设备码/扫码/管理 API 的 **HTTP 路由未实现**（独立服务 `login-server serve` 已可启动，但只提供健康检查/OpenAPI/账户入口页），标准 HTTP
   客户端当前无法直接对接。
 - 真实第三方 OIDC 客户端、移动端相机扫码、真实浏览器联调未实测。
 - 刷新令牌重放/撤销/密钥轮换的跨进程与并发压力未实测。

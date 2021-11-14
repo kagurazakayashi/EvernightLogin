@@ -70,12 +70,13 @@ login 有两种使用形态。**当前版本只有嵌入模式能真正启动 HT
 
 | 项目 | 状态 |
 |---|---|
+| `login-server serve --config <path>` | **已实现**：读取并校验 YAML、打开/校验 SQLite 迁移、装配真实服务与账户入口页、监听 HTTP、有界优雅关闭 |
+| `login-server init --config <path>` | **已实现**：本地受控首次初始化（唯一 root、一次性凭证兑换、root 正式密码） |
 | `login-server --version` / `--help` | 可用（退出码 0） |
-| `login-server`（无参数） | 退出码 1，stderr 明确说明服务功能尚未实现 |
-| 读取 YAML 后监听 HTTP | **未实现** |
-| 首次配置 CLI/HTTP 入口 | **未实现**（唯一路径在 `internal/bootstrap`，外部不可导入） |
-| OAuth/OIDC/设备码/扫码/管理 HTTP 路由 | **未实现**（协议实现是受信 Go API） |
-| 发布包（`login-server.exe` 等二进制） | 可查询版本/帮助、运行本地工具；**不能当作可对外服务** |
+| `login-server`（无参数） | 退出码 1，stderr 明确提示使用 `serve`/`init` |
+| 首次配置 HTTP 入口 | **不提供**（安全设计：root 只能本地受控创建） |
+| OAuth/OIDC/设备码/扫码/管理 HTTP 路由 | **未实现**（协议实现仍是受信 Go API） |
+| 发布包（`login-server.exe` 等二进制） | 可用于本地初始化与启动内置账户入口页；**不等同于完整 OAuth2/OIDC 服务** |
 
 ```bat
 :: 实测（Windows amd64）
@@ -83,19 +84,28 @@ login-server.exe --version
 :: 输出：login-server devel (commit unknown, built unknown, go1.27.4)，退出码 0
 
 login-server.exe
-:: 退出码 1；stderr 说明 HTTP 监听与 OAuth/OIDC/管理接口仍未实现，不会假装启动
+:: 退出码 1；stderr 提示使用 serve 或 init 子命令，不会假装启动
 ```
 
-### 3.2 独立部署必须补齐的前置（缺一不可）
+完整命令、参数与限制见 [../deployment/standalone-service.md](../deployment/standalone-service.md)
+与 [../deployment/first-run.md](../deployment/first-run.md)。
 
-1. 服务启动装配：读取配置 → 校验 → 打开数据库 → 装配真实业务服务 → 监听。
-2. 首次配置入口：本机受限、一次性、限时的 root 初始化；不开放匿名远程初始化。
-3. 协议 HTTP 路由：OAuth/OIDC、设备码、扫码、管理接口（按安全边界逐项接线）。
-4. 真实认证/MFA 适配器与在线管理授权（不能拿示例替身当生产鉴权）。
-5. 首次配置、防锁死、备份恢复演练流程可端到端执行。
+### 3.2 已补前置与仍缺前置
 
-在此之前，**不要**把 `login-server` 包装成网络服务，也不要用反向代理“先转发看看”；
-它不会监听端口，转发只会得到连接失败。安全模型与防锁死清单见
+已补齐（本轮宿主装配 MVP）：
+
+1. 服务启动装配：读取配置 → 校验 → 打开/迁移 SQLite → 装配真实服务与账户入口页 →
+   监听 → 有界优雅关闭。
+2. 首次配置 CLI：本机受限、一次性、限时的 root 初始化；不开放匿名远程初始化。
+
+仍缺（不得当作已完成）：
+
+3. 协议 HTTP 路由：OAuth/OIDC、设备码、扫码、管理 JSON API（按安全边界逐项接线）。
+4. root 强认证（MFA/Passkey）绑定流程与在线管理授权（不能拿示例替身当生产鉴权）。
+5. 其余管理页面后端、邮件/Webhook 投递、后台任务调度、备份/恢复端到端演练。
+
+因此当前版本适合：本机/内网受限范围内的账户入口页与健康检查，以及嵌入式 Go 集成；
+不适合：直接作为完整对外 OAuth2/OIDC 身份服务。安全模型与防锁死清单见
 [../deployment/first-run.md](../deployment/first-run.md)。
 
 ## 4. 网络与 TLS 边界（两种形态共用）

@@ -6,9 +6,13 @@
 
 - 项目是**纯 Go 模块**，SQLite 使用纯 Go 驱动（`modernc.org/sqlite`），因此
   `CGO_ENABLED=0` 的静态二进制可在 `scratch`/`distroless` 等最小镜像中运行。
-- `cmd/login-server` **目前只提供 `--version`/`--help`**，不带参数会以非零退出，不会
-  启动 HTTP 服务。因此用本样例镜像**得不到可对外服务的容器**；镜像当前可用于：
-  版本核对、把二进制放进受控网络内的镜像仓库、以及装配完成后的同一运行契约。
+- `cmd/login-server` 现已支持 `init`（本地首次初始化）与 `serve`（真实启动 HTTP 服务：
+  配置/迁移门禁/密钥/审计/维护门禁/内置账户入口页/健康检查/TLS/优雅关闭）。容器样例
+  的 `ENTRYPOINT` 仍是无参数形式，直接运行只会得到用法错误；在容器中运行需按
+  `standalone-service.md` 第 3 节补 `serve --config <挂载配置>` 参数，并把
+  `init` 作为一次性初始化任务单独执行（不要把 root 初始化逻辑塞进容器启动脚本）。
+- 当前镜像仍**不是完整对外 OAuth2/OIDC 服务**：协议端点、管理 JSON API、root 强认证
+  绑定与多数管理页面未装配（缺口见 `standalone-service.md` 第 6 节）。
 - 备份工具 `cmd/login-backup` 与管理 CLI `cmd/loginctl` 可在容器内以独立命令运行
   （需要挂载数据库与密钥卷）。
 - 本轮**未实际构建/运行容器镜像**（环境不保证有 Docker）；样例只用于表达配置契约，

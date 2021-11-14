@@ -52,17 +52,19 @@
 | 最小 HTTP 契约：`/healthz`、`/openapi.json` | 已实现 | 前缀 + 固定后缀；OpenAPI 只是最小文档（见 [api-status.md](api-status.md)） |
 | 监听、TLS/mTLS、可信代理、多地址 | 已实现（Go API） | `login.NewServer`；默认只监听回环地址 |
 | 账户、应用、角色权限、会话、MFA/Passkey、OAuth/OIDC、设备码、扫码、客服恢复等**领域服务** | 已实现（`internal/`，受信 Go API） | 有真实测试；**HTTP 路由尚未装配** |
-| 独立服务进程 `cmd/login-server` | 部分实现 | 只有 `--version`/`--help`；不带参数以非零退出并说明未实现，不会假装启动 |
-| 首次配置（创建唯一 root） | 部分实现 | 领域能力在 `internal/bootstrap`；**CLI/HTTP 入口未实现**，外部部署者无法完成 |
+| 独立服务进程 `cmd/login-server` | MVP 可用 | `serve` 真实启动 HTTP 服务（健康检查/OpenAPI/内置账户入口页、配置与迁移门禁、维护门禁、TLS、优雅关闭）；`init` 本地受控首次初始化；OAuth/OIDC/管理 API 仍未实现 |
+| 首次配置（创建唯一 root） | 已实现（CLI） | `login-server init` 本地受控完成 root 创建、一次性凭证兑换与正式密码设置；不提供匿名 HTTP 入口；root 强认证绑定仍待后续步骤 |
 | 本地应急命令 `cmd/loginctl` | 部分实现 | `root-recover`、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 可用；组/角色/应用/权限/通知在线管理命令当前入口未接通 |
 | 备份工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
 | SQLite 数据库与迁移 | 已实现 | 44 个内嵌迁移；SQLite 为唯一运行实测目标 |
 | MySQL / PostgreSQL / SQL Server 适配 | 部分实现 | 有方言与迁移代码，**未运行实测** |
 | 多实例/集群、TCP 代理协议、OCSP/CRL、证书自动续期 | 未实现 | 第一版不含 |
 
-一句话结论：**当前版本可以作为 Go 库嵌入使用，内置页面与本地工具可用；但还不能作为
-一个“解压即用、对外监听 HTTP”的独立身份服务。** 需要独立 HTTP 身份服务时，请先读
-[deployment-modes.md](deployment-modes.md) 与 `docs/deployment/standalone-service.md`。
+一句话结论：**当前版本可以作为 Go 库嵌入使用，内置页面与本地工具可用；`login-server`
+也能真实启动独立 HTTP 服务并完成本地首次初始化，但仅覆盖健康检查与账户入口页，
+OAuth/OIDC/设备码/扫码/管理 JSON API 与 root 强认证绑定仍未实现**，尚不能作为完整的
+对外 OAuth2/OIDC 身份服务。部署前请读 [deployment-modes.md](deployment-modes.md) 与
+`docs/deployment/standalone-service.md`。
 
 ## 3. 术语表（首次出现时也逐篇解释）
 
@@ -70,7 +72,7 @@
 |---|---|
 | Go Module（Go 模块） | Go 的依赖与版本单位；本项目本身是一个可被其他 Go 程序导入的模块 |
 | 嵌入模式 | 把本项目的 Go 包编进你自己的程序，由你的程序打开数据库、监听端口、调用 API |
-| 独立服务 | 单独运行的 login 进程，对外提供 HTTP 接口；本项目当前入口尚未装配完成 |
+| 独立服务 | 单独运行的 login 进程（`login-server serve`），对外提供 HTTP 接口；当前为宿主装配 MVP（健康检查/OpenAPI/账户入口页），完整协议端点待后续步骤 |
 | OAuth 2.0 | 一种“应用向用户申请有限访问权”的授权协议；本项目实现授权码、刷新令牌、设备码等流程 |
 | OIDC（OpenID Connect） | 在 OAuth 2.0 上增加“登录并确认你是谁”的身份层；提供 ID Token 与 Discovery 文档 |
 | PKCE | OAuth 的防授权码拦截机制；公开客户端必须使用，本项目强制 `S256` |

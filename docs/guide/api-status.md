@@ -53,6 +53,11 @@ Handler 会在 `<prefix>/openapi.json` 提供该文档。
 也不要为了对接去改本文件；协议契约目前以受信 Go API 与
 `docs/deployment/integration.md` 为准。
 
+独立服务 `login-server serve` 现已真实启动，并向 `<prefix>/healthz`、`<prefix>/openapi.json`
+与内置账户入口页（`<prefix>/login` 等）提供服务；但它同样**不提供业务 JSON API**，
+OpenAPI 仍只有上述两条路径。`login-server init` 是本地受控首次初始化入口，
+不是 HTTP 接口。
+
 预览文档（不监听端口，直接生成）：
 
 ```go
@@ -111,7 +116,8 @@ document, err := login.OpenAPIDocument("/login") // /login 是路径前缀，可
 | 缺口 | 影响 |
 |---|---|
 | 业务 HTTP API 与 OpenAPI 业务路径未提供 | 不能用标准 HTTP 客户端对接账户/OAuth/OIDC/管理能力 |
-| 完整服务装配入口未公开 | 外部宿主无法只靠公开 API 装配完整身份服务 |
+| 独立服务已可启动，但页面/协议覆盖有限 | `login-server serve` 可启动并服务健康检查与账户入口页；OAuth/OIDC/设备码/扫码/管理端点仍未装配 |
+| 完整服务装配入口未公开 | 外部宿主无法只靠公开 API 装配完整身份服务；独立进程请用 `login-server` |
 | `cmd/*` 参数与输出不承诺稳定 | 发布包脚本应以本文与 `--help` 为准，不要长期依赖输出文本 |
 | 未发布 `v1.0.0` | 破坏性变更策略按 `host_integration.md` 第 2 节执行，但仍应做适配测试 |
 

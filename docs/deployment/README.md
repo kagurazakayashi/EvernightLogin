@@ -34,17 +34,18 @@
 | 监听组件（多地址、Host、可信代理、TLS/mTLS、安全重载） | 已实现（Go API） | `login.NewServer` + `login.ServerOptions`；HTTP 处理与页面可通过 `login.NewHTTPHandler`、`login.NewWebUI`、`login.Instance` 装配 |
 | 嵌入模式启动/关闭/就绪（宿主 `net/http`） | 已实现（Go API） | `login.New` + `Instance.Start/Ready/Close`，见 `docs/embedding/host_integration.md` |
 | 内置 Web 页面、模板、静态资源、中文文案 | 已实现（内嵌 `embed.FS`） | `web/` + `ui_embed.go`；无 Node/npm 构建链 |
-| 独立服务进程 `cmd/login-server` | **仅命令行入口** | 只提供 `--version`/`--help`；不带参数以非零退出并明确报错，**不会假装服务已启动** |
-| 独立服务 HTTP 启动装配（读取配置后监听） | **未实现** | 尚无 CLI/装配代码；部署时必须使用嵌入模式或等待后续装配步骤 |
-| 首次配置的 CLI/HTTP 入口 | **未实现** | 领域能力在 `internal/bootstrap`（仅本模块可导入），未暴露给独立部署 |
-| OAuth/OIDC、设备码、扫码、管理接口的 HTTP 路由 | **未实现** | 只有内嵌页面路由与受信 Go API；业务接入约定见 `integration.md` |
+| 独立服务进程 `cmd/login-server` | 已实现（MVP） | `serve` 真实启动 HTTP 服务（配置/数据库/迁移门禁/密钥/审计/维护门禁/内置账户入口页/健康检查/TLS/访问日志/有界优雅关闭）；`init` 本地受控首次初始化 |
+| 首次配置入口 | 已实现（CLI） | `login-server init`：本地一次性凭证 + 交互式/受保护 stdin 密码；不提供 HTTP 初始化入口，不接受命令行明文密码 |
+| 内置页面装配范围 | 部分实现 | 已注册账户入口页（登录/注册/邀请/邮箱验证/退出）；个人资料/管理/安全中心/MFA/RBAC/应用/客服/审计/统计/报告/备份页面因缺少宿主授权适配器未注册，缺口见 `standalone-service.md` 第 6 节 |
+| OAuth/OIDC、设备码、扫码、管理接口的 HTTP 路由 | **未实现** | 只有健康检查/OpenAPI/内置页面路由与受信 Go API；业务接入约定见 `integration.md` |
 | 备份创建与离线查看工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
 | 本地管理/应急命令 `cmd/loginctl` | 部分实现 | root 应急恢复、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 本地命令；组/角色/应用/权限/通知在线管理命令尚未接通，详见 `../guide/root-cli.md` |
 | 数据库迁移 | 已实现（SQLite 为主） | `migrations/` 内嵌，按版本追加；MySQL/PostgreSQL/SQL Server 适配**未运行实测** |
 
-> 结论：本版本**还不能作为独立 HTTP 身份服务直接对外部署**。发布包里的二进制可用于
-> 版本查询、备份与本地管理；需要真实 HTTP 身份服务的部署必须基于 Go API（嵌入模式）
-> 完成装配，相关前置在 `standalone-service.md` 第 1 节列出。
+> 结论：本版本可以**在受限范围内**作为独立 HTTP 服务启动（健康检查 + 内置账户入口页 +
+> 本地初始化），但**还不是完整的对外 OAuth2/OIDC 身份服务**：协议端点、管理 JSON API、
+> root 强认证绑定与多数管理页面仍未装配。不要把「能启动」等同于「第一版协议能力已
+> 交付」；可交付边界见 `standalone-service.md` 第 6 节。
 
 ## 3. 平台与验证口径
 

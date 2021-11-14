@@ -1,6 +1,7 @@
 # login systemd 单元样例（步骤 89）
-# 注意：当前 cmd/login-server 只提供 --version/--help，注册后服务会立即退出；
-# 本单元用于预置权限模型，装配完成后的服务进程可直接复用。
+# 注意：ExecStart 需按实际配置补 `serve --config <配置>` 参数（必要时加
+# `--master-key-file`）；首次初始化用 `login-server init` 一次性执行，不要写进
+# ExecStart。健康检查建议使用 <prefix>/healthz。
 #
 # 安装：
 #   sudo install -m 0644 docs/deployment/samples/evernight-login.service \

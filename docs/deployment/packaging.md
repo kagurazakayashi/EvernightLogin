@@ -30,7 +30,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-release.ps1 `
 ```text
 evernight-login-<version>-<os>-<arch>/
 ├── bin/
-│   ├── login-server[.exe]     服务进程入口（当前仅 --version/--help）
+│   ├── login-server[.exe]     服务进程入口（serve：HTTP 服务；init：本地首次初始化）
 │   ├── loginctl[.exe]         本地管理/应急命令
 │   └── login-backup[.exe]     备份创建与离线查看工具
 ├── config/
@@ -145,14 +145,17 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 
 | 命令 | 退出码 | 结果 |
 |---|---|---|
-| `bin\login-server.exe --version` | 0 | `login-server 0.1.0-dev (commit 96d1a23, built 2026-11-19T18:53:16Z, go1.27.4)` |
-| `bin\login-server.exe --help` | 0 | 打印帮助（当前仅版本/帮助） |
-| `bin\login-server.exe`（无参数） | 1 | stderr：`错误：login-server 服务功能尚未实现；当前步骤只提供 --version 和 --help`（诚实失败，不伪造启动） |
+| `bin\login-server.exe --version` | 0 | 打印构建信息 |
+| `bin\login-server.exe --help` | 0 | 打印帮助（列出 `serve`、`init` 子命令与参数） |
+| `bin\login-server.exe`（无参数） | 1 | stderr：提示使用 `serve` 或 `init` 子命令（诚实失败，不伪造启动） |
+| `bin\login-server.exe serve --config <包内>\config\login.example.yaml` | 0/1 | 配置/数据库/密钥/迁移条件满足时真实启动 HTTP 服务；缺失时明确失败（样例配置需替换路径与主密钥后使用） |
+| `bin\login-server.exe init --config <包内>\config\login.example.yaml` | 0/1 | 本地受控首次初始化；重复执行返回 1（需在受控环境手动执行，不在冒烟脚本内自动建 root） |
 | `bin\login-backup.exe version` | 0 | 打印构建信息 |
 | `bin\loginctl.exe --version` | 0 | 打印构建信息 |
 | `go run ./examples/config-load -config <包内>\config\login.example.yaml` | 0 | 样例配置经真实配置加载器校验通过，诊断输出中 `secrets.master_key = [UNSET]`，无秘密泄露 |
 
-“启动→示例配置→停止”的说明：当前 `login-server` 尚未装配 HTTP 服务，运行后立即退出
+“启动→示例配置→停止”的说明：`login-server serve` 已能真实启动，但既有发布产物早于本轮
+宿主装配，需在干净工作树重新构建后按上表复测；仓库样例配置的路径/秘密占位符必须先替换
 （不监听端口、无后台进程）；上面的版本/帮助命令与配置校验是当前真实可验证的启动边界。
 `verify-release.ps1` 的 159 项检查全部通过（6 个压缩包 SHA-256、每包 111 个条目的包内
 校验和、禁止项扫描、必需文件、Windows 二进制退出码与输出、样例配置校验）。
@@ -168,8 +171,10 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 
 ## 8. 已知限制
 
-- 独立服务 HTTP 装配未完成，包内 `login-server` 只提供 `--version`/`--help`；不能把它当
-  作可对外服务的身份服务（见 `README.md` 第 2 节）。
+- 独立服务装配为 MVP：包内 `login-server` 可 `init`/`serve`，但 OAuth/OIDC/设备码/扫码/
+  管理 JSON API 仍未实现，root 强认证绑定与多数管理页面未装配，不能当作完整对外
+  OAuth2/OIDC 身份服务（见 `standalone-service.md` 第 6 节）。
+- 本轮未重新构建发布包；既有产物早于宿主装配，`--version`/帮助/无参数行为需重建后复测。
 - 仅 Windows amd64 允许实际运行验证；Windows arm64、Linux、macOS 只做编译检查，**未运行**。
 - 未构建/运行容器镜像；容器样例只是配置契约。
 - 字体未随包分发，PDF 报告需要单独获取字体并配置路径。
