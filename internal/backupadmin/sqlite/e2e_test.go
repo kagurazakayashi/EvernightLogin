@@ -207,7 +207,9 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
 	e := &env{t: t, ctx: ctx, now: testNow}
-	e.dir = t.TempDir()
+	// 用带重试清理的测试临时目录替代 t.TempDir：Windows 上目录删除可能被安全
+	// 软件/文件过滤驱动瞬时延迟，标准库清理不重试 ERROR_DIR_NOT_EMPTY。
+	e.dir = testTempDir(t)
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(e.dir, "step81.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)

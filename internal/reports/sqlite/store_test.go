@@ -23,7 +23,7 @@ func newStore(t *testing.T) *Store {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "report-lifecycle.db")))
+		filepath.Join(testTempDir(t), "report-lifecycle.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
 	}

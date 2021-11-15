@@ -14,14 +14,22 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/avatar"
 )
 
+// testFetchMaxBytes 是“远端过大”用例配置的抓取字节上限，也是响应夹具必须
+// 超过的阈值。构造响应与断言都只引用这个值，不再依赖某张图片编码后的固定字节数
+// （渐变图的压缩率会随尺寸与 PNG 编码器实现变化）。
+const testFetchMaxBytes int64 = 128 << 10
+
 // fetchHandler 构造覆盖远程边界用例的本地 HTTP 服务；测试不访问真实外网。
 func fetchHandler(t *testing.T) http.Handler {
 	t.Helper()
 	pngData := makePNG(t, 32, 32)
 	jpegData := makeJPEG(t, 40, 40)
+	// “远端过大”用例需要真正超过抓取上限的响应：在有效图片后追加按上限计算的
+	// 填充字节，使夹具与上限保持一致，而不是假设 600x600 的渐变图编码后有多重。
 	bigData := makePNG(t, 600, 600)
-	if len(bigData) <= 4096 {
-		t.Fatalf("大图尺寸异常: %d 字节", len(bigData))
+	bigPayload := append(append([]byte(nil), bigData...), make([]byte, testFetchMaxBytes)...)
+	if int64(len(bigPayload)) <= testFetchMaxBytes {
+		t.Fatalf("大图夹具未超过抓取上限 %d: %d 字节", testFetchMaxBytes, len(bigPayload))
 	}
 	var compressed bytes.Buffer
 	writer := gzip.NewWriter(&compressed)
@@ -55,9 +63,8 @@ func fetchHandler(t *testing.T) http.Handler {
 	})
 	mux.HandleFunc("/big", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		// 追加远大于策略上限的填充字节，确保按 Content-Length 或读取上限提前拒绝。
-		payload := append(append([]byte(nil), bigData...), bytes.Repeat([]byte{0}, 200<<10)...)
-		_, _ = w.Write(payload)
+		// 响应体已按 testFetchMaxBytes 构造，确保超过策略上限并按读取上限提前拒绝。
+		_, _ = w.Write(bigPayload)
 	})
 	mux.HandleFunc("/mismatch", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -85,7 +92,7 @@ func TestNetworkFetchBoundaries(t *testing.T) {
 	env := newTestEnv(t, func(options *avatar.Options) {
 		options.Network = avatar.NetworkPolicy{
 			TestOnlyAllowLocalAddresses: true,
-			MaxBytes:                    128 << 10,
+			MaxBytes:                    testFetchMaxBytes,
 			Timeout:                     time.Second,
 			MaxRedirects:                2,
 		}

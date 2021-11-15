@@ -65,7 +65,9 @@ type envConfig struct {
 func newTestEnv(t *testing.T, config envConfig) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "credential.sqlite")
+	// 用带重试清理的测试临时目录替代 t.TempDir：Windows 上目录删除可能被安全
+	// 软件/文件过滤驱动瞬时延迟，标准库清理不重试 ERROR_DIR_NOT_EMPTY。
+	dbPath := filepath.Join(testTempDir(t), "credential.sqlite")
 	rawStore, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(dbPath))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 数据库失败: %v", err)
