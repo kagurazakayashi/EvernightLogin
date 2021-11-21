@@ -99,7 +99,12 @@ func TestGenerateViaRealTaskExecutor(t *testing.T) {
 	if view.TaskID == "" {
 		t.Fatal("真实执行器未返回任务编号")
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	// 有界轮询报告终态：真实执行器线程与查询并发，不能在断言前假设状态已经落库。
+	const (
+		waitTimeout  = 20 * time.Second
+		pollInterval = 20 * time.Millisecond
+	)
+	deadline := time.Now().Add(waitTimeout)
 	var final ReportView
 	for {
 		final, err = service.Get(ctx, caller, view.ID)
@@ -113,11 +118,36 @@ func TestGenerateViaRealTaskExecutor(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("等待真实执行器完成超时，最后状态 %s", final.State)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 	if final.State != StateSucceeded {
 		t.Fatalf("真实执行器生成失败: state=%s code=%s reason=%s",
 			final.State, final.ErrorCode, final.FailureReason)
+	}
+	// 报告状态先于任务状态落库：执行器要等处理器返回后才把任务回写为 succeeded。
+	// 因此继续有界轮询任务摘要直到终态，避免把“任务尚未回写”误判为失败；这里只
+	// 放宽测试等待，最终断言仍要求 succeeded（不改产品断言与产品逻辑）。
+	taskDeadline := time.Now().Add(waitTimeout)
+	for {
+		final, err = service.Get(ctx, caller, view.ID)
+		if err != nil {
+			t.Fatalf("查询报告任务摘要失败: %v", err)
+		}
+		if final.Task != nil && task.State(final.Task.State).Terminal() {
+			break
+		}
+		if time.Now().After(taskDeadline) {
+			lastState := "<nil>"
+			if final.Task != nil {
+				lastState = final.Task.State
+			}
+			t.Fatalf("等待任务摘要到达终态超时，最后报告状态=%s 任务状态=%s",
+				final.State, lastState)
+		}
+		time.Sleep(pollInterval)
+	}
+	if final.State != StateSucceeded {
+		t.Fatalf("等待任务摘要期间报告状态变为 %s，期望 succeeded", final.State)
 	}
 	if final.Task == nil || final.Task.ID != view.TaskID {
 		t.Fatalf("未从真实 *task.Executor 读取任务摘要: %+v (taskid=%s)", final.Task, view.TaskID)

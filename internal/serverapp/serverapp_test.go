@@ -6,8 +6,9 @@ package serverapp_test
 // 200 与未知路径 404、维护状态只放行健康检查、有界优雅关闭、配置错误 fail-closed、
 // TLS 配置校验、初始化不落明文秘密。
 //
-// 所有用例使用 t.TempDir()，结束时关闭服务、取消上下文并等待退出；不读写仓库的
-// database/login.db，不真实外发邮件/Webhook，不遗留监听端口与后台协程。
+// 所有用例使用带重试清理的测试临时目录（testTempDir），结束时关闭服务、
+// 取消上下文并等待退出；不读写仓库的 database/login.db，不真实外发邮件/
+// Webhook，不遗留监听端口与后台协程。
 
 import (
 	"bytes"
@@ -85,7 +86,7 @@ type testPaths struct {
 // preparePaths 创建临时部署目录并写入最小配置。
 func preparePaths(t *testing.T, yamlMutate func(config string) string) testPaths {
 	t.Helper()
-	root := t.TempDir()
+	root := testTempDir(t)
 	dataDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		t.Fatalf("创建数据目录失败: %v", err)
@@ -535,7 +536,7 @@ func TestConfigValidationFailsClosed(t *testing.T) {
 		t.Fatalf("未知配置字段未被拒绝: %v", err)
 	}
 
-	missingDir := t.TempDir()
+	missingDir := testTempDir(t)
 	badTLS := preparePaths(t, func(config string) string {
 		return withTLS(config,
 			filepath.Join(missingDir, "missing-cert.pem"),
@@ -557,7 +558,7 @@ func TestConfigValidationFailsClosed(t *testing.T) {
 
 // TestServeWithLocalTLS 覆盖本地 TLS 装配（临时自签名证书）：HTTPS 健康检查可用。
 func TestServeWithLocalTLS(t *testing.T) {
-	root := t.TempDir()
+	root := testTempDir(t)
 	certFile, keyFile := writeSelfSignedCertificate(t, root)
 	paths := preparePaths(t, func(config string) string {
 		return withTLS(config, certFile, keyFile)
