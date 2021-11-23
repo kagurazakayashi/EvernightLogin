@@ -18,6 +18,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -78,9 +79,9 @@ func allowAllTransfers() delegation.GuardFuncs {
 func prepareEnv(t *testing.T) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	// 用带重试清理的测试临时目录替代 t.TempDir：Windows 上目录删除可能被安全
+	// 用 internal/testutil.TempDir（带重试清理）替代 t.TempDir：Windows 上目录删除可能被安全
 	// 软件/文件过滤驱动瞬时延迟，标准库清理不重试 ERROR_DIR_NOT_EMPTY。
-	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(testTempDir(t), "app.sqlite")))
+	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "app.sqlite")))
 	if err != nil {
 		t.Fatalf("打开临时数据库失败: %v", err)
 	}

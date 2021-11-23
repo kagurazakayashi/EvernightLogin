@@ -18,6 +18,7 @@ import (
 	groupsqlite "github.com/kagurazakayashi/EvernightLogin/internal/group/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -78,7 +79,7 @@ func allowAllTransfers() delegation.GuardFuncs {
 func prepareEnv(t *testing.T, mutations ...func(*group.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "group.sqlite")))
+	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "group.sqlite")))
 	if err != nil {
 		t.Fatalf("打开临时数据库失败: %v", err)
 	}

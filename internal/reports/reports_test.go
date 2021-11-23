@@ -19,6 +19,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // baseTime 是测试固定时钟；窗口与产物有效期都以它为基准，不使用会随时间失效的
@@ -356,7 +357,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	now := func() time.Time { return baseTime }
-	env := &testEnv{t: t, outputDir: t.TempDir(), now: now}
+	env := &testEnv{t: t, outputDir: testutil.TempDir(t), now: now}
 	env.authorizer = &fakeAuthorizer{grants: map[string]stats.ScopeGrant{}}
 	env.root = &fakeRoot{roots: map[string]bool{}}
 	env.sensitive = &fakeSensitive{}

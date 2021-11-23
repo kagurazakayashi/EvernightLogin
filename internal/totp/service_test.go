@@ -20,6 +20,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	totpsqlite "github.com/kagurazakayashi/EvernightLogin/internal/totp/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
@@ -62,7 +63,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T, mutate func(*totp.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "totp.db")))
+	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "totp.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

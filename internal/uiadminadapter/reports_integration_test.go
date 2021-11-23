@@ -28,6 +28,7 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -186,7 +187,7 @@ func newM5Env(t *testing.T) *m5Env {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
 	nowFn := func() time.Time { return now }
-	dbPath := filepath.Join(t.TempDir(), "adapter-reports.db")
+	dbPath := filepath.Join(testutil.TempDir(t), "adapter-reports.db")
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(dbPath))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
@@ -252,7 +253,7 @@ func newM5Env(t *testing.T) *m5Env {
 		Source: source, Authorizer: authorizer, Root: m5Root{},
 		Sensitive: m5Sensitive{}, Audit: auditRecorder,
 		Enqueuer: enqueuer, Canceller: m5Canceller{},
-		History: history, OutputDir: t.TempDir(), MaxDetailRows: 20,
+		History: history, OutputDir: testutil.TempDir(t), MaxDetailRows: 20,
 		Now: nowFn})
 	if err != nil {
 		t.Fatalf("构造报告服务失败: %v", err)

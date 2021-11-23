@@ -21,6 +21,7 @@ import (
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // generateTestServerCertificate 生成自签名服务器证书与受限权限私钥文件，返回
@@ -109,7 +110,7 @@ func httpsClient(pool *x509.CertPool, serverName string) *http.Client {
 }
 
 func TestServerTLSHTTPSAndStatus(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	certPath, keyPath, pool := generateTestServerCertificate(t, dir, "localhost")
 	cfg := testServerConfig(t, freeListenAddr(t))
 	cfg.Server.TLSCertFiles = []string{certPath}
@@ -153,7 +154,7 @@ func TestServerTLSHTTPSAndStatus(t *testing.T) {
 }
 
 func TestServerTLSUnknownSNIRejected(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	certPath, keyPath, pool := generateTestServerCertificate(t, dir, "localhost")
 	cfg := testServerConfig(t, freeListenAddr(t))
 	cfg.Server.TLSCertFiles = []string{certPath}
@@ -172,7 +173,7 @@ func TestServerTLSUnknownSNIRejected(t *testing.T) {
 }
 
 func TestServerTLSValidationAtStartup(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	certPath, keyPath, _ := generateTestServerCertificate(t, dir, "login.example.com")
 	handler, err := NewHTTPHandler(HTTPOptions{})
 	if err != nil {
@@ -223,7 +224,7 @@ func TestServerTLSValidationAtStartup(t *testing.T) {
 }
 
 func TestServerTLSReload(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	certPath, keyPath, pool := generateTestServerCertificate(t, dir, "localhost")
 	cfg := testServerConfig(t, freeListenAddr(t))
 	cfg.Server.TLSCertFiles = []string{certPath}
@@ -241,7 +242,7 @@ func TestServerTLSReload(t *testing.T) {
 
 	// 使用新的自签名证书替换（同一 SAN，同一信任池无法覆盖新证书，因此重新生成
 	// 并信任新证书进行验证）。
-	newDir := t.TempDir()
+	newDir := testutil.TempDir(t)
 	newCertPath, newKeyPath, newPool := generateTestServerCertificate(t, newDir, "localhost")
 	if err := os.WriteFile(certPath, mustReadFile(t, newCertPath), 0o644); err != nil {
 		t.Fatalf("更新证书文件失败：%v", err)
@@ -282,7 +283,7 @@ func TestServerTLSReload(t *testing.T) {
 }
 
 func TestServerTLSReloadRejectsUncoveredCertificate(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	certPath, keyPath, pool := generateTestServerCertificate(t, dir, "localhost", "login.example.com")
 	cfg := testServerConfig(t, freeListenAddr(t))
 	cfg.Server.TLSCertFiles = []string{certPath}
@@ -293,7 +294,7 @@ func TestServerTLSReloadRejectsUncoveredCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 同一份「不覆盖允许主机」的配置在启动阶段必须被拒绝。
-	uncoveredDir := t.TempDir()
+	uncoveredDir := testutil.TempDir(t)
 	uncoveredCert, uncoveredKey, _ := generateTestServerCertificate(t, uncoveredDir, "localhost")
 	uncoveredCfg := testServerConfig(t, freeListenAddr(t))
 	uncoveredCfg.Server.TLSCertFiles = []string{uncoveredCert}
@@ -348,7 +349,7 @@ func mustReadFile(t *testing.T, path string) []byte {
 }
 
 func TestServerTLSPFXConfig(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	certPath, keyPath, pool := generateTestServerCertificate(t, dir, "localhost")
 	// 用测试证书/私钥重新编码为 PFX；私钥从受限文件中读取后仅用于测试编码。
 	keyPEM := mustReadFile(t, keyPath)

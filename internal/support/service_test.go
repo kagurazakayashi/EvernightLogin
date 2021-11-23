@@ -15,6 +15,7 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 	supportsqlite "github.com/kagurazakayashi/EvernightLogin/internal/support/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -127,7 +128,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T, mutate func(*support.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(t.TempDir()+"/support.db"))
+	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(testutil.TempDir(t)+"/support.db"))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

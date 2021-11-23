@@ -26,6 +26,7 @@ import (
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 	tokensqlite "github.com/kagurazakayashi/EvernightLogin/internal/token/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
@@ -137,7 +138,7 @@ func newTestEnv(t *testing.T, clientType oauthclient.ClientType) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "oauthflow-test.db")))
+	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "oauthflow-test.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

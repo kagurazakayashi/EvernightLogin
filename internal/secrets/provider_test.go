@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // writeTestKeyringFile 生成密钥环文档并写入受保护文件，返回路径与密钥环。
@@ -26,7 +28,7 @@ func writeTestKeyringFile(t *testing.T, dir, name, keyID string) (string, *Keyri
 }
 
 func TestFileProviderLoadsProtectedKeyring(t *testing.T) {
-	path, ring := writeTestKeyringFile(t, t.TempDir(), "master-key.json", "k1")
+	path, ring := writeTestKeyringFile(t, testutil.TempDir(t), "master-key.json", "k1")
 	wantDoc, err := ring.Document()
 	if err != nil {
 		t.Fatalf("Document 失败: %v", err)
@@ -55,7 +57,7 @@ func TestFileProviderLoadsProtectedKeyring(t *testing.T) {
 }
 
 func TestFileProviderRejectsMissingFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "does-not-exist.json")
 	provider, err := NewFileProvider(path)
 	if err != nil {
@@ -71,7 +73,7 @@ func TestFileProviderRejectsMissingFile(t *testing.T) {
 }
 
 func TestFileProviderRejectsInvalidDocument(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "master-key.json")
 	if err := WriteProtectedFile(path, []byte(`{"format":"wrong"}`)); err != nil {
 		t.Fatalf("WriteProtectedFile 失败: %v", err)
@@ -86,7 +88,7 @@ func TestFileProviderRejectsInvalidDocument(t *testing.T) {
 }
 
 func TestFileProviderRejectsEmptyAndOversizedFiles(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 
 	emptyPath := filepath.Join(dir, "empty.json")
 	if err := os.WriteFile(emptyPath, nil, 0o600); err != nil {
@@ -114,7 +116,7 @@ func TestFileProviderRejectsEmptyAndOversizedFiles(t *testing.T) {
 }
 
 func TestFileProviderRejectsDirectory(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	provider, err := NewFileProvider(dir)
 	if err != nil {
 		t.Fatalf("NewFileProvider 失败: %v", err)
@@ -193,14 +195,14 @@ func TestNewFileProviderPathValidation(t *testing.T) {
 	if _, err := NewFileProvider("relative/master-key.json"); !errors.Is(err, ErrFileInvalid) {
 		t.Fatalf("相对路径错误 = %v", err)
 	}
-	abs := filepath.Join(t.TempDir(), "missing.json")
+	abs := filepath.Join(testutil.TempDir(t), "missing.json")
 	if _, err := NewFileProvider(abs); err != nil {
 		t.Fatalf("绝对路径不应在构造阶段失败: %v", err)
 	}
 }
 
 func TestCheckProtectedFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "master-key.json")
 	if err := WriteProtectedFile(path, []byte("data")); err != nil {
 		t.Fatalf("WriteProtectedFile 失败: %v", err)
@@ -220,7 +222,7 @@ func TestCheckProtectedFile(t *testing.T) {
 }
 
 func TestWriteProtectedFileValidations(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "master-key.json")
 	if err := WriteProtectedFile(path, nil); !errors.Is(err, ErrFileInvalid) {
 		t.Fatalf("空内容错误 = %v", err)
@@ -238,7 +240,7 @@ func TestWriteProtectedFileValidations(t *testing.T) {
 }
 
 func TestWriteProtectedFileAtomicReplace(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "master-key.json")
 	first, err := mustGenerateKeyring(t, "k1").Document()
 	if err != nil {

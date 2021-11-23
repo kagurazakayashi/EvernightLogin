@@ -23,6 +23,7 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -207,9 +208,9 @@ func TestSchedulerTickReportLifecycle(t *testing.T) {
 	var now = e2eNow
 	nowFn := func() time.Time { return now }
 
-	// 用带重试清理的测试临时目录替代 t.TempDir：Windows 上目录删除可能被安全
+	// 用 internal/testutil.TempDir（带重试清理）替代 t.TempDir：Windows 上目录删除可能被安全
 	// 软件/文件过滤驱动瞬时延迟，标准库清理不重试 ERROR_DIR_NOT_EMPTY。
-	dbPath := filepath.Join(testTempDir(t), "reports-e2e.db")
+	dbPath := filepath.Join(testutil.TempDir(t), "reports-e2e.db")
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(dbPath))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
@@ -290,7 +291,7 @@ func TestSchedulerTickReportLifecycle(t *testing.T) {
 		Source: e2eSource{now: nowFn}, Authorizer: authorizer, Root: e2eRoot{},
 		Sensitive: e2eSensitive{}, Audit: e2eAudit{}, Enqueuer: executor,
 		Canceller: executor, Tasks: executor, History: history,
-		OutputDir: testTempDir(t), MaxDetailRows: 20, Now: nowFn,
+		OutputDir: testutil.TempDir(t), MaxDetailRows: 20, Now: nowFn,
 	})
 	if err != nil {
 		t.Fatalf("构造报告服务失败: %v", err)

@@ -55,6 +55,7 @@ import (
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -116,7 +117,7 @@ func newStep91Env(t *testing.T) *step91Env {
 	t.Helper()
 	ctx := context.Background()
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "step91-acceptance.db")))
+		filepath.Join(testutil.TempDir(t), "step91-acceptance.db")))
 	if err != nil {
 		t.Fatalf("打开临时数据库: %v", err)
 	}

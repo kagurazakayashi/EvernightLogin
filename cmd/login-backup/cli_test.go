@@ -17,6 +17,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -34,7 +35,7 @@ type cliEnvironment struct {
 // 配置 YAML；不接触真实业务库。
 func setupCLIEnvironment(t *testing.T) *cliEnvironment {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	env := &cliEnvironment{
 		dir:        dir,
 		database:   filepath.Join(dir, "login.db"),
@@ -213,7 +214,7 @@ func TestCLIVerifyWrongKeyAndTamperedFile(t *testing.T) {
 	}
 	backupFile := findBackupFile(t, env.outputDir)
 
-	otherDir := t.TempDir()
+	otherDir := testutil.TempDir(t)
 	otherRing, err := secrets.GenerateKeyring("k2",
 		time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -281,7 +282,7 @@ func TestCLIUsageAndSafety(t *testing.T) {
 	if err := secrets.WriteProtectedFile(insideKey, document); err != nil {
 		t.Fatalf("写入同目录密钥失败：%v", err)
 	}
-	missingDatabase := filepath.Join(t.TempDir(), "missing.db")
+	missingDatabase := filepath.Join(testutil.TempDir(t), "missing.db")
 	code, _, stderr = runCLI(t, "create", "--database", missingDatabase,
 		"--key-file", env.keyFile, "--output", env.outputDir,
 		"--operator", "local-admin-test")
@@ -304,7 +305,7 @@ func TestCLIUsageAndSafety(t *testing.T) {
 
 // TestKeyInside 验证主密钥位置判断（含子目录与相似前缀路径）。
 func TestKeyInside(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	if !keyInside(filepath.Join(base, "key.json"), base) {
 		t.Fatal("输出目录内密钥未被识别")
 	}

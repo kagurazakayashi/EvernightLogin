@@ -25,6 +25,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -114,7 +115,7 @@ type statsIntegrationEnv struct {
 func newStatsIntegrationEnv(t *testing.T) *statsIntegrationEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "stats_page.db")
+	path := filepath.Join(testutil.TempDir(t), "stats_page.db")
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
@@ -155,7 +156,7 @@ func newStatsIntegrationEnv(t *testing.T) *statsIntegrationEnv {
 	auditSvc, err := auditops.New(auditops.Options{Store: auditStoreOps, Audit: recorder,
 		Authorizer: auditAuthorizer,
 		Root:       root, Sensitive: statsSensitive{}, Enqueuer: statsEnqueuer{},
-		Canceller: statsCanceller{}, OutputDir: t.TempDir(),
+		Canceller: statsCanceller{}, OutputDir: testutil.TempDir(t),
 		Now: func() time.Time { return statsNow }})
 	if err != nil {
 		t.Fatalf("构造审计查询服务失败: %v", err)

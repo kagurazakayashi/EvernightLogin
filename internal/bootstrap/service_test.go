@@ -21,6 +21,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -69,7 +70,7 @@ type testEnv struct {
 // newTestEnv 在临时目录创建数据库并执行全部迁移，然后构造真实生产依赖。
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	return newTestEnvAtPath(t, filepath.Join(t.TempDir(), "bootstrap.sqlite"))
+	return newTestEnvAtPath(t, filepath.Join(testutil.TempDir(t), "bootstrap.sqlite"))
 }
 
 // newTestEnvAtPath 在指定数据库路径上构造测试环境，用于模拟进程重启。

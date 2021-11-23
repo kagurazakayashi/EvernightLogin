@@ -14,6 +14,7 @@ import (
 	onboardingsqlite "github.com/kagurazakayashi/EvernightLogin/internal/onboarding/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -23,7 +24,7 @@ var testStart = time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 // 分配性校验与目标既有权限读取（不经服务层替身）。
 func TestStoreInvitationLifecycle(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "onboarding-sqlite-test.db")
+	path := filepath.Join(testutil.TempDir(t), "onboarding-sqlite-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)

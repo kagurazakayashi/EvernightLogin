@@ -27,6 +27,7 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 	supportsqlite "github.com/kagurazakayashi/EvernightLogin/internal/support/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -209,7 +210,7 @@ func newITEnv(t *testing.T, policy manualrecovery.Policy) *itEnv {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx,
-		storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "support-integration.db")))
+		storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "support-integration.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

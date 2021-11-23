@@ -27,6 +27,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -133,7 +134,7 @@ func TestStep95PerfIdentifierNormalization(t *testing.T) {
 // TestStep95PerfSQLiteStartupAndAccess 测量临时 SQLite 冷启动迁移、简单读查询与事务写入。
 func TestStep95PerfSQLiteStartupAndAccess(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "step95-perf.db")
+	path := filepath.Join(testutil.TempDir(t), "step95-perf.db")
 
 	openStart := time.Now()
 	store, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))

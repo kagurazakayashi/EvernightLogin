@@ -15,6 +15,7 @@ import (
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -24,7 +25,7 @@ var testTime = time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
 // openTestDatabase 在临时目录创建数据库并执行全部迁移。
 func openTestDatabase(t *testing.T) *storagesqlite.Store {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "audit.db")
+	path := filepath.Join(testutil.TempDir(t), "audit.db")
 	raw, err := storagesqlite.Open(context.Background(), storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)

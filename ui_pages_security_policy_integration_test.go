@@ -31,6 +31,7 @@ import (
 	policysqlite "github.com/kagurazakayashi/EvernightLogin/internal/policy/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -99,7 +100,7 @@ func newPolicyIntegrationEnv(t *testing.T) *policyIntegrationEnv {
 	t.Helper()
 	ctx := context.Background()
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "policy-pages.db")))
+		filepath.Join(testutil.TempDir(t), "policy-pages.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

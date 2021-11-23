@@ -13,12 +13,13 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/maintenance"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // newController 在隔离临时目录中构造控制器：数据库与状态目录分开，模拟“库外状态”。
 func newController(t *testing.T) *maintenance.Controller {
 	t.Helper()
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	databaseDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(databaseDir, 0o700); err != nil {
 		t.Fatalf("创建测试数据库目录失败：%v", err)
@@ -84,7 +85,7 @@ func TestInitialStateIsNormalAndPersisted(t *testing.T) {
 }
 
 func TestEnterMaintenanceBlocksWritesAndExitRestores(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	databaseDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(databaseDir, 0o700); err != nil {
 		t.Fatalf("创建测试数据库目录失败：%v", err)
@@ -179,7 +180,7 @@ func TestDrainTimeoutKeepsMaintenance(t *testing.T) {
 // newControllerWithDrain 构造指定收束等待上限的控制器（同 newController，参数化）。
 func newControllerWithDrain(t *testing.T, timeout time.Duration) *maintenance.Controller {
 	t.Helper()
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	databaseDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(databaseDir, 0o700); err != nil {
 		t.Fatalf("创建测试数据库目录失败：%v", err)
@@ -199,7 +200,7 @@ func newControllerWithDrain(t *testing.T, timeout time.Duration) *maintenance.Co
 }
 
 func TestRestoreLockIsExclusiveAcrossControllers(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	databaseDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(databaseDir, 0o700); err != nil {
 		t.Fatalf("创建测试数据库目录失败：%v", err)
@@ -341,7 +342,7 @@ func TestReconcileIncompleteAndMismatch(t *testing.T) {
 }
 
 func TestStateFileTamperRejected(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	databaseDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(databaseDir, 0o700); err != nil {
 		t.Fatalf("创建目录失败：%v", err)
@@ -374,7 +375,7 @@ func TestStateFileTamperRejected(t *testing.T) {
 }
 
 func TestStateDirInsideDatabaseDirRejected(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	databaseDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(databaseDir, 0o700); err != nil {
 		t.Fatalf("创建目录失败：%v", err)
@@ -409,7 +410,7 @@ func TestOperatorValidation(t *testing.T) {
 // TestStorageWriteGuardBlocksWritesDuringMaintenance 验证维护状态通过存储写入门闸
 // 真实阻止新写入（事务与直接写语句），只读查询不受影响；退出维护后写入恢复。
 func TestStorageWriteGuardBlocksWritesDuringMaintenance(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	databaseDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(databaseDir, 0o700); err != nil {
 		t.Fatalf("创建测试数据库目录失败：%v", err)

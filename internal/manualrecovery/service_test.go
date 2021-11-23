@@ -17,6 +17,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -227,7 +228,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T, mutate func(*manualrecovery.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "manual-recovery.db")))
+	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "manual-recovery.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

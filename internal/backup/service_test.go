@@ -27,6 +27,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -142,7 +143,7 @@ type testEnv struct {
 // newTestEnv 构造测试环境：临时数据库执行全部迁移，审计写入真实 audit_events。
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "login.db")
+	dbPath := filepath.Join(testutil.TempDir(t), "login.db")
 	store, err := storagesqlite.Open(context.Background(),
 		storagesqlite.DefaultOptions(dbPath))
 	if err != nil {
@@ -173,13 +174,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	authorizer := &fakeAuthorizer{}
 	authorizer.allow(PermissionCreate)
 	authorizer.allow(PermissionCancel)
-	avatarDir := filepath.Join(t.TempDir(), "avatars")
+	avatarDir := filepath.Join(testutil.TempDir(t), "avatars")
 	avatarStorage, err := avatar.NewLocalStorage(avatarDir)
 	if err != nil {
 		t.Fatalf("构造头像存储失败：%v", err)
 	}
 	env := &testEnv{
-		store: store, dbPath: dbPath, outputDir: t.TempDir(), ring: ring,
+		store: store, dbPath: dbPath, outputDir: testutil.TempDir(t), ring: ring,
 		authorizer: authorizer, recorder: recorder, avatars: avatarStorage,
 		now: func() time.Time { return backupTestTime },
 	}
@@ -250,7 +251,7 @@ source_kind, created_at_ms, updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 // writeConfig 写入测试 YAML 配置并返回配置源。
 func (e *testEnv) writeConfig(t *testing.T) ConfigSource {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "login.yaml")
+	path := filepath.Join(testutil.TempDir(t), "login.yaml")
 	data := []byte("server:\n  listen_addr: 127.0.0.1:8080\nlogging:\n  level: info\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("写入测试配置失败：%v", err)
@@ -470,7 +471,7 @@ func TestCreateBackupWithAttachmentsAndConfig(t *testing.T) {
 	}
 	// 数据库条目可被独立解析，说明备份的是真实 SQLite 快照。
 	raw := extractEntry(t, result.Path, env.ring, databaseEntryName)
-	snapshotPath := filepath.Join(t.TempDir(), "extracted.db")
+	snapshotPath := filepath.Join(testutil.TempDir(t), "extracted.db")
 	if err := os.WriteFile(snapshotPath, raw, 0o600); err != nil {
 		t.Fatalf("写入提取的数据库快照失败：%v", err)
 	}
@@ -548,7 +549,7 @@ id INTEGER PRIMARY KEY, value INTEGER NOT NULL)`); err != nil {
 		t.Fatal("并发写入测试没有发生写入，无法证明一致性")
 	}
 	raw := extractEntry(t, result.Path, env.ring, databaseEntryName)
-	snapshotPath := filepath.Join(t.TempDir(), "concurrent.db")
+	snapshotPath := filepath.Join(testutil.TempDir(t), "concurrent.db")
 	if err := os.WriteFile(snapshotPath, raw, 0o600); err != nil {
 		t.Fatalf("写入提取快照失败：%v", err)
 	}
@@ -590,7 +591,7 @@ func TestVerifyWrongKeyTamperAndTruncate(t *testing.T) {
 	}
 	tampered := append([]byte(nil), original...)
 	tampered[len(tampered)-TrailerBytes-1] ^= 0xff
-	tamperedPath := filepath.Join(t.TempDir(), "tampered.elnbak")
+	tamperedPath := filepath.Join(testutil.TempDir(t), "tampered.elnbak")
 	if err := os.WriteFile(tamperedPath, tampered, 0o600); err != nil {
 		t.Fatalf("写入篡改文件失败：%v", err)
 	}
@@ -600,7 +601,7 @@ func TestVerifyWrongKeyTamperAndTruncate(t *testing.T) {
 	if _, err := InspectFile(context.Background(), tamperedPath); err == nil {
 		t.Fatal("密文篡改未被无密钥结构检查发现")
 	}
-	truncatedPath := filepath.Join(t.TempDir(), "truncated.elnbak")
+	truncatedPath := filepath.Join(testutil.TempDir(t), "truncated.elnbak")
 	if err := os.WriteFile(truncatedPath, original[:len(original)-TrailerBytes-32], 0o600); err != nil {
 		t.Fatalf("写入截断文件失败：%v", err)
 	}
@@ -713,7 +714,7 @@ func craftManifestMismatchBackup(t *testing.T, sourcePath string, ring *secrets.
 	output.Write(filePrefix(newHeaderRaw))
 	output.Write(cipherBuffer.Bytes())
 	output.Write(cipherDigest[:])
-	craftedPath := filepath.Join(t.TempDir(), "crafted.elnbak")
+	craftedPath := filepath.Join(testutil.TempDir(t), "crafted.elnbak")
 	if err := os.WriteFile(craftedPath, output.Bytes(), 0o600); err != nil {
 		t.Fatalf("写入篡改备份失败：%v", err)
 	}
@@ -1098,7 +1099,7 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 	})
 	base := Options{Snapshotter: snapshotter, Keyring: keyProvider,
 		Authorizer: env.authorizer, Audit: env.recorder, OutputDir: env.outputDir}
-	outputFile := filepath.Join(t.TempDir(), "not-a-directory")
+	outputFile := filepath.Join(testutil.TempDir(t), "not-a-directory")
 	if err := os.WriteFile(outputFile, []byte("x"), 0o600); err != nil {
 		t.Fatalf("写入测试文件失败：%v", err)
 	}
@@ -1111,7 +1112,7 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 		{"缺少授权器", func(o *Options) { o.Authorizer = nil }},
 		{"缺少审计", func(o *Options) { o.Audit = nil }},
 		{"输出目录为空", func(o *Options) { o.OutputDir = "" }},
-		{"输出目录不存在", func(o *Options) { o.OutputDir = filepath.Join(t.TempDir(), "missing") }},
+		{"输出目录不存在", func(o *Options) { o.OutputDir = filepath.Join(testutil.TempDir(t), "missing") }},
 		{"输出目录是文件", func(o *Options) { o.OutputDir = outputFile }},
 		{"超时过短", func(o *Options) { o.Timeout = time.Second }},
 		{"尝试次数超限", func(o *Options) { o.MaxAttempts = MaxAllowedAttempts + 1 }},
@@ -1248,7 +1249,7 @@ func TestActiveBackupResidueProtected(t *testing.T) {
 // （创建前 PRAGMA quick_check(1) fail-closed）。
 func TestCorruptSourceDatabaseRejected(t *testing.T) {
 	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "corrupt-source.db")
+	dbPath := filepath.Join(testutil.TempDir(t), "corrupt-source.db")
 	store, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(dbPath))
 	if err != nil {
 		t.Fatalf("打开测试数据库失败：%v", err)
@@ -1295,7 +1296,7 @@ func TestCorruptSourceDatabaseRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造快照器失败：%v", err)
 	}
-	destination := filepath.Join(t.TempDir(), "snapshot.db")
+	destination := filepath.Join(testutil.TempDir(t), "snapshot.db")
 	if _, err := snapshotter.Snapshot(ctx, destination, nil); err == nil {
 		t.Fatal("损坏源数据库未被拒绝，生成了“成功”快照")
 	}

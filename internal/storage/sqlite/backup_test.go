@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -64,7 +65,7 @@ func TestOnlineBackupUnderConcurrentWrites(t *testing.T) {
 		}
 	}()
 
-	destination := filepath.Join(t.TempDir(), "snapshot.db")
+	destination := filepath.Join(testutil.TempDir(t), "snapshot.db")
 	var lastProgress atomic.Int64
 	err = store.OnlineBackup(ctx, destination, func(done, total int) {
 		if done >= 0 && total >= 0 {
@@ -107,7 +108,7 @@ func TestOnlineBackupUnderConcurrentWrites(t *testing.T) {
 func TestOnlineBackupCancel(t *testing.T) {
 	store, _ := defaultTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	destination := filepath.Join(t.TempDir(), "snapshot.db")
+	destination := filepath.Join(testutil.TempDir(t), "snapshot.db")
 	progressCalls := 0
 	err := store.OnlineBackup(ctx, destination, func(done, total int) {
 		progressCalls++
@@ -125,7 +126,7 @@ func TestOnlineBackupCancel(t *testing.T) {
 // 把旧备份原样保留成“成功”的假象。
 func TestOnlineBackupRejectsExistingDestination(t *testing.T) {
 	store, _ := defaultTestStore(t)
-	destination := filepath.Join(t.TempDir(), "snapshot.db")
+	destination := filepath.Join(testutil.TempDir(t), "snapshot.db")
 	if err := os.WriteFile(destination, []byte("keep"), 0o600); err != nil {
 		t.Fatalf("准备目标文件失败：%v", err)
 	}
@@ -147,7 +148,7 @@ func TestOnlineBackupContextTimeout(t *testing.T) {
 	store, _ := defaultTestStore(t)
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	err := store.OnlineBackup(ctx, filepath.Join(t.TempDir(), "snapshot.db"), nil)
+	err := store.OnlineBackup(ctx, filepath.Join(testutil.TempDir(t), "snapshot.db"), nil)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("超时错误 = %v，期望 context.DeadlineExceeded", err)
 	}

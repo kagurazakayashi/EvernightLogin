@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // envLookup 构造可控的环境变量读取函数，避免测试依赖真实进程环境。
@@ -461,7 +463,7 @@ func TestYAMLSyntaxErrors(t *testing.T) {
 }
 
 func TestInvalidConfigHasNoSideEffects(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	databasePath := filepath.Join(dir, "login.db")
 
 	validYAML := "database:\n  path: \"" + filepath.ToSlash(databasePath) + "\"\n"

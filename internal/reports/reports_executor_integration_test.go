@@ -11,6 +11,7 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -19,11 +20,11 @@ import (
 func TestGenerateViaRealTaskExecutor(t *testing.T) {
 	ctx := context.Background()
 	now := func() time.Time { return baseTime }
-	outputDir := t.TempDir()
+	outputDir := testutil.TempDir(t)
 
 	// 任务存储：临时 SQLite + 全部迁移。
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "reports-task.db")))
+		filepath.Join(testutil.TempDir(t), "reports-task.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
 	}

@@ -34,6 +34,7 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -203,7 +204,7 @@ func newStep93ReportsEnv(t *testing.T, userID, kind string,
 	now := time.Date(2026, 11, 20, 3, 40, 0, 0, time.UTC)
 	nowFn := func() time.Time { return now }
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "step93-reports.db")))
+		filepath.Join(testutil.TempDir(t), "step93-reports.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
 	}
@@ -268,7 +269,7 @@ func newStep93ReportsEnv(t *testing.T, userID, kind string,
 	service, err := reports.New(reports.Options{
 		Source: source, Authorizer: authorizer, Root: step93Root{},
 		Sensitive: step93Sensitive{}, Audit: recorder, Enqueuer: enqueuer,
-		Canceller: canceller, History: history, OutputDir: t.TempDir(),
+		Canceller: canceller, History: history, OutputDir: testutil.TempDir(t),
 		FontPath: step93PDFFontPath(t), MaxDetailRows: 20, Now: nowFn})
 	if err != nil {
 		t.Fatalf("构造报告服务失败: %v", err)

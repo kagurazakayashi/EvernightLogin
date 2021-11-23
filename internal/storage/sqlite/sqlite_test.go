@@ -15,13 +15,14 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
 func testStore(t *testing.T, options Options) (*Store, string) {
 	t.Helper()
 	if options.Path == "" {
-		options.Path = filepath.Join(t.TempDir(), "login.db")
+		options.Path = filepath.Join(testutil.TempDir(t), "login.db")
 	}
 	store, err := Open(context.Background(), options)
 	if err != nil {
@@ -108,7 +109,7 @@ func TestOpenAndPragmas(t *testing.T) {
 }
 
 func TestWALCanBeDisabled(t *testing.T) {
-	options := DefaultOptions(filepath.Join(t.TempDir(), "login.db"))
+	options := DefaultOptions(filepath.Join(testutil.TempDir(t), "login.db"))
 	options.WAL = false
 	store, _ := testStore(t, options)
 	err := store.WithConn(context.Background(), func(ctx context.Context, conn *sql.Conn) error {
@@ -127,7 +128,7 @@ func TestWALCanBeDisabled(t *testing.T) {
 }
 
 func TestOpenErrorsAreSafe(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	missingParent := filepath.Join(dir, "missing", "login.db")
 	_, err := Open(context.Background(), DefaultOptions(missingParent))
 	if err == nil {
@@ -157,7 +158,7 @@ func TestOpenErrorsAreSafe(t *testing.T) {
 }
 
 func TestWrapHostDBOwnership(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "host.db")
+	path := filepath.Join(testutil.TempDir(t), "host.db")
 	host, err := sql.Open("sqlite", path+"?_foreign_keys=1")
 	if err != nil {
 		t.Fatalf("打开宿主连接失败：%v", err)
@@ -178,7 +179,7 @@ func TestWrapHostDBOwnership(t *testing.T) {
 		t.Errorf("Close 不应关闭宿主连接：%v", err)
 	}
 
-	noForeignKeys := filepath.Join(t.TempDir(), "nofk.db")
+	noForeignKeys := filepath.Join(testutil.TempDir(t), "nofk.db")
 	hostWithoutFK, err := sql.Open("sqlite", noForeignKeys)
 	if err != nil {
 		t.Fatalf("打开宿主连接失败：%v", err)
@@ -316,7 +317,7 @@ func TestVersionConflict(t *testing.T) {
 }
 
 func TestBusyTimeoutWaitsThenSucceeds(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "busy.db")
+	path := filepath.Join(testutil.TempDir(t), "busy.db")
 	first, _ := testStore(t, DefaultOptions(path))
 	second, _ := testStore(t, DefaultOptions(path))
 	mustExec(t, first, `CREATE TABLE busy_items (id TEXT PRIMARY KEY)`)
@@ -366,7 +367,7 @@ func TestBusyTimeoutWaitsThenSucceeds(t *testing.T) {
 }
 
 func TestLockTimeoutIsBounded(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "timeout.db")
+	path := filepath.Join(testutil.TempDir(t), "timeout.db")
 	first, _ := testStore(t, DefaultOptions(path))
 	secondOptions := DefaultOptions(path)
 	secondOptions.BusyTimeout = 100 * time.Millisecond
@@ -411,7 +412,7 @@ func TestLockTimeoutIsBounded(t *testing.T) {
 }
 
 func TestRetryOnBusySucceeds(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "retry.db")
+	path := filepath.Join(testutil.TempDir(t), "retry.db")
 	first, _ := testStore(t, DefaultOptions(path))
 	secondOptions := DefaultOptions(path)
 	secondOptions.BusyTimeout = 30 * time.Millisecond
@@ -490,7 +491,7 @@ func TestContextCancellationRollsBack(t *testing.T) {
 }
 
 func TestContextCancellationWhileWaitingForLock(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cancel-lock.db")
+	path := filepath.Join(testutil.TempDir(t), "cancel-lock.db")
 	first, _ := testStore(t, DefaultOptions(path))
 	secondOptions := DefaultOptions(path)
 	secondOptions.BusyTimeout = 300 * time.Millisecond
@@ -541,7 +542,7 @@ func TestContextCancellationWhileWaitingForLock(t *testing.T) {
 }
 
 func TestMigrateAndReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "migrate.db")
+	path := filepath.Join(testutil.TempDir(t), "migrate.db")
 	store, err := Open(context.Background(), DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("Open() 失败：%v", err)
@@ -675,7 +676,7 @@ func TestMigrateFailureRecordedAndRetryNeedsClear(t *testing.T) {
 }
 
 func TestConcurrentMigrateTwoConnections(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "concurrent.db")
+	path := filepath.Join(testutil.TempDir(t), "concurrent.db")
 	first, _ := testStore(t, DefaultOptions(path))
 	secondOptions := DefaultOptions(path)
 	secondOptions.BusyTimeout = 2 * time.Second
@@ -738,7 +739,7 @@ func TestErrorClassificationCodes(t *testing.T) {
 }
 
 func TestOptionsValidation(t *testing.T) {
-	valid := DefaultOptions(filepath.Join(t.TempDir(), "x.db"))
+	valid := DefaultOptions(filepath.Join(testutil.TempDir(t), "x.db"))
 	if _, err := valid.normalize(true); err != nil {
 		t.Fatalf("默认配置不合法：%v", err)
 	}

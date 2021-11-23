@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // TestExtractRejectsPresetSymlinkDestination 验证步骤 82 审计 L5 的加固：解包父
@@ -30,8 +32,8 @@ func TestExtractRejectsPresetSymlinkDestination(t *testing.T) {
 	}
 
 	// 情形一：目标暂存目录内预置 attachments 符号链接指向外部目录。
-	outsideDir := t.TempDir()
-	destination := t.TempDir()
+	outsideDir := testutil.TempDir(t)
+	destination := testutil.TempDir(t)
 	if err := os.Symlink(outsideDir, filepath.Join(destination, "attachments")); err != nil {
 		t.Skipf("当前环境不支持创建符号链接，跳过符号链接用例：%v", err)
 	}
@@ -45,7 +47,7 @@ func TestExtractRejectsPresetSymlinkDestination(t *testing.T) {
 	}
 
 	// 情形二：目标暂存目录内预置同名普通文件（不是目录）阻止落盘。
-	destination2 := t.TempDir()
+	destination2 := testutil.TempDir(t)
 	blocker := filepath.Join(destination2, "attachments")
 	if err := os.WriteFile(blocker, []byte("preserve"), 0o600); err != nil {
 		t.Fatalf("写入预置文件失败：%v", err)
@@ -59,7 +61,7 @@ func TestExtractRejectsPresetSymlinkDestination(t *testing.T) {
 	}
 
 	// 情形三：预置完整目标路径文件；O_EXCL 必须失败且不覆盖原内容。
-	destination3 := t.TempDir()
+	destination3 := testutil.TempDir(t)
 	targetPath := filepath.Join(destination3,
 		filepath.FromSlash(attachmentEntry.Name))
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
@@ -77,7 +79,7 @@ func TestExtractRejectsPresetSymlinkDestination(t *testing.T) {
 	}
 
 	// 情形四：正常解包附件内容正确。
-	destination4 := t.TempDir()
+	destination4 := testutil.TempDir(t)
 	result, err := Extract(ctx, ExtractOptions{Path: backupPath, Keyring: env.ring,
 		Destination: destination4})
 	if err != nil {
@@ -105,7 +107,7 @@ func TestExtractRejectsUnsafeDestination(t *testing.T) {
 		Destination: "relative-dir"}); !errors.Is(err, ErrOptionsInvalid) {
 		t.Fatalf("相对解包目录未按 ErrOptionsInvalid 拒绝：%v", err)
 	}
-	filePath := filepath.Join(t.TempDir(), "not-a-dir")
+	filePath := filepath.Join(testutil.TempDir(t), "not-a-dir")
 	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
 		t.Fatalf("写入文件失败：%v", err)
 	}

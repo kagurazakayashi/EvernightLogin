@@ -36,6 +36,7 @@ import (
 	rolesqlite "github.com/kagurazakayashi/EvernightLogin/internal/role/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -120,7 +121,7 @@ func newRBACIntegrationEnv(t *testing.T) *rbacIntegrationEnv {
 	t.Helper()
 	ctx := context.Background()
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "rbac-pages.db")))
+		filepath.Join(testutil.TempDir(t), "rbac-pages.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

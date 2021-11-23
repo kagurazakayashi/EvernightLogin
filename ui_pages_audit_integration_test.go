@@ -26,6 +26,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -109,7 +110,7 @@ func newHTTPAuditHandlerKind(t *testing.T, sessionUser, eventActor, kind string)
 	ctx := context.Background()
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 	raw, err := storagesqlite.Open(ctx,
-		storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "audit_http.db")))
+		storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "audit_http.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
 	}
@@ -141,7 +142,7 @@ func newHTTPAuditHandlerKind(t *testing.T, sessionUser, eventActor, kind string)
 		Store: opStore, Audit: recorder, Authorizer: authorizer,
 		Root:      &httpAuditRoot{roots: map[string]bool{}},
 		Sensitive: httpAuditSensitive{}, Enqueuer: &httpAuditEnqueuer{},
-		Canceller: httpAuditCanceller{}, OutputDir: t.TempDir(), RetentionDays: 180,
+		Canceller: httpAuditCanceller{}, OutputDir: testutil.TempDir(t), RetentionDays: 180,
 		Now: func() time.Time { return now },
 	})
 	if err != nil {

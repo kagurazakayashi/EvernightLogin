@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // testCryptoHeaderDigest 返回固定头部摘要，模拟加密写入时的 AAD 起点。
@@ -187,7 +189,7 @@ func TestValidateEntryName(t *testing.T) {
 // TestVerifyFailsWithoutKey 验证认证校验必须提供主密钥环，不能用无密钥结构检查
 // 冒充完整校验。
 func TestVerifyFailsWithoutKey(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing.elnbak")
+	path := filepath.Join(testutil.TempDir(t), "missing.elnbak")
 	if err := os.WriteFile(path, []byte("not-a-backup"), 0o600); err != nil {
 		t.Fatalf("写入测试文件失败：%v", err)
 	}

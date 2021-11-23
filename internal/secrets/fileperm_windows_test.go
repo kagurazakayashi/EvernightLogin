@@ -11,11 +11,12 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"golang.org/x/sys/windows"
 )
 
 // 本文件在 Windows 上实际验证 ACL 检查，而不是只依赖 Unix 权限位的逻辑。
-// 测试只操作 t.TempDir() 下的临时文件，不修改系统路径或用户主目录。
+// 测试只操作 testutil.TempDir(t) 下的临时文件，不修改系统路径或用户主目录。
 
 // everyoneSID 返回 Everyone（S-1-1-0）SID。
 func everyoneSID(t *testing.T) *windows.SID {
@@ -71,7 +72,7 @@ func clearDACL(t *testing.T, path string) {
 }
 
 func TestWindowsProtectedFileACL(t *testing.T) {
-	path, ring := writeTestKeyringFile(t, t.TempDir(), "master-key.json", "k1")
+	path, ring := writeTestKeyringFile(t, testutil.TempDir(t), "master-key.json", "k1")
 	if err := CheckProtectedFile(path); err != nil {
 		t.Fatalf("受保护文件检查失败: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestWindowsProtectedFileACL(t *testing.T) {
 }
 
 func TestWindowsWideExplicitACLRejected(t *testing.T) {
-	path, ring := writeTestKeyringFile(t, t.TempDir(), "master-key.json", "k1")
+	path, ring := writeTestKeyringFile(t, testutil.TempDir(t), "master-key.json", "k1")
 	addAllowACE(t, path, everyoneSID(t), windows.GENERIC_READ, 0)
 
 	err := CheckProtectedFile(path)
@@ -125,7 +126,7 @@ func TestWindowsWideExplicitACLRejected(t *testing.T) {
 }
 
 func TestWindowsNullDACLRejected(t *testing.T) {
-	path, _ := writeTestKeyringFile(t, t.TempDir(), "master-key.json", "k1")
+	path, _ := writeTestKeyringFile(t, testutil.TempDir(t), "master-key.json", "k1")
 	clearDACL(t, path)
 	if err := CheckProtectedFile(path); !errors.Is(err, ErrInsecurePermissions) {
 		t.Fatalf("NULL DACL 检查错误 = %v, 期望 ErrInsecurePermissions", err)
@@ -133,7 +134,7 @@ func TestWindowsNullDACLRejected(t *testing.T) {
 }
 
 func TestWindowsWideInheritedACLRejected(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	// 在父目录上增加可继承的 Everyone 读取 ACE，子文件创建后会继承它。
 	addAllowACE(t, dir, everyoneSID(t), windows.GENERIC_READ,
 		uint32(windows.CONTAINER_INHERIT_ACE|windows.OBJECT_INHERIT_ACE))
@@ -147,7 +148,7 @@ func TestWindowsWideInheritedACLRejected(t *testing.T) {
 }
 
 func TestWindowsWriteProtectedFileOverridesPermissiveParent(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	addAllowACE(t, dir, everyoneSID(t), windows.GENERIC_READ,
 		uint32(windows.CONTAINER_INHERIT_ACE|windows.OBJECT_INHERIT_ACE))
 	path := filepath.Join(dir, "protected-in-bad-dir.json")
@@ -173,7 +174,7 @@ func TestWindowsWriteProtectedFileOverridesPermissiveParent(t *testing.T) {
 }
 
 func TestWindowsInheritOnlyACEAllowed(t *testing.T) {
-	path, _ := writeTestKeyringFile(t, t.TempDir(), "master-key.json", "k1")
+	path, _ := writeTestKeyringFile(t, testutil.TempDir(t), "master-key.json", "k1")
 	// 仅继承给子对象的 ACE 不影响文件自身访问，允许存在。
 	addAllowACE(t, path, everyoneSID(t), windows.GENERIC_READ, uint32(windows.INHERIT_ONLY_ACE))
 	if err := CheckProtectedFile(path); err != nil {

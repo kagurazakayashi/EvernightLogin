@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // TestPDFAndMarkdownSameSnapshotConsistency 生成五种格式并核对数值同源：JSON 是
@@ -305,7 +306,7 @@ func TestPDFFontValidation(t *testing.T) {
 		t.Fatalf("开关放行后摘要不符错误 = %v，期望 ErrOptionsInvalid", err)
 	}
 	// 显式开关放行后仍要求真实 TrueType（sfnt 魔数），非 TTF 内容拒绝。
-	fakePath := filepath.Join(t.TempDir(), "fake.ttf")
+	fakePath := filepath.Join(testutil.TempDir(t), "fake.ttf")
 	fakeData := make([]byte, 2<<20)
 	if err := os.WriteFile(fakePath, fakeData, 0o600); err != nil {
 		t.Fatalf("写测试字体失败: %v", err)

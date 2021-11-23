@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // testClientCA 是 mTLS 测试用的客户端信任 CA（与服务器证书链独立）。
@@ -181,7 +182,7 @@ func requestMTLS(t *testing.T, client *http.Client, url string) (int, string) {
 }
 
 func TestServerMTLSRequiredEndToEnd(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	serverCert, serverKey, serverPool := generateTestServerCertificate(t, dir, "localhost")
 	clientCA := newTestClientCA(t, "Login Client Trust CA")
 	otherCA := newTestClientCA(t, "Untrusted Client CA")
@@ -249,7 +250,7 @@ func TestServerMTLSRequiredEndToEnd(t *testing.T) {
 }
 
 func TestServerMTLSOptionalEndToEnd(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	serverCert, serverKey, serverPool := generateTestServerCertificate(t, dir, "localhost")
 	clientCA := newTestClientCA(t, "Login Client Trust CA")
 	otherCA := newTestClientCA(t, "Untrusted Client CA")
@@ -293,7 +294,7 @@ func TestServerMTLSOptionalEndToEnd(t *testing.T) {
 }
 
 func TestServerMTLSDisabledKeepsAnonymous(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	serverCert, serverKey, serverPool := generateTestServerCertificate(t, dir, "localhost")
 	cfg := testServerConfig(t, freeListenAddr(t))
 	cfg.Server.TLSCertFiles = []string{serverCert}
@@ -313,7 +314,7 @@ func TestServerMTLSDisabledKeepsAnonymous(t *testing.T) {
 }
 
 func TestServerMTLSReloadKeepsClientAuth(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	serverCertFile, serverKeyFile, serverPool := generateTestServerCertificate(t, dir, "localhost")
 	clientCA := newTestClientCA(t, "Login Client Trust CA")
 	clientCAPath := writeTestPEM(t, dir, "client-ca.pem", clientCA.pem)
@@ -328,7 +329,7 @@ func TestServerMTLSReloadKeepsClientAuth(t *testing.T) {
 	initialStatus, _ := server.TLSStatus()
 
 	// 轮换服务器证书：ReloadTLS 只重载服务器证书，不得削弱客户端认证。
-	newDir := t.TempDir()
+	newDir := testutil.TempDir(t)
 	newCertFile, newKeyFile, newServerPool := generateTestServerCertificate(t, newDir, "localhost")
 	if err := os.WriteFile(serverCertFile, mustReadFile(t, newCertFile), 0o644); err != nil {
 		t.Fatalf("更新服务器证书失败：%v", err)
@@ -370,7 +371,7 @@ func TestServerMTLSReloadKeepsClientAuth(t *testing.T) {
 }
 
 func TestServerMTLSRevocationRequiresRestart(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	serverCert, serverKey, serverPool := generateTestServerCertificate(t, dir, "localhost")
 	clientCA := newTestClientCA(t, "Login Client Trust CA")
 	clientCAPath := writeTestPEM(t, dir, "client-ca.pem", clientCA.pem)
@@ -400,7 +401,7 @@ func TestServerMTLSRevocationRequiresRestart(t *testing.T) {
 }
 
 func TestServerMTLSShutdownReleasesPort(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	serverCert, serverKey, serverPool := generateTestServerCertificate(t, dir, "localhost")
 	clientCA := newTestClientCA(t, "Login Client Trust CA")
 	clientCAPath := writeTestPEM(t, dir, "client-ca.pem", clientCA.pem)
@@ -432,7 +433,7 @@ func TestServerMTLSShutdownReleasesPort(t *testing.T) {
 }
 
 func TestServerMTLSFromYAMLConfig(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	serverCert, serverKey, serverPool := generateTestServerCertificate(t, dir, "localhost")
 	clientCA := newTestClientCA(t, "Login Client Trust CA")
 	clientCAPath := writeTestPEM(t, dir, "client-ca.pem", clientCA.pem)

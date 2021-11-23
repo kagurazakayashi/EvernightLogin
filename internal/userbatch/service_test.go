@@ -19,6 +19,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/userbatch"
 	userbatchsqlite "github.com/kagurazakayashi/EvernightLogin/internal/userbatch/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
@@ -147,7 +148,7 @@ func newTestEnvWithConfig(t *testing.T, mutate func(*userbatch.Options)) *testEn
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "userbatch-test.db")))
+		filepath.Join(testutil.TempDir(t), "userbatch-test.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}
@@ -175,7 +176,7 @@ func newTestEnvWithConfig(t *testing.T, mutate func(*userbatch.Options)) *testEn
 	authorizer := &fakeAuthorizer{}
 	accounts := &fakeAccounts{}
 	enqueuer := &fakeEnqueuer{}
-	outputDir := t.TempDir()
+	outputDir := testutil.TempDir(t)
 	options := userbatch.Options{
 		Store: store, Audit: recorder, Authorizer: authorizer, Sensitive: fakeSensitive{},
 		Accounts: accounts, DataScope: fakeDataScope{}, Enqueuer: enqueuer,

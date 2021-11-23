@@ -18,6 +18,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -112,7 +113,7 @@ func mustUserCaller(t *testing.T, id string) mailer.Caller {
 func newDeliveryEnv(t *testing.T) *deliveryEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "login-mailer-test.db")
+	path := filepath.Join(testutil.TempDir(t), "login-mailer-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开临时数据库: %v", err)

@@ -18,6 +18,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/preset"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -45,7 +46,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T, mutate func(*policy.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "policy-test.db")
+	path := filepath.Join(testutil.TempDir(t), "policy-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)

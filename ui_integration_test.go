@@ -21,6 +21,7 @@ import (
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -76,7 +77,7 @@ func newUIIntegrationEnv(t *testing.T) *uiIntegrationEnv {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "ui.db")))
+		filepath.Join(testutil.TempDir(t), "ui.db")))
 	if err != nil {
 		t.Fatalf("打开临时数据库失败: %v", err)
 	}

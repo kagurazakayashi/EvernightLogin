@@ -12,6 +12,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reports"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -23,7 +24,7 @@ func newStore(t *testing.T) *Store {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(testTempDir(t), "report-lifecycle.db")))
+		filepath.Join(testutil.TempDir(t), "report-lifecycle.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
 	}

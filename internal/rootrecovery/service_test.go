@@ -15,6 +15,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/rootrecovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -81,7 +82,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T, mutate func(*rootrecovery.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	dbPath := filepath.Join(dir, "login.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(dbPath))
 	if err != nil {
@@ -491,7 +492,7 @@ func TestFaultInjectionRollsBack(t *testing.T) {
 // TestInvalidDatabaseRejected 覆盖错误数据库/旧版本/缺 root：全部在写入前拒绝。
 func TestInvalidDatabaseRejected(t *testing.T) {
 	// 非本项目数据库文件。
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	foreign := filepath.Join(dir, "foreign.db")
 	if err := os.WriteFile(foreign, []byte("not a sqlite database at all"), 0o600); err != nil {
 		t.Fatalf("写入错误库: %v", err)
@@ -514,7 +515,7 @@ func TestInvalidDatabaseRejected(t *testing.T) {
 		t.Fatalf("错误库不应被修改: %v %v", info, statErr)
 	}
 	// 迁移到一半的数据库（缺少本项目 root）拒绝。
-	incompleteDir := t.TempDir()
+	incompleteDir := testutil.TempDir(t)
 	incompletePath := filepath.Join(incompleteDir, "incomplete.db")
 	ctx := context.Background()
 	incomplete, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(incompletePath))
@@ -629,7 +630,7 @@ BEGIN SELECT RAISE(ABORT,'模拟审计存储故障'); END`); err != nil {
 // 访问时仍共享互斥：身份锁确保硬链接路径不能绕过恢复锁。
 func TestLockCoversSameFileDifferentPaths(t *testing.T) {
 	env := newTestEnv(t, nil)
-	otherDir := t.TempDir()
+	otherDir := testutil.TempDir(t)
 	hardlinkPath := filepath.Join(otherDir, "linked.db")
 	if err := os.Link(env.dbPath, hardlinkPath); err != nil {
 		t.Skipf("当前环境不支持硬链接，跳过不同路径锁测试: %v", err)

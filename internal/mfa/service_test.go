@@ -30,6 +30,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	totpsqlite "github.com/kagurazakayashi/EvernightLogin/internal/totp/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
@@ -57,7 +58,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T, mutate func(*mfa.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "mfa-test.db")
+	path := filepath.Join(testutil.TempDir(t), "mfa-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)

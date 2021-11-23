@@ -24,6 +24,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -59,7 +60,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auditops.db")
+	path := filepath.Join(testutil.TempDir(t), "auditops.db")
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
@@ -81,7 +82,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("构造 auditops 仓储失败: %v", err)
 	}
 	env := &testEnv{t: t, ctx: ctx, raw: raw, audit: auditStore, store: store,
-		outputDir: t.TempDir(), now: func() time.Time { return baseTime }}
+		outputDir: testutil.TempDir(t), now: func() time.Time { return baseTime }}
 	env.authorizer = &fakeAuthorizer{grants: map[string]auditops.ScopeGrant{}}
 	env.root = &fakeRoot{roots: map[string]bool{}}
 	env.sensitive = &fakeSensitive{denied: map[string]bool{}}

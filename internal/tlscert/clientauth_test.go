@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // clientLeafTemplate 返回客户端认证叶证书模板。
@@ -205,7 +207,7 @@ func newMTLSManager(t *testing.T, mode ClientAuthMode, caFiles []string, identit
 }
 
 func TestClientAuthLoadingAndStatus(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	clientCA := newTestAuthority(t, "Client Trust CA", true)
 	caPath := writeClientCA(t, dir, "client-ca.pem", clientCA)
 	identities := []ClientIdentity{{DNSName: "backup.internal", Service: "backup-agent"}}
@@ -282,7 +284,7 @@ func TestClientAuthLoadingAndStatus(t *testing.T) {
 }
 
 func TestClientAuthLoadingFailures(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	validCA := newTestAuthority(t, "Valid CA", true)
 	validCAPath := writeClientCA(t, dir, "valid-ca.pem", validCA)
 	serverIdentity := newTestIdentity(t, "localhost")
@@ -365,7 +367,7 @@ func TestClientAuthLoadingFailures(t *testing.T) {
 
 	// 客户端信任 CA 与服务器证书链不能共用同一张证书：把自签服务器证书同时当作
 	// 客户端信任 CA。
-	selfSignedDir := t.TempDir()
+	selfSignedDir := testutil.TempDir(t)
 	selfSignedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("生成自签服务器私钥失败：%v", err)
@@ -439,7 +441,7 @@ func newExpiredAuthority(t *testing.T, commonName string) *testAuthority {
 }
 
 func TestMTLSHandshakeRequired(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	clientCA := newTestAuthority(t, "Client Trust CA", true)
 	otherCA := newTestAuthority(t, "Other CA", true)
 	caPath := writeClientCA(t, dir, "client-ca.pem", clientCA)
@@ -505,7 +507,7 @@ func TestMTLSHandshakeRequired(t *testing.T) {
 }
 
 func TestMTLSHandshakeOptional(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	clientCA := newTestAuthority(t, "Client Trust CA", true)
 	otherCA := newTestAuthority(t, "Other CA", true)
 	caPath := writeClientCA(t, dir, "client-ca.pem", clientCA)
@@ -569,7 +571,7 @@ func TestMTLSHandshakeDisabled(t *testing.T) {
 }
 
 func TestMTLSResumptionRechecksIdentity(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	clientCA := newTestAuthority(t, "Client Trust CA", true)
 	caPath := writeClientCA(t, dir, "client-ca.pem", clientCA)
 	identities := []ClientIdentity{{DNSName: "backup.internal", Service: "backup-agent"}}
@@ -601,7 +603,7 @@ func TestMTLSResumptionRechecksIdentity(t *testing.T) {
 
 // TestMTLSVerifyConnectionDirect 验证身份映射的规范化匹配与歧义拒绝。
 func TestMTLSVerifyConnectionDirect(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	clientCA := newTestAuthority(t, "Client Trust CA", true)
 	caPath := writeClientCA(t, dir, "client-ca.pem", clientCA)
 	manager, _ := newMTLSManager(t, ClientAuthRequired, []string{caPath}, []ClientIdentity{
@@ -623,7 +625,7 @@ func TestMTLSVerifyConnectionDirect(t *testing.T) {
 }
 
 func TestMTLSOptionalExpiredCertificateFails(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	clientCA := newTestAuthority(t, "Client Trust CA", true)
 	caPath := writeClientCA(t, dir, "client-ca.pem", clientCA)
 	manager, serverIdentity := newMTLSManager(t, ClientAuthOptional, []string{caPath}, []ClientIdentity{

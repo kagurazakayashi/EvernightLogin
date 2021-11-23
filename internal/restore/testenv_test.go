@@ -21,6 +21,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -46,10 +47,10 @@ type testEnv struct {
 }
 
 // newTestEnv 构造隔离测试环境：数据库目录、库外状态目录、回退备份目录与附件目录
-// 全部位于 t.TempDir() 下，互不重叠。
+// 全部位于 testutil.TempDir(t) 下，互不重叠。
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	root := t.TempDir()
+	root := testutil.TempDir(t)
 	env := &testEnv{
 		t:          t,
 		root:       root,

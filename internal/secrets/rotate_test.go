@@ -10,6 +10,8 @@ import (
 	"sort"
 	"sync"
 	"testing"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // memRecord 是内存存储中的一条密文记录。
@@ -715,7 +717,7 @@ func TestReencryptRejectsNonAdvancingStoreOrder(t *testing.T) {
 // 文件丢失时明确失败且不静默生成新密钥。
 func TestKeyRotationPersistenceAndKeyLossFlow(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	keyPath := filepath.Join(dir, "master-key.json")
 	binding := Binding{Purpose: "mfa.totp", ObjectID: "mfa-flow-1", ScopeID: ScopeSystem}
 	oldPlaintext := []byte("flow-initial-totp-seed")

@@ -15,6 +15,7 @@ import (
 	profilesqlite "github.com/kagurazakayashi/EvernightLogin/internal/profile/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -39,7 +40,7 @@ func (e *testEnv) auditForTest() profile.AuditRecorder { return e.recorder }
 func newTestEnv(t *testing.T, mutate func(*profile.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "profile-test.db")
+	path := filepath.Join(testutil.TempDir(t), "profile-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)

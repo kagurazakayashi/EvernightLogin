@@ -16,6 +16,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // cliListResult 是 list --json 的测试解析结构。
@@ -454,7 +455,7 @@ func TestCLIViewerErrorCodes(t *testing.T) {
 	// Windows 保留设备名/尾随点的条目名在打开备份前被拒绝，不创建输出。
 	for _, entryName := range []string{"CON", "prn.txt", "NUL.png", "COM1.dat",
 		"attachments/avatars/x.png.", "attachments/avatars/CON"} {
-		target := filepath.Join(t.TempDir(), "blocked.bin")
+		target := filepath.Join(testutil.TempDir(t), "blocked.bin")
 		code, _, _ := runCLI(t, "extract", "--file", backupFile,
 			"--key-file", env.keyFile, "--entry", entryName, "--output", target)
 		if code != ExitQueryInvalid {
@@ -528,7 +529,7 @@ func TestCLIViewerSensitiveExportProtection(t *testing.T) {
 func TestCLIViewerExportCancelledContext(t *testing.T) {
 	env := setupCLIEnvironment(t)
 	backupFile := createBackupForViewer(t, env)
-	outputPath := filepath.Join(t.TempDir(), "cancelled.csv")
+	outputPath := filepath.Join(testutil.TempDir(t), "cancelled.csv")
 	provider, err := secrets.NewFileProvider(env.keyFile)
 	if err != nil {
 		t.Fatalf("构造密钥提供者失败：%v", err)

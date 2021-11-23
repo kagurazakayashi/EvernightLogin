@@ -22,6 +22,7 @@ import (
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // testAuthority 是测试用证书颁发者（根 CA 或中间 CA）。
@@ -134,7 +135,7 @@ type testIdentity struct {
 // newTestIdentity 在临时目录生成 CA + 叶证书及受保护私钥文件。
 func newTestIdentity(t *testing.T, domains ...string) *testIdentity {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Test Root CA", true)
 	leaf, leafKey, certPEM, keyPEM := ca.issue(t, leafTemplate(domains...))
 	return &testIdentity{
@@ -186,7 +187,7 @@ func handshake(t *testing.T, manager *Manager, roots *x509.CertPool, serverName 
 }
 
 func TestLoadPEMChainAndSNISelection(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	root := newTestAuthority(t, "Root CA", true)
 	intermediate, intermediateKey, intermediatePEM, intermediateKeyPEM := root.issue(t, &x509.Certificate{
 		Subject:               pkix.Name{CommonName: "Intermediate CA"},
@@ -253,7 +254,7 @@ func TestDefaultCertificateForEmptySNI(t *testing.T) {
 }
 
 func TestCertificateValidationFailures(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Root", true)
 	_, _, leafPEM, leafKeyPEM := ca.issue(t, leafTemplate("login.example.com"))
 	_, _, otherPEM, otherKeyPEM := ca.issue(t, leafTemplate("other.example.com"))
@@ -316,7 +317,7 @@ func TestCertificateValidationFailures(t *testing.T) {
 }
 
 func TestChainOrganizationFailures(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	root := newTestAuthority(t, "Root", true)
 	intermediate, intermediateKey, intermediatePEM, _ := root.issue(t, &x509.Certificate{
 		Subject:               pkix.Name{CommonName: "Intermediate"},
@@ -359,7 +360,7 @@ func TestChainOrganizationFailures(t *testing.T) {
 }
 
 func TestAdditionalCAFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	root := newTestAuthority(t, "Root", true)
 	intermediate, intermediateKey, intermediatePEM, _ := root.issue(t, &x509.Certificate{
 		Subject:               pkix.Name{CommonName: "Intermediate"},
@@ -387,7 +388,7 @@ func TestAdditionalCAFile(t *testing.T) {
 }
 
 func TestPFXImport(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Root", true)
 	leaf, leafKey, _, _ := ca.issue(t, leafTemplate("login.example.com"))
 	password := "pfx-test-password"
@@ -416,7 +417,7 @@ func TestPFXImport(t *testing.T) {
 }
 
 func TestDuplicateDomainsAcrossCertificates(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Root", true)
 	_, _, certPEM1, keyPEM1 := ca.issue(t, leafTemplate("login.example.com"))
 	_, _, certPEM2, keyPEM2 := ca.issue(t, leafTemplate("login.example.com"))
@@ -433,7 +434,7 @@ func TestDuplicateDomainsAcrossCertificates(t *testing.T) {
 }
 
 func TestReloadSuccessAndFailureFallback(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Root", true)
 	_, _, certPEM1, keyPEM1 := ca.issue(t, leafTemplate("login.example.com"))
 	certPath := writePublic(t, dir, "server.crt", certPEM1)
@@ -491,7 +492,7 @@ func TestReloadSuccessAndFailureFallback(t *testing.T) {
 }
 
 func TestConcurrentHandshakeDuringReload(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Root", true)
 	_, _, certPEM, keyPEM := ca.issue(t, leafTemplate("login.example.com"))
 	certPath := writePublic(t, dir, "server.crt", certPEM)
@@ -575,7 +576,7 @@ func TestConcurrentHandshakeDuringReload(t *testing.T) {
 }
 
 func TestReloadCheckedRejectsCandidate(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Root", true)
 	_, _, certPEM, keyPEM := ca.issue(t, leafTemplate("login.example.com"))
 	certPath := writePublic(t, dir, "server.crt", certPEM)
@@ -615,7 +616,7 @@ func TestReloadCheckedRejectsCandidate(t *testing.T) {
 }
 
 func TestExpiryStatus(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	ca := newTestAuthority(t, "Root", true)
 	template := leafTemplate("login.example.com")
 	template.NotAfter = time.Now().Add(10 * 24 * time.Hour)

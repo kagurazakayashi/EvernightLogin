@@ -17,6 +17,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 	tokensqlite "github.com/kagurazakayashi/EvernightLogin/internal/token/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
@@ -66,7 +67,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
-	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "oidc.db")))
+	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "oidc.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -151,7 +152,7 @@ func newIntegrationEnv(t *testing.T, rootUserIDs ...string) *integrationEnv {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx,
-		storagesqlite.DefaultOptions(filepath.Join(t.TempDir(), "auditpage.db")))
+		storagesqlite.DefaultOptions(filepath.Join(testutil.TempDir(t), "auditpage.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
 	}
@@ -172,7 +173,7 @@ func newIntegrationEnv(t *testing.T, rootUserIDs ...string) *integrationEnv {
 		t.Fatalf("构造 auditops 仓储失败: %v", err)
 	}
 	env := &integrationEnv{t: t, ctx: ctx, audit: auditStore, store: opStore,
-		outputDir: t.TempDir()}
+		outputDir: testutil.TempDir(t)}
 	env.capture = &captureStore{Store: auditStore}
 	recorder, err := audit.New(env.capture, audit.Options{
 		Now: func() time.Time { return integrationNow }})

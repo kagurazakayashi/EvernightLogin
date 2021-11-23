@@ -26,6 +26,7 @@ import (
 	avatarsqlite "github.com/kagurazakayashi/EvernightLogin/internal/avatar/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -57,8 +58,8 @@ func (e *testEnv) setClockPastGCWindow() {
 func newTestEnv(t *testing.T, mutate func(*avatar.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	dir := t.TempDir()
-	path := filepath.Join(t.TempDir(), "avatar-test.db")
+	dir := testutil.TempDir(t)
+	path := filepath.Join(testutil.TempDir(t), "avatar-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
@@ -474,7 +475,7 @@ func TestRejectInvalidAndActiveContent(t *testing.T) {
 
 // TestStoragePathAndKeySafety 覆盖存储键格式、路径穿越与非法路径拒绝。
 func TestStoragePathAndKeySafety(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	files, err := avatar.NewLocalStorage(dir)
 	if err != nil {
 		t.Fatalf("构造存储: %v", err)
@@ -518,7 +519,7 @@ func TestStoragePathAndKeySafety(t *testing.T) {
 	if _, err := avatar.NewLocalStorage(""); !errors.Is(err, avatar.ErrOptionsInvalid) {
 		t.Errorf("空目录错误 = %v，期望 ErrOptionsInvalid", err)
 	}
-	filePath := filepath.Join(t.TempDir(), "not-a-dir")
+	filePath := filepath.Join(testutil.TempDir(t), "not-a-dir")
 	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
 		t.Fatalf("写入普通文件: %v", err)
 	}
@@ -529,7 +530,7 @@ func TestStoragePathAndKeySafety(t *testing.T) {
 		t.Errorf("非法扩展名错误 = %v，期望 ErrOptionsInvalid", err)
 	}
 	// 存储目录内的符号链接不能被 Open 跟随读取（Windows 无权限创建时跳过）。
-	outside := filepath.Join(t.TempDir(), "outside-target.png")
+	outside := filepath.Join(testutil.TempDir(t), "outside-target.png")
 	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
 		t.Fatalf("写入链接目标: %v", err)
 	}

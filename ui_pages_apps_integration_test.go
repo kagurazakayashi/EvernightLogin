@@ -34,6 +34,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -104,7 +105,7 @@ func newAppsIntegrationEnv(t *testing.T) *appsIntegrationEnv {
 	t.Helper()
 	ctx := context.Background()
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "apps-pages.db")))
+		filepath.Join(testutil.TempDir(t), "apps-pages.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

@@ -35,6 +35,7 @@ import (
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -144,7 +145,7 @@ func newPageAuthEnv(t *testing.T, registrationMutate func(*registration.Options)
 	t.Helper()
 	ctx := context.Background()
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "pages.db")))
+		filepath.Join(testutil.TempDir(t), "pages.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // newExtractEnv 构造带附件与配置的真实备份环境，返回环境与备份结果。
@@ -35,7 +36,7 @@ func newExtractEnv(t *testing.T) (*testEnv, Result) {
 // stagingDir 创建一个 0700 的受控暂存目录。
 func stagingDir(t *testing.T) string {
 	t.Helper()
-	directory := filepath.Join(t.TempDir(), "staging")
+	directory := filepath.Join(testutil.TempDir(t), "staging")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatalf("创建暂存目录失败：%v", err)
 	}
@@ -135,7 +136,7 @@ func TestExtractWrongKeyAndUnsafeDestination(t *testing.T) {
 	}
 	if _, err := Extract(context.Background(), ExtractOptions{
 		Path: backupResult.Path, Keyring: env.ring,
-		Destination: filepath.Join(t.TempDir(), "missing"),
+		Destination: filepath.Join(testutil.TempDir(t), "missing"),
 	}); err == nil {
 		t.Fatal("不存在的暂存目录必须拒绝")
 	}
@@ -146,7 +147,7 @@ func TestExtractWrongKeyAndUnsafeDestination(t *testing.T) {
 	}
 	// 符号链接目录必须拒绝。
 	target := stagingDir(t)
-	link := filepath.Join(t.TempDir(), "link")
+	link := filepath.Join(testutil.TempDir(t), "link")
 	if err := os.Symlink(target, link); err == nil {
 		if _, err := Extract(context.Background(), ExtractOptions{
 			Path: backupResult.Path, Keyring: env.ring, Destination: link,

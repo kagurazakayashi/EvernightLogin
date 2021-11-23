@@ -34,6 +34,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/internal/userbatch"
 	userbatchsqlite "github.com/kagurazakayashi/EvernightLogin/internal/userbatch/sqlite"
@@ -103,7 +104,7 @@ func newAdminIntegrationEnv(t *testing.T) *adminIntegrationEnv {
 	t.Helper()
 	ctx := context.Background()
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "admin-pages.db")))
+		filepath.Join(testutil.TempDir(t), "admin-pages.db")))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
 	}
@@ -200,7 +201,7 @@ func newAdminIntegrationEnv(t *testing.T) *adminIntegrationEnv {
 	if err != nil {
 		t.Fatalf("批量存储: %v", err)
 	}
-	outputDir := t.TempDir()
+	outputDir := testutil.TempDir(t)
 	batchService, err := userbatch.New(userbatch.Options{Store: batchStore, Audit: recorder,
 		Authorizer: allowBatchAuthorizer{}, Sensitive: batchSensitive{},
 		Accounts:  accountService,

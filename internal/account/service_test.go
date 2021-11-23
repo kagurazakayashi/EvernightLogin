@@ -18,6 +18,7 @@ import (
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -65,7 +66,7 @@ func prepareEnvWithLogger(t *testing.T, logger *slog.Logger, operators ...string
 		operators = []string{"operator-1"}
 	}
 	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "account.sqlite")
+	dbPath := filepath.Join(testutil.TempDir(t), "account.sqlite")
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(dbPath))
 	if err != nil {
 		t.Fatalf("打开临时数据库失败: %v", err)

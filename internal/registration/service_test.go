@@ -32,6 +32,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -98,7 +99,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T, mutate func(*registration.Options)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "login-registration-test.db")
+	path := filepath.Join(testutil.TempDir(t), "login-registration-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开临时数据库: %v", err)

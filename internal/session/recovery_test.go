@@ -16,6 +16,7 @@ import (
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -50,7 +51,7 @@ type sessionRecoveryEnv struct {
 func newSessionRecoveryEnv(t *testing.T, gate *recoveryGateStub, allowRoot bool) *sessionRecoveryEnv {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "session-recovery-test.db")
+	path := filepath.Join(testutil.TempDir(t), "session-recovery-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)
@@ -313,7 +314,7 @@ func TestRenewRejectsRecoverySession(t *testing.T) {
 // TestRecoverySessionTTLOptions 验证恢复会话期限边界校验。
 func TestRecoverySessionTTLOptions(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "session-recovery-ttl.db")
+	path := filepath.Join(testutil.TempDir(t), "session-recovery-ttl.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开数据库: %v", err)

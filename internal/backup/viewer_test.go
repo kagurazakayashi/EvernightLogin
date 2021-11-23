@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // viewerSourceSHA256 计算文件摘要，用于证明查看/导出全程只读源备份。
@@ -64,7 +65,7 @@ func newViewerTestEnv(t *testing.T, insertBefore func(*testEnv)) (*testEnv, stri
 func TestViewerListSnapshotAndPreview(t *testing.T) {
 	env, backupPath, _ := newViewerTestEnv(t, nil)
 	sourceBefore := viewerSourceSHA256(t, backupPath)
-	tempRoot := t.TempDir()
+	tempRoot := testutil.TempDir(t)
 	ctx := context.Background()
 	viewer, err := OpenViewer(ctx, ViewOptions{Path: backupPath, Keyring: env.ring,
 		TempRoot: tempRoot})
@@ -249,7 +250,7 @@ VALUES(?,?,?,?,?)`, formulaID, formula, "formula-normalized",
 		}
 	})
 	sourceBefore := viewerSourceSHA256(t, backupPath)
-	outputDir := t.TempDir()
+	outputDir := testutil.TempDir(t)
 	csvPath := filepath.Join(outputDir, "users.csv")
 	query := QueryOptions{Table: "users", Columns: []string{"id", "username", "status"},
 		Filters: []ColumnFilter{{Column: "id", Operator: "=", Values: []string{formulaID}}},
@@ -340,7 +341,7 @@ VALUES(?,?,?,?,?)`, formulaID, formula, "formula-normalized",
 func TestViewerExtractSingleEntry(t *testing.T) {
 	env, backupPath, avatarContent := newViewerTestEnv(t, nil)
 	ctx := context.Background()
-	tempRoot := t.TempDir()
+	tempRoot := testutil.TempDir(t)
 	// 用只读查看器获取清单条目名（同时也验证了条目存在性）。
 	viewer, err := OpenViewer(ctx, ViewOptions{Path: backupPath, Keyring: env.ring,
 		TempRoot: tempRoot})
@@ -366,7 +367,7 @@ func TestViewerExtractSingleEntry(t *testing.T) {
 	if attachmentEntry == nil || configEntry == nil || databaseEntry == nil {
 		t.Fatalf("清单条目缺失：%+v", report.Entries)
 	}
-	outputDir := t.TempDir()
+	outputDir := testutil.TempDir(t)
 	attachmentPath := filepath.Join(outputDir, "avatar.bin")
 	result, err := ExtractEntry(ctx, ExtractEntryOptions{Path: backupPath,
 		Keyring: env.ring, EntryName: attachmentEntry.Name,
@@ -444,7 +445,7 @@ func TestViewerExtractSingleEntry(t *testing.T) {
 func TestViewerWrongKeyTamperedTruncated(t *testing.T) {
 	env, backupPath, _ := newViewerTestEnv(t, nil)
 	ctx := context.Background()
-	tempRoot := t.TempDir()
+	tempRoot := testutil.TempDir(t)
 	otherRing, err := secrets.GenerateKeyring("k9", backupTestTime)
 	if err != nil {
 		t.Fatalf("生成另一密钥环失败：%v", err)
@@ -459,7 +460,7 @@ func TestViewerWrongKeyTamperedTruncated(t *testing.T) {
 	}
 	tampered := append([]byte(nil), data...)
 	tampered[len(tampered)-20] ^= 0x5a
-	tamperedPath := filepath.Join(t.TempDir(), "tampered.elnbak")
+	tamperedPath := filepath.Join(testutil.TempDir(t), "tampered.elnbak")
 	if err := os.WriteFile(tamperedPath, tampered, 0o600); err != nil {
 		t.Fatalf("写入篡改文件失败：%v", err)
 	}
@@ -467,7 +468,7 @@ func TestViewerWrongKeyTamperedTruncated(t *testing.T) {
 		TempRoot: tempRoot}); err == nil {
 		t.Fatal("篡改备份未被拒绝")
 	}
-	truncatedPath := filepath.Join(t.TempDir(), "truncated.elnbak")
+	truncatedPath := filepath.Join(testutil.TempDir(t), "truncated.elnbak")
 	if err := os.WriteFile(truncatedPath, data[:len(data)-64], 0o600); err != nil {
 		t.Fatalf("写入截断文件失败：%v", err)
 	}
@@ -475,7 +476,7 @@ func TestViewerWrongKeyTamperedTruncated(t *testing.T) {
 		TempRoot: tempRoot}); err == nil {
 		t.Fatal("截断备份未被拒绝")
 	}
-	missingPath := filepath.Join(t.TempDir(), "missing.elnbak")
+	missingPath := filepath.Join(testutil.TempDir(t), "missing.elnbak")
 	if _, err := OpenViewer(ctx, ViewOptions{Path: missingPath, Keyring: env.ring,
 		TempRoot: tempRoot}); err == nil {
 		t.Fatal("缺失备份文件未被拒绝")
@@ -550,7 +551,7 @@ func TestViewerMaliciousContainers(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			tempRoot := t.TempDir()
+			tempRoot := testutil.TempDir(t)
 			crafted := craftViewerTestBackup(t, templateRing, dbContent,
 				testCase.entries, testCase.content, false)
 			if _, err := OpenViewer(ctx, ViewOptions{Path: crafted,
@@ -696,7 +697,7 @@ func craftViewerTestBackup(t *testing.T, ring *secrets.Keyring, databaseContent 
 	fileContent.Write(filePrefix(headerRaw))
 	fileContent.Write(cipher.Bytes())
 	fileContent.Write(cipherDigest[:])
-	path := filepath.Join(t.TempDir(), "crafted.elnbak")
+	path := filepath.Join(testutil.TempDir(t), "crafted.elnbak")
 	if err := os.WriteFile(path, fileContent.Bytes(), 0o600); err != nil {
 		t.Fatalf("写入测试容器失败：%v", err)
 	}
@@ -707,7 +708,7 @@ func craftViewerTestBackup(t *testing.T, ring *secrets.Keyring, databaseContent 
 // 时明确失败且不留下临时明文。
 func TestViewerExtractLimitRejectsOversizeBackup(t *testing.T) {
 	env, backupPath, _ := newViewerTestEnv(t, nil)
-	tempRoot := t.TempDir()
+	tempRoot := testutil.TempDir(t)
 	_, err := OpenViewer(context.Background(), ViewOptions{Path: backupPath,
 		Keyring: env.ring, TempRoot: tempRoot, MaxExtractedBytes: 1024})
 	if !errors.Is(err, ErrTooLarge) {
@@ -751,8 +752,8 @@ func TestViewerCatalogTablesExist(t *testing.T) {
 
 // TestOperationLogRejectsSymlink 验证本地操作记录不会跟随预置符号链接写入。
 func TestOperationLogRejectsSymlink(t *testing.T) {
-	dir := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	dir := testutil.TempDir(t)
+	outside := filepath.Join(testutil.TempDir(t), "outside.jsonl")
 	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
 		t.Fatalf("写入外部文件失败：%v", err)
 	}
@@ -784,7 +785,7 @@ func TestViewerSnapshotUnsupportedEngine(t *testing.T) {
 // TestExportOutputSafety 验证输出目标安全检查：父目录缺失、目标存在（含符号
 // 链接）均默认拒绝。
 func TestExportOutputSafety(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if _, err := resolveOutputFile(filepath.Join(dir, "missing-dir", "out.csv")); !errors.Is(err, ErrOutputDirUnsafe) {
 		t.Fatalf("缺失输出目录未按 ErrOutputDirUnsafe 拒绝：%v", err)
 	}

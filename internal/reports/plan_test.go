@@ -14,6 +14,7 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -36,7 +37,7 @@ func newPlanTestEnv(t *testing.T, now *time.Time) *planTestEnv {
 	t.Helper()
 	ctx := context.Background()
 	raw, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(
-		filepath.Join(t.TempDir(), "reports-plan.db")))
+		filepath.Join(testutil.TempDir(t), "reports-plan.db")))
 	if err != nil {
 		t.Fatalf("打开临时 SQLite 失败: %v", err)
 	}
@@ -99,7 +100,7 @@ func newPlanTestEnv(t *testing.T, now *time.Time) *planTestEnv {
 	service, err = New(Options{Source: source, Authorizer: authorizer,
 		Root: &fakeRoot{}, Sensitive: &fakeSensitive{}, Audit: recorder,
 		Enqueuer: executor, Canceller: executor, Tasks: executor,
-		OutputDir: t.TempDir(), MaxDetailRows: 20, Now: nowFunc})
+		OutputDir: testutil.TempDir(t), MaxDetailRows: 20, Now: nowFunc})
 	if err != nil {
 		t.Fatalf("构造报告服务失败: %v", err)
 	}

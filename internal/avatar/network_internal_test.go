@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // fakeResolver 是可控 DNS 解析器，用于在不访问真实网络的情况下验证地址分类。
@@ -169,7 +171,7 @@ func TestDialRejectsNonPublicResolution(t *testing.T) {
 
 // TestStorageJoinRejectsEscape 验证受控存储键拼路径的逃逸防护。
 func TestStorageJoinRejectsEscape(t *testing.T) {
-	storage, err := NewLocalStorage(t.TempDir())
+	storage, err := NewLocalStorage(testutil.TempDir(t))
 	if err != nil {
 		t.Fatalf("构造存储: %v", err)
 	}

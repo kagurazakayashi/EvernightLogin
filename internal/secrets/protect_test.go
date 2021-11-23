@@ -7,12 +7,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // TestProtectFileTightensExistingFile 验证 ProtectFile 能收紧已存在普通文件的权限，
 // 并在收紧后通过 CheckProtectedFile 复核。
 func TestProtectFileTightensExistingFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "sensitive-export.csv")
 	if err := os.WriteFile(path, []byte("id,value\n1,demo\n"), 0o644); err != nil {
 		t.Fatalf("写入测试文件失败：%v", err)
@@ -48,7 +50,7 @@ func TestProtectFileRejectsUnsafeTargets(t *testing.T) {
 	if err := ProtectFile("relative.txt"); !errors.Is(err, ErrFileInvalid) {
 		t.Fatalf("相对路径未按 ErrFileInvalid 拒绝：%v", err)
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if err := ProtectFile(filepath.Join(dir, "missing.txt")); !errors.Is(err, ErrFileInvalid) {
 		t.Fatalf("缺失文件未按 ErrFileInvalid 拒绝：%v", err)
 	}

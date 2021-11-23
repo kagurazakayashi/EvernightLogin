@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -16,7 +17,7 @@ const testSecretValue = "top-secret-value-9f3c"
 
 func writeSecretFile(t *testing.T, content string, mode os.FileMode) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "master.key")
+	path := filepath.Join(testutil.TempDir(t), "master.key")
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatalf("写入测试秘密文件失败：%v", err)
 	}
@@ -93,7 +94,7 @@ func TestSecretValueReturnsCopy(t *testing.T) {
 }
 
 func TestParseSecretSource(t *testing.T) {
-	absoluteSecretPath := filepath.Join(t.TempDir(), "master.key")
+	absoluteSecretPath := filepath.Join(testutil.TempDir(t), "master.key")
 	valid := []struct {
 		spec string
 		kind SecretSourceKind
@@ -191,7 +192,7 @@ func TestSecretInlineYAMLRejected(t *testing.T) {
 
 func TestSecretEnvDirectOverridesYAMLSource(t *testing.T) {
 	// YAML 指向不存在的文件，但环境变量直接提供值；环境变量优先级更高，不应读文件。
-	missing := filepath.Join(t.TempDir(), "missing.key")
+	missing := filepath.Join(testutil.TempDir(t), "missing.key")
 	cfg := mustLoad(t, LoadOptions{
 		YAML:      yamlBytes(yamlSecretFile(missing)),
 		LookupEnv: envLookup(map[string]string{envSecretsMasterKey: testSecretValue}),
@@ -213,7 +214,7 @@ func TestSecretOptionsOverrideEnv(t *testing.T) {
 
 func TestSecretSourceErrors(t *testing.T) {
 	t.Run("YAML 文件不存在", func(t *testing.T) {
-		missing := filepath.Join(t.TempDir(), "missing.key")
+		missing := filepath.Join(testutil.TempDir(t), "missing.key")
 		errs := loadErrors(t, LoadOptions{YAML: yamlBytes(yamlSecretFile(missing))})
 		requireConfigError(t, errs, ConfigErrorSecretSource, "secrets.master_key")
 	})
@@ -251,7 +252,7 @@ func TestSecretSourceErrors(t *testing.T) {
 	})
 
 	t.Run("秘密来源是目录", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := testutil.TempDir(t)
 		errs := loadErrors(t, LoadOptions{YAML: yamlBytes(yamlSecretFile(dir))})
 		requireConfigError(t, errs, ConfigErrorSecretSource, "secrets.master_key")
 	})

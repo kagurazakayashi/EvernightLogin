@@ -5,12 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 )
 
 // TestFileLockExclusiveAdapter 直接验证 OS 文件锁适配器：同一路径第二个排他锁
 // 立即失败，释放后可重新取得。它不依赖恢复流程，覆盖跨进程互斥的底层实现。
 func TestFileLockExclusiveAdapter(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "lock.db")
+	path := filepath.Join(testutil.TempDir(t), "lock.db")
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatalf("准备文件: %v", err)
 	}

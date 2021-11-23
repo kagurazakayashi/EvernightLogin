@@ -24,6 +24,7 @@ import (
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
@@ -75,7 +76,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	clock := &testClock{now: testStart}
-	path := filepath.Join(t.TempDir(), "login-session-test.db")
+	path := filepath.Join(testutil.TempDir(t), "login-session-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
 	if err != nil {
 		t.Fatalf("打开临时数据库失败: %v", err)
