@@ -56,6 +56,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/fsutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 )
@@ -550,6 +551,8 @@ func (s *Service) finishSuccess(ctx context.Context, state *runState, requestID 
 	}
 	if err := s.record(auditCtx, event); err != nil {
 		// 删除已发布文件（best effort）。删除失败必须如实报告并提示残留风险。
+		// 这里是有意保留单次删除语义：不得把“已发布产物无法回滚删除”的真实残留
+		// 风险用重试延后或掩盖；重试只用于临时/暂存产物清理。
 		removeErr := os.Remove(result.Path)
 		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			s.opts.Logger.Error("成功审计失败且已发布备份无法回滚删除",
@@ -945,7 +948,7 @@ func (s *Service) runAttempt(ctx context.Context, ring *secrets.Keyring,
 	if cancelled, _, _, _ := state.claimFinish(); cancelled {
 		return fail("publish", fmt.Errorf("%w: 发布前收到取消请求", ErrCancelled))
 	}
-	if err := os.RemoveAll(stagingDir); err != nil {
+	if err := fsutil.RemoveAllRetry(stagingDir); err != nil {
 		return fail("cleanup", fmt.Errorf("%w: 无法删除明文暂存目录: %w",
 			ErrCleanupFailed, err))
 	}
@@ -1149,7 +1152,7 @@ func (s *Service) cleanupStaleTemps(ctx context.Context) {
 			continue
 		}
 		for _, name := range names {
-			if removeErr := os.RemoveAll(filepath.Join(s.outputDir, name)); removeErr != nil {
+			if removeErr := fsutil.RemoveAllRetry(filepath.Join(s.outputDir, name)); removeErr != nil {
 				s.opts.Logger.Warn("清理遗留备份临时文件失败", "name", name,
 					"error", removeErr)
 				continue
@@ -1165,7 +1168,7 @@ func (s *Service) cleanupStaleTemps(ctx context.Context) {
 		if infoErr != nil || info.ModTime().After(threshold) {
 			continue
 		}
-		if removeErr := os.RemoveAll(filepath.Join(s.outputDir, name)); removeErr != nil {
+		if removeErr := fsutil.RemoveAllRetry(filepath.Join(s.outputDir, name)); removeErr != nil {
 			s.opts.Logger.Warn("清理未知遗留备份文件失败", "name", name,
 				"error", removeErr)
 		}
@@ -1320,15 +1323,17 @@ func (r *entrySourcesReader) Close() error {
 }
 
 // cleanupAttemptPaths 删除临时文件与明文暂存目录；两者都尽力删除并返回合并错误。
+// 两者都是本次尝试产生的中间产物，瞬时占用（杀软扫描/过滤驱动）用有界重试吸收；
+// 预算耗尽仍失败时如实合并进错误，由调用方写入真实终态。
 func cleanupAttemptPaths(tempPath, stagingDir string) error {
 	var problems []error
 	if tempPath != "" {
-		if err := os.Remove(tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := fsutil.RemoveRetry(tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			problems = append(problems, err)
 		}
 	}
 	if stagingDir != "" {
-		if err := os.RemoveAll(stagingDir); err != nil {
+		if err := fsutil.RemoveAllRetry(stagingDir); err != nil {
 			problems = append(problems, err)
 		}
 	}

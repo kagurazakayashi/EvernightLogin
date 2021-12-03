@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/fsutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 )
 
@@ -95,7 +96,7 @@ func OpenViewer(ctx context.Context, options ViewOptions) (*Viewer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: 无法创建受控临时目录", ErrBackupIO)
 	}
-	cleanup := func() { _ = os.RemoveAll(tempDir) }
+	cleanup := func() { _ = fsutil.RemoveAllRetry(tempDir) }
 	// os.MkdirTemp 在 Unix 使用 0700；Windows 上 chmod 不改变 ACL，但目录由
 	// 宿主临时目录保护且不会被用作共享位置。这里复核它不是符号链接。
 	if info, statErr := os.Lstat(tempDir); statErr != nil ||
@@ -153,7 +154,7 @@ func (v *Viewer) Close() error {
 		v.db = nil
 	}
 	if v.tempDir != "" {
-		errs = append(errs, os.RemoveAll(v.tempDir))
+		errs = append(errs, fsutil.RemoveAllRetry(v.tempDir))
 		v.tempDir = ""
 	}
 	return errors.Join(errs...)

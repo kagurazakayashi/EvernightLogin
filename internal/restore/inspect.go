@@ -15,6 +15,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
+	"github.com/kagurazakayashi/EvernightLogin/internal/fsutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
@@ -377,7 +378,9 @@ func (s *Service) rehearseStagedDatabase(ctx context.Context, backupPath string,
 		return Impact{}, stagedDatabase{}, fmt.Errorf("%w: 无法创建预演暂存目录",
 			ErrStoreUnavailable)
 	}
-	defer func() { _ = os.RemoveAll(directory) }()
+	// 预演暂存目录含解密后的明文数据库副本，退出时必须清理；瞬时占用用有界
+	// 重试吸收，最终失败仍忽略（预演不产生持久副作用）。
+	defer func() { _ = fsutil.RemoveAllRetry(directory) }()
 	extracted, err := backup.Extract(ctx, backup.ExtractOptions{
 		Path: backupPath, Keyring: keyring, Destination: directory,
 		OnlyEntries: func(entry backup.ManifestEntry) bool {
@@ -732,6 +735,8 @@ func countImpact(ctx context.Context, store *storagesqlite.Store) (Impact, error
 }
 
 // probeWritableDirectory 在受控目录创建并删除临时文件，验证可写（不留下残留）。
+// 探针文件刚创建即删除，杀软扫描可能短暂持有句柄；用有界重试避免把瞬时占用误报
+// 为“目录不可写”，预算耗尽仍如实返回错误。
 func probeWritableDirectory(directory string) error {
 	file, err := os.CreateTemp(directory, ".restore-probe-*")
 	if err != nil {
@@ -739,10 +744,10 @@ func probeWritableDirectory(directory string) error {
 	}
 	path := file.Name()
 	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
+		_ = fsutil.RemoveRetry(path)
 		return err
 	}
-	return os.Remove(path)
+	return fsutil.RemoveRetry(path)
 }
 
 // codeForBackupError 把备份域错误映射为恢复预演检查的错误码。

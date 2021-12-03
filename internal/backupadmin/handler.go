@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
+	"github.com/kagurazakayashi/EvernightLogin/internal/fsutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 )
@@ -207,7 +207,11 @@ func (s *Service) handleCleanupTask(ctx context.Context, job task.Job) error {
 			summary.Failed++
 			continue
 		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		// 保护条件（最后可用备份、已验证、文件仍存在）已在上方逐项复核并保持原
+		// 逻辑；这里只对删除调用做 Windows 瞬时错误的有界重试：受控输出目录内的
+		// 产物可能正被杀软扫描/过滤驱动短暂持有，瞬时失败不应计为清理失败。路径
+		// 不存在按成功处理（与原 os.IsNotExist 判断一致），预算耗尽仍计入 Failed。
+		if err := fsutil.RemoveRetry(path); err != nil {
 			summary.Failed++
 			continue
 		}

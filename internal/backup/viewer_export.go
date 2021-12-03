@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/fsutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 )
 
@@ -216,7 +217,9 @@ func ExportTable(ctx context.Context, options ExportOptions) (result ExportResul
 	defer func() {
 		if removeOnError {
 			_ = file.Close()
-			_ = os.Remove(output.absolute)
+			// 不完整输出文件属于失败中间产物：瞬时占用用有界重试吸收，最终失败
+			// 仍由调用方按原有错误路径报告。
+			_ = fsutil.RemoveRetry(output.absolute)
 		}
 	}()
 	// 高敏导出：在写入任何数据之前先收紧空文件权限；失败则删空文件并拒绝。
@@ -312,7 +315,7 @@ func ExtractEntry(ctx context.Context, options ExtractEntryOptions) (result Extr
 		return ExtractEntryResult{}, fmt.Errorf("%w: 无法创建受控临时目录", ErrBackupIO)
 	}
 	defer func() {
-		if cleanupErr := os.RemoveAll(tempDir); cleanupErr != nil {
+		if cleanupErr := fsutil.RemoveAllRetry(tempDir); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("%w: 清理临时目录失败：%v",
 				ErrCleanupFailed, cleanupErr))
 		}
@@ -398,7 +401,8 @@ func ExtractEntry(ctx context.Context, options ExtractEntryOptions) (result Extr
 	defer func() {
 		if removeOnError {
 			_ = file.Close()
-			_ = os.Remove(output.absolute)
+			// 不完整输出文件属于失败中间产物：瞬时占用用有界重试吸收。
+			_ = fsutil.RemoveRetry(output.absolute)
 		}
 	}()
 	if sensitive {

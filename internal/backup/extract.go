@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/fsutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 )
 
@@ -253,13 +254,15 @@ func (s *extractSink) EndEntry(entry ManifestEntry) error {
 }
 
 // abort 清理未完成的当前条目文件；已完成的条目由调用方清理整个暂存目录。
+// 当前条目文件属于本次解包的中间产物，瞬时占用用有界重试吸收（失败仍忽略，
+// 因为整个暂存目录随后由调用方删除）。
 func (s *extractSink) abort() {
 	if s.current == nil {
 		return
 	}
 	path := s.currentPath
 	_ = s.current.Close()
-	_ = os.Remove(path)
+	_ = fsutil.RemoveRetry(path)
 	s.current = nil
 }
 

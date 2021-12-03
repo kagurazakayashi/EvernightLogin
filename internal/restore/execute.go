@@ -18,6 +18,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
+	"github.com/kagurazakayashi/EvernightLogin/internal/fsutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/maintenance"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
@@ -175,7 +176,9 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	if err != nil {
 		return exec.fail(err)
 	}
-	defer func() { _ = os.RemoveAll(stagingDir) }()
+	// 暂存目录含明文数据库/附件副本，退出时必须清理；Windows 上杀软扫描或过滤
+	// 驱动造成的瞬时占用用有界重试吸收，最终失败仍由调用方/清理审计如实记录。
+	defer func() { _ = fsutil.RemoveAllRetry(stagingDir) }()
 	keyring, err := s.loadKeyring(workCtx)
 	if err != nil {
 		return exec.fail(err)
@@ -513,7 +516,7 @@ func (s *Service) newStagingDirectory() (string, error) {
 		return "", fmt.Errorf("%w: 无法创建恢复暂存目录", ErrStoreUnavailable)
 	}
 	if err := os.Chmod(directory, 0o700); err != nil && !isWindowsPlatform() {
-		_ = os.RemoveAll(directory)
+		_ = fsutil.RemoveAllRetry(directory)
 		return "", fmt.Errorf("%w: 无法限制暂存目录权限", ErrStoreUnavailable)
 	}
 	return directory, nil
@@ -538,7 +541,12 @@ func (s *Service) switchDatabase(ctx context.Context, stagedPath, restoreID stri
 		return nil, fmt.Errorf("无法在数据库目录创建恢复临时文件: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	cleanupTemporary := func() { _ = temporary.Close(); _ = os.Remove(temporaryPath) }
+	cleanupTemporary := func() {
+		_ = temporary.Close()
+		// 恢复临时数据库文件是本次切换的中间产物，清理失败只可能留下可诊断残片，
+		// 瞬时占用用有界重试吸收。
+		_ = fsutil.RemoveRetry(temporaryPath)
+	}
 	copiedSHA, copiedBytes, err := copyFileWithDigest(stagedPath, temporary)
 	if err != nil {
 		cleanupTemporary()
@@ -549,15 +557,15 @@ func (s *Service) switchDatabase(ctx context.Context, stagedPath, restoreID stri
 		return nil, fmt.Errorf("恢复临时数据库 fsync 失败: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
+		_ = fsutil.RemoveRetry(temporaryPath)
 		return nil, fmt.Errorf("恢复临时数据库关闭失败: %w", err)
 	}
 	if copiedBytes <= 0 {
-		_ = os.Remove(temporaryPath)
+		_ = fsutil.RemoveRetry(temporaryPath)
 		return nil, fmt.Errorf("%w: 暂存数据库为空", ErrStageFailed)
 	}
 	if expectedSHA256 != "" && !strings.EqualFold(copiedSHA, expectedSHA256) {
-		_ = os.Remove(temporaryPath)
+		_ = fsutil.RemoveRetry(temporaryPath)
 		return nil, fmt.Errorf("%w: 暂存数据库复制后摘要与清单不一致", ErrStageFailed)
 	}
 	sw := &databaseSwitch{
@@ -567,7 +575,7 @@ func (s *Service) switchDatabase(ctx context.Context, stagedPath, restoreID stri
 	}
 	removeWALSidecars(s.databasePath)
 	if err := os.Rename(s.databasePath, sw.preRestorePath); err != nil {
-		_ = os.Remove(temporaryPath)
+		_ = fsutil.RemoveRetry(temporaryPath)
 		return nil, fmt.Errorf("无法把当前数据库改名为恢复前副本（可能仍有进程占用，"+
 			"请先停止服务）: %w", err)
 	}
@@ -578,7 +586,7 @@ func (s *Service) switchDatabase(ctx context.Context, stagedPath, restoreID stri
 			return nil, fmt.Errorf("切换数据库失败且回退失败（活动数据库可能缺失，"+
 				"恢复前副本位于 %s）: %w", sw.preRestorePath, errors.Join(err, restoreErr))
 		}
-		_ = os.Remove(temporaryPath)
+		_ = fsutil.RemoveRetry(temporaryPath)
 		return nil, fmt.Errorf("切换数据库失败（已回退到恢复前数据库）: %w", err)
 	}
 	removeWALSidecars(s.databasePath)
@@ -613,7 +621,9 @@ func (s *Service) cleanupSuccessfulSwitch(sw *databaseSwitch) error {
 		return nil
 	}
 	var problems []error
-	if err := os.Remove(sw.preRestorePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// sw.preRestorePath 是切换前数据库的明文副本（中间产物），不是用户提供的原始
+	// 加密备份；删除只影响可再生成的诊断副本，瞬时占用用有界重试吸收。
+	if err := fsutil.RemoveRetry(sw.preRestorePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		problems = append(problems, err)
 	}
 	pruneRestoreResidues(filepath.Dir(sw.livePath), preRestorePrefix, 0)
@@ -650,7 +660,7 @@ func pruneRestoreResidues(directory, prefix string, keep int) {
 		}
 	}
 	for index := keep; index < len(matches); index++ {
-		_ = os.Remove(filepath.Join(directory, matches[index].Name()))
+		_ = fsutil.RemoveRetry(filepath.Join(directory, matches[index].Name()))
 	}
 }
 
@@ -683,7 +693,7 @@ func removeWALSidecars(databasePath string) {
 	for _, suffix := range []string{"-wal", "-shm"} {
 		path := databasePath + suffix
 		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
-			_ = os.Remove(path)
+			_ = fsutil.RemoveRetry(path)
 		}
 	}
 }
@@ -720,7 +730,7 @@ func (s *Service) applyAttachments(ctx context.Context, entries []backup.Extract
 	state := &attachmentRollback{backupDir: backupDir}
 	rollback := func() {
 		_ = s.rollbackAttachments(state)
-		_ = os.RemoveAll(backupDir)
+		_ = fsutil.RemoveAllRetry(backupDir)
 	}
 	var applied int64
 	for _, entry := range entries {
@@ -812,24 +822,26 @@ func (s *Service) rollbackAttachments(state *attachmentRollback) error {
 			}
 			continue
 		}
-		// 原本不存在的附件：删除恢复写入的文件。
+		// 原本不存在的附件：删除恢复写入的文件。这是用户数据路径的回退语义，
+		// 失败必须计入回退问题，保持原有单次删除语义，不在此处延迟重试。
 		if err := os.Remove(swap.target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			problems = append(problems, err)
 		}
 	}
-	_ = os.RemoveAll(state.backupDir)
+	_ = fsutil.RemoveAllRetry(state.backupDir)
 	if len(problems) > 0 {
 		return errors.Join(problems...)
 	}
 	return nil
 }
 
-// finishAttachments 成功后删除附件回退备份目录。
+// finishAttachments 成功后删除附件回退备份目录（临时暂存目录，允许有界重试；
+// 失败由调用方记录告警，不影响已完成的恢复）。
 func (s *Service) finishAttachments(state *attachmentRollback) error {
 	if state == nil {
 		return nil
 	}
-	return os.RemoveAll(state.backupDir)
+	return fsutil.RemoveAllRetry(state.backupDir)
 }
 
 // moveFile 优先使用同卷原子改名；跨卷时退化为复制 + fsync + 删除源文件。
@@ -894,12 +906,12 @@ func (s *Service) stagePendingConfig(ctx context.Context, configPath, restoreID 
 	}
 	if _, err := io.Copy(file, source); err != nil {
 		_ = file.Close()
-		_ = os.Remove(target)
+		_ = fsutil.RemoveRetry(target)
 		return "", fmt.Errorf("%w: 复制待审查配置失败", ErrStageFailed)
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		_ = os.Remove(target)
+		_ = fsutil.RemoveRetry(target)
 		return "", fmt.Errorf("%w: 待审查配置 fsync 失败", ErrStageFailed)
 	}
 	if err := file.Close(); err != nil {
