@@ -825,7 +825,11 @@ type HistoryPage struct {
 
 // ListHistory 返回当前数据范围可见的报告历史（受控分页，按创建时间倒序）。
 func (s *Store) ListHistory(ctx context.Context, query HistoryQuery) (HistoryPage, error) {
-	condition, args := accessSQL(query.Access)
+	// 数据范围条件的占位符拼在 WHERE 末尾，因此它的参数也必须最后追加；
+	// 若先放进 args 再追加筛选参数，owner/plan/state 与 scope 的参数会错位，
+	// 导致“同时按范围与所有者筛选”的查询静默返回空页。
+	condition, conditionArgs := accessSQL(query.Access)
+	var args []any
 	parts := []string{"1 = 1"}
 	if query.PlanID != "" {
 		parts = append(parts, "plan_id = ?")
@@ -851,6 +855,7 @@ func (s *Store) ListHistory(ctx context.Context, query HistoryQuery) (HistoryPag
 		moment := timeToMS(query.BeforeCreatedAt)
 		args = append(args, moment, moment, query.BeforeID)
 	}
+	args = append(args, conditionArgs...)
 	limit := clampLimit(query.Limit)
 	// 多取一条判断是否有下一页；不查询总数（总数在受控筛选下才允许显示）。
 	sqlText := `SELECT ` + historyColumns + ` FROM report_history WHERE ` +
