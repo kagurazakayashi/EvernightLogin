@@ -117,6 +117,9 @@ type Config struct {
 	// AppQRLogin 是已登录 APP 扫码登录网页请求的配置（步骤 58）。默认关闭；
 	// 启用时必须显式配置应用白名单，未列入的应用一律拒绝。
 	AppQRLogin AppQRLoginConfig
+	// Protocol 是 OAuth 2.0 / OpenID Connect 协议端点配置。默认关闭；启用时必须
+	// 配置与路径前缀一致的固定 Issuer，非法形状拒绝启动。
+	Protocol ProtocolConfig
 }
 
 // ServerConfig 是独立服务与嵌入模式共用的监听配置。
@@ -367,6 +370,95 @@ func appQRLoginConfigProblem(c AppQRLoginConfig) string {
 	return ""
 }
 
+// ProtocolConfig 是 OAuth 2.0 / OpenID Connect 协议端点的宿主配置（步骤 56/57/58
+// 的传输层由 internal/protocolapi 提供，独立服务负责发行方与开关接线）。
+//
+// 安全边界：Issuer 是写入 Discovery 文档与令牌 iss 的固定签发方，必须由配置显式
+// 给出，绝不能从请求 Host/转发头推导；它的路径部分必须与 server.path_prefix 完全
+// 一致，否则 Discovery 会声明未挂载的端点。启用时缺少 Issuer 或形状非法一律拒绝
+// 启动（fail-closed），关闭时协议端点不挂载（请求得到 404）。
+type ProtocolConfig struct {
+	// Enabled 是协议端点总开关，默认 false（默认拒绝）。独立服务还可以用
+	// --enable-protocol 显式打开（命令行覆盖配置）。
+	Enabled bool
+	// Issuer 是固定公开签发方（例如 https://login.example.com），不得带尾斜杠；
+	// 只接受 https，或明确用于本地开发的 http://localhost / 127.0.0.1 回环地址。
+	// 路径部分必须与 server.path_prefix 一致（都为空或完全相同）。
+	Issuer string
+	// EnableIntrospection 显式启用 RFC 7662 令牌状态查询端点。只有宿主装配了真实
+	// 资源服务授权器时才允许打开，否则 Discovery 会夸大能力。
+	EnableIntrospection bool
+	// LoginPath 是未登录访问授权端点时跳转的站内登录页路径（例如 /login）。为空
+	// 时协议端点返回受控 JSON 错误而不是跳转。
+	LoginPath string
+}
+
+// protocolConfigProblem 校验协议端点配置；返回空字符串表示合法。
+func protocolConfigProblem(c Config) string {
+	protocol := c.Protocol
+	issuer := strings.TrimSpace(protocol.Issuer)
+	if !protocol.Enabled {
+		// 关闭时允许预置 Issuer 供后续开启，但预置值同样必须是合法形状，避免
+		// 配置层留下“看起来配好了实际不可用”的半成品。
+		if issuer == "" {
+			return ""
+		}
+	}
+	if issuer == "" {
+		return "启用协议端点时必须配置 protocol.issuer（固定公开签发方）"
+	}
+	if strings.HasSuffix(issuer, "/") {
+		return "protocol.issuer 不能以斜杠结尾"
+	}
+	parsed, err := url.Parse(issuer)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return "protocol.issuer 必须是绝对 URL"
+	}
+	if parsed.User != nil {
+		return "protocol.issuer 不能包含用户信息"
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "protocol.issuer 不能包含查询字符串或片段"
+	}
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		host := parsed.Hostname()
+		ip := net.ParseIP(host)
+		if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+			return "protocol.issuer 使用 http 时只能是 localhost 或回环地址"
+		}
+	default:
+		return "protocol.issuer 必须是 https"
+	}
+	if _, err := netpolicy.ParseRequestHost(parsed.Host); err != nil {
+		return "protocol.issuer 的主机名无效"
+	}
+	normalizedPrefix, prefixErr := transport.NormalizePrefix(c.Server.PathPrefix)
+	if prefixErr != nil {
+		// 路径前缀本身非法时由 server.path_prefix 校验报告，这里不重复报错。
+		return ""
+	}
+	issuerPath := parsed.EscapedPath()
+	if issuerPath == "/" {
+		issuerPath = ""
+	}
+	if issuerPath != normalizedPrefix {
+		return "protocol.issuer 的路径必须与 server.path_prefix 一致"
+	}
+	loginPath := strings.TrimSpace(protocol.LoginPath)
+	if loginPath != "" {
+		if !strings.HasPrefix(loginPath, "/") || strings.HasPrefix(loginPath, "//") ||
+			strings.HasSuffix(loginPath, "/") {
+			return "protocol.login_path 必须是以单个斜杠开头的站内绝对路径"
+		}
+		if c.Server.PathPrefix != "" && !strings.HasPrefix(loginPath, normalizedPrefix+"/") {
+			return "protocol.login_path 必须位于 server.path_prefix 之下"
+		}
+	}
+	return ""
+}
+
 // SecretsConfig 保存从受保护来源解析出的秘密。秘密值不会出现在 YAML 中，
 // 只能来自环境变量、受保护文件或宿主显式选项。
 type SecretsConfig struct {
@@ -592,6 +684,12 @@ func Default() Config {
 			AllowedClientIDs:     nil,
 			RequestTTLSeconds:    120,
 			ClaimIntervalSeconds: 1,
+		},
+		Protocol: ProtocolConfig{
+			Enabled:             false,
+			Issuer:              "",
+			EnableIntrospection: false,
+			LoginPath:           "",
 		},
 	}
 }
@@ -1192,6 +1290,9 @@ func validateMerged(c Config) ConfigErrors {
 	}
 	if problem := appQRLoginConfigProblem(c.AppQRLogin); problem != "" {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "app_qr_login", 0, problem))
+	}
+	if problem := protocolConfigProblem(c); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "protocol", 0, problem))
 	}
 
 	// 非法组合：公开地址使用明文 http 时，服务不得监听非回环接口（主地址或额外

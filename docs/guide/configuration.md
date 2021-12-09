@@ -131,6 +131,22 @@ secrets:
 | `registration.require_email_verification` | `false` | restart-required | 否 | `LOGIN_REGISTRATION_REQUIRE_EMAIL_VERIFICATION` | 为 true 时注册必须完成邮箱验证；邮箱可选，不因关闭邮件能力而阻断密码注册 |
 | `registration.default_role_ids` | `[]` | restart-required | 否 | `LOGIN_REGISTRATION_DEFAULT_ROLE_IDS` | 新注册账户默认角色 ID，最多 20 个；只接受存在、已启用且作用域匹配的角色，不自动加入应用 |
 
+### 4.5a 协议端点（`protocol`，默认关闭，YAML 专用）
+
+`protocol` 段用于 OAuth 2.0 / OpenID Connect 协议端点，当前只支持 YAML（不提供独立
+环境变量），字段如下；未列出的字段或非法组合会拒绝加载，启用时缺少合法 Issuer 会
+拒绝启动。
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `protocol.enabled` | `false` | 协议端点总开关；也可用 `--enable-protocol` 覆盖 |
+| `protocol.issuer` | 空 | 固定公开签发方；必须为 https（本地回环 http 例外）、无尾斜杠，路径必须与 `server.path_prefix` 一致 |
+| `protocol.enable_introspection` | `false` | RFC 7662 状态查询；当前版本未装配资源服务注册表，设为 true 会拒绝启动 |
+| `protocol.login_path` | 空 | 未登录访问授权端点时跳转的站内登录页路径 |
+
+注意：Passkey 的 `passkey.user_verification` 默认 `required`；显式设为 `preferred` 或
+`discouraged` 会降低强认证强度，`discouraged` 不应在使用 root 管理强认证的部署中启用。
+
 ### 4.5 Passkey / WebAuthn（`passkey`，默认关闭）
 
 | YAML 字段 | 默认值 | 分类 | 秘密 | 环境变量 | 说明 |

@@ -2,8 +2,9 @@
 # 多阶段构建：静态 Go 二进制 + 最小运行镜像。
 # 注意：镜像 ENTRYPOINT 需按部署配置补 `serve --config <挂载配置>` 参数才会常驻
 # 监听；首次初始化 `init` 应作为一次性运维任务单独执行（不在容器启动脚本内创建 root）。
-# 当前独立服务为宿主装配 MVP：健康检查/OpenAPI/账户入口页可用，OAuth/OIDC/管理 API
-# 与强认证绑定仍未实现，不能当作完整对外身份服务。
+# 当前独立服务为宿主装配 MVP：健康检查/OpenAPI 与 14 个页面选项（默认 12、条件 2）
+# 可用；OAuth/OIDC 协议端点与管理 JSON API 已装配但默认关闭（需配置开关），设备码/扫码/
+# 令牌状态查询未启用，不能当作开箱即用的完整对外身份服务。
 #
 # 构建（在仓库根目录）：
 #   docker build -f docs/deployment/samples/Dockerfile -t evernight-login:dev .

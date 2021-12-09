@@ -95,6 +95,14 @@ type Options struct {
 	// AllowRootRecoverySessions 允许为 root 签发受限恢复会话；默认 false。root
 	// 应急恢复必须由受控本地通道处理，普通恢复代码流程不能作用于 root。
 	AllowRootRecoverySessions bool
+	// AllowRootStrongAuthSessions 允许 root 在已完成强认证（MFA/Passkey）的登录
+	// 结果上签发普通会话；默认 false。root 在 MFA/管理强认证完成前只能持有受限
+	// 会话，这是 fail-closed 基线。只有宿主装配了真实强认证流程、且认证结果带有
+	// 服务端强认证时间（authn.AuthenticateResult.StrongAuthCompletedAt，受限结果
+	// 不得携带）时才可显式开启；管理访问仍由 AuthorizeManagement 校验新鲜度。
+	// 本开关不绕过任何密码/第二因素校验，只消除“root 永远无法进入管理会话”的
+	// 过渡阻塞。
+	AllowRootStrongAuthSessions bool
 	// Authorizer 判定管理员能否在给定范围强制下线；nil 时管理强制下线一律拒绝
 	// （fail-closed）。用户本人退出自己的会话不依赖它。
 	Authorizer ScopeAuthorizer
@@ -141,6 +149,7 @@ type Service struct {
 	recoveryGate      RecoverySessionGate
 	recoveryTTL       time.Duration
 	allowRootRecovery bool
+	allowRootStrong   bool
 	cookieName        string
 	cookiePolicy      CookiePolicy
 	logger            *slog.Logger
@@ -266,6 +275,7 @@ func New(store Store, options Options) (*Service, error) {
 		recoveryGate:      options.RecoveryGate,
 		recoveryTTL:       recoveryTTL,
 		allowRootRecovery: options.AllowRootRecoverySessions,
+		allowRootStrong:   options.AllowRootStrongAuthSessions,
 		cookieName:        cookieName,
 		cookiePolicy:      cookiePolicy,
 		logger:            logger,
@@ -884,9 +894,13 @@ func (s *Service) checkEligibility(ctx context.Context, spec authnSpec, appID st
 	}
 	// root 在 MFA/管理强认证完成前只能持有受限会话：即使调用方给出“完整认证”
 	// 结果，也不得签发普通会话（防御认证结果被误用或未来 MFA 状态机接线错误）。
+	// 仅在宿主显式开启 AllowRootStrongAuthSessions 且认证结果带有服务端强认证时间
+	// 时，才允许 root 签发普通会话；管理访问还要通过 AuthorizeManagement 新鲜度校验。
 	if state.IsRoot && spec.kind == KindNormal {
-		s.recordIssuanceRejection(ctx, spec, appID, "root_requires_restricted_session")
-		return ErrAccountNotEligible
+		if !s.allowRootStrong || spec.strongAuthAt.IsZero() {
+			s.recordIssuanceRejection(ctx, spec, appID, "root_requires_restricted_session")
+			return ErrAccountNotEligible
+		}
 	}
 	if appID != "" {
 		membership, found, err := s.store.LoadMembership(ctx, appID, spec.userID)

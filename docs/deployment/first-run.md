@@ -24,12 +24,14 @@
 | `login-server init --config <path>` 本地受控首次初始化 | **已实现**（本轮宿主装配 MVP） |
 | 领域服务 `internal/bootstrap`（`Initialize`、`RedeemSetupCredential`、`ReissueSetupCredential`、`Status`、`AuthorizeStrongSetup`） | 已实现并有定向测试 |
 | HTTP 首次配置页面/接口 | **未实现**（设计上不提供匿名远程入口） |
-| root 强认证（MFA/Passkey）绑定流程 | **未装配到页面/CLI**；`init` 后状态保持 `setup_verified`，root 暂不能完成完整登录 |
+| root 强认证（MFA/Passkey）绑定流程 | **已接线**：登录后受限初始化会话 → `/login/strong-setup` 完成真实 Passkey 注册 → 重新登录取得强认证会话；未做真实浏览器/认证器真机互操作实测 |
 | 已初始化的 root 恢复通道 | `cmd/loginctl root-recover`：本地应急恢复密码/MFA，要求服务停止或维护状态并取得排他锁 |
 
 结论：本版本可以**由本地部署者完成首次初始化**（创建唯一 root、设置正式密码、写入
-`security_version`、落审计），但 root 的强认证绑定与完整登录仍属后续步骤；初始化后
-不要重复执行 `init`，重复初始化会被明确拒绝。
+`security_version`、落审计），并通过内置登录页 + `/login/strong-setup` 完成 root
+强认证（Passkey）绑定后取得管理会话；这条链路已接线并有服务层/页面状态测试，但未在
+真实浏览器与硬件认证器上互操作实测。初始化后不要重复执行 `init`，重复初始化会被明确
+拒绝。
 
 ## 3. 真实流程（可直接执行）
 
@@ -126,9 +128,18 @@ curl -s -o NUL -w "%{http_code}" http://127.0.0.1:8080/login        :: 期望 20
 
 ### 3.5 进入 ready 之前
 
-- root 目前要求强认证；MFA/Passkey 绑定流程尚未装配到页面/CLI，因此 root 处于
-  `setup_verified` 且**不能通过内置登录页完成完整登录**（不会降级为仅密码的高权限
-  会话）。在强认证绑定实现前，不要把 root 当作可远程管理的日常账号。
+- root 要求强认证；`init` 后 root 已设置正式密码但**未绑定强因素**，密码登录只得到
+  受限初始化会话（不会降级为仅密码的高权限会话）。请通过内置 `/login/strong-setup`
+  完成真实 Passkey 注册后重新登录；该链路已接线并有服务层/页面状态测试，但未做真实
+  浏览器+硬件认证器互操作实测。
+- **管理会话强认证门禁已生效**：页面层区分普通会话与管理会话，管理页要求会话已完成
+  强认证且在 15 分钟新鲜度窗口内；root 绑定前或强认证过期后管理页一律 403
+  （fail-closed）。这是预期安全行为，不要用 `--allow-legacy-without-sensitive` 绕过。
+- **单实例约束**：`serve` 会对数据库文件加跨进程排他锁；同一数据库的第二个进程会立即
+  失败。启动前确认没有旧的 `login-server` 进程仍在运行（尤其服务管理器重启场景）。
+- **访问日志轮转**：使用 `--access-log` 时文件默认按 64 MiB/保留 5 个历史文件轮转；可用
+  `--access-log-max-bytes`/`--access-log-max-files` 调整。访问日志不含 Cookie、
+  Authorization 或秘密。
 - 普通用户可由管理员创建/注册（注册默认关闭）。管理员创建账户与后续权限配置的完整
   远程流程属于后续步骤；本地管理工具见 `docs/guide/root-cli.md`。
 - 对外暴露前确认：只监听回环或已配置 TLS/受信代理；健康检查通过；主密钥与备份分开
@@ -148,8 +159,18 @@ curl -s -o NUL -w "%{http_code}" http://127.0.0.1:8080/login        :: 期望 20
 
 ## 5. 已知限制
 
-- root 强认证绑定、完整登录与在线管理页面尚未装配；`init` 只完成到 `setup_verified`。
-- 注册邮件验证投递通道未装配：配置要求邮箱验证时会 fail-closed 拒绝启动。
+- root 强认证绑定页面已接线（Passkey ceremony），但未做真实浏览器 + Windows Hello/
+  YubiKey 真机互操作；绑定前管理页 403（fail-closed），强认证过期后同样 403。
+  页面选项共 14 个：默认注册 12 个；安全中心页要求同时启用 Passkey 与协议端点、OAuth
+  页面要求启用协议端点，否则对应页面不注册（404）。
+- 敏感操作（导出/清理/凭证轮换/策略修改等）已接真实 policy + reauth；未满足时
+  fail-closed；数据范围仍是「作用范围全覆盖」，细粒度资源范围未实现。
+- 注册邮件验证投递通道未装配真实发送器：后台任务运行时的邮件投递为本地禁用（明确
+  失败），配置要求邮箱验证时仍 fail-closed 拒绝启动。
+- 后台任务执行器/调度器已启动，但当前只注册邮件/Webhook 投递处理器；报告/备份/审计
+  等域处理器待对应服务装配。
 - HTTP 初始化端点不提供（这是安全设计，不是缺口）；远程无法创建 root。
-- OAuth/OIDC、设备码、扫码协议端点与管理 JSON API 未实现；内置页面只覆盖账户入口页。
+- OAuth/OIDC 协议端点与管理 JSON API 已实现但默认关闭（`protocol.enabled` /
+  `--enable-protocol`、`--enable-admin-api`）；设备码、令牌状态查询与扫码登录未启用。
+  启用后协议发现/令牌端点真实可用，关闭时 404、维护模式 503。
 - 迁移、诊断、备份命令均为本地工具，不提供远程执行；不要把本地工具包装成网络接口。

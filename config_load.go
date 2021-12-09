@@ -52,6 +52,7 @@ type Overrides struct {
 	Registration RegistrationOverrides
 	Passkey      PasskeyOverrides
 	AppQRLogin   AppQRLoginOverrides
+	Protocol     ProtocolOverrides
 }
 
 // ServerOverrides 是 ServerConfig 的显式覆盖项。
@@ -118,6 +119,14 @@ type AppQRLoginOverrides struct {
 	AllowedClientIDs     *[]string
 	RequestTTLSeconds    *int
 	ClaimIntervalSeconds *int
+}
+
+// ProtocolOverrides 是 ProtocolConfig 的显式覆盖项。
+type ProtocolOverrides struct {
+	Enabled             *bool
+	Issuer              *string
+	EnableIntrospection *bool
+	LoginPath           *string
 }
 
 // Load 按“内置默认值 < YAML < 环境变量 < 显式代码选项”的顺序合并并校验配置。
@@ -272,6 +281,10 @@ type configOverrides struct {
 	appQRLoginClients     *[]string
 	appQRLoginTTL         *int
 	appQRLoginInterval    *int
+	protocolEnabled       *bool
+	protocolIssuer        *string
+	protocolIntrospection *bool
+	protocolLoginPath     *string
 	secretSource          *SecretSource
 	secretValue           *Secret
 	secretPFXSource       *SecretSource
@@ -386,6 +399,18 @@ func (ov *configOverrides) apply(cfg *Config) {
 	if ov.appQRLoginInterval != nil {
 		cfg.AppQRLogin.ClaimIntervalSeconds = *ov.appQRLoginInterval
 	}
+	if ov.protocolEnabled != nil {
+		cfg.Protocol.Enabled = *ov.protocolEnabled
+	}
+	if ov.protocolIssuer != nil {
+		cfg.Protocol.Issuer = *ov.protocolIssuer
+	}
+	if ov.protocolIntrospection != nil {
+		cfg.Protocol.EnableIntrospection = *ov.protocolIntrospection
+	}
+	if ov.protocolLoginPath != nil {
+		cfg.Protocol.LoginPath = *ov.protocolLoginPath
+	}
 }
 
 // readConfigFile 读取 YAML 配置文件，并限制文件大小与文件类型。
@@ -419,6 +444,7 @@ type yamlConfig struct {
 	Registration *yamlRegistration `yaml:"registration"`
 	Passkey      *yamlPasskey      `yaml:"passkey"`
 	AppQRLogin   *yamlAppQRLogin   `yaml:"app_qr_login"`
+	Protocol     *yamlProtocol     `yaml:"protocol"`
 }
 
 type yamlServer struct {
@@ -488,6 +514,14 @@ type yamlPasskey struct {
 	UserVerification *string   `yaml:"user_verification"`
 }
 
+// yamlProtocol 是 YAML 中的 OAuth/OIDC 协议端点配置段。
+type yamlProtocol struct {
+	Enabled             *bool   `yaml:"enabled"`
+	Issuer              *string `yaml:"issuer"`
+	EnableIntrospection *bool   `yaml:"enable_introspection"`
+	LoginPath           *string `yaml:"login_path"`
+}
+
 // yamlSecretFields 是允许出现的秘密字段名；每个字段的值只能是 env/file 来源映射。
 var yamlSecretFields = map[string]struct{}{
 	"master_key":       {},
@@ -506,7 +540,8 @@ type yamlLeafSpec struct {
 }
 
 var (
-	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration", "passkey", "app_qr_login"}
+	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration",
+		"passkey", "app_qr_login", "protocol"}
 
 	yamlSectionFields = map[string][]yamlLeafSpec{
 		"server": {
@@ -545,6 +580,12 @@ var (
 			{name: "enabled", tag: "!!bool"},
 			{name: "request_ttl_seconds", tag: "!!int"},
 			{name: "claim_interval_seconds", tag: "!!int"},
+		},
+		"protocol": {
+			{name: "enabled", tag: "!!bool"},
+			{name: "issuer", tag: "!!str"},
+			{name: "enable_introspection", tag: "!!bool"},
+			{name: "login_path", tag: "!!str"},
 		},
 	}
 
@@ -993,6 +1034,12 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.appQRLoginTTL = doc.AppQRLogin.RequestTTLSeconds
 		ov.appQRLoginInterval = doc.AppQRLogin.ClaimIntervalSeconds
 	}
+	if doc.Protocol != nil {
+		ov.protocolEnabled = doc.Protocol.Enabled
+		ov.protocolIssuer = doc.Protocol.Issuer
+		ov.protocolIntrospection = doc.Protocol.EnableIntrospection
+		ov.protocolLoginPath = doc.Protocol.LoginPath
+	}
 	if doc.Secrets != nil {
 		if doc.Secrets.MasterKey != nil {
 			source, sourceErr := convertYAMLSecretSource("secrets.master_key", doc.Secrets.MasterKey)
@@ -1340,6 +1387,10 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 		appQRLoginClients:     options.AppQRLogin.AllowedClientIDs,
 		appQRLoginTTL:         options.AppQRLogin.RequestTTLSeconds,
 		appQRLoginInterval:    options.AppQRLogin.ClaimIntervalSeconds,
+		protocolEnabled:       options.Protocol.Enabled,
+		protocolIssuer:        options.Protocol.Issuer,
+		protocolIntrospection: options.Protocol.EnableIntrospection,
+		protocolLoginPath:     options.Protocol.LoginPath,
 		secretValue:           options.Secrets.MasterKey,
 	}
 	errs := validateOverrides(&ov, "options")

@@ -1,6 +1,7 @@
 # login 容器编排样例（步骤 89）
-# 注意：当前 cmd/login-server 尚未装配 HTTP 服务，本 compose 不能得到可用服务；
-# 样例用于表达卷、权限与配置契约，装配完成后可直接复用。
+# 注意：cmd/login-server 可用 `serve` 启动 HTTP 服务；本 compose 需按部署配置提供
+# `serve --config <挂载配置>` 才能常驻。OAuth/OIDC 协议端点与管理 JSON API 已装配但
+# 默认关闭（需配置开关），设备码/扫码/令牌状态查询未启用；样例用于表达卷、权限与配置契约。
 #
 # 使用前：
 #   1. 替换 VERSION/域名/路径；

@@ -9,9 +9,9 @@ login 有两种使用形态。**当前版本只有嵌入模式能真正启动 HT
 | 维度 | 嵌入模式（Embedding） | 独立服务（Standalone） |
 |---|---|---|
 | 运行方式 | 你的 Go 程序导入 `github.com/kagurazakayashi/EvernightLogin`，在进程内装配 | 单独运行 `login-server` 进程，对外提供 HTTP |
-| 当前状态 | **可用（Go API）** | **仅命令行入口**，HTTP 启动装配未实现 |
-| 数据库/日志/监听 | 由你的程序打开、配置与关闭 | 计划由 login 自己管理 |
-| 页面与路由 | 挂到你的 `http.ServeMux`（`Instance.Mount`）或使用 `Instance.Handler` | 计划内置全部页面与协议路由 |
+| 当前状态 | **可用（Go API）** | **`login-server serve` 可独立启动**（健康检查/OpenAPI；页面、OAuth/OIDC 协议端点与管理 JSON API 按配置可选启用，协议与管理 API 默认关闭） |
+| 数据库/日志/监听 | 由你的程序打开、配置与关闭 | 由 `login-server` 自己管理（单实例数据库锁、访问日志轮转、监听/关闭） |
+| 页面与路由 | 挂到你的 `http.ServeMux`（`Instance.Mount`）或使用 `Instance.Handler` | 内置页面 14 个选项（默认注册 12、条件 2）；协议/管理 JSON API 可配置开关，维护模式 503 |
 | 适合场景 | 已有 Go 后端，希望“登录/权限”作为库使用 | 希望独立部署一个统一登录中心 |
 | 当前可以直接上线 | 可以装配你需要的部分（配置、页面、健康检查、扩展），完整身份服务仍需模块内装配 | **不可以**（见第 3 节） |
 
@@ -70,12 +70,12 @@ login 有两种使用形态。**当前版本只有嵌入模式能真正启动 HT
 
 | 项目 | 状态 |
 |---|---|
-| `login-server serve --config <path>` | **已实现**：读取并校验 YAML、打开/校验 SQLite 迁移、装配真实服务与账户入口页、监听 HTTP、有界优雅关闭 |
+| `login-server serve --config <path>` | **已实现**：读取并校验 YAML、单实例数据库锁、打开/校验 SQLite 迁移、装配真实服务与账户入口页、启动后台任务执行器/调度器与通知投递 worker、监听 HTTP、有界优雅关闭 |
 | `login-server init --config <path>` | **已实现**：本地受控首次初始化（唯一 root、一次性凭证兑换、root 正式密码） |
 | `login-server --version` / `--help` | 可用（退出码 0） |
 | `login-server`（无参数） | 退出码 1，stderr 明确提示使用 `serve`/`init` |
 | 首次配置 HTTP 入口 | **不提供**（安全设计：root 只能本地受控创建） |
-| OAuth/OIDC/设备码/扫码/管理 HTTP 路由 | **未实现**（协议实现仍是受信 Go API） |
+| OAuth/OIDC 协议端点与管理 JSON API | **已装配**（可配置开关，默认关闭）：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`；设备码、扫码登录、令牌状态查询（introspection）未启用；维护模式 503 |
 | 发布包（`login-server.exe` 等二进制） | 可用于本地初始化与启动内置账户入口页；**不等同于完整 OAuth2/OIDC 服务** |
 
 ```bat
@@ -92,21 +92,40 @@ login-server.exe
 
 ### 3.2 已补前置与仍缺前置
 
-已补齐（本轮宿主装配 MVP）：
+已补齐（本轮宿主装配 MVP + B1/B2 第二阶段）：
 
-1. 服务启动装配：读取配置 → 校验 → 打开/迁移 SQLite → 装配真实服务与账户入口页 →
-   监听 → 有界优雅关闭。
+1. 服务启动装配：读取配置 → 校验 → 单实例数据库锁 → 打开/迁移 SQLite → 装配真实服务与
+   账户入口页 → 启动后台任务执行器/调度器与通知投递 worker → 监听 → 有界优雅关闭。
 2. 首次配置 CLI：本机受限、一次性、限时的 root 初始化；不开放匿名远程初始化。
+3. 运维基础设施：访问日志文件受控轮转、后台任务运行时（邮件投递本地禁用、Webhook 投递）、
+   页面管理会话强认证门禁、协议/管理 API 挂载点（`ServeOptions.ExtraMounts`）。
 
 仍缺（不得当作已完成）：
 
-3. 协议 HTTP 路由：OAuth/OIDC、设备码、扫码、管理 JSON API（按安全边界逐项接线）。
-4. root 强认证（MFA/Passkey）绑定流程与在线管理授权（不能拿示例替身当生产鉴权）。
-5. 其余管理页面后端、邮件/Webhook 投递、后台任务调度、备份/恢复端到端演练。
+4. OAuth/OIDC 协议端点与管理 JSON API **已装配**（可配置开关，默认关闭：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`）；**设备码、扫码登录、令牌状态查询（introspection）未启用**；未开启时 404、维护模式 503。
+5. 页面/协议/管理 API 已装配（14 个页面选项、默认 12+条件 2）；root 强认证（Passkey）绑定已接线但未做真机互操作；
+   在绑定流程装配前 root 只能保持受限状态，管理页不可用（fail-closed）。
+6. 报告/备份/审计等域服务装配后的任务处理器注册、真实邮件通道与备份/恢复端到端演练。
 
 因此当前版本适合：本机/内网受限范围内的账户入口页与健康检查，以及嵌入式 Go 集成；
 不适合：直接作为完整对外 OAuth2/OIDC 身份服务。安全模型与防锁死清单见
 [../deployment/first-run.md](../deployment/first-run.md)。
+
+### 3.1 独立部署当前真实能力与开关
+
+- 页面选项共 14 个：默认注册 12 个，另 2 个条件注册；安全中心页需要 `passkey.enabled` + `protocol.enabled`，OAuth 页面需要
+  `protocol.enabled`，否则对应页面不注册（404）。
+- 敏感操作统一经 `internal/policy` + `internal/reauth`：导出/清理/保留策略/凭证轮换/
+  策略修改/TOTP/Passkey/恢复代码/邮箱变更；未满足近期认证、一次性批准、强认证或审计
+  可用性时 fail-closed。安全告知在未配置邮件发送器时记录明确失败（不真实外发）。
+- 协议端点默认关闭，`protocol.enabled: true`（或 `--enable-protocol`）开启；Issuer 必须
+  为 https（本地回环 http 例外）且路径与 `server.path_prefix` 一致；设备码/状态查询/
+  扫码登录未启用。
+- 管理 JSON API 默认关闭，`--enable-admin-api` 开启；复用管理会话与 CSRF 契约，写操作
+  仍要求近期再次认证。
+- 数据范围是**已声明的设计边界**：粒度是「功能权限 + 作用域」，无部门/资源级 scope；
+  无权限一律拒绝（fail-closed），有权限则作用域内全有或全无。不宣称已实现细粒度数据
+  权限，也不得把该边界描述为 fail-open。
 
 ## 4. 网络与 TLS 边界（两种形态共用）
 

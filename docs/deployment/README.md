@@ -34,18 +34,19 @@
 | 监听组件（多地址、Host、可信代理、TLS/mTLS、安全重载） | 已实现（Go API） | `login.NewServer` + `login.ServerOptions`；HTTP 处理与页面可通过 `login.NewHTTPHandler`、`login.NewWebUI`、`login.Instance` 装配 |
 | 嵌入模式启动/关闭/就绪（宿主 `net/http`） | 已实现（Go API） | `login.New` + `Instance.Start/Ready/Close`，见 `docs/embedding/host_integration.md` |
 | 内置 Web 页面、模板、静态资源、中文文案 | 已实现（内嵌 `embed.FS`） | `web/` + `ui_embed.go`；无 Node/npm 构建链 |
-| 独立服务进程 `cmd/login-server` | 已实现（MVP） | `serve` 真实启动 HTTP 服务（配置/数据库/迁移门禁/密钥/审计/维护门禁/内置账户入口页/健康检查/TLS/访问日志/有界优雅关闭）；`init` 本地受控首次初始化 |
+| 独立服务进程 `cmd/login-server` | 已实现（MVP） | `serve` 真实启动 HTTP 服务（配置/数据库/迁移门禁/密钥/审计/维护门禁/单实例锁/内置账户入口页/健康检查/TLS/访问日志轮转/后台任务运行时/协议与管理 API 挂载点/有界优雅关闭）；`init` 本地受控首次初始化 |
 | 首次配置入口 | 已实现（CLI） | `login-server init`：本地一次性凭证 + 交互式/受保护 stdin 密码；不提供 HTTP 初始化入口，不接受命令行明文密码 |
-| 内置页面装配范围 | 部分实现 | 已注册账户入口页（登录/注册/邀请/邮箱验证/退出）；个人资料/管理/安全中心/MFA/RBAC/应用/客服/审计/统计/报告/备份页面因缺少宿主授权适配器未注册，缺口见 `standalone-service.md` 第 6 节 |
-| OAuth/OIDC、设备码、扫码、管理接口的 HTTP 路由 | **未实现** | 只有健康检查/OpenAPI/内置页面路由与受信 Go API；业务接入约定见 `integration.md` |
+| 内置页面装配范围 | 已装配 | `ui.go` 共 **14 个页面选项**：默认注册 **12 个**（账户入口/资料/两步验证/用户管理/RBAC/应用/客服/敏感策略/审计/统计/报告/备份）；**2 个条件注册**：安全中心需 `passkey.enabled` 且 `protocol.enabled`、OAuth 页面需 `protocol.enabled`，未满足时不注册（404），全部满足时 14 个。安全中心页另含 TOTP/Passkey/恢复代码/会话/已授权应用；真实服务与生产授权见 `standalone-service.md` 第 3.8 节 |
+| OAuth/OIDC 协议与管理 API 的 HTTP 路由 | 已实现但默认关闭 | `protocol.enabled`/`--enable-protocol` 开启 OAuth/OIDC（Discovery/JWKS/授权/令牌/UserInfo/撤销）；`--enable-admin-api` 开启管理 JSON API（审计/报告/计划/备份/任务/错误码）。设备码、令牌状态查询、扫码登录未启用；关闭时 404、维护模式 503 |
 | 备份创建与离线查看工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
 | 本地管理/应急命令 `cmd/loginctl` | 部分实现 | root 应急恢复、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 本地命令；组/角色/应用/权限/通知在线管理命令尚未接通，详见 `../guide/root-cli.md` |
 | 数据库迁移 | 已实现（SQLite 为主） | `migrations/` 内嵌，按版本追加；MySQL/PostgreSQL/SQL Server 适配**未运行实测** |
 
-> 结论：本版本可以**在受限范围内**作为独立 HTTP 服务启动（健康检查 + 内置账户入口页 +
-> 本地初始化），但**还不是完整的对外 OAuth2/OIDC 身份服务**：协议端点、管理 JSON API、
-> root 强认证绑定与多数管理页面仍未装配。不要把「能启动」等同于「第一版协议能力已
-> 交付」；可交付边界见 `standalone-service.md` 第 6 节。
+> 结论：本版本可以**在受限范围内**作为独立 HTTP 服务启动（健康检查 + 14 个页面选项：
+> 默认注册 12、条件 2 + 本地初始化），并可按开关提供 OAuth/OIDC 协议端点与管理 JSON API
+> （默认关闭）；设备码/扫码/令牌状态查询未启用，root Passkey 绑定未做真机互操作，邮件
+> 外发仍本地禁用。不要把「能启动」等同于「所有客户端互操作已验证」；可交付边界见
+> `standalone-service.md` 第 6 节。
 
 ## 3. 平台与验证口径
 

@@ -16,12 +16,23 @@
 | 内置账户入口页（登录/注册/邀请接受/邮箱验证/退出） | 已实现（真实 authn/session/registration/onboarding 服务） |
 | 健康检查 `GET <prefix>/healthz`、OpenAPI `GET <prefix>/openapi.json` | 已实现 |
 | TLS / mTLS、可信代理、Host 校验、访问日志、`SIGINT/SIGTERM` 有界优雅关闭 | 已实现 |
-| 个人资料/管理/安全中心/MFA/Passkey/RBAC/应用/客服/审计/统计/报告/备份页面 | **未装配**（缺口见第 6 节） |
-| OAuth2/OIDC/设备码/扫码协议 JSON 端点 | **未实现** |
-| 管理 JSON API | **未实现** |
+| 访问日志文件受控轮转（单文件上限 + 历史数量上限） | 已实现（文件访问日志默认启用，见第 3.5 节） |
+| 单实例数据库排他锁（同一 SQLite 只允许一个 `serve`） | 已实现（跨进程文件锁，见第 3.5 节） |
+| 后台任务执行器 + 定时计划调度器（`internal/task`） | 已实现（随 serve 启动；已注册邮件投递、Webhook 投递处理器） |
+| 通知投递：邮件/Webhook 投递队列与 worker | 已实现但**本地禁用外发**：邮件发送器为显式「未配置」实现，投递必以明确错误失败；Webhook 投递使用真实出站网络策略，但端点管理入口未开放 |
+| 管理会话强认证门禁（root/高权限必须完成强认证且在新鲜度窗口内） | 已实现（页面会话层，见第 3.6 节） |
+| 协议端点/管理 JSON API 装配挂载点 | 已实现（`ServeOptions.ExtraMounts` + 内置协议/管理 API 开关，见第 3.7、3.8 节） |
+| 14 个页面选项（账户入口/资料/两步验证/OAuth/安全中心/用户/RBAC/应用/客服/敏感策略/审计/统计/报告/备份）：默认注册 12 个、条件注册 2 个 | 已装配（真实领域服务 + 生产授权；逐页依赖见第 3.8 节） |
+| 敏感操作链（policy + reauth + 安全告知） | 已装配：导出/清理/凭证轮换/策略修改/恢复代码/邮箱变更等经真实 `internal/policy` + `internal/reauth` 判定；未通过 fail-closed |
+| OAuth2/OIDC 协议 JSON 端点（授权/令牌/Discovery/JWKS/UserInfo/撤销） | 已实现，默认关闭；`protocol.enabled` 或 `--enable-protocol` 开启，见第 3.8 节 |
+| 管理 JSON API（审计/报告/计划/备份/任务/错误码） | 已实现，默认关闭；`--enable-admin-api` 开启，见第 3.8 节 |
+| root 强认证绑定（`/login/strong-setup` Passkey 注册） | 已接线：root 受限初始化 → 真实 Passkey ceremony → 重新登录取得强认证会话；本机未做浏览器/认证器真机互操作实测（见限制 14） |
 
-结论：`login-server` 现在可以真实启动并服务健康检查与内置账户入口页，但**还不是**
-完整的对外 OAuth2/OIDC 身份服务；不要把「能启动」等同于「第一版协议能力已全部交付」。
+结论：`login-server` 现在可以真实启动并服务健康检查与 14 个页面选项（默认 12、条件 2），具备单实例锁、
+访问日志轮转、后台任务执行器/调度器、真实敏感操作链（policy + reauth + 告知），
+并可按开关提供 OAuth2/OIDC 协议端点与管理 JSON API（均默认关闭）。邮件/Webhook 仍
+**本地禁用外发**；root 强认证绑定已接线但未做浏览器/认证器真机实测。不要把「能启动」
+等同于「所有部署形态与客户端互操作已验证」。
 
 ## 2. 启动前置条件（必须逐项确认）
 
@@ -42,8 +53,9 @@
    从未迁移过的新数据库首次 `serve` 允许自动创建；**已有迁移记录的库上状态缺失时默认
    拒绝启动**（防止删除状态目录绕过维护门禁），只有本地受控运维显式
    `--init-maintenance-state` 才允许重建。
-7. **首次初始化已完成**：数据库没有 root 时 `serve` 仍会启动并在日志中告警，但登录页
-   没有可登录账户；正式对外前必须先执行 `init`（见 `first-run.md`）。
+7. **首次初始化已完成**：数据库没有 root 时 `serve` **拒绝启动**（提示先运行 `login-server
+   init`）；只有本地开发/测试可显式 `--allow-uninitialized` 放行（会产生告警，不要暴露到
+   非回环网络）。
 8. **进程账号最小权限**：不要用管理员/root 账号长期运行 Web 服务；只授予数据库、
    秘密、日志目录的必需权限。
 9. **维护与恢复通道可用**：准备 `cmd/loginctl` 应急恢复和 `cmd/login-backup` 备份工具，
@@ -92,19 +104,64 @@ login-server.exe serve --config config\login.yaml ^
 | `--database <path>` | serve / init | 覆盖 `database.path` |
 | `--master-key-file <path>` | serve / init | 主密钥环文件路径；配置未设置 `secrets.master_key` 时必需。`init` 下文件不存在则生成受保护文件，`serve` 下文件必须已存在 |
 | `--migrate` / `--migrate=apply` | serve | 执行数据库迁移后再启动；其他取值拒绝 |
-| `--access-log <path>` | serve | W3C 访问日志文件（默认写 stderr；不自动轮转，由部署侧日志设施负责） |
+| `--access-log <path>` | serve | W3C 访问日志文件（默认写 stderr；文件日志默认启用受控轮转，见第 3.5 节） |
+| `--access-log-max-bytes <n>` | serve | 访问日志单文件字节上限；0 使用默认 64 MiB，允许 1 MiB～1 GiB |
+| `--access-log-max-files <n>` | serve | 访问日志保留的历史文件数量（不含当前文件）；0 使用默认 5，允许 1～100 |
 | `--maintenance-state-dir <dir>` | serve | 库外维护状态目录（必须与数据库目录分开） |
 | `--maintenance-state-dir <dir>` | init | 库外维护状态目录（默认与 serve 相同） |
 | `--init-maintenance-state` | serve | 显式允许在已有数据库上创建缺失的库外维护状态（默认 fail-closed；仅本地受控运维确认状态丢失原因后使用） |
 | `--allow-uninitialized` | serve | 仅开发/测试：允许数据库尚未完成首次初始化时启动（默认拒绝） |
-| `--allow-legacy-without-sensitive` | serve | 过渡开关：允许会话管理访问仅走旧强认证闸门（敏感操作策略未装配；默认 fail-closed） |
+| `--allow-legacy-without-sensitive` | serve | 过渡/兼容开关：允许会话管理访问只走旧强认证闸门而不额外经敏感操作策略（敏感策略已装配；默认 false 即 fail-closed，生产不建议开启） |
 | `--operator <id>` | init | 本地受控操作者标识；默认由操作系统本地管理员身份推导 |
 | `--password-file <path>` | init | 受保护密码文件（仅所有者可读写）；不提供命令行明文密码 |
 
 ### 3.4 启动时输出的诊断
 
 `serve` 只输出脱敏信息：版本、配置路径、监听地址、路径前缀、TLS/维护状态、数据库路径
-（路径不是秘密）、主密钥文件路径（仅路径）。不会输出秘密、会话、凭据或请求体内容。
+（路径不是秘密）、主密钥文件路径（仅路径）、后台任务调度是否启动、额外挂载点路径。
+不会输出秘密、会话、凭据或请求体内容。
+
+### 3.5 单实例约束与访问日志轮转
+
+- **单实例数据库锁**：`serve` 启动早期就在数据库同目录创建并获取 `<数据库文件名>.server.lock`
+  的跨进程排他锁（Windows `LockFileEx` / 类 Unix `flock`）。同一 SQLite 数据库只允许一个
+  `login-server serve`；第二个进程或同一进程内第二次 `serve` 会立即失败并提示「单实例约束」，
+  不会出现两个进程各自调度任务/写审计的拆分状态。进程退出（含崩溃）由操作系统释放锁，
+  锁文件保留最后一次持有的 PID/时间用于排障；不要手工删除锁文件来绕过检查，先确认没有
+  残留进程。跨机共享同一数据库文件不受支持。
+- **访问日志轮转**：使用 `--access-log` 指定文件时默认启用轮转，单文件达到
+  `--access-log-max-bytes`（默认 64 MiB）后顺延为 `<日志>.1`，历史文件最多保留
+  `--access-log-max-files` 个（默认 5 个，超出删除最旧），避免磁盘被无限增长的访问日志
+  耗尽。轮转在单次写入前判断，不会把一条记录拆到两个文件；轮转失败只记录告警并尽量继续
+  写当前文件/标准错误，不会让 HTTP 请求失败。轮转配置超出范围时拒绝启动（不静默退化为
+  不轮转）。操作系统级日志设施仍可另行采集这些文件。
+
+### 3.6 管理会话强认证门禁（root/高权限）
+
+- 页面会话层把「普通登录会话」和「管理会话」严格区分：`UIAccessManagement` 管理页只有在
+  `internal/session` 的 `AuthorizeManagement` 真实通过时才可访问，即会话必须是普通完整
+  会话、已完成强认证，且强认证时间在 `StrongAuthMaxAge`（默认 15 分钟）新鲜度窗口内。
+- 未完成强认证、强认证过期或处于受限初始化/受限恢复状态的会话，访问管理页一律 403；
+  不会因为「密码登录成功」就获得管理会话，也没有降级旁路。
+- MFA/Passkey 绑定页面已装配：root 在 `init` 后通过 `/login/strong-setup` 完成真实
+  Passkey 注册并重新登录后取得管理会话；绑定前/强认证过期后管理页对 root 仍为 403
+  （fail-closed）。该链路未做真实浏览器+硬件认证器互操作实测（第 6 节限制 4）；不要用
+  `--allow-legacy-without-sensitive` 绕过。
+- 已完成强认证的管理账户打开管理页仍需通过对应域服务的真实授权（authz/root 判定）；
+  14 个页面选项中默认注册 12 个（管理/RBAC/审计/统计/报告/备份/应用/客服/敏感策略等），
+  安全中心与 OAuth 页按开关条件注册；未注册页面返回 404。
+
+### 3.7 协议端点/管理 JSON API 挂载点
+
+- OAuth/OIDC 协议端点与管理 JSON API 已由独立包交付并由本服务接线（默认关闭，见第 3.8
+  节）。装配层仍保留 `serverapp.ServeOptions.ExtraMounts`（`[]serverapp.HandlerMount`）：
+  每项包含 `Name`、`Prefix`（站内相对前缀，挂在 `server.path_prefix` 之后）与 `Handler`；
+  `KeepPrefix: true` 的处理器（自带固定 BasePath，如管理 API）收到的是「站内前缀+剩余
+  路径」，非空 `server.path_prefix` 下不会 404。
+- 集成分两步：由后续包提供 `http.Handler`，再由装配方在 `ServeOptions.ExtraMounts` 中追加
+  一项；挂载点会收到去掉挂载前缀后的请求路径。非法配置（空名称、重复/嵌套前缀、覆盖
+  `/healthz`、`/openapi.json`、`/_ui/` 等内置路径、nil 处理程序）会在启动时 fail-closed。
+- 维护模式下不挂载额外处理程序（只放行健康检查），协议端点同样返回 503。
 
 ## 4. 启动检查清单
 
@@ -112,13 +169,16 @@ login-server.exe serve --config config\login.yaml ^
 |---|---|
 | 配置未知字段/重复键/类型错误 | 启动前失败，不产生监听 |
 | 数据库未迁移且未加 `--migrate=apply` | 拒绝启动，提示待应用版本 |
+| 同一数据库已有另一个 `serve` | 拒绝启动并提示单实例约束（不会监听） |
 | 监听地址 | 与配置一致；默认 `127.0.0.1:8080`；非回环明文必须满足 TLS 代理/本地 TLS 条件 |
 | `GET <prefix>/healthz` | 200，`{"status":"ok"}`（维护模式为 `{"status":"ok","mode":"maintenance"}`） |
 | `GET <prefix>/openapi.json` | 200，最低 OpenAPI 文档（仅健康检查与文档本身） |
 | `GET <prefix>/login` | 200，内置登录页（含 CSRF 隐藏字段） |
-| 未知路径 | 404（维护模式下为 503 维护提示） |
+| 未注册/未启用的页面与端点 | 404（不注册假页面；协议端点未开启时同样 404）；维护模式下为 503 维护提示 |
+| 访问日志 | 不包含 Cookie、Authorization、密码、一次性凭证；文件日志默认按大小/数量轮转 |
+| 后台任务 | 日志出现「后台任务运行时已启动」（执行器 + 调度器 + 邮件/Webhook 处理器） |
+| 协议/管理 API 挂载点 | 启动输出列出实际挂载路径；非法挂载配置启动失败 |
 | TLS 证书与私钥权限 | 私钥仅所有者可读；证书链完整、未过期 |
-| 访问日志 | 不包含 Cookie、Authorization、密码、一次性凭证；默认 stderr 或受控文件 |
 | 关闭 | 收到 SIGINT/SIGTERM 后在 `server.shutdown_timeout_seconds` 内有界完成，退出码 0 |
 
 ## 5. 维护状态行为
@@ -135,31 +195,85 @@ login-server.exe serve --config config\login.yaml ^
 
 ## 6. 已知限制（与本次 MVP 缺口一致）
 
-1. **协议端点未实现**：OAuth2/OIDC 授权、令牌、Discovery、设备码、扫码协议 JSON 端点
-   全部未装配；内置页面中的 OAuth 同意/设备码/扫码页也未注册。
-2. **管理 JSON API 未实现**：没有远程管理 API；本地管理/应急走 `cmd/loginctl`。
-3. **页面装配范围有限**：当前只注册账户入口页（步骤 63 域）；个人资料、管理、安全
-   中心、MFA/Passkey、OAuth 同意、RBAC、应用、客服、审计、统计、报告、备份页面缺少
-   宿主级授权适配器（`internal/*adapter` 中的部分适配器需要真实 authz/敏感策略/任务
-   调度，本 MVP 未装配），因此不注册，避免「页面能打开但后端是伪造成功」。
-4. **root 强认证绑定未接页面**：`init` 后 root 处于 `setup_verified`，要求绑定强因素
-   （MFA/Passkey）后才能完整登录；绑定流程属后续步骤，因此 root 目前不能通过内置登录页
-   完成登录（不会静默降级为只凭密码的高权限会话）。
-5. **邮件/Webhook 不真实外发**：注册邮件验证未装配投递通道（配置要求邮箱验证时会
-   fail-closed 拒绝启动）；Webhook/通知未装配。
-6. **后台任务调度未装配**：报告计划、备份计划、批量导出等依赖任务调度的页面未注册。
+1. **协议端点默认关闭且能力有限**：授权码/刷新/客户端凭证、Discovery、JWKS、UserInfo、
+   撤销已实现；**设备码、状态查询、扫码登录未启用**（设备确认页/短码密钥环/资源服务
+   注册表未装配，配置显式启用状态查询会拒绝启动）。扫码登录服务未装配，扫码页面显示
+   受控未启用状态。第三方客户端互操作未做真实联调。
+2. **管理 JSON API 默认关闭**：`--enable-admin-api` 后提供任务/错误码/审计/报告/计划/
+   备份路由；审计导出/报告/备份等写操作仍要求近期再次认证（无强认证事实时 fail-closed）。
+3. **页面按依赖注册**：14 个页面选项中默认注册 12 个；安全中心页要求同时启用 Passkey 与协议端点，
+   OAuth 页面要求启用协议端点，否则对应页面不注册（404），避免半装配页面冒充可用。
+4. **root 强认证绑定已接线但未真机互操作**：`init` 后 root 需在 `/login/strong-setup`
+   完成真实 Passkey（WebAuthn）注册，再重新登录取得管理会话；自动化测试覆盖服务层与
+   页面状态，但**未**在真实浏览器 + Windows Hello/YubiKey 上操作验证。绑定前管理页
+   仍 403（fail-closed）。
+5. **邮件/Webhook 不真实外发**：邮件发送器是显式「未配置」实现（投递/告知以明确失败
+   留痕，不访问网络）；因此两步验证邮件因素、找回密码、安全告知不可用（TOTP/Passkey
+   不受影响）。Webhook 端点管理入口未开放。注册邮箱验证在配置要求时仍拒绝启动。
+6. **后台任务调度已启动，但领域处理器有限**：执行器 + 定时计划调度器随 serve 启动，当前
+   只注册邮件投递与 Webhook 投递处理器；报告计划生成、备份计划/清理、审计保留清理等
+   处理器要等 `reports`/`backupadmin`/`auditops` 域服务装配后注册（否则相应管理页继续
+   不注册，不伪造处理器）。
 7. **数据库只支持 SQLite**：MySQL/PostgreSQL/SQL Server 适配未运行实测。
 8. **单实例**：SQLite 为单实例主库，跨实例共享会话/限流/任务协调未实现。
 9. **反代/负载均衡只提供配置样例**，未做真实代理联调（见 `reverse-proxy.md`）；
    TCP PROXY protocol、OCSP/CRL、证书自动续期未实现。
-10. **访问日志不自动轮转**，需部署侧日志设施控制保留与磁盘占用。
-11. **敏感操作策略未装配**：会话管理访问默认 fail-closed；`--allow-legacy-without-sensitive`
-    只是未装配敏感策略（步骤 39）时的显式过渡开关，不增强安全性，不应作为长期配置。
-12. **单实例/SQLite 限制**：SQLite 为主库且未实现跨进程单实例锁；同一 SQLite 数据库被
-    两个 `login-server` 进程以不同端口同时启动不会被阻止（会话/限流/任务不共享），
-    运维必须保证同一部署目录只运行一个服务进程。
+10. **访问日志轮转仅由本进程控制**：文件访问日志已有单文件上限与历史数量上限，但不会
+    压缩、归档到远端或做长期保留；需要集中日志时仍应接部署侧日志设施。
+11. **细粒度数据范围是已声明的设计边界（非缺陷、非 fail-open）**：当前数据模型没有
+    部门/资源级 scope，权限判定粒度是「功能权限 + 作用域（system/application）」；
+    持有某功能权限即对该作用域内全部数据可见（审计/统计/批量导出/客服同此），没有
+    按部门/属主/单条资源的二次过滤。**没有权限时一律拒绝**（fail-closed），因此不是
+    放行绕过，而是"全有或全无"的范围语义；不要对外宣称已实现细粒度数据权限。实现
+    细粒度范围需要在数据模型层引入资源/部门归属与授权映射，属后续独立设计项。
+12. **Passkey UserVerification 策略**：默认 `required`（浏览器要求 Windows Hello/
+    PIN/生物识别等用户验证）；显式配置 `preferred`/`discouraged` 会降低强认证强度，
+    尤其 `discouraged` 只应在明确接受风险且不用于 root/高权限账户的场景下使用，
+    否则管理强认证的"用户在场验证"保证不再成立。
+12. **单实例/SQLite 限制**：SQLite 为主库；同一数据库已被单实例排他锁阻止第二个
+    `serve`，但跨机共享同一数据库文件、多实例会话/限流/任务协调仍不受支持，也未被测试。
 13. **初始化中断语义**：`init` 若在创建 root 后、兑换凭证或设置密码前失败，会留下受限
     待配置 root（不可完整登录）；不要重复 init，按 `first-run.md` 的恢复指引处理。
+
+## 3.8 页面、协议端点与管理 API（本轮新增）
+
+- 页面：`ui.go` 共 14 个页面选项，默认注册 12 个，条件注册 2 个（安全中心需
+  `passkey.enabled`+`protocol.enabled`，OAuth 页需 `protocol.enabled`；未满足 404），
+  全部满足时 14 个。各页面使用真实领域服务与生产授权适配层；页面访问级别由页面会话
+  决定（普通页要求完整会话、管理页要求强认证新鲜的管理会话、受限会话一律拒绝）。
+  管理 Kind 只发给 `/admin/*` 与 `/support/*` 命名空间，避免强认证用户的普通页面被
+  会话 Kind 互斥规则拒绝。
+- 敏感操作：导出/清理/保留策略/凭证轮换/敏感策略修改/TOTP/Passkey/恢复代码/邮箱
+  变更/受控更名统一经 `internal/policy`（内置敏感操作目录）+ `internal/reauth`
+  （近期认证、一次性批准、安全告知）。缺少近期认证/批准、策略不存在、强认证不可满足
+  或审计不可用时全部 fail-closed；成功后的安全告知在未配置邮件发送器时记录为明确失败。
+- 协议端点（默认关闭）：配置
+
+```yaml
+protocol:
+  enabled: true
+  issuer: "https://login.example.com"   # 必须与 server.path_prefix 路径一致
+  # enable_introspection: true          # 当前版本不支持，启用会拒绝启动
+  # login_path: "/login"
+```
+
+  或 `login-server serve --enable-protocol`。启用后挂载 `/.well-known/openid-configuration`、
+  `/jwks`、`/oauth/authorize`、`/oauth/token`、`/oauth/userinfo`、`/oauth/revoke`
+  （路径带部署前缀）。Issuer 只接受 https 或本地回环 http；关闭时这些路径 404，
+  维护模式一律 503。
+- 管理 JSON API（默认关闭）：`--enable-admin-api`（可选 `--admin-api-prefix`）。认证复用
+  真实管理会话（每次请求重新 `AuthorizeManagement`），Cookie 会话写请求要求 CSRF 令牌；
+  已挂载任务、错误码、审计查询/导出/清理、报告、报告计划、备份管理路由；未装配能力
+  （如本地捕获通知测试）返回明确未启用。维护模式不挂载（503）。
+
+## 3.9 root 强认证绑定流程（最小可用）
+
+1. `login-server init` 创建 root 并设置正式密码（初始化状态 `setup_verified`→`ready`）。
+2. root 用密码登录：因未绑定强因素，认证返回受限初始化会话（不能进入管理页）。
+3. 在 `/login/strong-setup` 完成 Passkey（WebAuthn）注册；完成后受限会话被撤销。
+4. 重新登录：密码 + Passkey 第二步 → 服务端记录强认证时间 → 完整会话。
+5. 该会话在强认证新鲜度窗口内（默认 15 分钟）可进入管理页；过期后需重新强认证。
+6. 绑定前/强认证过期后管理页仍 403；不存在只凭密码的高权限会话旁路。
 
 ## 7. 服务托管
 

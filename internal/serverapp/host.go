@@ -29,6 +29,22 @@ type ServeOptions struct {
 	MasterKeyFile string
 	// AccessLogPath 是访问日志文件路径；空表示写 StandardError。
 	AccessLogPath string
+	// AccessLogMaxBytes/AccessLogMaxFiles 是访问日志文件轮转配置：单文件上限
+	// （0 使用默认 64 MiB，允许 1 MiB～1 GiB）与保留历史文件数量（0 使用默认 5，
+	// 允许 1～100，不含当前文件）。只在使用文件访问日志时生效。
+	AccessLogMaxBytes int64
+	AccessLogMaxFiles int
+	// ExtraMounts 是协议端点处理程序的显式挂载点；本包不实现协议包，只提供装配
+	// 位置（详见 HandlerMount 与 ComposeHandler）。
+	ExtraMounts []HandlerMount
+	// EnableProtocol 显式启用 OAuth 2.0 / OpenID Connect 协议端点（命令行覆盖
+	// 配置 protocol.enabled）；默认关闭。启用后仍要求配置合法协议签发方。
+	EnableProtocol bool
+	// EnableAdminAPI 显式启用内置管理 JSON API（internal/adminapi）；默认关闭。
+	// 启用后管理会话/CSRF 契约复用现有 session.Service，未启用时请求 404。
+	EnableAdminAPI bool
+	// AdminAPIPrefix 覆盖管理 API 站内前缀；空使用 adminapi.DefaultBasePath。
+	AdminAPIPrefix string
 	// Migrate 为 true（--migrate=apply）时先执行数据库迁移再启动。
 	Migrate bool
 	// MaintenanceStateDir 覆盖库外维护状态目录；空则使用数据库目录同级的
@@ -143,8 +159,11 @@ func newLogger(cfg login.Config, output io.Writer) (*slog.Logger, error) {
 }
 
 // accessLogTarget 打开访问日志输出；返回 writer 与需要关闭的文件（若为文件）。
-// 访问日志文件按平台受保护权限创建（0600 / 受限 ACL），失败时拒绝启动。
-func accessLogTarget(options ServeOptions) (io.Writer, *os.File, error) {
+//
+// 文件访问日志默认启用受控轮转（单文件上限 + 历史文件数量上限），文件按平台
+// 受保护权限创建（0600 / 受限 ACL）；配置非法或打开失败时拒绝启动，不静默
+// 退化成"无限增长"或"不记录"。
+func accessLogTarget(options ServeOptions) (io.Writer, io.Closer, error) {
 	if options.AccessLog != nil {
 		return options.AccessLog, nil, nil
 	}
@@ -154,22 +173,12 @@ func accessLogTarget(options ServeOptions) (io.Writer, *os.File, error) {
 	if options.AccessLogPath == "" {
 		return options.StandardError, nil, nil
 	}
-	absolutePath, err := filepath.Abs(options.AccessLogPath)
+	writer, err := NewRotatingLogWriter(options.AccessLogPath,
+		options.AccessLogMaxBytes, options.AccessLogMaxFiles, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("访问日志路径无效: %w", err)
+		return nil, nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o700); err != nil {
-		return nil, nil, fmt.Errorf("创建访问日志目录失败: %w", err)
-	}
-	file, err := os.OpenFile(absolutePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return nil, nil, fmt.Errorf("打开访问日志文件失败: %w", err)
-	}
-	if err := secrets.ProtectFile(absolutePath); err != nil {
-		_ = file.Close()
-		return nil, nil, fmt.Errorf("收紧访问日志文件权限失败: %w", err)
-	}
-	return file, file, nil
+	return writer, writer, nil
 }
 
 // MaintenanceHealthPath 返回维护模式下仍放行的健康检查路径（含部署前缀）。
@@ -202,9 +211,13 @@ func maintenanceHandler(cfg login.Config) http.Handler {
 
 // runServe 是 serve 的完整装配与运行流程（构造 -> 启动 -> 等待关闭）。
 //
-// 关闭顺序：Instance（逆序停止监听与后台组件）-> SQLite 存储 -> 维护状态锁 ->
-// 访问日志文件。任何一步关闭失败都会聚合返回，但仍继续释放后续资源，避免遗留
-// 端口、文件句柄或数据库连接。
+// 单实例约束：装配一开始就取得与数据库同目录的排他锁（见 AcquireInstanceLock），
+// 同一数据库本轮只允许一个 login-server 进程；第二个进程或同进程第二次 serve
+// 立即失败，不会出现两个进程各自调度任务/写审计的拆分状态。
+//
+// 关闭顺序：Instance（逆序停止后台任务与监听）-> SQLite 存储 -> 维护状态锁 ->
+// 访问日志文件 -> 单实例锁。任何一步关闭失败都会聚合返回，但仍继续释放后续
+// 资源，避免遗留端口、文件句柄或数据库连接。
 func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	now := options.Now
 	if now == nil {
@@ -213,6 +226,12 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	cfg, err := LoadConfig(options.ConfigPath, options.DatabasePath)
 	if err != nil {
 		return err
+	}
+	if options.EnableProtocol {
+		cfg.Protocol.Enabled = true
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("启用协议端点后的配置校验失败: %w", err)
+		}
 	}
 	stdout := options.StandardOutput
 	if stdout == nil {
@@ -228,11 +247,18 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	}
 	fmt.Fprintf(stdout, "login-server %s\n", login.CurrentBuildInfo().Version)
 	fmt.Fprintf(stdout, "配置: %s\n", options.ConfigPath)
+	instanceLock, err := AcquireInstanceLock(cfg.Database.Path)
+	if err != nil {
+		return err
+	}
+	defer instanceLock.Release()
+	logger.Info("已取得单实例数据库锁", "lock_path", instanceLock.Path())
 	logger.Info("开始装配独立服务",
 		"database", cfg.Database.Path,
 		"listen_addresses", cfg.Server.ListenAddresses(),
 		"path_prefix", cfg.Server.PathPrefix,
-		"tls", cfg.Server.TLSEnabled())
+		"tls", cfg.Server.TLSEnabled(),
+		"extra_mounts", len(options.ExtraMounts))
 
 	keyring, keyPath, err := LoadKeyring(ctx, cfg, options.MasterKeyFile, false, now)
 	if err != nil {
@@ -340,11 +366,20 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	var handler http.Handler
 	var server *login.Server
 	var instance *login.Instance
+	var taskRuntime *TaskRuntime
+	mountPaths := make([]string, 0, len(options.ExtraMounts))
 	if maintenanceMode {
-		logger.Warn("实例处于维护状态：只提供健康检查与维护提示，不装配业务页面")
+		if len(options.ExtraMounts) > 0 {
+			logger.Warn("实例处于维护状态：协议/管理 API 挂载点不对外提供（只放行健康检查）",
+				"extra_mounts", len(options.ExtraMounts))
+		}
+		logger.Warn("实例处于维护状态：只提供健康检查与维护提示，不装配业务页面与后台任务")
 		handler = maintenanceHandler(cfg)
 	} else {
-		services, buildErr := BuildServices(deps)
+		sensitiveRelay := &sensitiveRelay{}
+		strongPresenceRelay := &strongFactorRelay{}
+		services, buildErr := BuildServicesWithHooks(deps, SecurityHooks{
+			Sensitive: sensitiveRelay, StrongPresence: strongPresenceRelay})
 		if buildErr != nil {
 			return buildErr
 		}
@@ -360,9 +395,64 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 			logger.Warn("数据库尚未完成首次初始化：已按 --allow-uninitialized 显式放行，" +
 				"仅用于开发/测试，不要暴露到非回环网络")
 		}
-		pages, pageErr := BuildPages(deps, services)
+		// 敏感操作闸门：真实 policy + reauth（强认证可用性由 Passkey 配置决定，
+		// 未启用时声明为不可满足而不是降级为密码）。
+		gate, gateErr := BuildSecurityGate(deps, services.BootstrapStore,
+			services.Authn, cfg.Passkey.Enabled)
+		if gateErr != nil {
+			return gateErr
+		}
+		sensitiveRelay.Set(gate.Reauth)
+		// 两阶段任务运行时：先构造入队 relay 供域服务使用，注册完域处理器后再
+		// 创建执行器/调度器，避免循环依赖与重复调度器。
+		taskRuntime, err = NewTaskRuntime(deps, gate)
+		if err != nil {
+			return err
+		}
+		managed, managedErr := BuildManagedServices(deps, services, taskRuntime, gate)
+		if managedErr != nil {
+			return managedErr
+		}
+		securityDomains, securityErr := BuildSecurityDomains(deps, services, managed, gate)
+		if securityErr != nil {
+			return securityErr
+		}
+		strongPresenceRelay.Set(securityDomains.StrongFactors)
+		protocolDomains, protocolErr := BuildProtocolDomains(deps, services, managed, gate)
+		if protocolErr != nil {
+			return protocolErr
+		}
+		pages, pageErr := BuildPages(deps, services, managed, securityDomains, gate,
+			protocolDomains)
 		if pageErr != nil {
 			return pageErr
+		}
+		if completeErr := taskRuntime.Complete(managed.TaskHandlers()); completeErr != nil {
+			return completeErr
+		}
+		// 报告计划服务在构造时无法拿到调度器（调度器需要报告任务处理器），
+		// 因此在执行器/调度器创建完成后绑定延迟 relay。
+		managed.AttachScheduler(taskRuntime.Scheduler())
+		mounts := append([]HandlerMount(nil), options.ExtraMounts...)
+		if protocolDomains != nil {
+			mounts = append(mounts, protocolDomains.protocolMounts()...)
+			logger.Info("已启用 OAuth/OIDC 协议端点",
+				"issuer", protocolIssuer(deps),
+				"paths", protocolDomains.Protocol.Paths())
+		}
+		if options.EnableAdminAPI {
+			adminHandler, adminPrefix, adminErr := BuildAdminAPIServer(
+				deps, services, managed, taskRuntime, options.AdminAPIPrefix, gate)
+			if adminErr != nil {
+				return adminErr
+			}
+			mounts = append(mounts, HandlerMount{
+				Name: "admin-api", Prefix: adminPrefix, Handler: adminHandler,
+				KeepPrefix: true,
+			})
+			logger.Info("已启用管理 JSON API",
+				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+adminPrefix,
+				"note", "只挂载已装配领域服务路由；未装配域返回 404")
 		}
 		httpOptions, httpErr := BuildHTTPOptions(deps, pages, logger, accessWriter)
 		if httpErr != nil {
@@ -372,7 +462,15 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		if handlerErr != nil {
 			return fmt.Errorf("构造 HTTP 处理程序失败: %w", handlerErr)
 		}
-		handler = assembled
+		withMounts, mountErr := ComposeHandler(assembled, cfg.Server.PathPrefix, mounts)
+		if mountErr != nil {
+			return fmt.Errorf("协议/管理 API 挂载点配置无效: %w", mountErr)
+		}
+		handler = withMounts
+		for _, mount := range mounts {
+			mountPaths = append(mountPaths,
+				normalizePathPrefix(cfg.Server.PathPrefix)+mount.Prefix)
+		}
 	}
 
 	server, err = login.NewServer(login.ServerOptions{
@@ -380,11 +478,15 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	if err != nil {
 		return fmt.Errorf("构造监听服务失败: %w", err)
 	}
+	components := []login.BackgroundComponent{server}
+	if taskRuntime != nil {
+		components = append(components, taskRuntime)
+	}
 	instance, err = login.New(login.Options{
 		Config:     &cfg,
 		Logger:     logger,
 		Database:   databasePingAdapter{store: store},
-		Components: []login.BackgroundComponent{server},
+		Components: components,
 	})
 	if err != nil {
 		return fmt.Errorf("构造服务实例失败: %w", err)
@@ -397,14 +499,17 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	for _, addr := range addrs {
 		printed = append(printed, addr.String())
 	}
-	fmt.Fprintf(stdout, "监听地址: %v（前缀 %q，TLS=%v，维护模式=%v）\n",
-		printed, cfg.Server.PathPrefix, server.TLSEnabled(), maintenanceMode)
+	fmt.Fprintf(stdout, "监听地址: %v（前缀 %q，TLS=%v，维护模式=%v，任务调度=%v，额外挂载=%v）\n",
+		printed, cfg.Server.PathPrefix, server.TLSEnabled(), maintenanceMode,
+		taskRuntime != nil, mountPaths)
 	logger.Info("独立服务已启动",
 		"addresses", printed, "path_prefix", cfg.Server.PathPrefix,
-		"maintenance", maintenanceMode, "tls", server.TLSEnabled())
+		"maintenance", maintenanceMode, "tls", server.TLSEnabled(),
+		"task_runtime", taskRuntime != nil, "extra_mounts", mountPaths)
 	if options.OnStarted != nil {
 		options.OnStarted(StartResult{Addresses: printed,
-			TLS: server.TLSEnabled(), Maintenance: maintenanceMode})
+			TLS: server.TLSEnabled(), Maintenance: maintenanceMode,
+			Tasks: taskRuntime != nil, Mounts: mountPaths})
 	}
 
 	<-ctx.Done()
@@ -453,4 +558,8 @@ type StartResult struct {
 	TLS bool
 	// Maintenance 表示本次启动是否处于维护模式。
 	Maintenance bool
+	// Tasks 表示后台任务运行时（执行器 + 调度器）是否随实例启动。
+	Tasks bool
+	// Mounts 是实际挂载的协议/管理 API 站内路径（含部署前缀）。
+	Mounts []string
 }

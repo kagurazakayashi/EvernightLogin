@@ -565,6 +565,12 @@ func newCaller(kind audit.ActorKind, id string) (Caller, error) {
 	return Caller{actor: actor}, nil
 }
 
+// Actor 返回调用者的可信审计身份（只读副本）。
+//
+// 这是宿主授权适配层识别调用者所需的最小只读查询能力：授权器看不到不可见
+// 字段，无法判断主体；该访问器不允许修改身份，也不暴露请求编号。
+func (c Caller) Actor() audit.Actor { return c.actor }
+
 // WithRequestID 返回带请求编号的调用者副本（验证与角色包一致）。
 func (c Caller) WithRequestID(requestID string) (Caller, error) {
 	if requestID != "" {

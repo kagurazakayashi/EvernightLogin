@@ -5,12 +5,15 @@
 // 完成，导入本命令不会启动任何后台任务。
 //
 // 当前版本提供的真实能力：
-//   - serve：严格校验配置 -> 打开/校验 SQLite 与迁移 -> 装配真实服务与内置
-//     账户入口页 -> 监听（默认 127.0.0.1）-> 有界优雅关闭。
+//   - serve：严格校验配置 -> 单实例数据库锁 -> 打开/校验 SQLite 与迁移 ->
+//     装配真实服务与内置账户入口页 -> 启动后台任务执行器/调度器（邮件投递被
+//     本地禁用、Webhook 投递使用真实出站策略）-> 监听（默认 127.0.0.1）->
+//     有界优雅关闭；文件访问日志按大小/数量受控轮转。
 //   - init：本地受控首次安全初始化（创建 root、兑换一次性凭证、设置正式密码）。
 //
-// 仍未实现：OAuth2/OIDC/设备码/扫码协议 JSON 端点、管理 JSON API、其余管理
-// 页面后端与真实邮件/Webhook 投递。文档与报告按实际能力描述，不夸大可用范围。
+// 仍未实现：OAuth2/OIDC/设备码/扫码协议 JSON 端点、管理 JSON API、其余 13 个
+// 页面后端域服务（见 docs/guide/api-status.md）。协议/管理 API 已预留挂载点
+// （serverapp.ServeOptions.ExtraMounts），由后续集成步骤接入。
 package main
 
 import (
@@ -113,7 +116,11 @@ func newServeCommand() *cobra.Command {
 	flags.StringVar(&options.MasterKeyFile, "master-key-file", "",
 		"主密钥环文件路径（配置未设置 secrets.master_key 时必需，必须为受保护文件）")
 	flags.StringVar(&options.AccessLogPath, "access-log", "",
-		"W3C 访问日志文件路径（默认写 stderr；不自动轮转）")
+		"W3C 访问日志文件路径（默认写 stderr；文件日志默认受控轮转）")
+	flags.Int64Var(&options.AccessLogMaxBytes, "access-log-max-bytes", 0,
+		"访问日志单文件字节上限（0 使用默认 64 MiB，允许 1 MiB～1 GiB）")
+	flags.IntVar(&options.AccessLogMaxFiles, "access-log-max-files", 0,
+		"访问日志保留的历史文件数量（0 使用默认 5，允许 1～100，不含当前文件）")
 	flags.StringVar(&options.MaintenanceStateDir, "maintenance-state-dir", "",
 		"库外维护状态目录（默认：数据库目录同级的 <数据目录名>-maintenance）")
 	flags.BoolVar(&options.InitMaintenanceState, "init-maintenance-state", false,
@@ -122,6 +129,12 @@ func newServeCommand() *cobra.Command {
 		"仅开发/测试：允许数据库尚未完成首次初始化时启动（默认拒绝）")
 	flags.BoolVar(&options.AllowLegacyWithoutSensitive, "allow-legacy-without-sensitive", false,
 		"过渡开关：允许会话管理访问仅走旧强认证闸门（未装配敏感策略，默认 fail-closed）")
+	flags.BoolVar(&options.EnableProtocol, "enable-protocol", false,
+		"启用 OAuth 2.0 / OpenID Connect 协议端点（需配置 protocol.issuer；默认关闭，未启用时 404）")
+	flags.BoolVar(&options.EnableAdminAPI, "enable-admin-api", false,
+		"启用管理 JSON API（复用管理会话/CSRF 契约；默认关闭，未启用时 404）")
+	flags.StringVar(&options.AdminAPIPrefix, "admin-api-prefix", "",
+		"管理 API 站内前缀（默认 /admin/v1，不允许覆盖页面命名空间）")
 	flags.StringVar(&migrateValue, "migrate", "",
 		"执行数据库迁移后再启动：--migrate 或 --migrate=apply")
 	flags.Lookup("migrate").NoOptDefVal = "apply"

@@ -171,9 +171,10 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 
 ## 8. 已知限制
 
-- 独立服务装配为 MVP：包内 `login-server` 可 `init`/`serve`，但 OAuth/OIDC/设备码/扫码/
-  管理 JSON API 仍未实现，root 强认证绑定与多数管理页面未装配，不能当作完整对外
-  OAuth2/OIDC 身份服务（见 `standalone-service.md` 第 6 节）。
+- 独立服务装配为 MVP：包内 `login-server` 可 `init`/`serve`；OAuth/OIDC 协议端点与管理
+  JSON API 已装配但默认关闭（开关见 `standalone-service.md` 第 3.8 节）；设备码/扫码/
+  令牌状态查询未启用；14 个页面选项（默认注册 12、条件 2）；root Passkey 强认证绑定已接线
+  但未做真机互操作。发布包重建前不要按“已上线完整 OAuth2/OIDC 服务”宣传。
 - 本轮未重新构建发布包；既有产物早于宿主装配，`--version`/帮助/无参数行为需重建后复测。
 - 仅 Windows amd64 允许实际运行验证；Windows arm64、Linux、macOS 只做编译检查，**未运行**。
 - 未构建/运行容器镜像；容器样例只是配置契约。

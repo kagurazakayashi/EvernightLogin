@@ -2,8 +2,9 @@
 
 本文给出一条**当前版本真实可执行**的最短路径：从空配置开始，校验配置、迁移一个临时
 数据库、做本地诊断、执行首次安全初始化，并真实启动独立 HTTP 服务。每一步都给出可
-复现命令与预期结果；未实现的能力（OAuth/OIDC、管理 JSON API、强认证绑定等）在文末
-如实列出，不把规划写成可用。
+复现命令与预期结果；OAuth/OIDC 协议端点与管理 JSON API 已实现（可配置开关，默认关闭），
+未启用的能力（设备码、扫码登录、令牌状态查询/introspection）与未真机互操作项在文末如实
+列出，不把规划写成可用。
 
 > 运行环境：Windows 11 / amd64 / Go 1.27.4（本项目唯一运行实测平台）。
 > 全部命令默认**在仓库根目录**执行，示例使用 cmd 语法；PowerShell 请把
@@ -163,8 +164,10 @@ curl -s -o NUL -w "%%{http_code}" http://127.0.0.1:18080/no-such-page
 预期：`/healthz` 与 `/login` 为 **200**，未知路径为 **404**。停止用 `Ctrl+C`，
 进程在 `server.shutdown_timeout_seconds` 内有界关闭。
 
-> 说明：root 初始化后仍要求强认证绑定（MFA/Passkey），绑定流程尚未装配到页面/CLI，
-> 因此 root 现在不能通过内置登录页完成完整登录；普通账户登录页可用，但注册默认关闭。
+> 说明：root 初始化后仍要求强认证绑定（Passkey）；绑定流程已接线到内置
+> `/login/strong-setup` 页面：密码登录得到受限初始化会话 → 完成真实 Passkey 注册 →
+> 重新登录取得强认证管理会话（未做真机互操作实测，见 `standalone-service.md` 第 6 节）；
+> 普通账户登录页可用，但注册默认关闭。
 > 完整命令与限制见 [../deployment/standalone-service.md](../deployment/standalone-service.md)
 > 与 [../deployment/first-run.md](../deployment/first-run.md)。
 

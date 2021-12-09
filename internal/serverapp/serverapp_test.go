@@ -160,8 +160,19 @@ func runInit(t *testing.T, paths testPaths) (string, error) {
 // startServe 在后台运行 serve 并等待监听就绪，返回监听地址与取消函数。
 func startServe(t *testing.T, options serverapp.ServeOptions) (string, *safeBuffer, context.CancelFunc) {
 	t.Helper()
+	result, accessLog, cancel := startServeResult(t, options)
+	return result.Addresses[0], accessLog, cancel
+}
+
+// startServeResult 与 startServe 相同，但额外返回完整启动诊断（任务/挂载点状态）。
+func startServeResult(t *testing.T, options serverapp.ServeOptions) (serverapp.StartResult, *safeBuffer, context.CancelFunc) {
+	t.Helper()
 	accessLog := &safeBuffer{}
-	options.AccessLog = accessLog
+	// 未显式指定访问日志目标时，把访问日志收集到内存缓冲区便于断言；指定了
+	// 文件路径的用例保持真实文件（轮转测试）。
+	if options.AccessLog == nil && options.AccessLogPath == "" {
+		options.AccessLog = accessLog
+	}
 	options.StandardOutput = io.Discard
 	options.StandardError = &safeBuffer{}
 	started := make(chan serverapp.StartResult, 1)
@@ -190,7 +201,7 @@ func startServe(t *testing.T, options serverapp.ServeOptions) (string, *safeBuff
 				t.Errorf("serve 未在 20s 内退出")
 			}
 		})
-		return result.Addresses[0], accessLog, cancel
+		return result, accessLog, cancel
 	case err := <-done:
 		cancel()
 		t.Fatalf("serve 未启动即退出: %v", err)
@@ -198,7 +209,7 @@ func startServe(t *testing.T, options serverapp.ServeOptions) (string, *safeBuff
 		cancel()
 		t.Fatalf("serve 在 30s 内未完成启动")
 	}
-	return "", accessLog, cancel
+	return serverapp.StartResult{}, accessLog, cancel
 }
 
 // httpGet 发起一次 GET 请求。
@@ -408,7 +419,7 @@ func TestServeRefusesUnmigratedDatabase(t *testing.T) {
 	}
 
 	// 显式迁移并放行未初始化：开发/测试路径真实启动，健康检查可用。
-	address, _, _ := startServe(t, serverapp.ServeOptions{
+	address, _, firstCancel := startServe(t, serverapp.ServeOptions{
 		ConfigPath:         paths.config,
 		MasterKeyFile:      paths.masterKey,
 		Migrate:            true,
@@ -419,6 +430,9 @@ func TestServeRefusesUnmigratedDatabase(t *testing.T) {
 		!strings.Contains(body, `"ok"`) {
 		t.Fatalf("--migrate=apply 启动后 healthz 异常: status=%d body=%s", status, body)
 	}
+	// 单实例锁：先停掉上一个 serve 并等待锁释放，再验证未初始化库的拒绝语义。
+	firstCancel()
+	waitInstanceLockRelease(t, paths.database)
 	// 迁移完成且维护状态已存在，但数据库仍无 root：默认 serve 必须拒绝。
 	err = serverapp.RunServe(context.Background(), serverapp.ServeOptions{
 		ConfigPath:     paths.config,
@@ -429,6 +443,23 @@ func TestServeRefusesUnmigratedDatabase(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "首次初始化") {
 		t.Fatalf("未初始化数据库未被默认拒绝: %v", err)
+	}
+}
+
+// waitInstanceLockRelease 等待单实例锁释放（用于在同一测试内串行启动多个 serve）。
+func waitInstanceLockRelease(t *testing.T, databasePath string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		lock, err := serverapp.AcquireInstanceLock(databasePath)
+		if err == nil {
+			lock.Release()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("单实例锁未在 20s 内释放: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

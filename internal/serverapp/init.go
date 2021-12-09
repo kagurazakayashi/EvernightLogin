@@ -315,7 +315,7 @@ func RunInit(ctx context.Context, options InitOptions) (exitErr error) {
 	if err != nil {
 		return fmt.Errorf("兑换一次性配置凭证失败（root 已创建，可重新签发凭证继续）: %w", err)
 	}
-	authnService, err := newAuthnService(deps, precheckStore)
+	authnService, err := newAuthnService(deps, precheckStore, SecurityHooks{})
 	if err != nil {
 		return err
 	}

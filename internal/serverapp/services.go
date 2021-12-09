@@ -21,6 +21,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
 	onboardingsqlite "github.com/kagurazakayashi/EvernightLogin/internal/onboarding/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	registrationsqlite "github.com/kagurazakayashi/EvernightLogin/internal/registration/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
@@ -92,12 +93,27 @@ type Services struct {
 	Onboarding        *onboarding.Service
 }
 
+// SecurityHooks 是宿主提供给认证/会话服务的延迟安全依赖；nil 字段表示该依赖
+// 尚未装配（服务侧按其自身 fail-closed 语义处理）。
+type SecurityHooks struct {
+	// Sensitive 是敏感操作收敛入口（生产实现为 SecurityGate.Reauth）。
+	Sensitive reauth.OperationRunner
+	// StrongPresence 报告账户是否已绑定强因素（生产实现为 TOTP/Passkey 聚合）。
+	StrongPresence authn.StrongFactorPresence
+}
+
 // BuildServices 按依赖顺序装配账户入口页所需的最小真实服务集合：
 // 审计 -> 凭证/会话/认证 -> 注册 -> 入域。
 //
 // 所有服务构造只校验依赖、不创建协程、不监听端口、不写数据库；后台任务与
 // 外部投递（邮件/Webhook）都不启动也不真实外发。
 func BuildServices(deps Deps) (*Services, error) {
+	return BuildServicesWithHooks(deps, SecurityHooks{})
+}
+
+// BuildServicesWithHooks 与 BuildServices 相同，但注入延迟安全依赖（敏感操作
+// 闸门与强因素来源），供独立服务完整装配使用。
+func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 	if deps.Store == nil || deps.Keyring == nil || deps.Audit == nil {
 		return nil, fmt.Errorf("装配服务缺少存储、主密钥环或审计依赖")
 	}
@@ -121,7 +137,7 @@ func BuildServices(deps Deps) (*Services, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造一次性凭证服务失败: %w", err)
 	}
-	authnService, err := newAuthnService(deps, bootstrapStore)
+	authnService, err := newAuthnService(deps, bootstrapStore, hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +151,10 @@ func BuildServices(deps Deps) (*Services, error) {
 		// 仅当宿主显式开启 --allow-legacy-without-sensitive 时才允许旧闸门路径，
 		// 该开关不改变认证/授权判定本身的强度，只影响未装配策略时的拒绝点。
 		AllowLegacyWithoutSensitive: deps.AllowLegacyWithoutSensitive,
+		Sensitive:                   hooks.Sensitive,
+		// root 管理会话绑定：只有已完成强认证（结果带服务端强认证时间）的 root
+		// 才能签发普通会话；未完成强认证时仍只能持有受限会话（fail-closed）。
+		AllowRootStrongAuthSessions: true,
 		Now:                         now, Logger: logger,
 	})
 	if err != nil {
@@ -234,7 +254,8 @@ func BuildBootstrapService(deps Deps, operatorID string) (*bootstrap.Service, bo
 
 // newAuthnService 构造认证服务；root 受限初始化状态存储必须注入真实
 // bootstrapsqlite.Store，不允许用测试替身替代（否则会绕过 0008 状态机）。
-func newAuthnService(deps Deps, bootstrapStore *bootstrapsqlite.Store) (*authn.Service, error) {
+func newAuthnService(deps Deps, bootstrapStore *bootstrapsqlite.Store,
+	hooks SecurityHooks) (*authn.Service, error) {
 	authnStore, err := authnsqlite.New(deps.Store)
 	if err != nil {
 		return nil, fmt.Errorf("构造认证存储失败: %w", err)
@@ -245,7 +266,9 @@ func newAuthnService(deps Deps, bootstrapStore *bootstrapsqlite.Store) (*authn.S
 	}
 	service, err := authn.New(authn.Options{
 		Store: authnStore, Audit: deps.Audit, RootInitialization: bootstrapStore,
-		PasswordPolicy: authn.DefaultPasswordPolicy(), Params: authn.DefaultParams(),
+		StrongFactorPresence: hooks.StrongPresence,
+		Sensitive:            hooks.Sensitive,
+		PasswordPolicy:       authn.DefaultPasswordPolicy(), Params: authn.DefaultParams(),
 		Now: now, Logger: deps.Logger,
 	})
 	if err != nil {
