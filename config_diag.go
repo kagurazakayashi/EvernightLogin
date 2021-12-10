@@ -139,6 +139,37 @@ func formatTLSClientIdentities(values []TLSClientIdentity) string {
 	return b.String()
 }
 
+// FieldValue 是 Config.FieldValues 返回的一条脱敏配置值。
+//
+// Value 与 Diagnostic 使用同一格式化规则：秘密字段只可能出现 [REDACTED] 或
+// [UNSET]，任何秘密内容、来源环境变量名或来源文件路径都不会出现在 Value 中。
+type FieldValue struct {
+	// Field 是点分隔的稳定字段路径。
+	Field string
+	// Value 是脱敏后的有效值文本。
+	Value string
+	// Class 是字段的重载分类（hot-reloadable 或 restart-required）。
+	Class ReloadClass
+	// Secret 表示该字段是秘密字段。
+	Secret bool
+}
+
+// FieldValues 按 Fields 的稳定顺序返回脱敏后的有效配置值，供 CLI 的 JSON 输出、
+// 诊断与文档生成使用。它与 Diagnostic 共用同一取值函数，因此两者不会出现
+// “一个脱敏、另一个泄露”的不一致。它不读取秘密来源，也不改变任何配置。
+func (c Config) FieldValues() []FieldValue {
+	values := make([]FieldValue, 0, len(configFields))
+	for _, field := range configFields {
+		values = append(values, FieldValue{
+			Field:  field.Field,
+			Value:  c.fieldValueString(field.Field),
+			Class:  field.Class,
+			Secret: field.Secret,
+		})
+	}
+	return values
+}
+
 // ReloadDiff 描述两份有效配置之间的差异，并按重载分类拆开。
 type ReloadDiff struct {
 	// HotFields 是可在不重启进程的情况下生效的变更字段。

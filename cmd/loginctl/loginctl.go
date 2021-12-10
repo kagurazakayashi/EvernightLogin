@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/managecli"
 	"github.com/kagurazakayashi/EvernightLogin/internal/rootrecovery"
 	"golang.org/x/term"
 )
@@ -61,6 +62,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, factory Promp
 		return runRestoreReview(args[1:], stdout, stderr)
 	case "restore-reenable":
 		return runRestoreReenable(args[1:], stdout, stderr)
+	case "config", "diag", "migrate", "task", "session", "user",
+		"audit", "reports", "backups", "notifications", "tasks":
+		// 步骤 84 常规管理/诊断/设置命令与在线管理命令：本地运维边界不联网；
+		// 在线域（audit/reports/backups/notifications/tasks）只调用已运行服务的
+		// 管理 API，需要 --session-file 提供的受保护管理会话秘密。
+		return managecli.Run(args, stdin, stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return ExitOK
@@ -192,6 +199,16 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl restore-review --database <path> --state-dir <dir> --operator <id> [--restore-id <id>]")
 	fmt.Fprintln(out, "  loginctl restore-reenable --database <path> --state-dir <dir> --operator <id> \\")
 	fmt.Fprintln(out, "      --reason <原因> [--kind schedule,webhook] [--restore-id <id>]")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "常规管理与诊断（步骤 84，本地运维边界；详细帮助：loginctl help 后接子命令）：")
+	fmt.Fprintln(out, "  loginctl config show|get|validate|diff|set|set-secret ...")
+	fmt.Fprintln(out, "  loginctl diag health|ready|database|certificate|mail|all ...")
+	fmt.Fprintln(out, "  loginctl migrate status|apply ...")
+	fmt.Fprintln(out, "  loginctl task list|get|wait|cancel ...")
+	fmt.Fprintln(out, "  loginctl session whoami|list|revoke ...")
+	fmt.Fprintln(out, "  loginctl user list|get|disable|enable ...")
+	fmt.Fprintln(out, "  loginctl group|role|app list|get|... |permission list |notify status|test")
+	fmt.Fprintln(out, "  loginctl audit|reports|backups|notifications|tasks ...（在线管理，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl help | version")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "安全要求：")
