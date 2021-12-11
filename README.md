@@ -1,11 +1,85 @@
 # login
 
-login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立的 OAuth 2.0 / OpenID Connect 身份服务。当前只是最小可编译骨架，不是可运行的用户系统。
+login 提供可嵌入 Go 程序的用户与权限组件，并提供可独立部署的 OAuth 2.0 / OpenID Connect 身份服务入口。当前版本可作为 Go 库嵌入使用；独立服务 `cmd/login-server` 已实现 `serve`（严格配置与迁移门禁、维护状态、单实例锁、主密钥与审计、内置页面、后台任务调度、访问日志轮转、协议端点与管理 JSON API 开关、有界优雅关闭）与 `init`（本地一次性 root 初始化）。OAuth2/OIDC 协议端点与管理 JSON API 默认关闭，需显式配置或 `--enable-protocol`/`--enable-admin-api` 开启。面向新手的产品文档集中在 [`docs/guide/README.md`](docs/guide/README.md)；「开发阶段状态记录」及其以下的各节是按开发阶段累积的详细记录，偏开发日志，不是入门文档。
 
-## 项目状态（步骤 31）
+## 新手入口
+
+面向新手的产品文档集中在 `docs/guide/`（GoDoc 与各详细文档为权威，指南不重复规范全文）：
+
+- 文档总览、能力状态与术语表：[docs/guide/README.md](docs/guide/README.md)
+- 快速开始（Windows，从空配置到迁移/诊断/装配自检）：[docs/guide/quickstart.md](docs/guide/quickstart.md)
+- 部署形态与当前边界：[docs/guide/deployment-modes.md](docs/guide/deployment-modes.md)
+- 配置参考（37 个字段与默认值）：[docs/guide/configuration.md](docs/guide/configuration.md)
+- 错误码与排障（48 个错误码）：[docs/guide/troubleshooting.md](docs/guide/troubleshooting.md)
+- 本地运维与在线管理 CLI（`loginctl`）：[docs/guide/root-cli.md](docs/guide/root-cli.md)
+
+## 独立服务快速入口
+
+`cmd/login-server` 是独立服务入口，已实现真实装配；当前只支持 SQLite。完整前置条件、
+配置样例与排障见 [docs/deployment/standalone-service.md](docs/deployment/standalone-service.md)，
+首次配置的安全模型与流程见 [docs/deployment/first-run.md](docs/deployment/first-run.md)。
+
+```text
+login-server init  --config <login.yaml>   # 本地一次性初始化：建库/迁移/主密钥环/唯一 root
+login-server serve --config <login.yaml>   # 启动 HTTP 服务（默认 127.0.0.1:8080）
+```
+
+- `serve` 负责：严格配置校验与迁移门禁（未迁移库默认拒绝启动，`--migrate=apply` 才迁移）、
+  库外维护状态检查、单实例数据库排他锁、主密钥与安全审计装配、内置页面、后台任务执行器与
+  调度器、文件访问日志受控轮转、`SIGINT`/`SIGTERM` 有界优雅关闭。未完成首次初始化的库
+  默认拒绝启动（仅本地开发/测试可 `--allow-uninitialized`）。
+- `init` 创建唯一 root，正式密码只在交互式终端或受保护文件中读取；不接受命令行明文秘密，
+  不签发会话；重复初始化会被拒绝。
+- 关键开关（以 `login-server serve --help` 实际输出为准）：`--enable-protocol` 启用
+  OAuth 2.0 / OIDC 协议端点（需配置 `protocol.issuer`）；`--enable-admin-api` 启用管理
+  JSON API（默认前缀 `/admin/v1`）。两者默认关闭，未启用时对应路径返回 404。其他常用
+  参数：`--master-key-file`、`--database`、`--access-log`（轮转参数
+  `--access-log-max-bytes`/`--access-log-max-files`）、`--maintenance-state-dir`、
+  `--init-maintenance-state`、`--admin-api-prefix`。
+- 页面：14 个页面选项，默认注册 12 个；安全中心页需同时启用 Passkey 与协议端点，OAuth
+  页需启用协议端点（不满足时对应页面 404），全部满足时为 14 个。
+- 管理 JSON API 启用后最多提供 54 条路由（审计/报告/计划/备份/任务/错误码等）；未装配的
+  领域服务不注册路由，对应请求返回 404（fail-closed）。
+- 配套工具：`cmd/loginctl`（本地运维 `config`/`diag`/`migrate`/`task`/`session`/`user` 等，
+  以及经管理 JSON API 的在线管理命令）、`cmd/login-backup`（离线备份创建/校验/查看/导出）、
+  `tools/loginte2e`（端到端测试客户端）、`tools/testmaild`（本地测试邮件服务器
+  SMTP/IMAP/POP3，只用于本地捕获）。发布产物按
+  [docs/deployment/packaging.md](docs/deployment/packaging.md) 构建。
+
+## 已知限制
+
+以下为当前真实限制（未实测项按未实测写，不当成已支持）：
+
+- **真实邮件外发未配置**：邮件发送器是显式“未配置”实现，投递与安全告知会以明确错误失败，
+  不访问网络；因此两步验证邮件因素、找回密码与安全告知不可用（TOTP/Passkey 不受影响）。
+  Webhook 出站使用真实网络策略，但端点管理入口未开放。邮件相关流程只支持本地捕获测试。
+- **协议端点默认关闭且能力有限**：OAuth 2.0 / OIDC 的授权码/刷新/客户端凭证、Discovery、
+  JWKS、UserInfo、撤销已实现；**设备码、状态查询（introspection）与扫码登录未启用**
+  （配置显式启用状态查询会拒绝启动），第三方客户端互操作未做真实联调。
+- **管理 JSON API 默认关闭**：需 `--enable-admin-api` 显式开启；写操作仍要求近期再次认证，
+  缺少强认证事实时 fail-closed。
+- **数据库只实测 SQLite**：MySQL/PostgreSQL/SQL Server 适配只有编译/静态检查，未做真实
+  数据库运行验证，不能据此宣称已支持。
+- **WebAuthn 未做真机/真实浏览器验证**：MFA/Passkey 绑定与管理强认证已接线，自动化测试
+  覆盖服务层与页面状态，但未在真实浏览器与 Windows Hello/YubiKey 等认证器上互操作实测。
+- **细粒度数据范围是已声明的设计边界**：权限粒度是“功能权限 + 作用域（system/application）”，
+  当前数据模型没有部门/资源级 scope，持有某功能权限即对该作用域内全部数据可见；无权限时
+  一律拒绝（fail-closed）。不要对外宣称已实现细粒度数据权限。
+- **单实例部署**：同一 SQLite 由跨进程排他锁限制为单个 `serve`，不支持多实例/集群共享
+  状态，跨实例会话、限流与任务协调未实现。
+- **其他未实测**：Linux/macOS 与非 amd64 架构只做编译检查、未运行实测；真实反向代理/容器托管联调、
+  真实磁盘耗尽等故障注入、`-race` 均未验证；访问日志轮转只由本进程控制，不压缩、不归档
+  到远端。
+
+## 开发阶段状态记录
+
+> 本节与下文按开发步骤累积记录能力。本节列表原是步骤 31 时的状态快照，下文各节标题带
+> 步骤编号；它们会随步骤增加而变长且可能落后于最新实现，其中“尚未实现”“未接入
+> login-server”等表述不代表当前状态。当前可用状态、已知限制与文档入口以上文
+> 「独立服务快速入口」「已知限制」与 `docs/guide/` 为准。
 
 - 模块路径：`github.com/kagurazakayashi/EvernightLogin`，根包名 `login`；路径来自现有远端，首次发布后不再变更。
-- 独立进程入口：`cmd/login-server`。当前只提供 `--version` 和 `--help`；不带参数运行会明确失败并返回非零，不假装服务已启动。
+- 独立进程入口：`cmd/login-server`。已实现 `serve`（真实 HTTP 服务装配）与 `init`（本地首次安全初始化），启动方式与开关见上文「独立服务快速入口」。
 - 管理命令入口：`cmd/loginctl`（`root-recover` 应急恢复、本地备份恢复/维护命令，以及步骤 84 的 `config`/`diag`/`migrate`/`task`/`session`/`user` 本地运维命令与 `audit`/`reports`/`backups`/`notifications`/`tasks` 在线管理命令；本地命令以操作系统文件访问权为边界，在线命令通过运行中的 login-server 管理 JSON API 执行并需要受保护的管理会话秘密文件，不提供匿名远程入口）。
 - 已实现：版本与构建信息；类型化配置加载器；核心实例生命周期契约；统一错误码注册表、`AppError`、请求编号校验与结构化运行日志；版本化数据库迁移机制及隔离核心表；基于 modernc SQLite 的存储基础（连接/所有权、WAL、外键、忙等待、连接池上限、事务与取消、错误映射、有界重试、迁移执行）；内部秘密加密包 `internal/secrets`（AES-256-GCM 认证加密、随机 nonce、用途/对象/范围绑定、主密钥环加载、Windows ACL/Unix 权限检查、轮换与可中断重加密、旧密钥退役保护）；一次性凭证服务 `internal/credential` 与 SQLite 生产仓储（用途/目标/应用绑定、高熵摘要、低熵受密钥保护验证码、原子消费、取消/替换/过期清理、可注入时钟）及迁移 0002；安全审计包 `internal/audit` 与 SQLite 持久化（可信身份、脱敏差异、失败审计独立保存、关键变更同事务、审计故障拒绝并告警）及迁移 0003；可靠单实例后台任务执行器 `internal/task` 与 SQLite 状态持久化（完整任务状态机、可信发起/执行/取消身份、并发与墙钟上限、取消上下文与子进程清理约定、重启恢复、全状态审计）及迁移 0004；定时计划（日/周/月/自定义表达式、IANA 时区与夏令时规则、停机错过策略与有界补跑、触发去重、尝试历史、有界指数退避重试与显式不可重试错误、运行前权限复验默认拒绝、暂停/恢复/删除语义）及迁移 0005；HTTP 传输层 `internal/transport` 与公开 `login.NewHTTPHandler`（标准 net/http Handler、固定前缀与严格路由、请求体类型/大小与参数规范化、统一错误 JSON/请求编号/panic 恢复/上下文取消、最小健康端点、可信身份建立与 context 传递、由错误码注册表生成的 OpenAPI、W3C Extended 脱敏访问日志与写入失败告警）；HTTP 防护层 `internal/ratelimit` 与传输层中间件（多维有界固定窗口限流、容量上限与过期清理、可信代理地址解析、昂贵请求预算、请求期限/响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie 安全属性策略）；独立监听组件 `login.NewServer` 与 `internal/listener`/`internal/netpolicy`/`internal/proxytrust`（多 IPv4/IPv6 地址监听、失败整体回滚、关停释放端口、Host/公开地址限制、Forwarded 与 X-Forwarded-* 可信代理链边界、限流使用验证后的客户端地址，可交给 `Instance` 生命周期管理）；HTTPS 单向认证 `internal/tlscert`（PEM 证书链/私钥/附加 CA、PKCS#12/PFX 导入、私钥与证书匹配、证书链与用途/有效期校验、按 SNI 选择证书、未知 SNI 拒绝、安全重载与到期状态）；可选客户端证书双向认证 mTLS（`disabled`/`required`/`optional` 模式、独立客户端信任 CA、显式“证书 DNS 名称 -> 可信服务身份”映射、可选模式拒绝无效证书降级、脱敏 mTLS 状态诊断与服务身份上下文）；审计读取与生命周期后端 `internal/auditops` 与 SQLite 仓储（受控数据范围查询/详情、稳定排序分页、独立授权脱敏异步导出、root 保留策略与分批可取消清理、受保护清理审计）及迁移 0040。
 - 账户领域基础 `internal/account` 与 SQLite 仓储 `internal/account/sqlite`（普通用户创建、按稳定 ID 查询、有限分页检索；用户名显示值/规范化值分离，NFKC 兼容规范化 + Unicode 大小写折叠；保留名、空白、Unicode 与长度规则；资料字段白名单；创建/读取审计与审计失败拒绝；可信本地初始化授权器，生产 HTTP 未接入）；账户状态变更与删除流程（启用/禁用/待删除/完成删除状态机、row_version 乐观并发、security_version 失效语义、root 保护、删除影响预览与关联数据明确清理策略、关键变更同事务审计）。
@@ -20,7 +94,7 @@ login 提供可嵌入 Go 程序的用户与权限组件，并计划提供独立�
 - 会话设备管理（步骤 31，继续 `internal/session` 扩展）：用户本人设备/会话列表（分页、标记当前会话、只返回展示字段不返回会话秘密）、指定退出与退出全部、管理员按授权范围强制下线（应用管理员仅限获准应用会话，root 与受保护目标拒绝，无授权实现时 fail-closed）、记住我更长绝对到期、最大在线数与单设备替换策略（在登录审计事务内以单条条件更新原子维护，自动淘汰写独立审计）；新增迁移 0011 追加 `remember_me`/展示用客户端描述列与活动会话索引；管理强认证与数据范围裁剪仍未接入，管理强制下线只提供 Go API。
 - 可转授权限与委派限制 `internal/delegation` 与 SQLite 生产仓储 `internal/delegation/sqlite`（把“可使用权限”与“可转授权限”分开：委派资格由受限本地初始化/系统操作者显式签发并写入迁移 0006，记录作用范围、权限、数据范围上限、目标白名单、是否允许自我/本组转授、有效期与撤回；角色组合权限、角色分配、启用角色、向已配角色的用户组增员、应用成员加入/重新启用、启用权限、启用应用等所有改变有效权限的写入路径统一经 Guard 在同一审计事务内检查，普通管理者只能转授自己当前实际持有且有有效资格的权限，数据范围必须收缩，默认禁止自我与自身所在用户组；启用角色/权限、组合权限进已分配角色与启用应用等间接路径还按实际受影响目标集合复核 allow_self 与目标白名单，启用应用无法安全校验时仅受信通道可通过；持有但不可转授、过期/撤回、目标越界、范围过宽与并发撤回均拒绝并返回可诊断错误码；数据范围收缩尚未完整落地（写入路径仍为未声明范围，非 all 上限一律 fail-closed），不实现审批引擎、再委派、数据范围写入口与委派资格 HTTP）。
 - 角色领域基础 `internal/role` 与 SQLite 仓储 `internal/role/sqlite`（系统/应用角色的创建/读取/分页/资料更新/启停/受引用保护的删除；角色机器标识稳定且不能使用 root 语义；角色只组合同范围、启用、非 root_only 权限；角色可分配给可用全局账户或系统组、以及应用有效成员或同应用用户组；重复组合/分配幂等，删除前检查权限/用户/组引用；root 账户不能作为普通角色分配目标；不实现有效权限推导、可转授权限检查或 HTTP 端点）。
-- 尚未实现：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role`/`internal/authz`/`internal/delegation` 已提供基础能力）、有效权限推导与授权执行的 HTTP/令牌接入（`internal/authz` 已提供基础引擎）、首次初始化入口的 CLI/启动装配（`internal/bootstrap` 已提供受信 Go API，`cmd/loginctl` 目前只实现 root-recover 与步骤 82 的本地备份恢复/维护命令，完整 CLI 未建）、密码登录/退出/会话校验的 HTTP 路由接入与启动装配（认证与受限/普通会话能力已由 `internal/authn`/`internal/session` 提供受信 Go API，步骤 30/31 未暴露 HTTP 路由；设备列表与管理员强制下线同样只有 Go API，管理强认证与数据范围裁剪尚未接入）、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、统计报告/审计报告页面与自动按保留策略定时清理仍未实现（审计查询/导出与 root 手动清理已由 `internal/auditops` 提供受信 Go API 与异步任务，未开放 HTTP 路由）；备份已由步骤 80 提供本地手动创建（`internal/backup` + `cmd/login-backup`）与离线认证校验，步骤 81 已提供定时计划/持久任务/保留清理/独立下载与管理页面（`internal/backupadmin` + `WebUIOptions.PageBackups`），恢复已由步骤 82 提供维护模式恢复前预演、加密回退备份、原子切换与恢复后凭证失效（`internal/restore` + `internal/maintenance` + `cmd/loginctl` 本地入口），独立备份查看/内容预览/安全单项导出已由步骤 83 提供离线只读 CLI（`cmd/login-backup` 的 `list`/`tables`/`preview`/`export`/`extract`：受限查询、默认脱敏、默认不覆盖导出、本地操作记录；在线页面/API 导出仍未实现）。委派资格签发/撤回管理 API、审批引擎、预设目录的 HTTP/CLI 管理入口（`internal/preset` 已提供受信通道初始化/恢复能力）与数据范围写入口也未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希与密码验证已由 `internal/authn` 使用 Argon2id 实现；会话签发/校验/续期/撤销与受限会话语义已由 `internal/session` 实现（未暴露 HTTP 路由），MFA/管理强认证与完整管理会话尚未实现。root 的受限配置凭证兑换后可设置正式密码，但 MFA/管理强认证完成前状态保持 `setup_verified`、不会进入 `ready`，也不会签发管理员会话（`ready` 条件转换已由 `internal/bootstrap` 的 `MarkReady` 提供）。
+- 尚未实现（步骤 31 快照，后续步骤已部分补齐；**当前真实缺口以上文「已知限制」与 `docs/guide/` 为准**）：SQLite、`internal/secrets`、`internal/credential`、`internal/audit`、`internal/task` 与 `internal/transport` 尚未接入 `login-server`；`cmd/login-server` 也尚未装配 `NewServer`（监听组件已可由 Go API 使用并交给 `Instance` 管理）；客户端信任 CA/身份映射的热重载与 OCSP/CRL 在线撤销、完整反向代理部署示例、账户创建/查询/状态变更/删除、应用登记/资料/启停/应用成员管理、用户组与组成员、权限目录、角色与角色分配的 HTTP 与服务启动接入（`internal/account`/`internal/app`/`internal/group`/`internal/permission`/`internal/role`/`internal/authz`/`internal/delegation` 已提供基础能力）、有效权限推导与授权执行的 HTTP/令牌接入（`internal/authz` 已提供基础引擎）、首次初始化入口的 CLI/启动装配（`internal/bootstrap` 已提供受信 Go API，`cmd/loginctl` 目前只实现 root-recover 与步骤 82 的本地备份恢复/维护命令，完整 CLI 未建）、密码登录/退出/会话校验的 HTTP 路由接入与启动装配（认证与受限/普通会话能力已由 `internal/authn`/`internal/session` 提供受信 Go API，步骤 30/31 未暴露 HTTP 路由；设备列表与管理员强制下线同样只有 Go API，管理强认证与数据范围裁剪尚未接入）、OAuth/OIDC 客户端凭证与回调、Web 页面、应用删除策略、统计报告/审计报告页面与自动按保留策略定时清理仍未实现（审计查询/导出与 root 手动清理已由 `internal/auditops` 提供受信 Go API 与异步任务，未开放 HTTP 路由）；备份已由步骤 80 提供本地手动创建（`internal/backup` + `cmd/login-backup`）与离线认证校验，步骤 81 已提供定时计划/持久任务/保留清理/独立下载与管理页面（`internal/backupadmin` + `WebUIOptions.PageBackups`），恢复已由步骤 82 提供维护模式恢复前预演、加密回退备份、原子切换与恢复后凭证失效（`internal/restore` + `internal/maintenance` + `cmd/loginctl` 本地入口），独立备份查看/内容预览/安全单项导出已由步骤 83 提供离线只读 CLI（`cmd/login-backup` 的 `list`/`tables`/`preview`/`export`/`extract`：受限查询、默认脱敏、默认不覆盖导出、本地操作记录；在线页面/API 导出仍未实现）。委派资格签发/撤回管理 API、审批引擎、预设目录的 HTTP/CLI 管理入口（`internal/preset` 已提供受信通道初始化/恢复能力）与数据范围写入口也未实现。HTTP Handler 只公开健康与 OpenAPI，不提供业务或管理端点；防护层不提供绕过鉴权或 CSRF 的生产开关，任务执行器与调度器不提供网络端点，服务层授权尚未接入，也不承诺外部副作用恰好执行一次。密码哈希与密码验证已由 `internal/authn` 使用 Argon2id 实现；会话签发/校验/续期/撤销与受限会话语义已由 `internal/session` 实现（未暴露 HTTP 路由），MFA/管理强认证与完整管理会话尚未实现。root 的受限配置凭证兑换后可设置正式密码，但 MFA/管理强认证完成前状态保持 `setup_verified`、不会进入 `ready`，也不会签发管理员会话（`ready` 条件转换已由 `internal/bootstrap` 的 `MarkReady` 提供）。
 - 代码检查只在本地运行，未配置自动远程流水线。
 
 ## 配置加载（步骤 03）

@@ -1,15 +1,30 @@
-// Package login 提供可嵌入业务程序的用户与身份权限组件。
+// Package login 提供可嵌入业务程序的用户与身份权限组件，并提供可独立部署的
+// OAuth 2.0 / OpenID Connect 身份服务入口。
 //
-// 当前处于项目初始化阶段：本包提供模块版本与构建信息、类型化配置加载器、
-// 核心实例生命周期契约（New/Start/Close、后台组件接口、资源所有权与状态
-// 重入规则）、统一错误码注册表、AppError、请求编号校验与结构化运行日志基础。
-// 数据库迁移机制、隔离核心表结构与 SQLite 存储基础已在 internal/storage 与
-// migrations/ 实现（连接所有权、WAL、外键、忙等待、事务、错误映射与有界重试），
-// 但尚未接入 Instance/服务启动。
+// 新手入口（集中产品文档）：docs/guide/README.md；快速开始：
+// docs/guide/quickstart.md；配置参考：docs/guide/configuration.md；
+// 错误码与排障：docs/guide/troubleshooting.md。本文件按开发阶段记录包能力与
+// 安全不变量；下文步骤记录中的“尚未实现”“未接入”多为当时快照，当前可用状态
+// 以本段说明与 docs/guide/ 为准。
+//
+// 当前版本可作为 Go 库嵌入使用：模块版本与构建信息、类型化配置加载器（YAML/
+// 环境变量/代码覆盖）、实例生命周期契约（New/Start/Close、扩展注册、资源所有
+// 权）、统一错误码注册表与 AppError、结构化运行日志、HTTP 传输层（健康检查/
+// OpenAPI/防护）、内置页面框架、监听组件与 TLS/mTLS，以及账户、应用、权限、
+// 会话、MFA/Passkey、OAuth/OIDC、审计、报告、备份、恢复等领域服务。
+//
+// 独立服务 cmd/login-server 已实现：serve（严格配置校验与迁移门禁、维护状态、
+// 单实例数据库锁、主密钥与安全审计装配、14 个页面选项、后台任务执行器与调度器、
+// 文件访问日志受控轮转、协议端点与管理 JSON API 开关、有界优雅关闭）与 init
+// （本地一次性 root 初始化）。启动方式、配置与限制见
+// docs/deployment/standalone-service.md 与 docs/deployment/first-run.md；
+// OAuth2/OIDC 协议端点与管理 JSON API 默认关闭，需显式配置或
+// --enable-protocol / --enable-admin-api 开启。
 //
 // internal/secrets 已实现可还原秘密（如 TOTP 种子）的 AES-256-GCM 认证加密、
 // 主密钥环加载、Windows ACL/Unix 权限检查、密钥轮换、可中断重加密与旧密钥
-// 退役保护；它尚未接入 Instance、配置加载或服务启动，密码哈希仍待密码步骤实现，
+// 退役保护；它现已由 cmd/login-server 的 serve/init 经配置或 --master-key-file
+// 加载主密钥环，密码哈希已由 internal/authn 使用 Argon2id 实现，
 // 本模块不把密码按可解密形式保存。
 //
 // internal/credential 已实现一次性凭证服务与 SQLite 生产仓储：用途/目标/应用绑定、
@@ -43,8 +58,9 @@
 // 步骤 14 增加 HTTP 防护层：多维有界固定窗口限流（可信客户端地址、已认证用户、
 // 应用、接口与昂贵请求预算，容量上限与过期清理）、可信代理转发头解析、请求期限/
 // 响应超时与并发上限、精确来源 CORS、安全响应头、Cookie 会话 CSRF 契约与 Cookie
-// 安全属性策略。生产路由只有健康检查与 OpenAPI 文档；未鉴权的管理功能、调试路由
-// 和测试路由都不注册，/oauth2 前缀保留给未来标准协议响应。
+// 安全属性策略。步骤 14 时生产路由只有健康检查与 OpenAPI 文档；未鉴权的管理功能、
+// 调试路由和测试路由都不注册，/oauth2 前缀保留给后续标准协议响应（协议端点已由
+// 后续步骤实现，默认关闭；内置页面与（默认关闭的）管理 JSON API 也已装配）。
 //
 // 独立监听组件 login.NewServer 复用同一 Handler 与 Instance 生命周期：支持多个
 // IPv4/IPv6 地址与端口、任一地址失败时整体回滚、关停释放端口；默认只允许回环
@@ -52,7 +68,8 @@
 // 请求先经代理信任边界校验 Host，仅当直连对端命中显式可信代理时才解析
 // Forwarded/X-Forwarded-* 并做确定性链解析，结果放入上下文供限流与访问日志使用；
 // 外部公开地址、未来 OIDC Issuer 与 WebAuthn RP ID 都必须来自独立显式配置，
-// 不能由请求 Host 动态推导。它尚未接入 cmd/login-server，也没有业务接口。
+// 不能由请求 Host 动态推导。它已由 cmd/login-server 的 serve 装配（内置页面与
+// 默认关闭的协议/管理端点均经该监听），本组件自身不提供业务接口。
 //
 // HTTPS 单向认证由 internal/tlscert 与 login.Server 提供：配置本地 TLS 证书后
 // 监听地址提供 HTTPS，非回环监听在 TLS 保护下允许。支持 PEM 证书链 + 私钥、
@@ -1059,13 +1076,16 @@
 // 的权限、数据范围、强认证、敏感操作与审计仍由服务端每次重新判定，CLI 不缓存授权
 // 结论、不直连数据库；宿主未装配对应领域服务时如实返回 404/503，不伪造成功。
 //
-// 密码登录/退出/会话校验的 HTTP 路由与启动装配、自助注册 HTTP 路由与启动装配、OAuth/OIDC Token 联合校验与完整
-// 授权执行、应用成员/用户组/权限目录/角色/有效权限 HTTP 接口、OAuth 凭据/回调、Web 页面与
-// 备份恢复已由步骤 82 提供维护模式恢复、恢复前预演与恢复后凭证失效（internal/restore +
-// internal/maintenance + cmd/loginctl 本地应急命令；页面恢复区仍为占位）；
-// 会话能力已由 internal/session 提供受信 Go API，但管理强认证（MFA）未
-// 实现前管理访问保持拒绝，设备列表与管理强制下线同样只有 Go API（未暴露 HTTP 路由），
-// 数据范围裁剪也尚未接入强制下线。首次初始化不提供完整 CLI 或启动装配（cmd/loginctl 目前只实现步骤 48 的 root-recover 应急恢复命令），
-// 兑换后的受限配置会话持久化绑定与完整 root 应急重置留后续步骤。需要独立进程入口时使用
-// cmd/login-server；该入口目前也只提供版本与帮助，不会假装服务已经启动。
+// 下文步骤记录中的部分“未实现”已由后续步骤补齐：密码登录/退出/会话校验与自助注册的
+// HTTP 路由、OAuth/OIDC 协议端点（默认关闭，需显式开启）、应用成员/用户组/权限目录/
+// 角色/有效权限管理与 Web 页面均已由独立服务 login-server 装配（见
+// docs/deployment/standalone-service.md）；维护模式恢复、恢复前预演与恢复后凭证失效
+// 由 internal/restore + internal/maintenance + cmd/loginctl 提供（页面恢复区仍为占位）。
+// 会话能力已由 internal/session 提供，MFA/Passkey 与管理强认证已接线但未做真机/真实
+// 浏览器互操作验证；设备列表与管理强制下线仍只有 Go API（未暴露 HTTP 路由），数据范围
+// 裁剪也尚未接入强制下线。首次初始化已由 cmd/login-server init 提供本地 CLI，
+// cmd/loginctl 另提供 root-recover 应急恢复与本地运维/在线管理命令组；兑换后的受限配置
+// 会话持久化绑定与完整 root 应急重置留后续步骤。独立服务入口 cmd/login-server 的 serve
+// 已实现真实装配（严格配置与迁移门禁、维护状态、单实例锁、主密钥与审计、14 个页面选项、
+// 任务调度、访问日志轮转、协议/管理 API 开关与有界关闭），不再只是版本与帮助。
 package login
