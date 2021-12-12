@@ -1,8 +1,8 @@
 # 嵌入模式与独立部署
 
-login 有两种使用形态。**当前版本只有嵌入模式能真正启动 HTTP 服务**；独立服务进程
-`cmd/login-server` 还只是命令行入口。本文说明如何选择、各自边界，以及独立部署前必须
-补齐的前置条件。
+login 有两种使用形态。嵌入模式把组件装配进宿主 Go 程序；独立服务进程 `cmd/login-server`
+也已实现真实装配（`serve` 启动 HTTP 服务、`init` 完成本地首次初始化），可以独立部署。
+本文说明如何选择、各自边界，以及独立部署前必须确认的前置条件与已知限制。
 
 ## 1. 两种形态对照
 
@@ -98,20 +98,24 @@ login-server.exe
    账户入口页 → 启动后台任务执行器/调度器与通知投递 worker → 监听 → 有界优雅关闭。
 2. 首次配置 CLI：本机受限、一次性、限时的 root 初始化；不开放匿名远程初始化。
 3. 运维基础设施：访问日志文件受控轮转、后台任务运行时（邮件投递本地禁用、Webhook 投递）、
-   页面管理会话强认证门禁、协议/管理 API 挂载点（`ServeOptions.ExtraMounts`）。
+   页面管理会话强认证门禁、OAuth2/OIDC 协议端点与管理 JSON API 装配（默认关闭：
+   `protocol.enabled`/`--enable-protocol`、`--enable-admin-api`）、14 个页面选项
+   （默认注册 12 个、条件注册 2 个）。
 
 仍缺（不得当作已完成）：
 
-4. OAuth/OIDC 协议端点与管理 JSON API **已装配**（可配置开关，默认关闭：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`）；**设备码、扫码登录、令牌状态查询（introspection）未启用**；未开启时 404、维护模式 503。
-5. 页面/协议/管理 API 已装配（14 个页面选项、默认 12+条件 2）；root 强认证（Passkey）绑定已接线但未做真机互操作；
-   在绑定流程装配前 root 只能保持受限状态，管理页不可用（fail-closed）。
-6. 报告/备份/审计等域服务装配后的任务处理器注册、真实邮件通道与备份/恢复端到端演练。
+4. 设备码、扫码登录、令牌状态查询（introspection）未启用；协议/管理 API 默认关闭，
+   未开启时对应路径 404，维护模式 503。
+5. root 强认证（Passkey）绑定已接线，但尚未在真实浏览器/硬件认证器上做互操作实测；
+   绑定完成前 root 保持受限状态、管理页 fail-closed（预期行为）。
+6. 报告/备份/审计等域服务装配后的任务处理器注册、真实邮件通道与备份/恢复端到端演练；
+   第三方客户端协议互操作未联调。
 
 因此当前版本适合：本机/内网受限范围内的账户入口页与健康检查，以及嵌入式 Go 集成；
 不适合：直接作为完整对外 OAuth2/OIDC 身份服务。安全模型与防锁死清单见
 [../deployment/first-run.md](../deployment/first-run.md)。
 
-### 3.1 独立部署当前真实能力与开关
+### 3.3 独立部署当前真实能力与开关
 
 - 页面选项共 14 个：默认注册 12 个，另 2 个条件注册；安全中心页需要 `passkey.enabled` + `protocol.enabled`，OAuth 页面需要
   `protocol.enabled`，否则对应页面不注册（404）。
@@ -161,7 +165,8 @@ Linux/macOS 解压 ZIP 后没有 Unix 执行位，需要 `chmod +x bin/*`；详�
 
 - 你的业务已经是 Go 服务，且只需要配置、页面框架、健康检查、扩展与生命周期：
   **用嵌入模式**，按第 2.3 节装配。
-- 你需要一个独立的统一登录中心：**当前版本还不能满足**；请等待独立服务装配与首次
-  配置入口实现，或由有能力的团队在模块内（`cmd/login-server` 所在模块）完成装配。
+- 你需要一个独立的统一登录中心：用独立服务 `login-server serve`（先运行 `init` 完成
+  首次初始化）；部署前按 [../deployment/standalone-service.md](../deployment/standalone-service.md)
+  与 [../deployment/first-run.md](../deployment/first-run.md) 确认前置条件与已知限制。
 - 无论哪种形态，都不要把本地工具（`loginctl`、`login-backup`）暴露成网络接口；它们是
   本地运维/应急通道。

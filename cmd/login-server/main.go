@@ -6,14 +6,17 @@
 //
 // 当前版本提供的真实能力：
 //   - serve：严格校验配置 -> 单实例数据库锁 -> 打开/校验 SQLite 与迁移 ->
-//     装配真实服务与内置账户入口页 -> 启动后台任务执行器/调度器（邮件投递被
-//     本地禁用、Webhook 投递使用真实出站策略）-> 监听（默认 127.0.0.1）->
-//     有界优雅关闭；文件访问日志按大小/数量受控轮转。
+//     装配真实服务与内置页面（14 个页面选项，默认注册 12 个、条件注册 2 个）->
+//     启动后台任务执行器/调度器（邮件投递被本地禁用、Webhook 投递使用真实出站
+//     策略）-> 监听（默认 127.0.0.1）-> 有界优雅关闭；文件访问日志按大小/数量
+//     受控轮转。OAuth2/OIDC 协议端点（Discovery/JWKS/授权/令牌/UserInfo/撤销等）
+//     与管理 JSON API（审计/报告/计划/备份/任务/错误码等路由）已装配，默认关闭，
+//     分别由 --enable-protocol / --enable-admin-api（或 protocol.enabled 配置）
+//     显式启用。
 //   - init：本地受控首次安全初始化（创建 root、兑换一次性凭证、设置正式密码）。
 //
-// 仍未实现：OAuth2/OIDC/设备码/扫码协议 JSON 端点、管理 JSON API、其余 13 个
-// 页面后端域服务（见 docs/guide/api-status.md）。协议/管理 API 已预留挂载点
-// （serverapp.ServeOptions.ExtraMounts），由后续集成步骤接入。
+// 仍未启用：设备码、扫码登录、令牌状态查询（introspection）；真实邮件外发未配置
+// （本地禁用）；发布包不等同于已完成真机互操作验证的完整对外身份服务。
 package main
 
 import (
@@ -54,9 +57,11 @@ func newRootCommand(build login.BuildInfo) *cobra.Command {
 		Use:   "login-server",
 		Short: "login 独立身份服务（HTTP 服务 + 本地首次初始化）",
 		Long: "login 独立身份服务的装配入口。\n\n" +
-			"serve  校验配置、打开并校验数据库迁移、装配真实服务与内置页面后监听 HTTP。\n" +
+			"serve  校验配置、打开并校验数据库迁移、装配真实服务与内置页面后监听 HTTP；\n" +
+			"       OAuth2/OIDC 协议端点与管理 JSON API 已装配但默认关闭，\n" +
+			"       由 --enable-protocol / --enable-admin-api 显式启用。\n" +
 			"init   本地受控首次初始化：创建唯一 root、兑换一次性配置凭证并设置正式密码。\n\n" +
-			"未实现：OAuth2/OIDC/设备码/扫码协议端点、管理 JSON API 与真实邮件/Webhook 投递。",
+			"未启用：设备码、扫码登录、令牌状态查询（introspection）；真实邮件外发未配置。",
 		Version:       build.String(),
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
