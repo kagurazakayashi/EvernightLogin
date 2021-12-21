@@ -131,6 +131,18 @@ func BuildProtocolDomains(deps Deps, services *Services, managed *ManagedService
 		return nil, fmt.Errorf("构造令牌服务失败: %w", err)
 	}
 
+	// 预引导 active 签名密钥：全新实例若等到首次令牌签发才懒创建密钥，JWKS 会为空
+	// （协议端点看似可用但没有公钥）。幂等：已有 active 密钥时直接复用，kid 跨重启
+	// 稳定；失败时协议装配失败（拒绝启动），绝不发布空 JWKS 假装可用。
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	keyInfo, keyErr := tokenService.EnsureSigningKey(bootstrapCtx)
+	bootstrapCancel()
+	if keyErr != nil {
+		return nil, fmt.Errorf("启动阶段预引导令牌签名密钥失败（10s 上限，拒绝启动，避免空 JWKS）: %w", keyErr)
+	}
+	if deps.Logger != nil {
+		deps.Logger.Info("已确保令牌签名密钥可用于 JWKS 发布", "kid", keyInfo.Kid)
+	}
 	oidcStore, err := oidcsqlite.New(deps.Store)
 	if err != nil {
 		return nil, fmt.Errorf("构造 OIDC 用户来源失败: %w", err)

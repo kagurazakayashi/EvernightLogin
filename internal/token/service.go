@@ -185,11 +185,23 @@ func sealBinding(kid string) secrets.Binding {
 // 运维需要暂停签发，应在服务装配层停止调用签发入口/下线令牌端点，而不是依赖本
 // 方法失败。该语义与本文件 RevokeSigningKey 的说明保持一致。
 func (s *Service) ensureActiveKey(ctx context.Context) (KeyRecord, error) {
+	return s.ensureActiveKeyWithStatus(ctx, nil)
+}
+
+// ensureActiveKeyWithStatus 与 ensureActiveKey 相同，额外通过 onReuse 回调标识
+// “本次未创建、复用了既有 active 密钥”的路径（供 EnsureSigningKey 写复用审计）。
+func (s *Service) ensureActiveKeyWithStatus(ctx context.Context,
+	onReuse func(KeyRecord) error) (KeyRecord, error) {
 	active, found, err := s.opts.Store.GetActiveKey(ctx)
 	if err != nil {
 		return KeyRecord{}, ErrStoreUnavailable
 	}
 	if found {
+		if onReuse != nil {
+			if err := onReuse(active); err != nil {
+				return KeyRecord{}, err
+			}
+		}
 		return active, nil
 	}
 	kid, publicJWK, sealed, err := s.generateKeyMaterial()
@@ -222,6 +234,11 @@ func (s *Service) ensureActiveKey(ctx context.Context) (KeyRecord, error) {
 		// 并发引导可能被另一请求抢先创建 active 密钥：重读并复用，避免把并发首签
 		// 变成失败；仍无 active 时才返回错误（fail-closed）。
 		if existing, found, readErr := s.opts.Store.GetActiveKey(ctx); readErr == nil && found {
+			if onReuse != nil {
+				if err := onReuse(existing); err != nil {
+					return KeyRecord{}, err
+				}
+			}
 			return existing, nil
 		}
 		return KeyRecord{}, mapKeyError(err)
@@ -296,6 +313,38 @@ func (s *Service) signClaims(record KeyRecord, payload []byte, typ string) (stri
 		return "", fmt.Errorf("%w: 无法序列化令牌", ErrSigningFailed)
 	}
 	return compact, nil
+}
+
+// EnsureSigningKey 在装配/启动阶段幂等确保存在 active 签名密钥（系统主体审计），
+// 供宿主在发布 JWKS 前预引导：全新实例若等到首次令牌签发才懒创建密钥，JWKS 会
+// 发布空集合，调用方会误判为“协议不可用/无密钥”。已有 active 密钥时不生成新密钥，
+// kid 跨重启稳定；创建走与签发相同的 ensureActiveKey 审计路径（密钥材料经既有
+// secrets 封装保存），失败时返回错误由宿主拒绝启动。
+func (s *Service) EnsureSigningKey(ctx context.Context) (KeyInfo, error) {
+	ctx = normalizeContext(ctx)
+	record, err := s.ensureActiveKeyWithStatus(ctx, func(existing KeyRecord) error {
+		// 复用既有 active 密钥同样写审计（不静默）：system 主体、kid/algorithm，
+		// 不含任何私钥材料；审计不可用时 fail-closed。
+		event := audit.Event{
+			Actor:   audit.Actor{Type: audit.ActorSystem, ID: "token-service"},
+			Action:  "token.key.ensured",
+			Target:  audit.Target{Type: "oauth_signing_key", ID: existing.Kid},
+			Outcome: audit.OutcomeSuccess,
+			Changes: []audit.FieldChange{
+				{Field: "algorithm", After: existing.Algorithm},
+				{Field: "status", After: string(existing.Status)},
+				{Field: "reused", After: "true"},
+			},
+		}
+		if recordErr := s.opts.Audit.Record(ctx, event); recordErr != nil {
+			return ErrAuditUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return KeyInfo{}, mapKeyError(err)
+	}
+	return keyInfoOf(record), nil
 }
 
 // PublishedJWKS 返回 JWKS 公钥集合（active + next + 保留期内 retired），不含任何

@@ -21,6 +21,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/maintenance"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/serverapp"
+	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
 // protocolTestYAML 追加启用 Passkey（localhost 测试来源）与协议端点（本地 http
@@ -279,6 +280,40 @@ func TestProtocolDisabledReturns404(t *testing.T) {
 			t.Fatalf("协议未启用时 %s 状态码 = %d，期望 404", path, status)
 		}
 	}
+	cancel()
+	// 协议关闭时不得预引导签名密钥（无密钥记录、无创建/复用审计），避免无谓副作用。
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		lock, lockErr := serverapp.AcquireInstanceLock(paths.database)
+		if lockErr == nil {
+			lock.Release()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("serve 未在 20s 内关闭: %v", lockErr)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	store, err := storagesqlite.Open(context.Background(),
+		storagesqlite.DefaultOptions(paths.database))
+	if err != nil {
+		t.Fatalf("打开测试数据库失败: %v", err)
+	}
+	defer store.Close()
+	var keyCount, auditCount int
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM token_signing_keys`).Scan(&keyCount); err != nil {
+		t.Fatalf("查询签名密钥失败: %v", err)
+	}
+	if keyCount != 0 {
+		t.Fatalf("协议关闭时不应预引导签名密钥，实际 %d 条", keyCount)
+	}
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM audit_events
+		WHERE action IN ('token.key.created','token.key.ensured')`).Scan(&auditCount); err != nil {
+		t.Fatalf("查询密钥审计失败: %v", err)
+	}
+	if auditCount != 0 {
+		t.Fatalf("协议关闭时不应写密钥审计，实际 %d 条", auditCount)
+	}
 }
 
 // TestMaintenanceModeBlocksProtocolAndAdminAPI 验证维护状态下协议端点与管理 API
@@ -408,5 +443,84 @@ passkey:
 	}
 	if started {
 		t.Fatal("配置被拒绝时不应开始监听")
+	}
+}
+
+// TestProtocolJWKSBootstrappedOnStartup 验证协议端点启用时启动阶段预引导签名密钥：
+// JWKS 非空、包含 ES256 P-256 公钥、Discovery 声明的 jwks_uri 与 issuer 一致；
+// 重启同一数据库后 kid 稳定（不会每次启动重新生成）。
+func TestProtocolJWKSBootstrappedOnStartup(t *testing.T) {
+	paths := newProtocolPaths(t)
+	writeMasterKey(t, paths.masterKey)
+	if stdout, err := runInit(t, paths); err != nil {
+		t.Fatalf("首次初始化失败: %v（stdout=%s）", err, stdout)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	fetchJWKS := func(address string) (map[string]any, []map[string]any) {
+		status, body := getStatus(t, client, "http://"+address+"/jwks", "", "")
+		if status != http.StatusOK {
+			t.Fatalf("JWKS 状态码 = %d，期望 200（body 前 160: %.160s）", status, body)
+		}
+		var document struct {
+			Keys []map[string]any `json:"keys"`
+		}
+		if err := json.Unmarshal([]byte(body), &document); err != nil {
+			t.Fatalf("JWKS 不是合法 JSON: %v（body 前 160: %.160s）", err, body)
+		}
+		if len(document.Keys) == 0 {
+			t.Fatalf("JWKS keys 为空：启动阶段未预引导签名密钥（body: %.200s）", body)
+		}
+		raw := map[string]any{}
+		_ = json.Unmarshal([]byte(body), &raw)
+		return raw, document.Keys
+	}
+	firstAddress, _, firstCancel := startServe(t, serverapp.ServeOptions{
+		ConfigPath: paths.config, MasterKeyFile: paths.masterKey,
+	})
+	_, firstKeys := fetchJWKS(firstAddress)
+	first := firstKeys[0]
+	for _, required := range []string{"kid", "kty", "crv", "x", "y", "alg", "use"} {
+		if value, ok := first[required].(string); !ok || value == "" {
+			t.Fatalf("JWKS 公钥缺少字段 %s: %v", required, first)
+		}
+	}
+	if first["kty"] != "EC" || first["crv"] != "P-256" || first["alg"] != "ES256" {
+		t.Fatalf("JWKS 公钥算法不符合 ES256/P-256: %v", first)
+	}
+	// Discovery 声明的 jwks_uri 必须指向真实挂载路径（issuer 校验一致）。
+	status, body := getStatus(t, client, "http://"+firstAddress+"/.well-known/openid-configuration", "", "")
+	if status != http.StatusOK {
+		t.Fatalf("Discovery 状态码 = %d，期望 200", status)
+	}
+	var discovery map[string]any
+	if err := json.Unmarshal([]byte(body), &discovery); err != nil {
+		t.Fatalf("Discovery 不是合法 JSON: %v", err)
+	}
+	if discovery["jwks_uri"] != "https://localhost/jwks" {
+		t.Fatalf("Discovery jwks_uri = %v，期望 https://localhost/jwks", discovery["jwks_uri"])
+	}
+	firstCancel()
+	// 等待第一个实例完全退出并释放单实例锁后再启动第二个实例。
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		lock, lockErr := serverapp.AcquireInstanceLock(paths.database)
+		if lockErr == nil {
+			lock.Release()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("首个实例未在 20s 内释放单实例锁: %v", lockErr)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// 重启同一数据库：签名密钥持久化，kid 必须稳定。
+	secondAddress, _, secondCancel := startServe(t, serverapp.ServeOptions{
+		ConfigPath: paths.config, MasterKeyFile: paths.masterKey,
+	})
+	defer secondCancel()
+	_, secondKeys := fetchJWKS(secondAddress)
+	if secondKeys[0]["kid"] != first["kid"] {
+		t.Fatalf("重启后 kid 变化：first=%v second=%v（签名密钥未持久化）",
+			first["kid"], secondKeys[0]["kid"])
 	}
 }
