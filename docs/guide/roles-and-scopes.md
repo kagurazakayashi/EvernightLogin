@@ -98,5 +98,7 @@
 - 管理页面（角色/权限/委派/有效权限）已实现，但需要宿主注入真实后端；页面不提供
   “预设恢复执行”和“委派签发/撤回”入口（仅受信通道）。
 - 角色/权限管理已装配为内置页面（独立服务默认注册）；该领域**没有独立的 JSON 业务 API**；
-  `loginctl` 的组/角色/应用/权限在线管理命令 **当前 CLI 入口未接通**（详见 [root-cli.md](root-cli.md)）。
+  `loginctl` 的组/角色/应用/权限/通知管理命令已接通（本地读取与受控建组；需要委派/敏感
+  策略的写动作返回 `MANAGEMENT_WRITE_NOT_EXPOSED`，`audit`/`reports`/`backups` 等在线命令
+  需 `--session-file`），详见 [root-cli.md](root-cli.md) 第 8 节。
 - 外部宿主目前无法只靠公开包装配完整 RBAC 服务（真实仓储与授权引擎在 `internal/`）。

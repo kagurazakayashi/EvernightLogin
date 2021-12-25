@@ -54,7 +54,7 @@
 | 账户、应用、角色权限、会话、MFA/Passkey、OAuth/OIDC、客服恢复等**领域服务** | 已装配到内置页面、OAuth/OIDC 协议端点与管理 JSON API（真实服务 + 真实测试） | 协议端点与管理 API 可配置开关（默认关闭）；**设备码、扫码登录、令牌状态查询（introspection）未启用**；维护模式一律 503 |
 | 独立服务进程 `cmd/login-server` | MVP 可用 | `serve` 真实启动 HTTP 服务（健康检查/OpenAPI、**14 个页面选项：默认注册 12、条件注册 2**、配置与迁移门禁、维护门禁、TLS、优雅关闭、单实例锁、访问日志轮转、后台任务执行器/调度器与邮件/Webhook 投递 worker、真实敏感操作 policy+reauth 链）；可选开启 OAuth/OIDC 协议端点与管理 JSON API（默认关闭）；`init` 本地受控首次初始化与 root Passkey 强认证绑定 |
 | 首次配置（创建唯一 root） | 已实现（CLI） | `login-server init` 本地受控完成 root 创建、一次性凭证兑换与正式密码设置；不提供匿名 HTTP 入口；root Passkey 强认证绑定已接线（未真机互操作） |
-| 本地应急命令 `cmd/loginctl` | 部分实现 | `root-recover`、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 可用；组/角色/应用/权限/通知在线管理命令当前入口未接通 |
+| 本地应急命令 `cmd/loginctl` | 已实现（部分写动作受限） | `root-recover`、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 可用；`group`/`role`/`app`/`permission`/`notify` 本地管理（读取与受控建组；受限写动作返回 `MANAGEMENT_WRITE_NOT_EXPOSED`）与 `audit`/`reports`/`backups`/`notifications`/`tasks` 在线管理（需 `--session-file`）已接通，详见 [root-cli.md](root-cli.md) 第 8 节 |
 | 备份工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
 | SQLite 数据库与迁移 | 已实现 | 44 个内嵌迁移；SQLite 为唯一运行实测目标 |
 | MySQL / PostgreSQL / SQL Server 适配 | 部分实现 | 有方言与迁移代码，**未运行实测** |

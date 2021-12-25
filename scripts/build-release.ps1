@@ -282,10 +282,17 @@ foreach ($target in $Targets) {
         "  docs/deployment deployment documentation",
         "  docs/licenses   third-party notices and dependency license texts",
         "",
-        "Important: cmd/login-server currently only implements --version/--help.",
-        "It does not start an HTTP service yet (see docs/deployment/README.md).",
-        "Do not expose these binaries as a production identity service until the",
-        "standalone HTTP assembly ships."
+        "Runtime boundary:",
+        "  - this package contains the embeddable Go library plus three CLIs;",
+        "  - login-server supports serve (real HTTP service) and init (local one-time",
+        "    first-run initialization); OAuth2/OIDC protocol endpoints and the admin",
+        "    JSON API are assembled but disabled by default (enable explicitly);",
+        "  - loginctl provides local management/emergency commands and online",
+        "    management commands that require a running service;",
+        "  - built-in Web pages are optional and replaceable by the host.",
+        "Deploy with your own configuration, database, keyring and TLS material, and",
+        "finish acceptance checks before exposing it as a production identity service",
+        "(see docs/deployment/README.md)."
     ) -join "`n"
     Write-Utf8File (Join-Path $packageDir "VERSION.txt") ($versionText + "`n")
     Write-Utf8File (Join-Path $packageDir "README.txt") ($versionText + "`n")

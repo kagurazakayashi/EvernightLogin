@@ -2,9 +2,9 @@
 <!--
   login launchd 样例（步骤 89，macOS）
 
-  用途：把 login-server 交给 launchd 托管。当前 cmd/login-server 只提供
-  --version/--help，会立即退出；KeepAlive 在装配完成前保持 false，避免反复拉起
-  立即退出的进程。
+  用途：把 login-server 交给 launchd 托管。login-server 支持 `serve`（真实启动
+  HTTP 服务）与 `init`（本地首次初始化）；KeepAlive 在配置/数据库/密钥未就绪时
+  保持 false，避免反复拉起启动失败的进程。
 
   安装（当前用户）：
     cp com.example.evernight-login.plist ~/Library/LaunchAgents/

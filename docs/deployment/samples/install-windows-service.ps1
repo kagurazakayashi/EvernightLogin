@@ -3,10 +3,11 @@
 # Purpose: install the WinSW-wrapped login-server as a Windows service with an
 # explicit working directory and no secrets on the command line.
 #
-# IMPORTANT: cmd/login-server currently only implements --version/--help and
-# exits immediately without arguments. Registering this service now will show a
-# stopped/failed service; that is expected behavior, not a configuration bug.
-# The template is provided for the moment the standalone HTTP assembly lands.
+# IMPORTANT: cmd/login-server now supports "serve" (real HTTP service) and "init"
+# (local first-run initialization). Register the service only after the config,
+# database, keyring and TLS material are in place; registering before that shows
+# a stopped/failed service, which is expected behavior, not a configuration bug.
+# See docs/deployment/README.md in this package for the delivery boundary.
 #
 # Usage (elevated PowerShell):
 #   pwsh -File .\install-windows-service.ps1 `

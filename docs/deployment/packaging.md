@@ -8,12 +8,13 @@
 ```powershell
 # 在仓库根目录；Windows PowerShell 5.1 或 PowerShell 7 均可
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-release.ps1 `
-  -OutputDir P:\go\tmp\deploy-step89 -Version 0.1.0-dev
+  -OutputDir P:\go\tmp\release-20261121 -Version 0.1.0-dev
 ```
 
 固定条件：
 
-- `CGO_ENABLED=0`、`GOMAXPROCS=2`；
+- `CGO_ENABLED=0`、`GOMAXPROCS=2`（脚本固定写 2，低于项目上限「逻辑处理器数的一半」= 6，
+  属更保守取值，不会超过并发约束）；
 - `-trimpath`、`-buildvcs=false`；
 - 通过 `-ldflags` 注入 `version`/`commit`/`buildTime`（`login.CurrentBuildInfo` 读取）；
 - 每个目标独立执行三次 `go build`（`./cmd/login-server`、`./cmd/loginctl`、
@@ -52,10 +53,18 @@ evernight-login-<version>-<os>-<arch>/
 - 运行数据：`database/*.db`、`*.db-wal`/`*.db-shm`、`*.sqlite*`；
 - 日志：`*.log`、`logs/`；
 - 测试密钥与秘密：`*.key`、`*.pem`、`*.p12`、`*.pfx`、`.env`、`secrets/`；
+- 源码与开发/测试工具：`tools/`、`examples/`、`scripts/` 等不随包；包内
+  `docs/deployment/e2e-smoke.md` 引用的 `scripts/e2e-login-server.ps1` 与
+  `tools/loginte2e` 只存在于源码树，发布包内仅有说明文档，不能直接执行；
 - 仓库内的其它源码目录与构建缓存。
 
 脚本使用**显式复制清单**组装包内容，因此仓库里新增的文件不会被自动打进包；需要新增
 运行时资源时应显式修改 `scripts/build-release.ps1` 的复制清单。
+
+包内 `VERSION.txt`/`README.txt` 描述当前运行时边界：本包含可嵌入 Go 库与三个 CLI；
+`login-server` 支持 `serve`（真实 HTTP 服务）与 `init`（本地首次初始化），OAuth2/OIDC
+协议端点与管理 JSON API 已装配但默认关闭；`loginctl` 提供本地与在线管理命令；内置
+Web 页面可选且可由宿主替换。
 
 ### 2.1 Unix 执行位（Linux/macOS 解压后必须处理）
 
@@ -91,7 +100,8 @@ chmod +x bin/login-server bin/loginctl bin/login-backup
 
 ## 4. 跨平台构建矩阵
 
-本轮实际执行的矩阵结果（真实命令与状态，未运行的目标不写成“通过”）：
+本轮实际执行的矩阵结果（2026-11-21 从干净 HEAD `597b503` 重建，真实命令与状态，
+未运行的目标不写成“通过”）：
 
 | 目标 | 代码 | 编译（`CGO_ENABLED=0`） | 运行 |
 |---|---|---|---|
@@ -102,10 +112,12 @@ chmod +x bin/login-server bin/loginctl bin/login-backup
 | darwin/amd64 | 有 | 成功（3 个二进制） | 未运行（按项目约束不做运行实测） |
 | darwin/arm64 | 有 | 成功（3 个二进制） | 未运行（按项目约束不做运行实测） |
 
-本轮构建信息：`go1.27.4 windows/amd64`，`commit=96d1a23`，`worktree_dirty=yes`
-（包含步骤 84 未提交改动与步骤 89 新增文件），`build_time=2026-11-19T18:53:16Z`；
+本轮构建信息：`go1.27.1 windows/amd64`，`commit=597b503`，`worktree_dirty=no`
+（构建前工作树干净，非 dirty 构建），`build_time=2026-11-20T17:37:43Z`；
 6 个目标全部构建成功，无失败目标，未用空文件占位。构建输出目录：
-`P:\go\tmp\deploy-step89`（临时目录，不属于仓库）。
+`P:\go\tmp\release-20261121`（仓库外临时目录，不属于仓库；含 6 个 zip、顶层
+`SHA256SUMS.txt`、`build-matrix.txt` 与构建/校验控制台日志）。本轮产物共 6 个
+zip，合计 149,234,273 字节（约 149 MB / 142 MiB），单包 23.6–26.0 MB。
 
 构建矩阵的完整机器可读记录也在构建输出目录的 `build-matrix.txt` 中。
 
@@ -118,12 +130,21 @@ chmod +x bin/login-server bin/loginctl bin/login-backup
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-release.ps1 `
-  -ReleaseDir P:\go\tmp\deploy-step89 -ExpectedVersion 0.1.0-dev
+  -ReleaseDir P:\go\tmp\release-20261121 -ExpectedVersion 0.1.0-dev
 ```
 
 校验脚本会：核对顶层清单；逐包解压到临时目录；核对包内清单；检查禁止项（AI 文件、
-数据库、日志、密钥/证书、`.env`、`secrets/`）；检查必需文件与三个二进制；扫描文本
-文件中的私钥块；在 Windows 上实际运行 `windows/amd64` 二进制并检查退出码与输出。
+`*.db*`/`*.sqlite*`、`*.log`、`*.key`/`*.pem`/`*.p12`/`*.pfx`、`.env`、`secrets/`；
+注意正则**不含** `*.crt`/`*.cer`，证书文件需人工核对）；检查必需文件与三个二进制；
+扫描文本文件（≤2 MB，跳过 `.exe`/`.zip`）中的私钥块；在 Windows 上实际运行
+`windows/amd64` 二进制并检查退出码与输出，最后用真实配置加载器校验包内样例配置。
+
+> **运行环境前提（本轮实测遇到）**：Windows PowerShell 5.1 的 `Start-Process` 在进程
+> 环境同时存在大小写重复变量（如 `NO_PROXY`/`no_proxy`，MSYS2 或代理环境常见）时会报
+> `Item has already been added. Key in dictionary: 'NO_PROXY'` 并中止冒烟段，脚本以退出码
+> 1 结束——这是环境问题，不是产物损坏。本轮首次运行即因此 FAIL（前两节全部 PASS），
+> 清理小写重复变量后重跑 `VERIFY: PASS`。若遇同样报错，先在纯 Windows 环境启动，或
+> 在两节检查前清理重复变量（如 `unset no_proxy http_proxy https_proxy`）再运行。
 
 手工核对示例（解压后）：
 
@@ -141,24 +162,27 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 ## 6. Windows 实测记录
 
 执行方式：解压 `evernight-login-0.1.0-dev-windows-amd64.zip` 到临时目录，直接运行包内
-二进制（不设置任何额外环境变量）：
+二进制（不设置任何额外环境变量）；以下为本轮从干净 HEAD `597b503` 重建产物的实测输出：
 
 | 命令 | 退出码 | 结果 |
 |---|---|---|
-| `bin\login-server.exe --version` | 0 | 打印构建信息 |
-| `bin\login-server.exe --help` | 0 | 打印帮助（列出 `serve`、`init` 子命令与参数） |
-| `bin\login-server.exe`（无参数） | 1 | stderr：提示使用 `serve` 或 `init` 子命令（诚实失败，不伪造启动） |
-| `bin\login-server.exe serve --config <包内>\config\login.example.yaml` | 0/1 | 配置/数据库/密钥/迁移条件满足时真实启动 HTTP 服务；缺失时明确失败（样例配置需替换路径与主密钥后使用） |
-| `bin\login-server.exe init --config <包内>\config\login.example.yaml` | 0/1 | 本地受控首次初始化；重复执行返回 1（需在受控环境手动执行，不在冒烟脚本内自动建 root） |
-| `bin\login-backup.exe version` | 0 | 打印构建信息 |
-| `bin\loginctl.exe --version` | 0 | 打印构建信息 |
+| `bin\login-server.exe --version` | 0 | `login-server 0.1.0-dev (commit 597b503, built 2026-11-20T17:37:43Z, go1.27.1)` |
+| `bin\login-server.exe --help` | 0 | 打印帮助（`serve`、`init`、`completion`、`help` 子命令；说明设备码/扫码/令牌状态查询未启用、协议与管理 API 默认关闭） |
+| `bin\login-server.exe`（无参数） | 1 | stderr：`错误：请使用 serve 或 init 子命令；--help 查看完整帮助`（诚实失败，不伪造启动） |
+| `bin\login-backup.exe version` | 0 | `login-backup 0.1.0-dev (commit 597b503, built 2026-11-20T17:37:43Z, go1.27.1)` |
+| `bin\loginctl.exe --version` | 0 | `loginctl 0.1.0-dev (commit 597b503, built 2026-11-20T17:37:43Z, go1.27.1)` |
 | `go run ./examples/config-load -config <包内>\config\login.example.yaml` | 0 | 样例配置经真实配置加载器校验通过，诊断输出中 `secrets.master_key = [UNSET]`，无秘密泄露 |
 
-“启动→示例配置→停止”的说明：`login-server serve` 已能真实启动，但既有发布产物早于本轮
-宿主装配，需在干净工作树重新构建后按上表复测；仓库样例配置的路径/秘密占位符必须先替换
-（不监听端口、无后台进程）；上面的版本/帮助命令与配置校验是当前真实可验证的启动边界。
-`verify-release.ps1` 的 159 项检查全部通过（6 个压缩包 SHA-256、每包 111 个条目的包内
-校验和、禁止项扫描、必需文件、Windows 二进制退出码与输出、样例配置校验）。
+`login-server serve` 与 `login-server init` 本轮**未复测**：前者会真实监听端口、后者会在
+受控环境创建 root，均超出本轮「不启动服务/监听端口」的验证约束，`verify-release.ps1`
+也不覆盖这两条命令。重建后的包内二进制已包含 `serve`/`init` 真实实现（见
+`bin/login-server --help` 与 `docs/deployment/README.md` 第 2 节），但**发布前仍应在隔离
+环境人工复测启动与初始化**（仓库样例配置的路径/秘密占位符必须先替换）。
+
+`verify-release.ps1` 本轮 **159 项检查全部通过（`Checks run: 159, failures: 0`，
+`VERIFY: PASS`，退出码 0）**：6 个压缩包 SHA-256、每包 **112 个条目**的包内校验和、
+禁止项扫描、必需文件、Windows 二进制退出码与输出、样例配置校验；首次运行时因宿主环境
+大小写重复变量的 `Start-Process` 报错在冒烟段 FAIL，清理重复变量后重跑通过（见第 5 节）。
 
 ## 7. 资源路径解析核对
 
@@ -174,10 +198,23 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 - 独立服务装配为 MVP：包内 `login-server` 可 `init`/`serve`；OAuth/OIDC 协议端点与管理
   JSON API 已装配但默认关闭（开关见 `standalone-service.md` 第 3.8 节）；设备码/扫码/
   令牌状态查询未启用；14 个页面选项（默认注册 12、条件 2）；root Passkey 强认证绑定已接线
-  但未做真机互操作。发布包重建前不要按“已上线完整 OAuth2/OIDC 服务”宣传。
-- 本轮未重新构建发布包；既有产物早于宿主装配，`--version`/帮助/无参数行为需重建后复测。
+  但未做真机互操作。不要按“已上线完整 OAuth2/OIDC 服务”宣传本发布包。
+- 本轮已从干净 HEAD `597b503` 重建并完成 `verify-release.ps1` 159 项校验；版本号仍为开发态
+  `0.1.0-dev`，正式发布版本号需维护者决定后重建。包内文档与 `VERSION.txt`/`README.txt` 由
+  构建时检出的内容和脚本文案生成；文档修正提交后按本文件第 1 节重新构建、第 5 节重新校验，
+  即包含最新文档与最新运行时边界说明。
+- `tools/`、`examples/`、`scripts/` 不随包；包内 `docs/deployment/e2e-smoke.md` 引用的
+  `scripts/e2e-login-server.ps1` 与 `tools/loginte2e` 只存在于源码树。
 - 仅 Windows amd64 允许实际运行验证；Windows arm64、Linux、macOS 只做编译检查，**未运行**。
+  编译成功不等于这些平台的运行、托管或客户端互操作已验证。
+- `serve`/`init` 本轮未复测（约束禁止启动服务/端口），见第 6 节；发布前需在隔离环境人工复测。
+- `verify-release.ps1` 的禁止项正则覆盖 `.key`/`.pem`/`.p12`/`.pfx`，**不含** `.crt`/`.cer`；
+  私钥块扫描只覆盖 ≤2 MB 的文本文件（跳过 `.exe`/`.zip`），二进制内嵌秘密不在扫描范围，
+  需要时可人工核对。
+- `verify-release.ps1` 在 Windows PowerShell 5.1 下要求进程环境无大小写重复变量
+  （如 `NO_PROXY`/`no_proxy`），否则 `Start-Process` 报错中止冒烟段；运行前需清理重复变量
+  （见第 5 节），或在纯 Windows 环境运行。
 - 未构建/运行容器镜像；容器样例只是配置契约。
 - 字体未随包分发，PDF 报告需要单独获取字体并配置路径。
-- 构建包含工作树中未提交改动（若 `VERSION.txt` 标注 `worktree_dirty: yes`），发布前应由
-  维护者用提交后的干净工作树重新构建。
+- 发布包应由干净工作树构建（`VERSION.txt` 标注 `worktree_dirty: no`）；若为 `yes` 说明包含
+  未提交改动，不得作为正式发布，应由维护者在提交后重新构建。

@@ -108,7 +108,7 @@
 | `diag health` 退出码 1（degraded） | 可能只是维护状态未验证或邮件通道未装配；看具体 check，不要据此断定数据库坏了 |
 | `diag mail` 报不可用 | CLI 不持有真实发件通道，不会伪成功、不会发信 |
 | 浏览器打不开任何页面 | 当前没有独立服务在监听；内置页面需要宿主 Go 装配，见 `docs/embedding/host_integration.md` |
-| `loginctl group/role/app ...` 报未知命令 | 当前 CLI 入口未接通这些命令组（已知缺口），见 [root-cli.md](root-cli.md) 第 8 节 |
+| `loginctl group/role/app ...` 报未知命令 | 先确认子命令拼写与二进制版本（旧构建没有这些命令组）；当前版本已接通这些命令组，用法见 [root-cli.md](root-cli.md) 第 8 节 |
 | 统计数字与审计条数不一致 | 统计是聚合快照（去重、窗口、保留期口径不同），审计是原始事件；先对齐口径再判断 |
 | 报告 PDF 失败 | 需要宿主提供中文字体；仓库不随包附带字体 |
 | 备份 `create` 报参数/路径错误 | 需先准备受保护输出目录与主密钥环；当前没有公开的密钥环生成工具（见 [backup-and-restore.md](backup-and-restore.md) 第 5 节） |

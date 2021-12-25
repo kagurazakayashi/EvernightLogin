@@ -136,14 +136,21 @@ loginctl restore-init-state ...
 完整语义见 [backup-and-restore.md](backup-and-restore.md)。核心规则：先预演再执行；恢复
 在维护状态与库外排他锁下进行；失败默认**保持维护**，必须显式 `maintenance-exit`。
 
-## 8. 当前未接通的命令
+## 8. 管理命令的真实接通范围
 
-`loginctl help` 的总览里列出了组/角色/应用/权限/通知等常规管理命令，但**当前版本的 CLI
-入口尚未接通这些命令组**：执行 `loginctl group list ...` 等会返回“未知命令”并以退出码 2
-结束。这是已知缺口，不要把它们写进自动化脚本。
+步骤 84 之后，`loginctl` 已接通下列命令组（此前“入口未接通、执行返回未知命令”的旧说明
+已失效）：
 
-此外，在线管理域命令（审计、报告、备份计划、通知真实投递等）依赖宿主装配真实服务；
-CLI 不写放权逻辑，缺少装配时明确返回稳定错误码而不是伪成功。
+- **本地管理**（直接操作数据库文件；`--operator` 是本地管理员稳定标识，不冒充在线认证）：
+  `group`/`role`/`app`/`permission`/`notify` 的读取与受控建组等命令。角色分配、角色改权限、
+  应用启停/成员变更等需要委派转授或敏感策略的写动作**未在 CLI 开放**，返回稳定错误码
+  `MANAGEMENT_WRITE_NOT_EXPOSED`（退出码 5），不使用放宽替身；读取由既有领域服务授权并写审计。
+- **在线管理**（经运行中的 login-server 管理 JSON API，需 `--session-file`）：`audit`、
+  `reports`、`backups`、`notifications`、`tasks` 等命令。服务未启动、管理 API 未启用或对应
+  领域未装配时如实返回连接失败/404/503 等稳定错误，不本地伪造成功、不直连数据库。
+- 逐条用法以 `loginctl help`、`loginctl <命令组> --help` 为准；CLI 的退出码与 JSON 外壳见
+  本文第 1、2 节，CLI 一致性的真实验收记录见
+  `docs/acceptance/步骤93：页面、自助管理、审计报告与 CLI 一致性验收记录（2026-11-20）.md`。
 
 ## 9. 安全边界
 
