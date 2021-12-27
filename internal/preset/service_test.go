@@ -290,15 +290,26 @@ func TestCatalogIntegrity(t *testing.T) {
 	if !strings.Contains(string(data), `"version": "1.0.0"`) {
 		t.Fatalf("机器可读目录缺少版本: %s", string(data))
 	}
-	// 未实现的权限必须显式标记，不能伪装成功。步骤 81 已把备份管理相关权限接入
-	// 真实服务（创建/查看/取消/下载/保留策略/清理），其余第一版业务操作仍未接入。
-	implemented := map[string]bool{
-		"backups.create": true, "backups.read": true, "backups.cancel": true,
-		"backups.export": true, "backups.retention": true, "backups.cleanup": true,
-		"backups.restore": true,
+	// 未实现的权限必须显式标记，不能伪装成功。B6 逐键核对代码后：权限键对应的真实
+	// 服务端执行路径（含页面/CLI/管理 API 装配）已实现的标 true；下列 6 键没有真实
+	// 执行路径，或流程默认关闭/执行器 fail-closed，必须保持 false：
+	//   recovery.approve、recovery.mfa.approve（人工恢复默认关闭且执行器未装配）、
+	//   authorization.check（tokenauthz 未挂载到独立服务）、
+	//   sessions.revoke（管理强制下线未注入 ScopeAuthorizer）、
+	//   settings.manage、diagnostics.read（无服务端执行路径）。
+	notImplemented := map[string]struct{}{
+		"recovery.approve":     {},
+		"recovery.mfa.approve": {},
+		"authorization.check":  {},
+		"sessions.revoke":      {},
+		"settings.manage":      {},
+		"diagnostics.read":     {},
 	}
 	for _, definition := range catalog.Permissions {
-		want := implemented[definition.Key]
+		want := true
+		if _, missing := notImplemented[definition.Key]; missing {
+			want = false
+		}
 		if definition.Implemented != want {
 			t.Fatalf("权限 %q Implemented = %v，期望 %v（未实现能力不得标记为已实现）",
 				definition.Key, definition.Implemented, want)

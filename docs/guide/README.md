@@ -36,6 +36,7 @@
 | [../embedding/host_integration.md](../embedding/host_integration.md) | 把 login 嵌入 Go 程序的公开 API 稳定范围与生命周期约束 |
 | [../requirements/login_功能列表_v1.1.md](../requirements/login_功能列表_v1.1.md) | 产品功能范围（设计目标，不等于全部已实现） |
 | [../requirements/login_错误码与排障手册.md](../requirements/login_错误码与排障手册.md) | 错误码权威手册（与 `error_codes.go` 自动比对） |
+| [../acceptance/README.md](../acceptance/README.md) | 验收记录索引，含 OWASP ASVS 4.0.3 第一版适用性内部自评与未覆盖项（**非认证、不宣称合规**） |
 | [../database/存储模型与迁移设计.md](../database/存储模型与迁移设计.md) | 数据库表、迁移与版本口径 |
 | [../../README.md](../../README.md) | 按开发阶段记录的功能与技术细节（偏开发日志） |
 
@@ -89,7 +90,7 @@ root Passkey 绑定未做真机互操作，数据范围仍未细粒度化**，�
 | SQLite / WAL | 单文件嵌入式数据库 / 它的预写日志模式（提高并发读写能力） |
 | 迁移（migration） | 按版本号顺序升级数据库结构的脚本，已应用的版本不可改写 |
 | 热备份 | 服务运行中通过数据库在线备份接口生成一致快照，不能直接复制正在写的库文件 |
-| 主密钥 / 密钥环 | 用于加密敏感数据与备份的密钥材料；必须与数据库、备份文件分开保存 |
+| 主密钥 / 密钥环 | 用于加密敏感数据与备份的密钥材料；由首次初始化 `login-server init --master-key-file <受保护路径>` 生成受保护文件，必须与数据库、备份文件分开保存（丢失即不可恢复） |
 | root | 唯一且受保护的系统最高管理员；只能由本地受控、一次性初始化流程创建 |
 | 作用范围（scope） | 权限或数据“在哪个范围内有效”，分系统级与应用级 |
 | 数据范围 | 同一权限能操作哪些数据（如仅本人、指定应用或系统） |

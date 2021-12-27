@@ -9,6 +9,44 @@ import (
 	"testing"
 )
 
+// TestLocalManageCLIDispatch 验证 group/role/app/permission/notify 本地管理命令组
+// 已接入 loginctl 入口（帮助文本列出的命令组必须能被真实分派，不能返回“未知命令”）。
+func TestLocalManageCLIDispatch(t *testing.T) {
+	cases := []struct {
+		args     []string
+		contains string
+	}{
+		{[]string{"group"}, "loginctl group list"},
+		{[]string{"role"}, "loginctl role list"},
+		{[]string{"app"}, "loginctl app list"},
+		{[]string{"permission"}, "loginctl permission list"},
+		{[]string{"notify"}, "notify status"},
+	}
+	for _, testCase := range cases {
+		var stdout, stderr bytes.Buffer
+		exit := Run(testCase.args, strings.NewReader(""), &stdout, &stderr, nil)
+		if exit != ExitOK {
+			t.Fatalf("%v 退出码 = %d，stderr=%s", testCase.args, exit, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), testCase.contains) {
+			t.Fatalf("%v 帮助缺少 %q：%s", testCase.args, testCase.contains,
+				stdout.String())
+		}
+	}
+	// 组级 --help 与在线命令组一致：输出组帮助并退出 0，而不是用法错误。
+	for _, group := range []string{"group", "role", "app", "permission", "notify"} {
+		var stdout, stderr bytes.Buffer
+		exit := Run([]string{group, "--help"}, strings.NewReader(""), &stdout, &stderr, nil)
+		if exit != ExitOK {
+			t.Fatalf("%s --help 退出码 = %d，stderr=%s", group, exit, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "loginctl "+group+" list") &&
+			!strings.Contains(stdout.String(), "notify status") {
+			t.Fatalf("%s --help 未输出组帮助：%s", group, stdout.String())
+		}
+	}
+}
+
 // TestOnlineManageCLIDispatch 验证 audit/reports/backups/notifications/tasks 已接入
 // loginctl 入口并能输出帮助；缺少 --session-file 时用法错误。
 func TestOnlineManageCLIDispatch(t *testing.T) {

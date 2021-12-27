@@ -92,6 +92,7 @@ task_id；精确内部原因码（reason_code）只保存在受限审计中，�
 | PDF | 生成路径已实现；字体需宿主提供，未做真实 PDF 渲染实测 |
 | 管理页面 | 已实现，需宿主注入真实后端 |
 | 审计/报告的 HTTP 业务 API 与页面 | 已装配：内置页面 + 管理 JSON API（审计查询/导出/清理、报告历史/下载/清理，`--enable-admin-api` 默认关闭；写操作仍要求近期再次认证） |
+| HTTP 访问日志 | 已实现：W3C 扩展格式、请求编号与安全响应头；`login-server serve --access-log <path>` 写文件时默认按单文件上限与历史数量上限轮转（`--access-log-max-bytes` 默认 64 MiB、`--access-log-max-files` 默认 5，见 `docs/deployment/standalone-service.md` 第 3.5 节）；不记录 Cookie/Authorization/密码/一次性凭证 |
 | 审计自动定时清理、导出产物自动过期清理 | **未实现**（第一版仅 root 手动清理） |
 | 真实浏览器/读屏/200% 文本、非 Windows | 未实测 |
 

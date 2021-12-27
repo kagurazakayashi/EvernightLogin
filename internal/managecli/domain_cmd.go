@@ -263,6 +263,12 @@ func (r *runner) runDomain(groupName string, args []string) int {
 	}
 	subcommand, rest := args[0], args[1:]
 	r.command = groupName + " " + subcommand
+	// 组级帮助与在线命令组保持一致：`<组> help|--help|-h` 显示组帮助并退出 0，
+	// 不带子命令时同样显示组帮助。
+	switch subcommand {
+	case "help", "-h", "--help":
+		return r.helpText(groupName, domainCommandUsage)
+	}
 	// 明确拒绝路径在解析具体参数前返回，这里先识别 --json 以便输出机器可读外壳。
 	for _, arg := range rest {
 		if arg == "--json" {

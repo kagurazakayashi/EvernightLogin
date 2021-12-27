@@ -55,8 +55,12 @@ type PermissionDefinition struct {
 	RootOnly bool `json:"root_only"`
 	// DefaultRoles 是默认授予的预设角色机器标识；为空表示默认不授予。
 	DefaultRoles []string `json:"default_roles,omitempty"`
-	// Implemented 表示该权限对应的业务操作是否已经实现。未实现的权限只登记目录
-	// 定义与说明，不得让对应操作伪装成功；业务调用必须显式检查该标记。
+	// Implemented 表示该权限对应的业务操作是否已经实现（服务端存在真实执行路径，
+	// 且执行前经服务端授权判定、root/受信判定或本人会话凭据校验）。它不是功能开关：
+	// 未实现的权限只登记目录定义与说明，不得让对应操作伪装成功；业务调用必须显式
+	// 检查该标记。外部通道或宿主装配缺失（如未配置 SMTP、PDF 字体未部署、人工恢复
+	// 执行器未装配）导致当前部署必然明确失败时，按对应业务是否已具备真实执行路径
+	// 分别标注，并在目录注释与验收记录中注明边界。
 	Implemented bool `json:"implemented"`
 }
 
@@ -369,85 +373,105 @@ func catalogV1() *Catalog {
 }
 
 // catalogPermissionsV1 是需求 11.5 的第一版权限目录基线，逐条独立登记。
+//
+// Implemented 标记的审计口径（2026-11-21 收敛交付缺口 B6 时逐键核对代码）：
+//   - true：服务端存在该权限键对应的真实业务执行路径，且执行前经服务端授权判定
+//     （internal/authz 权限键）、root/受信主体判定或本人会话凭据 + 所有权校验；
+//     外部通道未装配导致当前部署必然明确失败（未配置 SMTP、PDF 字体缺失、人工恢复
+//     执行器未装配）的边界在对应条目的报告与验收记录中注明。
+//   - false：没有真实执行路径，或流程被默认关闭/执行器 fail-closed，不能完成该权限
+//     承诺的业务动作。
+//
+// 保持 false 的 6 键及原因：
+//   - recovery.approve / recovery.mfa.approve：internal/manualrecovery 的申请/审批/
+//     执行状态机与权限判定已实现，但独立服务装配为 Policy{Enabled:false} 且执行器是
+//     显式 fail-closed 实现，人工核验恢复无法真正完成（MFA 审批在生产装配中也未按
+//     操作类型区分授权键）。
+//   - authorization.check：internal/tokenauthz 的联合判定服务与 HTTP 端点在库内已实现
+//     并有验收，但独立服务未挂载该端点、也没有以该权限键做服务端判定。
+//   - sessions.revoke：internal/session.AdminRevoke 有权限授权器实现，但生产装配未注入
+//     ScopeAuthorizer，`loginctl session admin-revoke` 明确返回强认证不可用；当前只有
+//     本人会话撤销（self.sessions.manage）可用。
+//   - settings.manage / diagnostics.read：没有对应的服务端执行路径（见条目内注释）。
 func catalogPermissionsV1() []PermissionDefinition {
 	return []PermissionDefinition{
 		// 本人权限：所有正常用户的基础角色。
 		{
 			Key: "self.profile.read", Name: "查看自己的资料", Summary: "查看自己的显示名称、联系资料与账户状态。",
 			Scope: "仅本人；不包含其他人的资料。", Limits: "不能查看他人的资料、管理资格或安全设置。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
 		},
 		{
 			Key: "self.profile.update", Name: "修改自己的资料", Summary: "修改自己的显示资料。",
 			Scope: "仅本人；用户名与邮箱修改遵守单独验证流程。", Limits: "不能修改管理资格、安全版本、已验证状态或他人资料。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
 		},
 		{
 			Key: "self.credentials.manage", Name: "管理自己的登录凭证", Summary: "管理自己的密码、Passkey 与两步验证。",
 			Scope: "仅本人；敏感修改仍需再次确认身份。", Limits: "不能免除再次验证要求，不能为他人重置凭证或解除两步验证。",
-			RequiresReauth: true, Implemented: false, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
+			RequiresReauth: true, Implemented: true, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
 		},
 		{
 			Key: "self.sessions.manage", Name: "退出自己的设备", Summary: "查看并退出自己的登录会话与设备。",
 			Scope: "仅本人。", Limits: "不能退出或查看其他人的设备与会话。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
 		},
 		{
 			Key: "self.grants.manage", Name: "撤回自己给应用的授权", Summary: "查看并撤回自己授权给应用的访问。",
 			Scope: "仅本人。", Limits: "不能撤回其他人的授权或应用自身的凭证。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin", "support", "auditor", "normal_user"},
 		},
 		// 用户管理。
 		{
 			Key: "users.read", Name: "查看普通用户", Summary: "按获准范围查看普通用户的必要资料。",
 			Scope: "仅获准管理的普通用户范围。", Limits: "不能查看 root 或超出管理范围的高权限管理账户资料。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin"},
 		},
 		{
 			Key: "users.create", Name: "创建普通用户", Summary: "创建普通用户并登记基本资料。",
 			Scope: "仅获准管理的普通用户范围。", Limits: "不能创建 root 或带管理资格的账户，不能设置固定密码。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin"},
 		},
 		{
 			Key: "users.update", Name: "修改普通用户", Summary: "修改普通用户的显示资料。",
 			Scope: "仅获准管理的普通用户范围。", Limits: "不能修改密码、邮箱验证状态、安全版本或管理资格。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin"},
 		},
 		{
 			Key: "users.disable", Name: "禁用普通用户", Summary: "禁用获准范围内的普通用户。",
 			Scope: "仅获准管理的普通用户范围。", Limits: "不能禁用 root 或其他高权限管理账户。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin"},
 		},
 		{
 			Key: "users.delete", Name: "删除普通用户", Summary: "删除获准范围内的普通用户。",
 			Scope: "仅获准普通用户，需确认；删除不清除审计。", Limits: "默认不授予，需另行分配；不能删除 root 或高权限账户。",
-			RequiresReauth: true, Implemented: false,
+			RequiresReauth: true, Implemented: true,
 		},
 		{
 			Key: "users.export", Name: "导出用户资料", Summary: "按字段许可批量导出普通用户资料。",
 			Scope: "仅获准普通用户范围，导出仍按字段许可。", Limits: "默认不授予；不能导出密码、MFA 秘密、恢复码或私钥。",
-			RequiresReauth: true, Implemented: false,
+			RequiresReauth: true, Implemented: true,
 		},
 		// 账户恢复与客服。
 		{
 			Key: "recovery.request", Name: "发起密码找回", Summary: "向用户此前已验证的渠道发送一次性密码找回入口。",
 			Scope: "仅获准的普通用户范围；不能选择新地址。", Limits: "不能查看找回入口或验证码，不能解除两步验证，不能为 root 或高权限账户发起。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin", "support"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin", "support"},
 		},
 		{
 			Key: "support.cases.read", Name: "查看求助单", Summary: "查看分配给自己的求助单与必要脱敏信息。",
 			Scope: "仅分配给自己的求助单。", Limits: "不能查看未分配求助单或未脱敏的敏感资料。",
-			Implemented: false, DefaultRoles: []string{"support"},
+			Implemented: true, DefaultRoles: []string{"support"},
 		},
 		{
 			Key: "support.cases.create", Name: "登记求助单", Summary: "登记用户求助事项与必要核验结果。",
 			Scope: "仅自己经手且获准的普通用户。", Limits: "不能伪造核验结果，不能记录无关证件材料。",
-			Implemented: false, DefaultRoles: []string{"support"},
+			Implemented: true, DefaultRoles: []string{"support"},
 		},
 		{
 			Key: "support.cases.update", Name: "更新求助单", Summary: "更新分配给自己且未结束的求助单状态。",
 			Scope: "仅分配给自己的求助单。", Limits: "不能改写历史处理记录，不能替用户设置新密码。",
-			Implemented: false, DefaultRoles: []string{"support"},
+			Implemented: true, DefaultRoles: []string{"support"},
 		},
 		{
 			Key: "recovery.approve", Name: "审批人工核验恢复", Summary: "审批通过人工核验的普通账户恢复申请。",
@@ -463,69 +487,69 @@ func catalogPermissionsV1() []PermissionDefinition {
 		{
 			Key: "groups.read", Name: "查看用户组", Summary: "查看获准范围内的用户组与成员。",
 			Scope: "仅获准系统或应用范围。", Limits: "不能查看范围外用户组，查看不代表可修改成员。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "groups.manage", Name: "管理用户组", Summary: "创建、修改用户组并管理组成员。",
 			Scope: "仅获准系统或应用范围。", Limits: "涉及赋权仍需角色分配权限；不能借组管理改变全局账户状态。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "roles.read", Name: "查看角色", Summary: "查看获准范围内的普通角色及其权限组合。",
 			Scope: "仅获准系统或应用范围。", Limits: "不能查看 root 能力，查看不代表可修改。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "roles.manage", Name: "管理普通角色", Summary: "创建、修改普通角色及其权限组合。",
 			Scope: "仅获准范围且只能组合可委派权限。", Limits: "不能制造 root 角色，不能组合超出自己委派范围的权限。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "roles.assign", Name: "分配角色", Summary: "把允许转授的角色交给指定用户或用户组。",
 			Scope: "仅获准范围；不能授予超出自己委派范围的权限。", Limits: "不能自行提权，不能把角色分配给 root 或范围外主体。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		// 权限目录。
 		{
 			Key: "permissions.read", Name: "查看权限目录", Summary: "查看系统与获准应用范围的权限定义与说明。",
 			Scope: "仅获准系统或应用范围。", Limits: "不能查看范围外应用权限，不能修改内置权限含义。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "permissions.manage", Name: "管理自定义权限", Summary: "登记、修改与删除自定义权限。",
 			Scope: "仅获准系统或应用范围。", Limits: "不能修改或删除内置系统权限，不能跨应用修改权限。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "permissions.state.update", Name: "启停权限", Summary: "启用或停用获准范围内的权限。",
 			Scope: "仅获准权限，停用即拒绝对应操作。", Limits: "默认仅 root，可明确委派非核心范围；不能取消安全底线。",
-			RequiresReauth: true, Implemented: false,
+			RequiresReauth: true, Implemented: true,
 		},
 		// 应用管理。
 		{
 			Key: "applications.read", Name: "查看应用", Summary: "查看获准范围内应用的资料与状态。",
 			Scope: "系统管理员限管理范围；应用管理员仅已分配应用。", Limits: "不能查看未分配应用的资料或凭证。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "applications.create", Name: "创建应用", Summary: "创建新的应用登记。",
 			Scope: "仅系统管理员的管理范围。", Limits: "应用管理员不默认拥有；不能创建后自动获得系统管理资格。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "applications.update", Name: "修改应用资料", Summary: "修改获准应用的显示资料。",
 			Scope: "系统管理员限管理范围；应用管理员仅已分配应用。", Limits: "不能修改应用 ID、client_type 或作用范围，不能借此扩大权限。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "applications.credentials.manage", Name: "管理应用凭证", Summary: "轮换应用密钥或公钥凭证。",
 			Scope: "仅指定应用；需再次确认身份。", Limits: "不包含服务器 HTTPS 私钥；默认不授予应用管理员，需明确授予。",
-			RequiresReauth: true, Implemented: false, DefaultRoles: []string{"system_admin"},
+			RequiresReauth: true, Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "applications.members.manage", Name: "管理应用成员", Summary: "管理应用成员及应用内状态。",
 			Scope: "仅指定应用。", Limits: "不能因此禁用或删除全局账户，不能修改全局管理资格。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "authorization.check", Name: "联合校验授权", Summary: "校验访问令牌与所需应用权限。",
@@ -541,37 +565,37 @@ func catalogPermissionsV1() []PermissionDefinition {
 		{
 			Key: "audit.read", Name: "查看安全记录", Summary: "查看获准范围内的安全审计记录。",
 			Scope: "仅获准范围，内容按权限脱敏。", Limits: "不能修改或删除原始记录，不能查看范围外记录。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "auditor"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "auditor"},
 		},
 		{
 			Key: "audit.export", Name: "导出安全记录", Summary: "按许可导出获准范围内的安全记录。",
 			Scope: "仅获准范围，导出仍脱敏。", Limits: "不能删除记录，不能导出未脱敏的秘密或范围外数据。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "auditor"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "auditor"},
 		},
 		{
 			Key: "reports.read", Name: "查看统计报告", Summary: "查看获准数据范围内的统计报告。",
 			Scope: "仅获准数据范围。", Limits: "不能查看范围外数据，缺失数据必须标记而不是记为零。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "auditor"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "auditor"},
 		},
 		{
 			Key: "reports.generate", Name: "生成统计报告", Summary: "生成获准数据范围的统计报告。",
 			Scope: "仅获准数据范围。", Limits: "不能生成超出权限范围的报告，不能伪造数据来源。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "auditor"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "auditor"},
 		},
 		{
 			Key: "reports.export", Name: "导出统计报告", Summary: "导出获准范围的报告文件。",
 			Scope: "仅获准数据范围，按格式安全转义。", Limits: "不能导出未获准的数据，不能绕过脱敏与注入防护。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "auditor"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "auditor"},
 		},
 		{
 			Key: "reports.schedule.manage", Name: "管理定期报告", Summary: "安排与暂停定期报告任务。",
 			Scope: "仅获准数据范围；任务不能超出所有者当前权限。", Limits: "不能创建超出权限范围的任务，不能修改他人报告。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "auditor"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "auditor"},
 		},
 		{
 			Key: "reports.cleanup", Name: "清理过期报告文件", Summary: "按保留策略清理已到期的报告产物文件。",
 			Scope: "仅获准数据范围；必须强认证并记录实际目标与结果。", Limits: "不能删除原始审计记录，不能清理未到期或范围外文件。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		// 备份。
 		{
@@ -612,14 +636,17 @@ func catalogPermissionsV1() []PermissionDefinition {
 		{
 			Key: "audit.purge", Name: "清理安全记录", Summary: "按保留策略清理安全审计记录。",
 			Scope: "全系统高风险操作。", Limits: "仅 root；不能通过普通角色分配下放。",
-			RootOnly: true, RequiresReauth: true, Implemented: false,
+			RootOnly: true, RequiresReauth: true, Implemented: true,
 		},
 		{
 			Key: "security.policy.manage", Name: "修改敏感操作规则", Summary: "查看、修改与恢复敏感操作安全策略。",
 			Scope: "全系统高风险操作。", Limits: "仅 root；不能通过普通角色分配下放，不能取消安全底线。",
-			RootOnly: true, RequiresReauth: true, Implemented: false,
+			RootOnly: true, RequiresReauth: true, Implemented: true,
 		},
-		// 常规设置与诊断。
+		// 常规设置与诊断：缺少权限键对应的服务端真实执行路径，保持未实现。
+		// settings.manage：当前没有常规设置的读取/写入服务、页面或 API，只有权限目录项；
+		// diagnostics.read：仅有本地受信边界下的 `loginctl diag` 脱敏诊断，没有以该键做的
+		// 服务端管理判定，管理 API 任务详情按任务类型复用各域读取权限。
 		{
 			Key: "settings.manage", Name: "修改常规设置", Summary: "修改常规运行设置。",
 			Scope: "仅常规设置，不包含敏感策略。", Limits: "不能修改敏感操作规则、主密钥或未脱敏秘密。",

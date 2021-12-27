@@ -63,9 +63,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, factory Promp
 	case "restore-reenable":
 		return runRestoreReenable(args[1:], stdout, stderr)
 	case "config", "diag", "migrate", "task", "session", "user",
+		"group", "role", "app", "permission", "notify",
 		"audit", "reports", "backups", "notifications", "tasks":
 		// 步骤 84 常规管理/诊断/设置命令与在线管理命令：本地运维边界不联网；
-		// 在线域（audit/reports/backups/notifications/tasks）只调用已运行服务的
+		// group/role/app/permission/notify 是本地管理命令组（只读 + 受控建组，
+		// 需要委派/敏感策略的写动作返回 MANAGEMENT_WRITE_NOT_EXPOSED）；在线域
+		// （audit/reports/backups/notifications/tasks）只调用已运行服务的
 		// 管理 API，需要 --session-file 提供的受保护管理会话秘密。
 		return managecli.Run(args, stdin, stdout, stderr)
 	case "help", "-h", "--help":
@@ -200,7 +203,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl restore-reenable --database <path> --state-dir <dir> --operator <id> \\")
 	fmt.Fprintln(out, "      --reason <原因> [--kind schedule,webhook] [--restore-id <id>]")
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "常规管理与诊断（步骤 84，本地运维边界；详细帮助：loginctl help 后接子命令）：")
+	fmt.Fprintln(out, "常规管理与诊断（步骤 84，本地运维边界；详细帮助：loginctl <命令组> --help）：")
 	fmt.Fprintln(out, "  loginctl config show|get|validate|diff|set|set-secret ...")
 	fmt.Fprintln(out, "  loginctl diag health|ready|database|certificate|mail|all ...")
 	fmt.Fprintln(out, "  loginctl migrate status|apply ...")
