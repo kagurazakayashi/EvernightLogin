@@ -18,8 +18,16 @@
 // 文件访问日志受控轮转、协议端点与管理 JSON API 开关、有界优雅关闭）与 init
 // （本地一次性 root 初始化）。启动方式、配置与限制见
 // docs/deployment/standalone-service.md 与 docs/deployment/first-run.md；
-// OAuth2/OIDC 协议端点与管理 JSON API 默认关闭，需显式配置或
-// --enable-protocol / --enable-admin-api 开启。
+// OAuth2/OIDC 协议端点、管理 JSON API、业务托管 API 与应用客服 API 默认关闭，需显式
+// 配置或 --enable-protocol / --enable-admin-api / --enable-managed-api /
+// --enable-app-support 开启。
+//
+// 当前能力状态（2026-11-21 起草，最终以 docs/guide/ 与验收记录为准）：独立服务可真实
+// 启动并完成 init；14 个页面选项按子能力注册；OAuth/OIDC、管理/托管/应用客服 API 已装配
+// 但默认关闭；设备码、扫码登录、令牌状态查询（introspection）仅部分实现且未完成验收
+// （142–145，143 未交付）；生产邮件默认 mail.enabled=false，测试只连本地 EvernightMail；
+// 真实浏览器/硬件认证器/第三方客户端/非 Windows/非 SQLite 未实测。需求→代码→生产入口
+// 与缺口矩阵见 docs/acceptance/requirements-matrix-login.md（起草版）。
 //
 // internal/secrets 已实现可还原秘密（如 TOTP 种子）的 AES-256-GCM 认证加密、
 // 主密钥环加载、Windows ACL/Unix 权限检查、密钥轮换、可中断重加密与旧密钥
@@ -953,7 +961,7 @@
 // 复用正式密码校验、限流与审计；MFA/Passkey 未实现时要求强认证的操作 fail-closed
 // 为 MFA_REQUIRED，不降级，高权限操作还要求完整认证。成功后按策略向已验证邮箱发送
 // 安全告知（复用 internal/mailer 模板；无邮箱/未配置/投递失败/限频只记录状态与原因，
-// 不回滚业务变更、不把通知当认证），测试使用 internal/testmail 本地捕获器。接入范围：
+// 不回滚业务变更、不把通知当认证），测试使用 internal/mailtest 外部 EvernightMail 进程夹具。接入范围：
 // internal/profile 受控更名已通过 Options.Sensitive 接入；邮箱变更、角色、会话与
 // 邮箱变更申请/确认、角色赋/收角色、组合/移除角色权限、角色启停、组成员加入/移除、
 // 管理强制下线与 authn 设置密码均已通过 Options.Sensitive 接入（批准绑定由服务端

@@ -317,6 +317,8 @@ VALUES(?,?,?,?,'','',0,1,?,?)`, testRoleOne, testAppOne, "managed.admin", "æ‰˜ç®
 		{"perm_00000000000000000000000000000005", "roles.assign"},
 		{"perm_00000000000000000000000000000006", "permissions.read"},
 		{"perm_00000000000000000000000000000007", "users.create"},
+		{"perm_00000000000000000000000000000008", "roles.manage"},
+		{"perm_00000000000000000000000000000009", "permissions.manage"},
 	}
 	for _, extra := range extraPermissions {
 		exec(`INSERT INTO permissions(id,scope_id,permission_key,name,description,limits_text,is_builtin,root_only,enabled,created_at_ms,updated_at_ms)
