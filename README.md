@@ -9,9 +9,10 @@ login 提供可嵌入 Go 程序的用户与权限组件，并提供可独立部�
 - 文档总览、能力状态与术语表：[docs/guide/README.md](docs/guide/README.md)
 - 快速开始（Windows，从空配置到迁移/诊断/装配自检）：[docs/guide/quickstart.md](docs/guide/quickstart.md)
 - 部署形态与当前边界：[docs/guide/deployment-modes.md](docs/guide/deployment-modes.md)
-- 配置参考（37 个字段与默认值）：[docs/guide/configuration.md](docs/guide/configuration.md)
+- 配置参考（51 个字段与默认值）：[docs/guide/configuration.md](docs/guide/configuration.md)
 - 错误码与排障（48 个错误码）：[docs/guide/troubleshooting.md](docs/guide/troubleshooting.md)
 - 本地运维与在线管理 CLI（`loginctl`）：[docs/guide/root-cli.md](docs/guide/root-cli.md)
+- 需求→代码→生产入口矩阵（157 起草，待 142–156 收口更新）：[docs/acceptance/requirements-matrix-login.md](docs/acceptance/requirements-matrix-login.md)
 
 ## 独立服务快速入口
 
@@ -36,26 +37,62 @@ login-server serve --config <login.yaml>   # 启动 HTTP 服务（默认 127.0.0
   参数：`--master-key-file`、`--database`、`--access-log`（轮转参数
   `--access-log-max-bytes`/`--access-log-max-files`）、`--maintenance-state-dir`、
   `--init-maintenance-state`、`--admin-api-prefix`。
-- 页面：14 个页面选项，默认注册 12 个；安全中心页需同时启用 Passkey 与协议端点，OAuth
+- 页面：14 个页面选项，安全中心按子能力组合（核心 MFA/TOTP/恢复代码/会话可用；Passkey/OAuth 可单独关闭并在页面标注未启用），OAuth
   页需启用协议端点（不满足时对应页面 404），全部满足时为 14 个。
 - 管理 JSON API 启用后最多提供 54 条路由（审计/报告/计划/备份/任务/错误码等）；未装配的
   领域服务不注册路由，对应请求返回 404（fail-closed）。
 - 配套工具：`cmd/loginctl`（本地运维 `config`/`diag`/`migrate`/`task`/`session`/`user` 等，
   以及经管理 JSON API 的在线管理命令）、`cmd/login-backup`（离线备份创建/校验/查看/导出）、
-  `tools/loginte2e`（端到端测试客户端）、`tools/testmaild`（本地测试邮件服务器
+  `tools/loginte2e`（端到端测试客户端）
   SMTP/IMAP/POP3，只用于本地捕获）。发布产物按
-  [docs/deployment/packaging.md](docs/deployment/packaging.md) 构建。
+  [docs/deployment/packaging.md](docs/deployment/packaging.md) 构建。业务应用托管管理
+  API（`/api/managed/v1`，默认关闭，`--enable-managed-api` 显式启用）见
+  [docs/deployment/managed-api.md](docs/deployment/managed-api.md)；应用受限客服 API
+  （`/api/app/v1/support`，默认关闭，`--enable-app-support` 且需启用协议端点）见
+  [docs/deployment/app-support-api.md](docs/deployment/app-support-api.md)。
+
+### 开发/测试前置：EvernightMail 子模块
+
+`EvernightMail` 是父仓库下的独立子模块（独立 Go module、离线邮件测试服务器），只用于
+开发/测试和发布前的本地邮件链路验证。父项目生产代码不导入 Mail 的 Go 包；父项目构建、
+单元测试与生产发布包都不依赖 Mail 存在，发布包也不包含 Mail 或测试器。
+
+新克隆若要运行 Mail 相关开发检查，由维护者先初始化子模块（AI 不执行 Git 写操作）：
+
+```powershell
+git submodule update --init --recursive EvernightMail
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mail-preflight.ps1 -Build
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Mail
+```
+
+根目录 `scripts/check.ps1` 的 gofmt 已显式排除 `EvernightMail/`，不会跨子模块边界；Mail
+作为独立模块单独检查。没有子模块时，普通 `scripts/check.ps1` 仍会完成父项目检查；
+`-Mail` 会给出准确前置提示并失败；`-Mail -RequirePinned` 还要求父 gitlink 与干净 Mail
+提交，用于可复现性门禁。
+
+父 `.gitmodules`/gitlink 及 Mail 提交必须由维护者按顺序提交；未提交的
+`EvernightMail/` 目录不能称为已固定的可复现版本。完整提交顺序、隔离副本复现、
+`EVERNIGHTMAIL_BIN` 与故障排查见
+[docs/deployment/mail-submodule.md](docs/deployment/mail-submodule.md)。
+
+## 许可证
+
+本项目采用 **MulanPSL2（木兰宽松许可证，第 2 版）**，标准正文与项目声明见根目录
+[LICENSE](LICENSE)。项目署名严格为 `Copyright (c) KagurazakaYashi(KagurazakaMiyabi)`，
+**不附年份**。第三方组件、字体与依赖的原有版权/许可声明保留在
+[`docs/licenses/THIRD_PARTY_NOTICES.md`](docs/licenses/THIRD_PARTY_NOTICES.md) 与
+[`docs/licenses/`](docs/licenses/)；不以本项目署名规则改写他人声明。
 
 ## 已知限制
 
 以下为当前真实限制（未实测项按未实测写，不当成已支持）：
 
-- **真实邮件外发未配置**：邮件发送器是显式“未配置”实现，投递与安全告知会以明确错误失败，
+- **生产邮件默认关闭**：`mail.enabled` 默认 false；启用后使用真实 SMTP（139/140/141 已接线并通过分段测试），测试只连本地 EvernightMail，真实外网外发未验收；未配置时投递与安全告知会以明确错误失败，
   不访问网络；因此两步验证邮件因素、找回密码与安全告知不可用（TOTP/Passkey 不受影响）。
   Webhook 出站使用真实网络策略，但端点管理入口未开放。邮件相关流程只支持本地捕获测试。
 - **协议端点默认关闭且能力有限**：OAuth 2.0 / OIDC 的授权码/刷新/客户端凭证、Discovery、
-  JWKS、UserInfo、撤销已实现；**设备码、状态查询（introspection）与扫码登录未启用**
-  （配置显式启用状态查询会拒绝启动），第三方客户端互操作未做真实联调。
+  JWKS、UserInfo、撤销已装配（默认关闭）。**设备码、状态查询（introspection）与扫码登录
+  仅部分实现（142–145，143 未交付），默认关闭且未完成验收**；第三方客户端互操作未做真实联调。
 - **管理 JSON API 默认关闭**：需 `--enable-admin-api` 显式开启；写操作仍要求近期再次认证，
   缺少强认证事实时 fail-closed。
 - **数据库只实测 SQLite**：MySQL/PostgreSQL/SQL Server 适配只有编译/静态检查，未做真实
@@ -1062,62 +1099,21 @@ handler, err := login.NewHTTPHandler(login.HTTPOptions{
 - **通知与审计**：通知状态 `pending/sent/failed` 中 **sent 表示已成功交给可靠投递服务（入队成功）**，不代表外部邮件已送达；通知只发送到**已验证邮箱**（未验证地址不作为收件目标），发送失败不回滚邀请/审核主事务。审计动作区分 `invitation.create`/`invitation.cancel`/`invitation.accept`（含目标用户 ID）/`registration.approve`/`registration.reject`，失败审计记录稳定错误码，令牌与邮件正文不入库/日志。
 - **已知限制**：邀请令牌是一次性凭证，当前一次邀请只允许一次接受（多次使用需按接收者分别签发，留后续步骤；服务对 `MaxUses>1` 明确拒绝）；令牌在**授权事务之前**消费，若接受在事务内因邀请者撤权、应用停用、邀请取消/过期等失败，令牌不会恢复，邀请者需重新签发（数据库侧账户/成员/角色/接受记录会整体回滚，不会部分修改；先消费可防止重放与暴力尝试）；过期邀请不会主动落库为 expired（接受时按时间拒绝，清理/状态更新任务未实现）；邀请创建授权由宿主注入 `InviteAuthorizer`（未接线时普通用户 fail-closed）；邀请/审核的 HTTP 路由、启动装配、过期记录清理任务、邀请邮件重发、审核通知重发与多级审批引擎尚未实现。
 
-## 测试用本地邮件服务器（额外步骤 extra01、extra03）
+## 测试邮件夹具（步骤 136 后的当前状态）
 
-`internal/testmail` 是**仅供测试**的本地 SMTP 接收服务器，`tools/testmaild` 是只负责装配与运行它的独立工具。它把收到的邮件保存在内存中供测试断言，**不投递、不中继、不连接任何外部邮件服务**，默认只监听 `127.0.0.1` 的随机端口；两个包都不会被 `cmd/login-server` 装配，生产邮件实现必须另行编写。本包不是产品能力，也不替代步骤 32 已实现的通用邮件投递基础设施与步骤 39 的通知业务逻辑。
+原 `internal/testmail` 内存捕获服务器与 `tools/testmaild` 独立工具已在**步骤 136** 删除（其历史实现与验收记录保留在本地回收备份与既有文档中，不再参与构建）。当前邮件相关测试统一使用父项目测试夹具 `internal/mailtest`：它以独立子进程启动已验收的 EvernightMail 子模块，使用临时配置/数据目录、随机回环端口、合成账号与临时测试 CA，通过 HTTP/POP3 和已提交 `.eml+.json` 成对文件断言；不导入 Mail internal 包，也不会被生产入口装配。
 
-支持的最小会话：EHLO/HELO、MAIL FROM、RCPT TO、DATA（含点填充还原）、RSET、NOOP、QUIT，以及可选的 AUTH PLAIN/LOGIN（显式测试凭据）与 STARTTLS（测试自签证书，默认关闭）。**安全提示**：默认不启用 AUTH；`RequireAuth` 在未加密连接上会让测试凭据以明文传输，建议只与 STARTTLS 搭配，且仅用于回环测试，不要复用任何真实密码。
-
-常用限制：`ReadTimeout`（单次读取，默认 30s）、`SessionTimeout`（单连接总时长，默认 5 分钟）、`MaxMessageBytes`（默认 256 KiB，超出返回 552）、`MaxRecipients`（默认 50，超出返回 452）、`MaxConnections`（默认 32，超出直接 421）、`MaxMessages`（默认 500，满时返回 452，`Clear`/`Take` 释放容量）。格式错误返回对应 SMTP 错误码且服务不崩溃；读取超时或会话超时返回 421 并关闭连接。内存占用上限是 `MaxMessageBytes × MaxMessages`（默认约 128 MiB），`MaxConnections` 也会叠加并发缓冲；高负载或长时间测试请调低这些参数。
-
-启动工具（默认回环随机端口，打印实际地址；`-auth` 可重复）：
-
-```bat
-go run .\tools\testmaild
-go run .\tools\testmaild -addr 127.0.0.1:0 -auth tester:test-pass -require-auth
-go run .\tools\testmaild -addr 127.0.0.1:0 -starttls
-go run .\tools\testmaild -config .\tools\testmaild\config.example.yaml
-go run .\tools\testmaild -config .\tools\testmaild\config.example.yaml -addr 127.0.0.1:0 -output debug
-```
-
-常用参数还有 `-config`（YAML 配置文件）、`-output`（`summary`/`detail`/`debug`）、`-body-limit`、`-trace-smtp`、`-max-message-bytes`、`-max-recipients`、`-max-connections`、`-max-messages`、`-read-timeout`、`-session-timeout`、`-print-body`；只有显式加 `-allow-non-loopback` 才允许监听非回环地址（`-addr :0` 这类空主机名不会被当作回环，需显式写 `127.0.0.1:0` 或加该开关）。工具在收到消息时打印信封、主题、大小与认证用户摘要；命令行 `-auth` 的密码不回显，配置文件里的模拟测试密码会在启动 banner 回显并标注「本地测试凭据、仅回环使用」；按 Ctrl+C 或 SIGTERM 优雅关闭并释放端口。
-
-### 配置文件、模拟账户与详细输出（额外步骤 extra03）
-
-`tools/testmaild/config.example.yaml` 是带逐字段中文注释的示例配置，用 `-config <path>` 加载；优先级为**命令行参数 > 配置文件 > 内置默认值**（未显式给出的命令行参数不会覆盖配置文件）。配置严格解析：未知字段、重复键、类型或时长格式错误会给出带文件路径与字段名的中文提示。字段分组：`listen`（`addr`/`hostname`/`allow_non_loopback`）、`limits`（消息字节、收件人、连接、保留数、`read_timeout`/`session_timeout`）、`starttls`（`enabled`/`cert_file`/`key_file`）、`auth`（`require_auth` 与 `accounts[].username`/`password`）、`output`（`level`/`print_body`/`max_body_bytes`/`trace_smtp`）。命令行 `-auth` 一旦出现会整体替换 `auth.accounts`；命令行证书对优先于配置文件；`-tls-cert`/`-tls-key` 必须同时给出。
-
-启动 banner 会打印模拟账户清单（明确标注**测试专用、非真实凭据**；告警在密码清单之前输出）、客户端连接参数（SMTP `host:port`、EHLO 主机名、是否需要 STARTTLS/自签证书信任、可用用户名）、`swaks` 与 `openssl s_client` 示例，以及 `smtp.host / smtp.port / smtp.username / smtp.password / starttls` 的产品配置片段样例（无模拟账户时省略 username/password，但仍给出 starttls 字段）。当前仓库根配置尚未提供 SMTP 节，宿主可用 `internal/mailer.SMTPOptions` 指向上面的地址（明文连接需 `AllowPlaintextLocal=true` 且目标为回环地址）。**风险提示**：配置文件中的测试密码会被回显以便本地连接测试，命令行 `-auth` 密码不回显；两者都只是模拟测试凭据，不要复用真实密码，也不要把服务暴露到非回环网络。如不想让测试密码出现在启动输出，可改用命令行 `-auth user:password`（不落盘、不回显），或把含密码的配置文件放在不纳入版本控制的位置。
-
-输出级别（`output.level` / `-output`）：`summary` 为默认值，每条消息一行摘要（与旧版一致）；`detail` 额外打印完整信封（MAIL FROM/RCPT TO）、全部头部原始值（保留折行）、解析出的 Subject/Date/Message-ID、TLS 与 AUTH 用户、字节数（总大小/正文/头部），`print_body` 打开时还打印正文；`debug` 在 detail 基础上默认开启会话级 SMTP 命令轨迹（连接、客户端命令、服务器应答、STARTTLS、认证成功、关闭）。正文输出受 `max_body_bytes`（默认 4096，`0` 表示不限制）约束，超出时按 UTF-8 字符边界截断并明确提示；正文、头部与轨迹中的终端控制字符（如 ESC）会被转义后再输出。`internal/testmail` 新增可选的 `Options.OnSessionEvent` 调试轨迹钩子：`AUTH` 命令参数只保留机制名，AUTH 客户端响应内容与邮件正文不会进入轨迹；未配置轨迹时不产生输出（会话路径仅保留少量判断）。
-
-更完整的使用说明（字段表、连接参数、产品配置示例与安全风险）见 `tools/testmaild/README.md`。
-
-在 Go 测试中直接复用（后续邮件发送模块的测试把 SMTP 地址指向 `srv.Addr()`，用 `Wait`/`Messages` 断言）：
+典型用法：
 
 ```go
-srv, err := testmail.New(testmail.Options{
-    Auth: &testmail.AuthOptions{Users: map[string]string{"tester": "test-pass"}},
-})
-if err != nil { return err }
-if err := srv.Start(); err != nil { return err }
-defer srv.Close()
-
-// 发送代码会把邮件投递到 srv.Addr()；随后等待并断言内容。
-msgs, err := srv.Wait(ctx, testmail.Query{To: "user@example.test"})
-// 信封地址在 msgs[0].EnvelopeFrom/EnvelopeTo；原始字节在 Data，正文在 Body()；
-// 解析后的头部通过 Headers 与 Header()/HeaderValues() 读取（不提供独立的
-// From/To 头部字段，避免与信封地址混淆），Subject/Date 为常用字段的解析结果。
-srv.Clear() // 或 Take 按条件取出
+instance := mailtest.Start(t, mailtest.Options{Required: true})
+defer instance.Close() // 实际由 t.Cleanup 兜底
+// 将发送器指向 instance.SMTPAddr / instance.Addr().String()（明文回环测试需允许明文）
+messages, err := instance.Wait(ctx, mailtest.Query{To: "user@example.test"})
+// Message.Data 为原始字节；EnvelopeFrom/EnvelopeTo、Headers/Header()/Body() 可断言。
 ```
 
-需要 STARTTLS 时用 `testmail.GenerateTestCertificate()` 生成自签证书注入 `Options.TLS`，测试客户端需显式信任该证书或跳过校验；`internal/testmail` 包本身不读配置文件、不读环境变量或凭证库，AUTH 测试凭据由调用方直接写在 `Options.Auth` 里（`tools/testmaild` 工具层的模拟账户才来自配置文件或命令行）。该包的"无外发"与"未被生产入口导入"有源码级测试守护（`internal/testmail/isolation_test.go`）。
-
-运行本步测试（Windows amd64 实测）：
-
-```bat
-go test -count=1 -p 1 .\internal\testmail\
-go test -count=1 -p 1 .\tools\testmaild\
-```
+`internal/mailtest` 自测覆盖独立进程、临时配置、STARTTLS/测试 CA、POP3、超时/端口冲突/启动失败/取消清理与生产零导入守护；运行 `go test -count=1 -p 1 ./internal/mailtest`。早期步骤文档中出现的 `internal/testmail`/`tools/testmaild` 是当时的实现名称，作为历史记录保留，不代表当前可用接口。
 
 ## 本地检查（Windows）
 
@@ -1170,7 +1166,7 @@ go run .\cmd\login-server --help
 | internal/session/ | 服务端会话签发/校验/续期/撤销、普通与受限会话、空闲/绝对到期、登录轮换、Cookie 与 CSRF 绑定（内部包） | 是 |
 | internal/recovery/ | 恢复代码生成/按组作废/原子消费、短时受限恢复会话与强制重新绑定（内部包） | 是 |
 | internal/manualrecovery/ | 人工核验恢复申请、独立审批与一次性受控执行（默认关闭，内部包） | 是 |
-| internal/testmail/ | 仅供测试的本地 SMTP 接收服务器（内存保存、查询/取出/清空、限制、可选 AUTH/STARTTLS）；不得装配进生产路径 | 是 |
+| internal/mailtest/ | 仅供测试的 EvernightMail 外部进程夹具（临时配置/端口/证书、HTTP 与 POP3 查询、失败清理）；生产代码零导入 | 是 |
 | internal/tlscert/ | 服务器 TLS 证书加载/链校验、SNI 选择、安全重载与到期状态；可选客户端证书信任与身份映射（内部包） | 是 |
 | migrations/ | 内嵌的版本化数据库迁移 SQL（隔离核心表、一次性凭证表、审计事件表、后台任务表、定时计划/尝试历史表、权限委派资格表、预设初始化版本表、root 初始化状态表、密码凭证/已验证邮箱表与会话表） | 是 |
 | examples/ | 可运行的最小接入示例（配置加载示例、定时计划示例） | 是 |
@@ -1179,7 +1175,7 @@ go run .\cmd\login-server --help
 | docs/acceptance/ | 基础设施阶段（步骤 01～17）验收记录与下一阶段前置条件 | 可以 |
 | database/login.db | 已创建的空业务 SQLite 数据库 | 否，运行数据应本地保存 |
 | database/0001_design_baseline.sql | 建库结构，需在开发阶段审查 | 可以 |
-| tools/ | 可选的 Python 建库/只读检查工具，以及只用于测试的本地邮件服务器命令行入口 `tools/testmaild` | 可以 |
+| tools/ | 可选的 Python 建库/只读检查工具与端到端测试客户端（`tools/loginte2e`） | 可以 |
 | .gitignore | AI 文件、数据库与秘密排除规则 | 可以 |
 | SHA256SUMS.txt | 启动包文件完整性清单 | 可留作交付记录 |
 

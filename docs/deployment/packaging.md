@@ -56,7 +56,15 @@ evernight-login-<version>-<os>-<arch>/
 - 源码与开发/测试工具：`tools/`、`examples/`、`scripts/` 等不随包；包内
   `docs/deployment/e2e-smoke.md` 引用的 `scripts/e2e-login-server.ps1` 与
   `tools/loginte2e` 只存在于源码树，发布包内仅有说明文档，不能直接执行；
+- 子模块与测试夹具：`EvernightMail/`（独立测试邮件服务器子模块）、
+  `internal/mailtest` 等本地邮件测试夹具不进入生产包；原 `tools/testmaild` 已在步骤 136 删除。
+  生产发布不需要 Mail；Mail 仅在开发/测试和发布前本地邮件链路验证时使用；
 - 仓库内的其它源码目录与构建缓存。
+
+`EvernightMail` 子模块的前置初始化、提交顺序、脚本检查与隔离副本复现见
+[docs/deployment/mail-submodule.md](mail-submodule.md)。发布脚本
+`scripts/build-release.ps1` 保持只构建三个 Login 命令的显式清单，不会因仓库中存在
+Mail 子模块而把 Mail/testkit 打进发布包。
 
 脚本使用**显式复制清单**组装包内容，因此仓库里新增的文件不会被自动打进包；需要新增
 运行时资源时应显式修改 `scripts/build-release.ps1` 的复制清单。
@@ -167,7 +175,7 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 | 命令 | 退出码 | 结果 |
 |---|---|---|
 | `bin\login-server.exe --version` | 0 | `login-server 0.1.0-dev (commit 597b503, built 2026-11-20T17:37:43Z, go1.27.1)` |
-| `bin\login-server.exe --help` | 0 | 打印帮助（`serve`、`init`、`completion`、`help` 子命令；说明设备码/扫码/令牌状态查询未启用、协议与管理 API 默认关闭） |
+| `bin\login-server.exe --help` | 0 | 打印帮助（`serve`、`init`、`completion`、`help` 子命令；历史帮助文本仍可能概括设备码/扫码/令牌状态查询未启用，实际状态以本包文档与需求矩阵为准，协议/管理/托管/应用客服 API 均默认关闭） |
 | `bin\login-server.exe`（无参数） | 1 | stderr：`错误：请使用 serve 或 init 子命令；--help 查看完整帮助`（诚实失败，不伪造启动） |
 | `bin\login-backup.exe version` | 0 | `login-backup 0.1.0-dev (commit 597b503, built 2026-11-20T17:37:43Z, go1.27.1)` |
 | `bin\loginctl.exe --version` | 0 | `loginctl 0.1.0-dev (commit 597b503, built 2026-11-20T17:37:43Z, go1.27.1)` |
@@ -197,7 +205,7 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 
 - 独立服务装配为 MVP：包内 `login-server` 可 `init`/`serve`；OAuth/OIDC 协议端点与管理
   JSON API 已装配但默认关闭（开关见 `standalone-service.md` 第 3.8 节）；设备码/扫码/
-  令牌状态查询未启用；14 个页面选项（默认注册 12、条件 2）；root Passkey 强认证绑定已接线
+  令牌状态查询部分实现且未完成验收（142–145）；14 个页面选项（默认注册 12、条件 2）；root Passkey 强认证绑定已接线
   但未做真机互操作。不要按“已上线完整 OAuth2/OIDC 服务”宣传本发布包。
 - 本轮已从干净 HEAD `597b503` 重建并完成 `verify-release.ps1` 159 项校验；版本号仍为开发态
   `0.1.0-dev`，正式发布版本号需维护者决定后重建。包内文档与 `VERSION.txt`/`README.txt` 由

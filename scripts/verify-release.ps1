@@ -30,6 +30,15 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# PowerShell 5.1 在进程环境同时存在大小写重复的代理变量（NO_PROXY/no_proxy 等）
+# 时，Start-Process/环境块会抛 "Item has already been added"。发布校验不能因此
+# 失败；在脚本边界清掉这些重复键（不改变网络策略，仅避免环境字典异常）。
+foreach ($name in @('http_proxy','https_proxy','all_proxy','no_proxy',
+        'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY',
+        'Http_Proxy','Https_Proxy','All_Proxy','No_Proxy')) {
+    try { [Environment]::SetEnvironmentVariable($name, $null, 'Process') } catch { }
+}
+
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $failures = New-Object System.Collections.Generic.List[string]
 $checks = 0
@@ -88,8 +97,21 @@ foreach ($entry in $topEntries) {
 $matrixPath = Join-Path $releaseDir "build-matrix.txt"
 Add-Check "build-matrix.txt exists" (Test-Path -LiteralPath $matrixPath -PathType Leaf)
 
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("login-verify-" + [Guid]::NewGuid().ToString("N"))
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("lv-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+
+# Expand-Archive 在 Windows PowerShell 5.1 下对目标目录/长路径较脆弱；统一用
+# .NET ZipFile 解压，并显式创建目标目录，兼容空格/中文路径与嵌套目录。
+function Expand-ReleaseArchive {
+    param([Parameter(Mandatory = $true)][string]$ArchivePath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath)
+    if (Test-Path -LiteralPath $DestinationPath) {
+        Remove-Item -LiteralPath $DestinationPath -Recurse -Force -ErrorAction Stop
+    }
+    New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
+}
 
 # Forbidden path/content policy of a release package.
 $forbiddenPathPatterns = @(
@@ -115,6 +137,8 @@ $requiredRelativePaths = @(
     "SHA256SUMS.txt",
     "DEPENDENCIES.txt",
     "BUILDINFO.txt",
+    "LICENSE",
+    "docs/licenses/THIRD_PARTY_NOTICES.md",
     "config/login.example.yaml",
     "docs/deployment/README.md",
     "docs/deployment/standalone-service.md",
@@ -136,7 +160,7 @@ try {
     foreach ($archive in $archives) {
         Write-Host ("-- " + $archive.Name)
         $extractDir = Join-Path $tempRoot ($archive.BaseName)
-        Expand-Archive -LiteralPath $archive.FullName -DestinationPath $extractDir -Force
+        Expand-ReleaseArchive -ArchivePath $archive.FullName -DestinationPath $extractDir
         $packageDirs = Get-ChildItem -LiteralPath $extractDir -Directory
         if (@($packageDirs).Count -ne 1) {
             Add-Check ($archive.Name + " contains exactly one top-level directory") $false
@@ -162,6 +186,17 @@ try {
         foreach ($required in $requiredRelativePaths) {
             $exists = Test-Path -LiteralPath (Join-Path $packageRoot $required) -PathType Leaf
             Add-Check ($archive.Name + " contains " + $required) $exists
+        }
+        $licensePath = Join-Path $packageRoot "LICENSE"
+        if (Test-Path -LiteralPath $licensePath -PathType Leaf) {
+            $licenseText = Get-Content -LiteralPath $licensePath -Raw
+            Add-Check ($archive.Name + " LICENSE identifies Mulan PSL v2") `
+                ($licenseText -match "Mulan PSL v2" -or $licenseText -match "Mulan Permissive Software License")
+            Add-Check ($archive.Name + " LICENSE has required attribution without year") `
+                ($licenseText -match "Copyright \(c\) KagurazakaYashi\(KagurazakaMiyabi\)" -and
+                 -not ($licenseText -match "Copyright \(c\) [0-9]{4} KagurazakaYashi\(KagurazakaMiyabi\)"))
+        } else {
+            Add-Check ($archive.Name + " contains LICENSE") $false
         }
         foreach ($requiredBin in @("bin/login-server", "bin/loginctl", "bin/login-backup")) {
             $found = $false
@@ -216,7 +251,7 @@ try {
     } else {
         $winArchive = $archives | Where-Object { $_.Name -match "windows-amd64" } | Select-Object -First 1
         $winDir = Join-Path $tempRoot "win-smoke"
-        Expand-Archive -LiteralPath $winArchive.FullName -DestinationPath $winDir -Force
+        Expand-ReleaseArchive -ArchivePath $winArchive.FullName -DestinationPath $winDir
         $packageRoot = (Get-ChildItem -LiteralPath $winDir -Directory)[0].FullName
         $loginServer = Join-Path $packageRoot "bin\login-server.exe"
         $loginBackup = Join-Path $packageRoot "bin\login-backup.exe"

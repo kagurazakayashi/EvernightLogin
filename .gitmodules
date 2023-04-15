@@ -1,0 +1,4 @@
+[submodule "EvernightMail"]
+	path = EvernightMail
+	url = git@github.com:kagurazakayashi/EvernightMail.git
+	branch = main

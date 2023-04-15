@@ -8,6 +8,11 @@
 # no remote release, no upload. The package excludes AI-only files, runtime
 # databases, logs, test keys and secrets by construction (explicit copy list).
 #
+# Scope: only cmd/login-server, cmd/loginctl and cmd/login-backup are built.
+# The sibling EvernightMail submodule, test fixtures (internal/mailtest) and
+# tools/testmaild are development/test-only and are never copied into a
+# production release package. See docs/deployment/mail-submodule.md.
+#
 # Windows PowerShell 5.1 and PowerShell 7 compatible. All messages are ASCII so
 # the script runs correctly on a default Windows console code page.
 #
@@ -249,6 +254,13 @@ foreach ($target in $Targets) {
     # the repository). config/ and deploy/ remain the operator-facing copies.
     Copy-Item -Path (Join-Path $repo "docs\deployment\samples\*") -Destination (Join-Path $packageDir "docs\deployment\samples") -Force
     Copy-Item -Path (Join-Path $repo "docs\licenses\*") -Destination (Join-Path $packageDir "docs\licenses") -Recurse -Force
+    # Root project license must ship at the package top level (MulanPSL2 + attribution).
+    foreach ($rootLicense in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {
+        $rootLicensePath = Join-Path $repo $rootLicense
+        if (Test-Path -LiteralPath $rootLicensePath -PathType Leaf) {
+            Copy-Item -LiteralPath $rootLicensePath -Destination (Join-Path $packageDir $rootLicense) -Force
+        }
+    }
 
     # Dependency license texts collected from the module cache (deps subdirectory).
     if (Test-Path -LiteralPath $licenseRoot) {

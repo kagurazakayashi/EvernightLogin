@@ -269,6 +269,21 @@ var defaultSnapshot = map[string]string{
 	"app_qr_login.claim_interval_seconds":     "1",
 	"secrets.master_key":                      "未配置",
 	"secrets.tls_pfx_password":                "未配置",
+	"mail.enabled":                            "false",
+	"mail.smtp.addr":                          "空",
+	"mail.smtp.host":                          "空",
+	"mail.smtp.tls_mode":                      "starttls",
+	"mail.smtp.trusted_roots":                 "[]",
+	"mail.smtp.username":                      "空",
+	"mail.smtp.password":                      "未配置",
+	"mail.smtp.timeout_seconds":               "10",
+	"mail.smtp.allow_plaintext_local":         "false",
+	"mail.from.address":                       "空",
+	"mail.from.name":                          "空",
+	"mail.app_name":                           "EvernightLogin",
+	"mail.delivery.max_attempts":              "3",
+	"mail.delivery.timeout_seconds":           "120",
+	"protocol.device_code_enabled":            "false",
 }
 
 func (v *verifier) checkConfigReference() {
@@ -301,8 +316,8 @@ func (v *verifier) checkConfigReference() {
 		}
 		fields = append(fields, configField{Field: match[1], Env: env, Class: class, Secret: match[4] != ""})
 	}
-	if len(fields) != 37 {
-		v.fail("配置字段数为 %d，文档约定为 37", len(fields))
+	if len(fields) != 52 {
+		v.fail("配置字段数为 %d，文档约定为 52", len(fields))
 	}
 	if len(defaultSnapshot) != len(fields) {
 		v.fail("默认值快照条目数 %d 与字段数 %d 不一致", len(defaultSnapshot), len(fields))
