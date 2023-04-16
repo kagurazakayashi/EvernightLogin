@@ -523,8 +523,23 @@ func TestEnvFieldMetadataStable(t *testing.T) {
 		{Field: "app_qr_login.allowed_client_ids", Env: "LOGIN_APP_QR_LOGIN_ALLOWED_CLIENT_IDS", Class: ReloadRestartRequired},
 		{Field: "app_qr_login.request_ttl_seconds", Env: "LOGIN_APP_QR_LOGIN_REQUEST_TTL_SECONDS", Class: ReloadRestartRequired},
 		{Field: "app_qr_login.claim_interval_seconds", Env: "LOGIN_APP_QR_LOGIN_CLAIM_INTERVAL_SECONDS", Class: ReloadRestartRequired},
+		{Field: "protocol.device_code_enabled", Env: "LOGIN_PROTOCOL_DEVICE_CODE_ENABLED", Class: ReloadRestartRequired},
 		{Field: "secrets.master_key", Env: "LOGIN_SECRETS_MASTER_KEY", Class: ReloadRestartRequired, Secret: true},
 		{Field: "secrets.tls_pfx_password", Env: "LOGIN_SECRETS_TLS_PFX_PASSWORD", Class: ReloadRestartRequired, Secret: true},
+		{Field: "mail.enabled", Env: "LOGIN_MAIL_ENABLED", Class: ReloadRestartRequired},
+		{Field: "mail.smtp.addr", Env: "LOGIN_MAIL_SMTP_ADDR", Class: ReloadRestartRequired},
+		{Field: "mail.smtp.host", Env: "LOGIN_MAIL_SMTP_HOST", Class: ReloadRestartRequired},
+		{Field: "mail.smtp.tls_mode", Env: "LOGIN_MAIL_SMTP_TLS_MODE", Class: ReloadRestartRequired},
+		{Field: "mail.smtp.trusted_roots", Env: "LOGIN_MAIL_SMTP_TRUSTED_ROOTS", Class: ReloadRestartRequired},
+		{Field: "mail.smtp.username", Env: "LOGIN_MAIL_SMTP_USERNAME", Class: ReloadRestartRequired},
+		{Field: "mail.smtp.password", Env: "LOGIN_MAIL_SMTP_PASSWORD", Class: ReloadRestartRequired, Secret: true},
+		{Field: "mail.smtp.timeout_seconds", Env: "LOGIN_MAIL_SMTP_TIMEOUT_SECONDS", Class: ReloadRestartRequired},
+		{Field: "mail.smtp.allow_plaintext_local", Env: "LOGIN_MAIL_SMTP_ALLOW_PLAINTEXT_LOCAL", Class: ReloadRestartRequired},
+		{Field: "mail.from.address", Env: "LOGIN_MAIL_FROM_ADDRESS", Class: ReloadRestartRequired},
+		{Field: "mail.from.name", Env: "LOGIN_MAIL_FROM_NAME", Class: ReloadRestartRequired},
+		{Field: "mail.app_name", Env: "LOGIN_MAIL_APP_NAME", Class: ReloadRestartRequired},
+		{Field: "mail.delivery.max_attempts", Env: "LOGIN_MAIL_DELIVERY_MAX_ATTEMPTS", Class: ReloadRestartRequired},
+		{Field: "mail.delivery.timeout_seconds", Env: "LOGIN_MAIL_DELIVERY_TIMEOUT_SECONDS", Class: ReloadRestartRequired},
 	}
 	got := Fields()
 	if !reflect.DeepEqual(got, want) {
