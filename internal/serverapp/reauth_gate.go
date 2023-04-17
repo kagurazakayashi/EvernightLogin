@@ -40,7 +40,10 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	reauthsqlite "github.com/kagurazakayashi/EvernightLogin/internal/reauth/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
+	totpsqlite "github.com/kagurazakayashi/EvernightLogin/internal/totp/sqlite"
 )
 
 // hostComponentID 是宿主系统组件标识（写入敏感操作审计主体）。
@@ -126,10 +129,10 @@ func BuildSecurityGate(deps Deps, bootstrapStore *bootstrapsqlite.Store,
 		management:   make(map[string]managementFact),
 		policyWrites: make(map[string]*policyWrite),
 	}
-	strengths := []policy.Strength{policy.StrengthNone, policy.StrengthPassword}
-	if strongAuthAvailable {
-		strengths = append(strengths, policy.StrengthStrong)
-	}
+	// TOTP 始终由安全域装配；它可作为再次认证的第二强因素。strong 是否“可用”
+	// 仍需按账户实际因素在验证时 fail-closed（未绑定 TOTP/Passkey 的账户不能通过）。
+	strengths := []policy.Strength{policy.StrengthNone, policy.StrengthPassword, policy.StrengthStrong}
+	_ = strongAuthAvailable
 	policyService, err := policy.New(policy.Options{
 		Store: policyStore, Audit: deps.Audit,
 		Catalog:            policy.DefaultCatalog(),
@@ -143,13 +146,33 @@ func BuildSecurityGate(deps Deps, bootstrapStore *bootstrapsqlite.Store,
 		return nil, fmt.Errorf("构造敏感策略服务失败: %w", err)
 	}
 	gate.Policy = policyService
+	mailURLs, urlErr := buildMailURLs(deps.Config)
+	if deps.Config.Mail.Enabled && urlErr != nil {
+		return nil, fmt.Errorf("CONFIG_INVALID: %w", urlErr)
+	}
+	sealer, sealerErr := secrets.NewSealer(deps.Keyring, deps.Logger)
+	if sealerErr != nil {
+		return nil, fmt.Errorf("构造再次认证强因素加密器失败: %w", sealerErr)
+	}
+	totpStore, totpErr := totpsqlite.New(deps.Store)
+	if totpErr != nil {
+		return nil, fmt.Errorf("构造再次认证 TOTP 存储失败: %w", totpErr)
+	}
+	strongTOTP, totpErr := totp.New(totp.Options{
+		Store: totpStore, Audit: deps.Audit, Sealer: sealer,
+		IssuerName: "EvernightLogin", Now: now, Logger: deps.Logger})
+	if totpErr != nil {
+		return nil, fmt.Errorf("构造再次认证 TOTP 服务失败: %w", totpErr)
+	}
 	reauthService, err := reauth.New(reauth.Options{
 		Store: reauthStore, Audit: deps.Audit, Policy: policyService,
-		Passwords:   authn.ReauthPasswordVerifier{Service: authnService},
-		Mailer:      disabledMailSender(),
-		FromAddress: notificationFromAddress,
-		AppName:     "EvernightLogin",
-		SupportURL:  "",
+		Passwords:     authn.ReauthPasswordVerifier{Service: authnService},
+		StrongFactors: &reauthStrongFactorVerifier{totp: strongTOTP, now: now},
+		Mailer:        deps.Mail.SenderOrDisabled(),
+		Templates:     mustMailTemplates(),
+		FromAddress:   deps.Mail.FromAddress().Spec,
+		AppName:       deps.Mail.AppDisplayName(),
+		SupportURL:    mailURLs.Support,
 		// 强认证是否可用由真实 Passkey 装配决定；未启用时声明为不可满足，
 		// 需要强认证的敏感操作 fail-closed，而不是退回密码。
 		AvailableStrengths: strengths,

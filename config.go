@@ -3,6 +3,7 @@ package login
 import (
 	"fmt"
 	"net"
+	mailpkg "net/mail"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -120,6 +121,12 @@ type Config struct {
 	// Protocol 是 OAuth 2.0 / OpenID Connect 协议端点配置。默认关闭；启用时必须
 	// 配置与路径前缀一致的固定 Issuer，非法形状拒绝启动。
 	Protocol ProtocolConfig
+	// Mail 是生产邮件发送配置（步骤 139）。默认关闭；关闭时不读取密码/证书、
+	// 不建立网络连接，邮件能力以明确错误拒绝。启用时配置不全拒绝启动。
+	Mail MailConfig
+	// ManualRecovery 是人工核验恢复制度配置（步骤 152）。默认关闭；启用时要求
+	// 独立审批、核验依据、可信交付渠道与有界等待期/批准/申请期限。修改后需重启。
+	ManualRecovery ManualRecoveryConfig
 }
 
 // ServerConfig 是独立服务与嵌入模式共用的监听配置。
@@ -370,6 +377,52 @@ func appQRLoginConfigProblem(c AppQRLoginConfig) string {
 	return ""
 }
 
+// MailConfig 是生产邮件发送配置（步骤 139）。默认关闭；关闭时不读取密码/
+// 证书、不建立网络连接，邮件能力以明确错误拒绝；启用时配置不全拒绝启动。
+type MailConfig struct {
+	Enabled  bool
+	SMTP     MailSMTPConfig
+	From     MailFromConfig
+	AppName  string
+	Delivery MailDeliveryConfig
+}
+
+// MailSMTPConfig 是 SMTP 传输配置。
+type MailSMTPConfig struct {
+	Addr                string
+	Host                string
+	TLSMode             string
+	TrustedRoots        []string
+	Username            string
+	Password            SecretSource
+	TimeoutSeconds      int
+	AllowPlaintextLocal bool
+}
+
+// MailFromConfig 是发件人配置。
+type MailFromConfig struct {
+	Address string
+	Name    string
+}
+
+// MailDeliveryConfig 是可靠投递参数（队列/重试由既有 mailer 任务执行器负责）。
+type MailDeliveryConfig struct {
+	MaxAttempts    int
+	TimeoutSeconds int
+}
+
+// ManualRecoveryConfig 是人工核验恢复制度（步骤 152）。默认关闭；启用后只允许
+// 普通用户，root/高权限目标由服务与执行器双重拒绝；制度参数修改需要重启，避免
+// 运行中临时放宽恢复面。时间字段使用秒，0 表示使用默认值。
+type ManualRecoveryConfig struct {
+	Enabled            bool
+	VerificationBases  []string
+	DeliveryChannels   []string
+	WaitPeriodSeconds  int
+	ApprovalTTLSeconds int
+	RequestTTLSeconds  int
+}
+
 // ProtocolConfig 是 OAuth 2.0 / OpenID Connect 协议端点的宿主配置（步骤 56/57/58
 // 的传输层由 internal/protocolapi 提供，独立服务负责发行方与开关接线）。
 //
@@ -377,6 +430,14 @@ func appQRLoginConfigProblem(c AppQRLoginConfig) string {
 // 给出，绝不能从请求 Host/转发头推导；它的路径部分必须与 server.path_prefix 完全
 // 一致，否则 Discovery 会声明未挂载的端点。启用时缺少 Issuer 或形状非法一律拒绝
 // 启动（fail-closed），关闭时协议端点不挂载（请求得到 404）。
+// ResourceServiceConfig 是受信资源服务登记项。认证材料复用 OAuth 客户端登记
+// 的 secret/证书；audience 必须已在该客户端的 Audiences 中登记。
+type ResourceServiceConfig struct {
+	ServiceID string
+	ClientID  string
+	Audience  string
+}
+
 type ProtocolConfig struct {
 	// Enabled 是协议端点总开关，默认 false（默认拒绝）。独立服务还可以用
 	// --enable-protocol 显式打开（命令行覆盖配置）。
@@ -388,6 +449,12 @@ type ProtocolConfig struct {
 	// EnableIntrospection 显式启用 RFC 7662 令牌状态查询端点。只有宿主装配了真实
 	// 资源服务授权器时才允许打开，否则 Discovery 会夸大能力。
 	EnableIntrospection bool
+	// DeviceCodeEnabled 显式启用 RFC 8628 设备码端点与 Discovery 的 device_code
+	// 能力。要求 protocol.enabled 且 server.public_base_url 可派生设备确认页。
+	DeviceCodeEnabled bool
+	// ResourceServices 是受信资源服务登记：每个条目把 confidential OAuth 客户端
+	// 认证材料映射为一个可信资源身份（service_id/client_id/audience）。
+	ResourceServices []ResourceServiceConfig
 	// LoginPath 是未登录访问授权端点时跳转的站内登录页路径（例如 /login）。为空
 	// 时协议端点返回受控 JSON 错误而不是跳转。
 	LoginPath string
@@ -396,6 +463,20 @@ type ProtocolConfig struct {
 // protocolConfigProblem 校验协议端点配置；返回空字符串表示合法。
 func protocolConfigProblem(c Config) string {
 	protocol := c.Protocol
+	if len(protocol.ResourceServices) > 0 && !protocol.Enabled {
+		return "protocol.resource_services 需要先启用 protocol.enabled"
+	}
+	if protocol.DeviceCodeEnabled {
+		if !protocol.Enabled {
+			return "protocol.device_code_enabled 需要先启用 protocol.enabled"
+		}
+		if strings.TrimSpace(c.Server.PublicBaseURL) == "" {
+			return "protocol.device_code_enabled 需要配置 server.public_base_url 以生成设备确认页地址"
+		}
+	}
+	if protocol.EnableIntrospection && len(protocol.ResourceServices) == 0 {
+		return "protocol.enable_introspection 需要至少一个 protocol.resource_services 登记"
+	}
 	issuer := strings.TrimSpace(protocol.Issuer)
 	if !protocol.Enabled {
 		// 关闭时允许预置 Issuer 供后续开启，但预置值同样必须是合法形状，避免
@@ -455,6 +536,38 @@ func protocolConfigProblem(c Config) string {
 		if c.Server.PathPrefix != "" && !strings.HasPrefix(loginPath, normalizedPrefix+"/") {
 			return "protocol.login_path 必须位于 server.path_prefix 之下"
 		}
+	}
+	if problem := resourceServicesProblem(protocol.ResourceServices); problem != "" {
+		return problem
+	}
+	return ""
+}
+
+// resourceServicesProblem 校验资源服务登记的配置形状（不读取数据库）。
+func resourceServicesProblem(services []ResourceServiceConfig) string {
+	seenService := make(map[string]struct{}, len(services))
+	seenAudience := make(map[string]struct{}, len(services))
+	for _, service := range services {
+		if strings.TrimSpace(service.ServiceID) == "" || len(service.ServiceID) > 128 {
+			return "protocol.resource_services.service_id 必填且不超过 128 字节"
+		}
+		if _, exists := seenService[service.ServiceID]; exists {
+			return "protocol.resource_services.service_id 不能重复"
+		}
+		seenService[service.ServiceID] = struct{}{}
+		if strings.TrimSpace(service.ClientID) == "" || len(service.ClientID) > 128 {
+			return "protocol.resource_services.client_id 必填且不超过 128 字节"
+		}
+		audience := strings.TrimSpace(service.Audience)
+		parsed, err := url.Parse(audience)
+		if err != nil || !parsed.IsAbs() || parsed.Host == "" || parsed.Fragment != "" {
+			return "protocol.resource_services.audience 必须是 absolute URI（无片段）"
+		}
+		key := service.ClientID + "\x00" + audience
+		if _, exists := seenAudience[key]; exists {
+			return "protocol.resource_services 同一客户端的 audience 不能重复"
+		}
+		seenAudience[key] = struct{}{}
 	}
 	return ""
 }
@@ -583,8 +696,23 @@ const (
 	envAppQRLoginClients     = EnvVarPrefix + "APP_QR_LOGIN_ALLOWED_CLIENT_IDS"
 	envAppQRLoginTTL         = EnvVarPrefix + "APP_QR_LOGIN_REQUEST_TTL_SECONDS"
 	envAppQRLoginInterval    = EnvVarPrefix + "APP_QR_LOGIN_CLAIM_INTERVAL_SECONDS"
+	envProtocolDeviceCode    = EnvVarPrefix + "PROTOCOL_DEVICE_CODE_ENABLED"
 	envSecretsMasterKey      = EnvVarPrefix + "SECRETS_MASTER_KEY"
 	envSecretsTLSPFXPassword = EnvVarPrefix + "SECRETS_TLS_PFX_PASSWORD"
+	envMailEnabled           = EnvVarPrefix + "MAIL_ENABLED"
+	envMailSMTPAddr          = EnvVarPrefix + "MAIL_SMTP_ADDR"
+	envMailSMTPHost          = EnvVarPrefix + "MAIL_SMTP_HOST"
+	envMailSMTPTLSMode       = EnvVarPrefix + "MAIL_SMTP_TLS_MODE"
+	envMailSMTPTrustedRoots  = EnvVarPrefix + "MAIL_SMTP_TRUSTED_ROOTS"
+	envMailSMTPUsername      = EnvVarPrefix + "MAIL_SMTP_USERNAME"
+	envMailSMTPPassword      = EnvVarPrefix + "MAIL_SMTP_PASSWORD"
+	envMailSMTPTimeout       = EnvVarPrefix + "MAIL_SMTP_TIMEOUT_SECONDS"
+	envMailSMTPAllowPlain    = EnvVarPrefix + "MAIL_SMTP_ALLOW_PLAINTEXT_LOCAL"
+	envMailFromAddress       = EnvVarPrefix + "MAIL_FROM_ADDRESS"
+	envMailFromName          = EnvVarPrefix + "MAIL_FROM_NAME"
+	envMailAppName           = EnvVarPrefix + "MAIL_APP_NAME"
+	envMailMaxAttempts       = EnvVarPrefix + "MAIL_DELIVERY_MAX_ATTEMPTS"
+	envMailDeliveryTimeout   = EnvVarPrefix + "MAIL_DELIVERY_TIMEOUT_SECONDS"
 )
 
 // configFields 是字段元数据的唯一来源。Fields、Diagnostic、环境变量加载和
@@ -625,8 +753,23 @@ var configFields = []FieldInfo{
 	{Field: "app_qr_login.allowed_client_ids", Env: envAppQRLoginClients, Class: ReloadRestartRequired},
 	{Field: "app_qr_login.request_ttl_seconds", Env: envAppQRLoginTTL, Class: ReloadRestartRequired},
 	{Field: "app_qr_login.claim_interval_seconds", Env: envAppQRLoginInterval, Class: ReloadRestartRequired},
+	{Field: "protocol.device_code_enabled", Env: envProtocolDeviceCode, Class: ReloadRestartRequired},
 	{Field: "secrets.master_key", Env: envSecretsMasterKey, Class: ReloadRestartRequired, Secret: true},
 	{Field: "secrets.tls_pfx_password", Env: envSecretsTLSPFXPassword, Class: ReloadRestartRequired, Secret: true},
+	{Field: "mail.enabled", Env: envMailEnabled, Class: ReloadRestartRequired},
+	{Field: "mail.smtp.addr", Env: envMailSMTPAddr, Class: ReloadRestartRequired},
+	{Field: "mail.smtp.host", Env: envMailSMTPHost, Class: ReloadRestartRequired},
+	{Field: "mail.smtp.tls_mode", Env: envMailSMTPTLSMode, Class: ReloadRestartRequired},
+	{Field: "mail.smtp.trusted_roots", Env: envMailSMTPTrustedRoots, Class: ReloadRestartRequired},
+	{Field: "mail.smtp.username", Env: envMailSMTPUsername, Class: ReloadRestartRequired},
+	{Field: "mail.smtp.password", Env: envMailSMTPPassword, Class: ReloadRestartRequired, Secret: true},
+	{Field: "mail.smtp.timeout_seconds", Env: envMailSMTPTimeout, Class: ReloadRestartRequired},
+	{Field: "mail.smtp.allow_plaintext_local", Env: envMailSMTPAllowPlain, Class: ReloadRestartRequired},
+	{Field: "mail.from.address", Env: envMailFromAddress, Class: ReloadRestartRequired},
+	{Field: "mail.from.name", Env: envMailFromName, Class: ReloadRestartRequired},
+	{Field: "mail.app_name", Env: envMailAppName, Class: ReloadRestartRequired},
+	{Field: "mail.delivery.max_attempts", Env: envMailMaxAttempts, Class: ReloadRestartRequired},
+	{Field: "mail.delivery.timeout_seconds", Env: envMailDeliveryTimeout, Class: ReloadRestartRequired},
 }
 
 // Fields 返回配置字段元数据的副本。字段顺序与诊断输出顺序一致，并且跨版本
@@ -689,7 +832,28 @@ func Default() Config {
 			Enabled:             false,
 			Issuer:              "",
 			EnableIntrospection: false,
+			DeviceCodeEnabled:   false,
 			LoginPath:           "",
+			ResourceServices:    nil,
+		},
+		Mail: MailConfig{
+			Enabled: false,
+			SMTP: MailSMTPConfig{
+				TLSMode:        "starttls",
+				TimeoutSeconds: 10,
+			},
+			From:    MailFromConfig{},
+			AppName: "EvernightLogin",
+			Delivery: MailDeliveryConfig{
+				MaxAttempts:    3,
+				TimeoutSeconds: 120,
+			},
+		},
+		ManualRecovery: ManualRecoveryConfig{
+			Enabled:            false,
+			WaitPeriodSeconds:  24 * 60 * 60,
+			ApprovalTTLSeconds: 48 * 60 * 60,
+			RequestTTLSeconds:  7 * 24 * 60 * 60,
 		},
 	}
 }
@@ -1230,6 +1394,62 @@ func registrationDefaultRolesProblem(roleIDs []string) string {
 }
 
 // validateMerged 校验合并后的完整配置，是 Validate 与 Load 的共同入口。
+// manualRecoveryConfigProblem 校验人工恢复制度；关闭状态允许空配置，启用时
+// 必须完整、有界且不使用电话口述/安全问题等弱依据。
+func manualRecoveryConfigProblem(cfg ManualRecoveryConfig) string {
+	allowedBasis := map[string]bool{
+		"in_person_identity_document": true,
+		"notarized_declaration":       true,
+	}
+	allowedDelivery := map[string]bool{"verified_email": true}
+	if !cfg.Enabled {
+		return ""
+	}
+	if len(cfg.VerificationBases) == 0 {
+		return "启用人工恢复时必须配置至少一种核验依据"
+	}
+	seen := map[string]bool{}
+	for _, basis := range cfg.VerificationBases {
+		value := strings.TrimSpace(basis)
+		if !allowedBasis[value] {
+			return "核验依据只允许 in_person_identity_document 或 notarized_declaration"
+		}
+		if seen[value] {
+			return "核验依据不能重复"
+		}
+		seen[value] = true
+	}
+	if len(cfg.DeliveryChannels) == 0 {
+		return "启用人工恢复时必须配置至少一种可信交付渠道"
+	}
+	for _, delivery := range cfg.DeliveryChannels {
+		if !allowedDelivery[strings.TrimSpace(delivery)] {
+			return "可信交付渠道只允许 verified_email"
+		}
+	}
+	const (
+		minWait, maxWait         = 60 * 60, 7 * 24 * 60 * 60
+		minApproval, maxApproval = 60 * 60, 7 * 24 * 60 * 60
+		minRequest, maxRequest   = 60 * 60, 30 * 24 * 60 * 60
+	)
+	if cfg.WaitPeriodSeconds < minWait || cfg.WaitPeriodSeconds > maxWait {
+		return "等待期必须是 1 小时～7 天"
+	}
+	if cfg.ApprovalTTLSeconds < minApproval || cfg.ApprovalTTLSeconds > maxApproval {
+		return "批准有效期必须是 1 小时～7 天"
+	}
+	if cfg.ApprovalTTLSeconds <= cfg.WaitPeriodSeconds {
+		return "批准有效期必须大于等待期"
+	}
+	if cfg.RequestTTLSeconds < minRequest || cfg.RequestTTLSeconds > maxRequest {
+		return "申请有效期必须是 1 小时～30 天"
+	}
+	if cfg.RequestTTLSeconds < cfg.WaitPeriodSeconds+cfg.ApprovalTTLSeconds {
+		return "申请有效期必须不小于等待期与批准有效期之和"
+	}
+	return ""
+}
+
 func validateMerged(c Config) ConfigErrors {
 	var errs ConfigErrors
 
@@ -1294,6 +1514,12 @@ func validateMerged(c Config) ConfigErrors {
 	if problem := protocolConfigProblem(c); problem != "" {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "protocol", 0, problem))
 	}
+	if problem := mailConfigProblem(c); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "mail", 0, problem))
+	}
+	if problem := manualRecoveryConfigProblem(c.ManualRecovery); problem != "" {
+		errs = append(errs, configErr(ConfigErrorValue, "final", "manual_recovery", 0, problem))
+	}
 
 	// 非法组合：公开地址使用明文 http 时，服务不得监听非回环接口（主地址或额外
 	// 地址都算）。否则认证页面和令牌会以明文暴露在网络上。反向代理终止 TLS 时
@@ -1351,4 +1577,81 @@ func validateMerged(c Config) ConfigErrors {
 	}
 
 	return errs
+}
+
+// mailConfigProblem 校验邮件配置，不做任何 IO（秘密/证书文件读取在装配期）。
+func mailConfigProblem(c Config) string {
+	mail := c.Mail
+	// 非启用时仍校验已填写值的范围，避免预置半成品；但不要求必填。
+	if mail.SMTP.TimeoutSeconds < 0 || mail.SMTP.TimeoutSeconds > 120 {
+		return "邮件发送时限必须在 1～120 秒"
+	}
+	if mail.Delivery.MaxAttempts < 0 || mail.Delivery.MaxAttempts > 10 {
+		return "邮件最大尝试次数必须在 1～10"
+	}
+	if mail.Delivery.TimeoutSeconds < 0 || mail.Delivery.TimeoutSeconds > 600 {
+		return "邮件投递任务超时必须在 30～600 秒"
+	}
+	if mail.SMTP.Password.Kind != "" {
+		if mail.SMTP.Password.Kind != SecretSourceEnv && mail.SMTP.Password.Kind != SecretSourceFile {
+			return "邮件密码只能来自 env: 或 file: 秘密来源"
+		}
+		if strings.TrimSpace(mail.SMTP.Password.Name) == "" {
+			return "邮件密码秘密来源不能为空"
+		}
+	}
+	if len(mail.SMTP.TrustedRoots) > 8 {
+		return "邮件信任根最多 8 个文件"
+	}
+	for _, root := range mail.SMTP.TrustedRoots {
+		if !filepath.IsAbs(root) {
+			return "邮件信任根必须是绝对路径"
+		}
+	}
+	switch mail.SMTP.TLSMode {
+	case "", "starttls", "implicit", "none":
+	default:
+		return "邮件 TLS 模式必须是 starttls、implicit 或 none"
+	}
+	if !mail.Enabled {
+		return ""
+	}
+	if _, _, err := net.SplitHostPort(strings.TrimSpace(mail.SMTP.Addr)); err != nil {
+		return "启用邮件时必须配置合法的 smtp.addr（host:port）"
+	}
+	if mail.SMTP.TimeoutSeconds < 1 || mail.SMTP.TimeoutSeconds > 120 {
+		return "邮件发送时限必须在 1～120 秒"
+	}
+	if mail.Delivery.MaxAttempts < 1 || mail.Delivery.MaxAttempts > 10 {
+		return "邮件最大尝试次数必须在 1～10"
+	}
+	if mail.Delivery.TimeoutSeconds < 30 || mail.Delivery.TimeoutSeconds > 600 {
+		return "邮件投递任务超时必须在 30～600 秒"
+	}
+	if strings.TrimSpace(mail.From.Address) == "" {
+		return "启用邮件时必须配置 mail.from.address"
+	}
+	parsed, err := mailpkg.ParseAddress(strings.TrimSpace(mail.From.Address))
+	if err != nil || parsed.Address != strings.TrimSpace(mail.From.Address) {
+		return "mail.from.address 必须是合法的 addr-spec"
+	}
+	hasUser := strings.TrimSpace(mail.SMTP.Username) != ""
+	hasPass := mail.SMTP.Password.Kind != ""
+	if hasUser != hasPass {
+		return "邮件认证用户名与密码必须同时配置或同时为空"
+	}
+	mode := mail.SMTP.TLSMode
+	if mode == "" {
+		mode = "starttls"
+	}
+	if mode == "none" {
+		host, _, _ := net.SplitHostPort(strings.TrimSpace(mail.SMTP.Addr))
+		if !mail.SMTP.AllowPlaintextLocal || !listenAddrIsLoopback(host) {
+			return "tls_mode=none 只允许回环地址且必须显式 allow_plaintext_local"
+		}
+		if hasUser {
+			return "明文邮件连接不得配置认证凭据"
+		}
+	}
+	return ""
 }

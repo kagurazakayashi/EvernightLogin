@@ -91,3 +91,36 @@ database:
 # secrets:
 #   tls_pfx_password:
 #     env: LOGIN_TLS_PFX_PASSWORD
+
+# 生产邮件发送（步骤 139）：默认关闭；关闭时不读取密码/证书、不访问网络。
+mail:
+  enabled: false
+  smtp:
+    addr: "127.0.0.1:2525"
+    host: ""
+    tls_mode: starttls
+    trusted_roots: []
+    username: ""
+    # 秘密只能来自 env:/file:，不得写明文。
+    password: {env: "LOGIN_MAIL_SMTP_PASSWORD"}
+    timeout_seconds: 10
+    allow_plaintext_local: false
+  from:
+    address: "no-reply@evernight-login.invalid"
+    name: "EvernightLogin"
+  app_name: "EvernightLogin"
+  delivery:
+    max_attempts: 3
+    timeout_seconds: 120
+
+# OAuth/OIDC 协议端点（默认关闭）。资源服务登记用于联合权限校验与标准 introspection；
+# client_id 必须是已登记的 confidential OAuth 客户端，audience 必须已在其 Audiences 中登记。
+# protocol:
+#   enabled: true
+#   issuer: "https://login.example.com"
+#   enable_introspection: false
+#   device_code_enabled: false
+#   resource_services:
+#     - service_id: billing-api
+#       client_id: app_billing
+#       audience: "https://billing.example.com/api"

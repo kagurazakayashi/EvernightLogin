@@ -37,7 +37,7 @@ var ReservedAdminAPIConflicts = []string{
 // prefix 为空时使用 adminapi.DefaultBasePath；非法前缀、缺少会话/任务依赖、
 // 错误码投影缺失时报错（启动失败），不降级为“匿名可读”。
 func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices,
-	runtime *TaskRuntime, prefix string, gate *SecurityGate) (http.Handler, string, error) {
+	runtime *TaskRuntime, pages *Pages, prefix string, gate *SecurityGate) (http.Handler, string, error) {
 	if gate == nil || gate.Reauth == nil {
 		return nil, "", fmt.Errorf("管理 API 缺少敏感操作闸门")
 	}
@@ -71,6 +71,8 @@ func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices
 		Plans:         managed.Plans,
 		Backups:       managed.BackupAdmin,
 		Sensitive:     gate.Reauth,
+		Notifications: newMailNotificationService(deps.Mail, runtime),
+		DomainRoutes:  buildAdminDomainRoutes(managed, pages, gate),
 		AuditRecorder: deps.Audit,
 		Logger:        deps.Logger, Now: deps.Now,
 	})

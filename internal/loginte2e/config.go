@@ -78,6 +78,12 @@ type Config struct {
 	// DeviceConfirm 是库使用者注入的设备确认函数（集成测试用真实领域服务完成
 	// “已登录用户确认”）；非 nil 时优先于 DeviceConfirmURL。
 	DeviceConfirm func(ctx context.Context, userCode string) error
+	// ResourceClientID/ResourceClientSecret 是受信资源服务的 confidential 客户端
+	// 身份（tokenauthz/introspect 套件使用）；秘密只能来自受保护文件。
+	ResourceClientID     string
+	ResourceClientSecret string
+	// Audience 是预期资源 audience（授权请求 resource 参数与状态查询使用）。
+	Audience string
 	// Now 是可注入时钟；nil 使用 time.Now（测试可固定时间）。
 	Now func() time.Time
 }

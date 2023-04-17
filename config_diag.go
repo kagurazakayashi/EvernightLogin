@@ -89,6 +89,8 @@ func (c Config) fieldValueString(field string) string {
 		return formatStringList(c.Passkey.AllowedOrigins)
 	case "passkey.user_verification":
 		return strconv.Quote(c.Passkey.UserVerification)
+	case "protocol.device_code_enabled":
+		return strconv.FormatBool(c.Protocol.DeviceCodeEnabled)
 	case "app_qr_login.enabled":
 		return strconv.FormatBool(c.AppQRLogin.Enabled)
 	case "app_qr_login.allowed_client_ids":
@@ -101,6 +103,37 @@ func (c Config) fieldValueString(field string) string {
 		return c.Secrets.MasterKey.String()
 	case "secrets.tls_pfx_password":
 		return c.Secrets.TLSPFXPassword.String()
+	case "mail.enabled":
+		return strconv.FormatBool(c.Mail.Enabled)
+	case "mail.smtp.addr":
+		return strconv.Quote(c.Mail.SMTP.Addr)
+	case "mail.smtp.host":
+		return strconv.Quote(c.Mail.SMTP.Host)
+	case "mail.smtp.tls_mode":
+		return strconv.Quote(c.Mail.SMTP.TLSMode)
+	case "mail.smtp.trusted_roots":
+		return formatStringList(c.Mail.SMTP.TrustedRoots)
+	case "mail.smtp.username":
+		return strconv.Quote(c.Mail.SMTP.Username)
+	case "mail.smtp.password":
+		if c.Mail.SMTP.Password.Kind == "" {
+			return "[UNSET]"
+		}
+		return "[REDACTED]"
+	case "mail.smtp.timeout_seconds":
+		return strconv.Itoa(c.Mail.SMTP.TimeoutSeconds)
+	case "mail.smtp.allow_plaintext_local":
+		return strconv.FormatBool(c.Mail.SMTP.AllowPlaintextLocal)
+	case "mail.from.address":
+		return strconv.Quote(c.Mail.From.Address)
+	case "mail.from.name":
+		return strconv.Quote(c.Mail.From.Name)
+	case "mail.app_name":
+		return strconv.Quote(c.Mail.AppName)
+	case "mail.delivery.max_attempts":
+		return strconv.Itoa(c.Mail.Delivery.MaxAttempts)
+	case "mail.delivery.timeout_seconds":
+		return strconv.Itoa(c.Mail.Delivery.TimeoutSeconds)
 	default:
 		return "[UNKNOWN]"
 	}
@@ -237,9 +270,26 @@ func DiffReload(previous, next Config) ReloadDiff {
 	record("database.path", previous.Database.Path != next.Database.Path)
 	record("database.wal", previous.Database.WAL != next.Database.WAL)
 	record("database.busy_timeout_ms", previous.Database.BusyTimeoutMS != next.Database.BusyTimeoutMS)
+	record("mail.enabled", previous.Mail.Enabled != next.Mail.Enabled)
+	record("mail.smtp.addr", previous.Mail.SMTP.Addr != next.Mail.SMTP.Addr)
+	record("mail.smtp.host", previous.Mail.SMTP.Host != next.Mail.SMTP.Host)
+	record("mail.smtp.tls_mode", previous.Mail.SMTP.TLSMode != next.Mail.SMTP.TLSMode)
+	record("mail.smtp.trusted_roots", !slices.Equal(previous.Mail.SMTP.TrustedRoots, next.Mail.SMTP.TrustedRoots))
+	record("mail.smtp.username", previous.Mail.SMTP.Username != next.Mail.SMTP.Username)
+	record("mail.smtp.password", !secretSourcesEqual(previous.Mail.SMTP.Password, next.Mail.SMTP.Password))
+	record("mail.smtp.timeout_seconds", previous.Mail.SMTP.TimeoutSeconds != next.Mail.SMTP.TimeoutSeconds)
+	record("mail.smtp.allow_plaintext_local", previous.Mail.SMTP.AllowPlaintextLocal != next.Mail.SMTP.AllowPlaintextLocal)
+	record("mail.from.address", previous.Mail.From.Address != next.Mail.From.Address)
+	record("mail.from.name", previous.Mail.From.Name != next.Mail.From.Name)
+	record("mail.app_name", previous.Mail.AppName != next.Mail.AppName)
+	record("mail.delivery.max_attempts", previous.Mail.Delivery.MaxAttempts != next.Mail.Delivery.MaxAttempts)
+	record("mail.delivery.timeout_seconds", previous.Mail.Delivery.TimeoutSeconds != next.Mail.Delivery.TimeoutSeconds)
 	record("secrets.master_key", !secretsEqual(previous.Secrets.MasterKey, next.Secrets.MasterKey))
 	record("secrets.tls_pfx_password",
 		!secretsEqual(previous.Secrets.TLSPFXPassword, next.Secrets.TLSPFXPassword))
 
 	return diff
 }
+
+// secretSourcesEqual 比较两个秘密来源是否引用同一来源；不读取秘密内容。
+func secretSourcesEqual(a, b SecretSource) bool { return a == b }

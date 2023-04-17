@@ -217,11 +217,13 @@ func NewTaskRuntime(deps Deps, gate *SecurityGate) (*TaskRuntime, error) {
 		return nil, fmt.Errorf("构造邮件模板失败: %w", err)
 	}
 	mailDelivery, err := mailer.NewDeliveryService(mailer.DeliveryOptions{
-		Store: mailerStore, Sender: mailer.SenderFunc(nil), Templates: templates,
+		Store: mailerStore, Sender: deps.Mail.SenderOrDisabled(), Templates: templates,
 		Sealer: sealer, Recorder: deps.Audit, Enqueuer: relay,
-		Authorizer: hostMailAuthorizer{},
-		From:       mailer.Address{Spec: notificationFromAddress},
-		Now:        now,
+		Authorizer:     hostMailAuthorizer{},
+		From:           deps.Mail.FromAddress(),
+		MaxAttempts:    deps.Config.Mail.Delivery.MaxAttempts,
+		TimeoutSeconds: deps.Config.Mail.Delivery.TimeoutSeconds,
+		Now:            now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造邮件投递服务失败: %w", err)
@@ -251,6 +253,12 @@ func NewTaskRuntime(deps Deps, gate *SecurityGate) (*TaskRuntime, error) {
 	}
 	// 调度器不依赖执行器/处理器，先创建以便备份管理等域服务在处理器注册前就能
 	// 持有真实调度器；成功入队回调通过动态 hook 转发（Start 前由宿主设置）。
+	if repaired, reconcileErr := mailDelivery.Reconcile(context.Background(), 200); reconcileErr != nil {
+		return nil, fmt.Errorf("修复中断投递记录失败: %w", reconcileErr)
+	} else if repaired > 0 {
+		logger.Warn("检测到进程重启前的残留 sending 投递，已标记永久失败（不自动重发）",
+			"repaired_count", repaired)
+	}
 	scheduler, err := task.NewScheduler(task.SchedulerOptions{
 		Store: taskStore, SchedulerID: taskSchedulerID,
 		OnJobEnqueued: runtime.dispatchEnqueueHook,

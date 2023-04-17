@@ -2,42 +2,36 @@ package mailer_test
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
-	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailtest"
 )
 
-// startTestMail 启动本地捕获服务器；可选 STARTTLS 与 AUTH。
-func startTestMail(t *testing.T, opts testmail.Options) *testmail.Server {
+// startTestMail 启动 Mail 测试夹具；tlsEnabled 时启用 STARTTLS 与临时测试 CA。
+func startTestMail(t *testing.T, tlsEnabled bool) *mailtest.Instance {
 	t.Helper()
-	srv, err := testmail.New(opts)
-	if err != nil {
-		t.Fatalf("testmail.New: %v", err)
-	}
-	if err := srv.Start(); err != nil {
-		t.Fatalf("testmail.Start: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-	return srv
+	return mailtest.Start(t, mailtest.Options{Required: true, TLS: tlsEnabled, SMTPAuthNone: !tlsEnabled})
 }
 
-// testRoots 把测试自签证书加入根证书池。
-func testRoots(t *testing.T, cert tls.Certificate) *x509.CertPool {
+// testRoots 把夹具临时 CA 加入根证书池（替代旧 testmail.GenerateTestCertificate）。
+func testRoots(t *testing.T, srv *mailtest.Instance) *x509.CertPool {
 	t.Helper()
-	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	caData, err := os.ReadFile(srv.CAFile)
 	if err != nil {
-		t.Fatalf("解析测试证书失败: %v", err)
+		t.Fatalf("读取夹具测试 CA: %v", err)
 	}
 	pool := x509.NewCertPool()
-	pool.AddCert(parsed)
+	if !pool.AppendCertsFromPEM(caData) {
+		t.Fatalf("解析夹具测试 CA 失败")
+	}
 	return pool
 }
 
@@ -214,7 +208,7 @@ func TestMessageRejectsHeaderInjection(t *testing.T) {
 
 // TestSMTPSendPlaintextLocal 验证回环明文发送（显式允许）与 testmail 实际收信。
 func TestSMTPSendPlaintextLocal(t *testing.T) {
-	srv := startTestMail(t, testmail.Options{})
+	srv := startTestMail(t, false)
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr:                srv.Addr().String(),
 		TLSMode:             mailer.TLSModeNone,
@@ -226,7 +220,7 @@ func TestSMTPSendPlaintextLocal(t *testing.T) {
 	if err := sender.Send(context.Background(), sampleMessage(t)); err != nil {
 		t.Fatalf("发送失败: %v", err)
 	}
-	msgs := srv.Messages(testmail.Query{})
+	msgs := srv.Snapshot(mailtest.Query{})
 	if len(msgs) != 1 {
 		t.Fatalf("期望捕获 1 封，实际 %d", len(msgs))
 	}
@@ -248,21 +242,14 @@ func TestSMTPSendPlaintextLocal(t *testing.T) {
 
 // TestSMTPStartTLSWithAuth 验证 STARTTLS + 认证使用测试自签根证书成功发送。
 func TestSMTPStartTLSWithAuth(t *testing.T) {
-	cert, err := testmail.GenerateTestCertificate("localhost", "127.0.0.1")
-	if err != nil {
-		t.Fatalf("生成测试证书: %v", err)
-	}
-	srv := startTestMail(t, testmail.Options{
-		TLS:  &testmail.TLSOptions{Certificate: cert},
-		Auth: &testmail.AuthOptions{Users: map[string]string{"tester": "s3cret-test"}},
-	})
+	srv := startTestMail(t, true)
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr:         srv.Addr().String(),
 		Host:         "localhost",
 		TLSMode:      mailer.TLSModeStartTLS,
-		TrustedRoots: testRoots(t, cert),
-		Username:     "tester",
-		Password:     "s3cret-test",
+		TrustedRoots: testRoots(t, srv),
+		Username:     srv.UserLogin,
+		Password:     srv.UserPassword,
 	})
 	if err != nil {
 		t.Fatalf("创建发送器: %v", err)
@@ -270,8 +257,8 @@ func TestSMTPStartTLSWithAuth(t *testing.T) {
 	if err := sender.Send(context.Background(), sampleMessage(t)); err != nil {
 		t.Fatalf("STARTTLS 发送失败: %v", err)
 	}
-	msgs := srv.Messages(testmail.Query{})
-	if len(msgs) != 1 || !msgs[0].TLS || msgs[0].AuthUser != "tester" {
+	msgs := srv.Snapshot(mailtest.Query{})
+	if len(msgs) != 1 || !msgs[0].TLS || msgs[0].AuthUser != srv.UserLogin {
 		t.Fatalf("消息状态异常: %+v", msgs)
 	}
 }
@@ -279,20 +266,13 @@ func TestSMTPStartTLSWithAuth(t *testing.T) {
 // TestSMTPFailureClassification 验证失败分类：认证失败永久、连接拒绝临时、
 // 缺少 STARTTLS 永久、取消可重试。
 func TestSMTPFailureClassification(t *testing.T) {
-	cert, err := testmail.GenerateTestCertificate("localhost", "127.0.0.1")
-	if err != nil {
-		t.Fatalf("生成测试证书: %v", err)
-	}
-	srv := startTestMail(t, testmail.Options{
-		TLS:  &testmail.TLSOptions{Certificate: cert},
-		Auth: &testmail.AuthOptions{Users: map[string]string{"tester": "s3cret-test"}},
-	})
+	srv := startTestMail(t, true)
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr:         srv.Addr().String(),
 		Host:         "localhost",
 		TLSMode:      mailer.TLSModeStartTLS,
-		TrustedRoots: testRoots(t, cert),
-		Username:     "tester",
+		TrustedRoots: testRoots(t, srv),
+		Username:     srv.UserLogin,
 		Password:     "wrong-password",
 	})
 	if err != nil {
@@ -317,7 +297,7 @@ func TestSMTPFailureClassification(t *testing.T) {
 	}
 
 	// 服务器不支持 STARTTLS：永久失败。
-	plain := startTestMail(t, testmail.Options{})
+	plain := startTestMail(t, false)
 	noTLS, err := mailer.NewSMTPSender(mailer.SMTPOptions{Addr: plain.Addr().String(), TLSMode: mailer.TLSModeStartTLS, Timeout: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("创建无 TLS 用例发送器: %v", err)

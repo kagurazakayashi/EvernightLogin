@@ -108,6 +108,22 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	if gate == nil || gate.Reauth == nil {
 		return nil, fmt.Errorf("安全域装配缺少敏感操作闸门")
 	}
+	mailURLs, urlErr := buildMailURLs(deps.Config)
+	if deps.Config.Mail.Enabled && urlErr != nil {
+		return nil, fmt.Errorf("CONFIG_INVALID: %w", urlErr)
+	}
+	// 邮箱变更走可靠投递（任务运行时已构造）；未启用邮件时保持 nil（失败留痕，
+	// 不伪造送达）。
+	var emailChangeMailer emailchange.EmailSender
+	if deps.Config.Mail.Enabled && deps.MailDeliveryProvider != nil {
+		if deliveries := deps.MailDeliveryProvider(); deliveries != nil {
+			adapter, adapterErr := emailchange.NewDeliveryEmailSender(deliveries, deps.Mail.AppDisplayName())
+			if adapterErr != nil {
+				return nil, fmt.Errorf("构造邮箱变更邮件适配器失败: %w", adapterErr)
+			}
+			emailChangeMailer = adapter
+		}
+	}
 	now := deps.Now
 	if now == nil {
 		now = time.Now
@@ -168,6 +184,8 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		}
 	}
 
+	manualTargets := manualRecoveryTargets{store: deps.Store, keyring: deps.Keyring, roots: managed.Roots}
+	adminResetBackend := manualRecoveryMFAAdminBackend{store: deps.Store, targets: manualTargets}
 	strongFactors := strongFactorSource{totp: totpService, passkeys: passkeyService}
 	var passkeySecondFactor mfa.SecondFactorPasskey
 	if passkeyService == nil {
@@ -184,18 +202,23 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	mfaService, err := mfa.New(mfa.Options{
 		Store: mfaStore, Audit: deps.Audit, Credentials: services.Credential,
 		Sessions:           services.Sessions,
-		Mailer:             disabledMailSender(),
-		FromAddress:        notificationFromAddress,
-		AppName:            "EvernightLogin",
+		Mailer:             deps.Mail.SenderOrDisabled(),
+		Templates:          mustMailTemplates(),
+		FromAddress:        deps.Mail.FromAddress().Spec,
+		AppName:            deps.Mail.AppDisplayName(),
+		SupportURL:         mailURLs.Support,
 		TOTP:               totpService,
 		Passkeys:           passkeySecondFactor,
 		StrongFactorSource: strongFactors,
 		StrongSetupAuthorizer: rootStrongSetupAuthorizer{
 			store: services.BootstrapStore, roots: managed.Roots},
-		Revoker:              services.Sessions,
-		AllowStrongAuthSetup: true,
-		StrongSetupMethods:   []authfact.Method{authfact.MethodPasskey},
-		Now:                  now, Logger: deps.Logger,
+		RootReady:             rootReadyMarker{store: services.BootstrapStore},
+		Revoker:               services.Sessions,
+		AllowStrongAuthSetup:  true,
+		StrongSetupMethods:    []authfact.Method{authfact.MethodPasskey},
+		AdminResetBackend:     adminResetBackend,
+		AdminResetTargetGuard: adminResetBackend.CheckAdminResetTarget,
+		Now:                   now, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造 MFA 服务失败: %w", err)
@@ -216,12 +239,11 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		return nil, fmt.Errorf("构造恢复服务失败: %w", err)
 	}
 
-	resetURLBase := strings.TrimSuffix(strings.TrimSpace(string(deps.Config.Server.PublicBaseURL)), "/")
+	resetURLBase := mailURLs.PasswordReset
 	if resetURLBase == "" {
-		// 未配置公开地址时邮件无法交付（发送器未配置），占位地址形状合法且不会被投递。
-		resetURLBase = "http://127.0.0.1"
+		// 未启用邮件时保留形状合法的占位地址；真实发送不可用时服务会明确失败。
+		resetURLBase = "http://127.0.0.1" + deps.Config.Server.PathPrefix + "/login/reset-password"
 	}
-	resetURLBase += deps.Config.Server.PathPrefix + "/login/reset-password"
 	passwordResetStore, err := passwordresetsqlite.New(deps.Store)
 	if err != nil {
 		return nil, fmt.Errorf("构造找回存储失败: %w", err)
@@ -229,8 +251,10 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	passwordResetService, err := passwordreset.New(passwordreset.Options{
 		Store: passwordResetStore, Audit: deps.Audit,
 		Credentials: services.Credential, Passwords: services.Authn,
-		Sessions: services.Sessions, Mailer: disabledMailSender(),
-		FromAddress: notificationFromAddress, AppName: "EvernightLogin",
+		Sessions: services.Sessions, Mailer: deps.Mail.SenderOrDisabled(),
+		Templates:   mustMailTemplates(),
+		FromAddress: deps.Mail.FromAddress().Spec, AppName: deps.Mail.AppDisplayName(),
+		SupportURL:   mailURLs.Support,
 		ResetURLBase: resetURLBase,
 		Now:          now, Logger: deps.Logger,
 	})
@@ -265,13 +289,14 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	}
 	emailChangeService, err := emailchange.New(emailchange.Options{
 		Store: emailChangeStore, Audit: deps.Audit,
-		Credentials:    services.Credential,
-		ReauthVerifier: emailChangeReauthVerifier{recentAuthVerifier{maxAge: 10 * time.Minute, now: now}},
-		Sensitive:      gate.Reauth,
-		// 无真实发送通道：申请会记录邮件发送失败状态，不伪造送达。
-		Mailer:  nil,
-		AppName: "EvernightLogin",
-		Now:     now, Logger: deps.Logger,
+		Credentials:         services.Credential,
+		ReauthVerifier:      emailChangeReauthVerifier{recentAuthVerifier{maxAge: 10 * time.Minute, now: now}},
+		Sensitive:           gate.Reauth,
+		Mailer:              emailChangeMailer,
+		VerificationURLBase: mailURLs.ChangeEmail,
+		SupportURL:          mailURLs.Support,
+		AppName:             deps.Mail.AppDisplayName(),
+		Now:                 now, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造邮箱变更服务失败: %w", err)
@@ -297,15 +322,33 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	if err != nil {
 		return nil, fmt.Errorf("构造人工恢复存储失败: %w", err)
 	}
+	manualPolicy := manualRecoveryPolicyFromConfig(deps.Config.ManualRecovery)
+	if err := manualPolicy.Validate(); err != nil {
+		return nil, fmt.Errorf("人工恢复制度配置无效: %w", err)
+	}
+	// 启用制度必须真实可交付：邮件发送器与真实执行器都要在启动期确认，避免
+	// 运行到执行时才失败而留下“看似可用”的恢复入口。
+	if manualPolicy.Enabled && (deps.Mail == nil || deps.Mail.Sender == nil) {
+		return nil, fmt.Errorf("人工恢复制度启用时必须配置真实邮件发送器（mail.enabled）")
+	}
+	executor := manualRecoveryExecutor{
+		passwordReset: passwordResetService, mfa: mfaService,
+		sessions: services.Sessions, targets: manualTargets,
+	}
+	var notifier manualrecovery.Notifier
+	if manualPolicy.Enabled {
+		notifier = manualRecoveryNotifier{sender: deps.Mail.Sender, store: deps.Store,
+			from: deps.Mail.FromAddress(), appName: deps.Mail.AppDisplayName()}
+	}
 	manualService, err := manualrecovery.New(manualrecovery.Options{
 		Store: manualStore, Audit: deps.Audit,
 		Reauth:   gate.Reauth,
 		Staff:    manualRecoveryStaff{checker: managed.Checker},
-		Targets:  manualRecoveryTargets{store: deps.Store, keyring: deps.Keyring, roots: managed.Roots},
-		Executor: failClosedRecoveryExecutor{},
-		// root 制度未配置 → 默认关闭；启用需要宿主提供核验依据/交付方式与真实执行器。
-		Policy: manualrecovery.Policy{Enabled: false},
-		Now:    now, Logger: deps.Logger,
+		Targets:  manualTargets,
+		Executor: executor,
+		Notifier: notifier,
+		Policy:   manualPolicy,
+		Now:      now, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造人工恢复服务失败: %w", err)
@@ -533,7 +576,7 @@ func (t manualRecoveryTargets) highPrivilege(ctx context.Context, userID string,
 	}
 	var count int
 	err := t.store.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM user_roles WHERE user_id=? AND revoked_at_ms IS NULL`,
+		`SELECT COUNT(*) FROM user_roles WHERE user_id=?`,
 		userID).Scan(&count)
 	if err != nil {
 		return false, errors.New("读取目标角色失败")
@@ -551,7 +594,7 @@ func (t manualRecoveryTargets) deliveryFingerprint(ctx context.Context, userID s
 		return "", nil // 没有已验证邮箱：指纹为空，服务会拒绝无法交付的恢复
 	}
 	digest, err := t.keyring.HMACDigest(t.keyring.CurrentKeyID(),
-		"manual-recovery/delivery/v1", []byte(strings.ToLower(email)))
+		"manual-recovery.delivery.v1", []byte(strings.ToLower(email)))
 	if err != nil {
 		return "", errors.New("计算交付指纹失败")
 	}

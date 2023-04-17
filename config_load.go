@@ -126,7 +126,9 @@ type ProtocolOverrides struct {
 	Enabled             *bool
 	Issuer              *string
 	EnableIntrospection *bool
+	DeviceCodeEnabled   *bool
 	LoginPath           *string
+	ResourceServices    []ResourceServiceConfig
 }
 
 // Load 按“内置默认值 < YAML < 环境变量 < 显式代码选项”的顺序合并并校验配置。
@@ -246,49 +248,71 @@ func mergeSecretLayer(layers []configOverrides, access func(*configOverrides) (*
 
 // configOverrides 是单层配置的内部表示；指针字段表示“该层显式设置了此字段”。
 type configOverrides struct {
-	serverListenAddr      *string
-	serverExtraListen     *[]string
-	serverPublicBaseURL   *string
-	serverPathPrefix      *string
-	serverAllowedHosts    *[]string
-	serverTrustedProxies  *[]string
-	serverTLSProxyMode    *bool
-	serverTLSCertFiles    *[]string
-	serverTLSKeyFiles     *[]string
-	serverTLSCAFile       *string
-	serverTLSPFXFile      *string
-	serverTLSExpiryDays   *int
-	serverTLSClientAuth   *TLSClientAuthMode
-	serverTLSClientCA     *[]string
-	serverTLSClientMaps   *[]TLSClientIdentity
-	serverShutdownTimeout *int
-	loggingLevel          *LogLevel
-	loggingFormat         *LogFormat
-	databaseDriver        *DatabaseDriver
-	databasePath          *string
-	databaseWAL           *bool
-	databaseBusyTimeout   *int
-	registrationEnabled   *bool
-	registrationReview    *bool
-	registrationEmail     *bool
-	registrationRoles     *[]string
-	passkeyEnabled        *bool
-	passkeyRPID           *string
-	passkeyRPName         *string
-	passkeyOrigins        *[]string
-	passkeyUserVerify     *string
-	appQRLoginEnabled     *bool
-	appQRLoginClients     *[]string
-	appQRLoginTTL         *int
-	appQRLoginInterval    *int
-	protocolEnabled       *bool
-	protocolIssuer        *string
-	protocolIntrospection *bool
-	protocolLoginPath     *string
-	secretSource          *SecretSource
-	secretValue           *Secret
-	secretPFXSource       *SecretSource
-	secretPFXValue        *Secret
+	serverListenAddr         *string
+	serverExtraListen        *[]string
+	serverPublicBaseURL      *string
+	serverPathPrefix         *string
+	serverAllowedHosts       *[]string
+	serverTrustedProxies     *[]string
+	serverTLSProxyMode       *bool
+	serverTLSCertFiles       *[]string
+	serverTLSKeyFiles        *[]string
+	serverTLSCAFile          *string
+	serverTLSPFXFile         *string
+	serverTLSExpiryDays      *int
+	serverTLSClientAuth      *TLSClientAuthMode
+	serverTLSClientCA        *[]string
+	serverTLSClientMaps      *[]TLSClientIdentity
+	serverShutdownTimeout    *int
+	loggingLevel             *LogLevel
+	loggingFormat            *LogFormat
+	databaseDriver           *DatabaseDriver
+	databasePath             *string
+	databaseWAL              *bool
+	databaseBusyTimeout      *int
+	registrationEnabled      *bool
+	registrationReview       *bool
+	registrationEmail        *bool
+	registrationRoles        *[]string
+	passkeyEnabled           *bool
+	passkeyRPID              *string
+	passkeyRPName            *string
+	passkeyOrigins           *[]string
+	passkeyUserVerify        *string
+	appQRLoginEnabled        *bool
+	appQRLoginClients        *[]string
+	appQRLoginTTL            *int
+	appQRLoginInterval       *int
+	protocolEnabled          *bool
+	protocolIssuer           *string
+	protocolIntrospection    *bool
+	protocolDeviceCode       *bool
+	protocolLoginPath        *string
+	protocolResourceServices *[]ResourceServiceConfig
+	mailEnabled              *bool
+	mailSMTPAddr             *string
+	mailSMTPHost             *string
+	mailSMTPTLSMode          *string
+	mailSMTPTrustedRoots     *[]string
+	mailSMTPUsername         *string
+	mailSMTPPassword         *SecretSource
+	mailSMTPTimeout          *int
+	mailSMTPAllowPlain       *bool
+	mailFromAddress          *string
+	mailFromName             *string
+	mailAppName              *string
+	mailMaxAttempts          *int
+	mailDeliveryTimeout      *int
+	manualRecoveryEnabled    *bool
+	manualRecoveryBases      *[]string
+	manualRecoveryDeliveries *[]string
+	manualRecoveryWait       *int
+	manualRecoveryApproval   *int
+	manualRecoveryRequest    *int
+	secretSource             *SecretSource
+	secretValue              *Secret
+	secretPFXSource          *SecretSource
+	secretPFXValue           *Secret
 }
 
 // apply 把本层显式设置的值覆盖到配置上；未设置的字段保持原值。切片字段复制后
@@ -408,8 +432,74 @@ func (ov *configOverrides) apply(cfg *Config) {
 	if ov.protocolIntrospection != nil {
 		cfg.Protocol.EnableIntrospection = *ov.protocolIntrospection
 	}
+	if ov.protocolDeviceCode != nil {
+		cfg.Protocol.DeviceCodeEnabled = *ov.protocolDeviceCode
+	}
 	if ov.protocolLoginPath != nil {
 		cfg.Protocol.LoginPath = *ov.protocolLoginPath
+	}
+	if ov.protocolResourceServices != nil {
+		cfg.Protocol.ResourceServices = append([]ResourceServiceConfig(nil), (*ov.protocolResourceServices)...)
+	}
+	if ov.mailEnabled != nil {
+		cfg.Mail.Enabled = *ov.mailEnabled
+	}
+	if ov.mailSMTPAddr != nil {
+		cfg.Mail.SMTP.Addr = *ov.mailSMTPAddr
+	}
+	if ov.mailSMTPHost != nil {
+		cfg.Mail.SMTP.Host = *ov.mailSMTPHost
+	}
+	if ov.mailSMTPTLSMode != nil {
+		cfg.Mail.SMTP.TLSMode = *ov.mailSMTPTLSMode
+	}
+	if ov.mailSMTPTrustedRoots != nil {
+		cfg.Mail.SMTP.TrustedRoots = append([]string(nil), (*ov.mailSMTPTrustedRoots)...)
+	}
+	if ov.mailSMTPUsername != nil {
+		cfg.Mail.SMTP.Username = *ov.mailSMTPUsername
+	}
+	if ov.mailSMTPPassword != nil {
+		cfg.Mail.SMTP.Password = *ov.mailSMTPPassword
+	}
+	if ov.mailSMTPTimeout != nil {
+		cfg.Mail.SMTP.TimeoutSeconds = *ov.mailSMTPTimeout
+	}
+	if ov.mailSMTPAllowPlain != nil {
+		cfg.Mail.SMTP.AllowPlaintextLocal = *ov.mailSMTPAllowPlain
+	}
+	if ov.mailFromAddress != nil {
+		cfg.Mail.From.Address = *ov.mailFromAddress
+	}
+	if ov.mailFromName != nil {
+		cfg.Mail.From.Name = *ov.mailFromName
+	}
+	if ov.mailAppName != nil {
+		cfg.Mail.AppName = *ov.mailAppName
+	}
+	if ov.mailMaxAttempts != nil {
+		cfg.Mail.Delivery.MaxAttempts = *ov.mailMaxAttempts
+	}
+	if ov.mailDeliveryTimeout != nil {
+		cfg.Mail.Delivery.TimeoutSeconds = *ov.mailDeliveryTimeout
+	}
+	if ov.manualRecoveryEnabled != nil {
+		cfg.ManualRecovery.Enabled = *ov.manualRecoveryEnabled
+	}
+	if ov.manualRecoveryBases != nil {
+		cfg.ManualRecovery.VerificationBases = append([]string(nil), (*ov.manualRecoveryBases)...)
+	}
+	if ov.manualRecoveryDeliveries != nil {
+		cfg.ManualRecovery.DeliveryChannels = append([]string(nil), (*ov.manualRecoveryDeliveries)...)
+	}
+	if ov.manualRecoveryWait != nil {
+		cfg.ManualRecovery.WaitPeriodSeconds = *ov.manualRecoveryWait
+	}
+	if ov.manualRecoveryApproval != nil {
+		cfg.ManualRecovery.ApprovalTTLSeconds = *ov.manualRecoveryApproval
+	}
+	if ov.manualRecoveryRequest != nil {
+		cfg.ManualRecovery.RequestTTLSeconds = *ov.manualRecoveryRequest
 	}
 }
 
@@ -437,14 +527,56 @@ func readConfigFile(path string) ([]byte, error) {
 
 // yamlConfig 是 YAML 层的严格解码目标。字段全部使用指针以保留“未设置”信息。
 type yamlConfig struct {
-	Server       *yamlServer       `yaml:"server"`
-	Logging      *yamlLogging      `yaml:"logging"`
-	Database     *yamlDatabase     `yaml:"database"`
-	Secrets      *yamlSecrets      `yaml:"secrets"`
-	Registration *yamlRegistration `yaml:"registration"`
-	Passkey      *yamlPasskey      `yaml:"passkey"`
-	AppQRLogin   *yamlAppQRLogin   `yaml:"app_qr_login"`
-	Protocol     *yamlProtocol     `yaml:"protocol"`
+	Server         *yamlServer         `yaml:"server"`
+	Logging        *yamlLogging        `yaml:"logging"`
+	Database       *yamlDatabase       `yaml:"database"`
+	Secrets        *yamlSecrets        `yaml:"secrets"`
+	Registration   *yamlRegistration   `yaml:"registration"`
+	Passkey        *yamlPasskey        `yaml:"passkey"`
+	AppQRLogin     *yamlAppQRLogin     `yaml:"app_qr_login"`
+	Protocol       *yamlProtocol       `yaml:"protocol"`
+	Mail           *yamlMail           `yaml:"mail"`
+	ManualRecovery *yamlManualRecovery `yaml:"manual_recovery"`
+}
+
+// yamlMail 是生产邮件配置段（步骤 139）；子段使用指针保留“未设置”。
+type yamlMail struct {
+	Enabled  *bool             `yaml:"enabled"`
+	SMTP     *yamlMailSMTP     `yaml:"smtp"`
+	From     *yamlMailFrom     `yaml:"from"`
+	AppName  *string           `yaml:"app_name"`
+	Delivery *yamlMailDelivery `yaml:"delivery"`
+}
+
+type yamlMailSMTP struct {
+	Addr                *string           `yaml:"addr"`
+	Host                *string           `yaml:"host"`
+	TLSMode             *string           `yaml:"tls_mode"`
+	TrustedRoots        *[]string         `yaml:"trusted_roots"`
+	Username            *string           `yaml:"username"`
+	Password            *yamlSecretSource `yaml:"password"`
+	TimeoutSeconds      *int              `yaml:"timeout_seconds"`
+	AllowPlaintextLocal *bool             `yaml:"allow_plaintext_local"`
+}
+
+type yamlMailFrom struct {
+	Address *string `yaml:"address"`
+	Name    *string `yaml:"name"`
+}
+
+type yamlMailDelivery struct {
+	MaxAttempts    *int `yaml:"max_attempts"`
+	TimeoutSeconds *int `yaml:"timeout_seconds"`
+}
+
+// yamlManualRecovery 是人工恢复制度配置段（步骤 152）；时间字段使用秒。
+type yamlManualRecovery struct {
+	Enabled            *bool     `yaml:"enabled"`
+	VerificationBases  *[]string `yaml:"verification_bases"`
+	DeliveryChannels   *[]string `yaml:"delivery_channels"`
+	WaitPeriodSeconds  *int      `yaml:"wait_period_seconds"`
+	ApprovalTTLSeconds *int      `yaml:"approval_ttl_seconds"`
+	RequestTTLSeconds  *int      `yaml:"request_ttl_seconds"`
 }
 
 type yamlServer struct {
@@ -516,10 +648,19 @@ type yamlPasskey struct {
 
 // yamlProtocol 是 YAML 中的 OAuth/OIDC 协议端点配置段。
 type yamlProtocol struct {
-	Enabled             *bool   `yaml:"enabled"`
-	Issuer              *string `yaml:"issuer"`
-	EnableIntrospection *bool   `yaml:"enable_introspection"`
-	LoginPath           *string `yaml:"login_path"`
+	Enabled             *bool                  `yaml:"enabled"`
+	Issuer              *string                `yaml:"issuer"`
+	EnableIntrospection *bool                  `yaml:"enable_introspection"`
+	DeviceCodeEnabled   *bool                  `yaml:"device_code_enabled"`
+	LoginPath           *string                `yaml:"login_path"`
+	ResourceServices    *[]yamlResourceService `yaml:"resource_services"`
+}
+
+// yamlResourceService 是资源服务登记项；三个字段均必填。
+type yamlResourceService struct {
+	ServiceID *string `yaml:"service_id"`
+	ClientID  *string `yaml:"client_id"`
+	Audience  *string `yaml:"audience"`
 }
 
 // yamlSecretFields 是允许出现的秘密字段名；每个字段的值只能是 env/file 来源映射。
@@ -541,7 +682,7 @@ type yamlLeafSpec struct {
 
 var (
 	yamlRootKeys = []string{"server", "logging", "database", "secrets", "registration",
-		"passkey", "app_qr_login", "protocol"}
+		"passkey", "app_qr_login", "protocol", "mail"}
 
 	yamlSectionFields = map[string][]yamlLeafSpec{
 		"server": {
@@ -585,7 +726,14 @@ var (
 			{name: "enabled", tag: "!!bool"},
 			{name: "issuer", tag: "!!str"},
 			{name: "enable_introspection", tag: "!!bool"},
+			{name: "device_code_enabled", tag: "!!bool"},
 			{name: "login_path", tag: "!!str"},
+		},
+		"manual_recovery": {
+			{name: "enabled", tag: "!!bool"},
+			{name: "wait_period_seconds", tag: "!!int"},
+			{name: "approval_ttl_seconds", tag: "!!int"},
+			{name: "request_ttl_seconds", tag: "!!int"},
 		},
 	}
 
@@ -608,6 +756,10 @@ var (
 		"app_qr_login": {
 			"allowed_client_ids": "!!str",
 		},
+		"manual_recovery": {
+			"verification_bases": "!!str",
+			"delivery_channels":  "!!str",
+		},
 	}
 
 	// yamlSectionObjectListFields 描述“对象列表”字段；每个列表元素必须是映射，且
@@ -617,6 +769,13 @@ var (
 			"tls_client_identities": {
 				{name: "dns_name", tag: "!!str"},
 				{name: "service", tag: "!!str"},
+			},
+		},
+		"protocol": {
+			"resource_services": {
+				{name: "service_id", tag: "!!str"},
+				{name: "client_id", tag: "!!str"},
+				{name: "audience", tag: "!!str"},
 			},
 		},
 	}
@@ -687,6 +846,10 @@ func checkYAMLStructure(root *yaml.Node) ConfigErrors {
 		}
 		seen[name] = key.Line
 
+		if name == "mail" {
+			errs = append(errs, checkYAMLMailSection(value)...)
+			continue
+		}
 		specs, known := yamlSectionFields[name]
 		if !known && name != "secrets" {
 			errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", name, key.Line,
@@ -1038,7 +1201,92 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.protocolEnabled = doc.Protocol.Enabled
 		ov.protocolIssuer = doc.Protocol.Issuer
 		ov.protocolIntrospection = doc.Protocol.EnableIntrospection
+		ov.protocolDeviceCode = doc.Protocol.DeviceCodeEnabled
 		ov.protocolLoginPath = doc.Protocol.LoginPath
+		if doc.Protocol.ResourceServices != nil {
+			services := make([]ResourceServiceConfig, 0, len(*doc.Protocol.ResourceServices))
+			for _, raw := range *doc.Protocol.ResourceServices {
+				service := ResourceServiceConfig{}
+				if raw.ServiceID != nil {
+					service.ServiceID = *raw.ServiceID
+				}
+				if raw.ClientID != nil {
+					service.ClientID = *raw.ClientID
+				}
+				if raw.Audience != nil {
+					service.Audience = *raw.Audience
+				}
+				services = append(services, service)
+			}
+			ov.protocolResourceServices = &services
+		}
+	}
+	if doc.Mail != nil {
+		if doc.Mail.Enabled != nil {
+			ov.mailEnabled = doc.Mail.Enabled
+		}
+		if doc.Mail.AppName != nil {
+			ov.mailAppName = doc.Mail.AppName
+		}
+		if doc.Mail.SMTP != nil {
+			smtp := doc.Mail.SMTP
+			if smtp.Addr != nil {
+				ov.mailSMTPAddr = smtp.Addr
+			}
+			if smtp.Host != nil {
+				ov.mailSMTPHost = smtp.Host
+			}
+			if smtp.TLSMode != nil {
+				ov.mailSMTPTLSMode = smtp.TLSMode
+			}
+			if smtp.TrustedRoots != nil {
+				ov.mailSMTPTrustedRoots = smtp.TrustedRoots
+			}
+			if smtp.Username != nil {
+				ov.mailSMTPUsername = smtp.Username
+			}
+			if smtp.Password != nil {
+				source, sourceErr := convertYAMLSecretSource("mail.smtp.password", smtp.Password)
+				if sourceErr != nil {
+					return configOverrides{}, ConfigErrors{sourceErr}
+				}
+				ov.mailSMTPPassword = source
+			}
+			if smtp.TimeoutSeconds != nil {
+				ov.mailSMTPTimeout = smtp.TimeoutSeconds
+			}
+			if smtp.AllowPlaintextLocal != nil {
+				ov.mailSMTPAllowPlain = smtp.AllowPlaintextLocal
+			}
+		}
+		if doc.Mail.From != nil {
+			ov.mailFromAddress = doc.Mail.From.Address
+			ov.mailFromName = doc.Mail.From.Name
+		}
+		if doc.Mail.Delivery != nil {
+			ov.mailMaxAttempts = doc.Mail.Delivery.MaxAttempts
+			ov.mailDeliveryTimeout = doc.Mail.Delivery.TimeoutSeconds
+		}
+	}
+	if doc.ManualRecovery != nil {
+		if doc.ManualRecovery.Enabled != nil {
+			ov.manualRecoveryEnabled = doc.ManualRecovery.Enabled
+		}
+		if doc.ManualRecovery.VerificationBases != nil {
+			ov.manualRecoveryBases = doc.ManualRecovery.VerificationBases
+		}
+		if doc.ManualRecovery.DeliveryChannels != nil {
+			ov.manualRecoveryDeliveries = doc.ManualRecovery.DeliveryChannels
+		}
+		if doc.ManualRecovery.WaitPeriodSeconds != nil {
+			ov.manualRecoveryWait = doc.ManualRecovery.WaitPeriodSeconds
+		}
+		if doc.ManualRecovery.ApprovalTTLSeconds != nil {
+			ov.manualRecoveryApproval = doc.ManualRecovery.ApprovalTTLSeconds
+		}
+		if doc.ManualRecovery.RequestTTLSeconds != nil {
+			ov.manualRecoveryRequest = doc.ManualRecovery.RequestTTLSeconds
+		}
 	}
 	if doc.Secrets != nil {
 		if doc.Secrets.MasterKey != nil {
@@ -1319,6 +1567,14 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 			ov.appQRLoginInterval = &number
 		}
 	}
+	if value, ok := lookup(envProtocolDeviceCode); ok {
+		flag, err := parseEnvBool(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "protocol.device_code_enabled", 0, err.Error()))
+		} else {
+			ov.protocolDeviceCode = &flag
+		}
+	}
 	if value, ok := lookup(envSecretsMasterKey); ok {
 		if value == "" {
 			errs = append(errs, configErr(ConfigErrorValue, "env", "secrets.master_key", 0,
@@ -1344,6 +1600,86 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 		}
 	}
 
+	// 步骤 139 邮件配置环境变量：与 YAML 同语义严格解析，非法值直接报错而不是
+	// 静默回退默认值（安全契约：运维以为设置生效但实际被忽略是不可接受的）。
+	if value, ok := lookup(envMailEnabled); ok {
+		flag, parseErr := parseEnvBool(value)
+		if parseErr != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "mail.enabled", 0, parseErr.Error()))
+		} else {
+			ov.mailEnabled = &flag
+		}
+	}
+	if value, ok := lookup(envMailSMTPAddr); ok {
+		ov.mailSMTPAddr = Ptr(value)
+	}
+	if value, ok := lookup(envMailSMTPHost); ok {
+		ov.mailSMTPHost = Ptr(value)
+	}
+	if value, ok := lookup(envMailSMTPTLSMode); ok {
+		ov.mailSMTPTLSMode = Ptr(value)
+	}
+	if value, ok := lookup(envMailSMTPTrustedRoots); ok {
+		roots, parseErr := parseEnvList(value)
+		if parseErr != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "mail.smtp.trusted_roots", 0, parseErr.Error()))
+		} else {
+			ov.mailSMTPTrustedRoots = &roots
+		}
+	}
+	if value, ok := lookup(envMailSMTPUsername); ok {
+		ov.mailSMTPUsername = Ptr(value)
+	}
+	if value, ok := lookup(envMailSMTPPassword); ok {
+		source, parseErr := ParseSecretSource(value)
+		if parseErr != nil {
+			errs = append(errs, configErrWrap(ConfigErrorSecretSource, "env", "mail.smtp.password", 0,
+				"邮件密码环境变量必须使用 env:NAME 或 file:绝对路径 引用", parseErr))
+		} else {
+			ov.mailSMTPPassword = &source
+		}
+	}
+	if value, ok := lookup(envMailSMTPTimeout); ok {
+		number, parseErr := parseEnvInt(value)
+		if parseErr != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "mail.smtp.timeout_seconds", 0, parseErr.Error()))
+		} else {
+			ov.mailSMTPTimeout = &number
+		}
+	}
+	if value, ok := lookup(envMailSMTPAllowPlain); ok {
+		flag, parseErr := parseEnvBool(value)
+		if parseErr != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "mail.smtp.allow_plaintext_local", 0, parseErr.Error()))
+		} else {
+			ov.mailSMTPAllowPlain = &flag
+		}
+	}
+	if value, ok := lookup(envMailFromAddress); ok {
+		ov.mailFromAddress = Ptr(value)
+	}
+	if value, ok := lookup(envMailFromName); ok {
+		ov.mailFromName = Ptr(value)
+	}
+	if value, ok := lookup(envMailAppName); ok {
+		ov.mailAppName = Ptr(value)
+	}
+	if value, ok := lookup(envMailMaxAttempts); ok {
+		number, parseErr := parseEnvInt(value)
+		if parseErr != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "mail.delivery.max_attempts", 0, parseErr.Error()))
+		} else {
+			ov.mailMaxAttempts = &number
+		}
+	}
+	if value, ok := lookup(envMailDeliveryTimeout); ok {
+		number, parseErr := parseEnvInt(value)
+		if parseErr != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "mail.delivery.timeout_seconds", 0, parseErr.Error()))
+		} else {
+			ov.mailDeliveryTimeout = &number
+		}
+	}
 	errs = append(errs, validateOverrides(&ov, "env")...)
 	return ov, errs
 }
@@ -1351,47 +1687,49 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 // overridesFromOptions 把宿主显式选项转为覆盖层并校验。
 func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 	ov := configOverrides{
-		serverListenAddr:      options.Server.ListenAddr,
-		serverExtraListen:     options.Server.ExtraListenAddrs,
-		serverPublicBaseURL:   options.Server.PublicBaseURL,
-		serverPathPrefix:      options.Server.PathPrefix,
-		serverAllowedHosts:    options.Server.AllowedHosts,
-		serverTrustedProxies:  options.Server.TrustedProxies,
-		serverTLSProxyMode:    options.Server.TLSProxyMode,
-		serverTLSCertFiles:    options.Server.TLSCertFiles,
-		serverTLSKeyFiles:     options.Server.TLSKeyFiles,
-		serverTLSCAFile:       options.Server.TLSCAFile,
-		serverTLSPFXFile:      options.Server.TLSPFXFile,
-		serverTLSExpiryDays:   options.Server.TLSExpiryWarningDays,
-		serverTLSClientAuth:   options.Server.TLSClientAuthMode,
-		serverTLSClientCA:     options.Server.TLSClientCAFiles,
-		serverTLSClientMaps:   options.Server.TLSClientIdentities,
-		serverShutdownTimeout: options.Server.ShutdownTimeoutSeconds,
-		secretPFXValue:        options.Secrets.TLSPFXPassword,
-		loggingLevel:          options.Logging.Level,
-		loggingFormat:         options.Logging.Format,
-		databaseDriver:        options.Database.Driver,
-		databasePath:          options.Database.Path,
-		databaseWAL:           options.Database.WAL,
-		databaseBusyTimeout:   options.Database.BusyTimeoutMS,
-		registrationEnabled:   options.Registration.Enabled,
-		registrationReview:    options.Registration.RequireReview,
-		registrationEmail:     options.Registration.RequireEmailVerification,
-		registrationRoles:     options.Registration.DefaultRoleIDs,
-		passkeyEnabled:        options.Passkey.Enabled,
-		passkeyRPID:           options.Passkey.RPID,
-		passkeyRPName:         options.Passkey.RPDisplayName,
-		passkeyOrigins:        options.Passkey.AllowedOrigins,
-		passkeyUserVerify:     options.Passkey.UserVerification,
-		appQRLoginEnabled:     options.AppQRLogin.Enabled,
-		appQRLoginClients:     options.AppQRLogin.AllowedClientIDs,
-		appQRLoginTTL:         options.AppQRLogin.RequestTTLSeconds,
-		appQRLoginInterval:    options.AppQRLogin.ClaimIntervalSeconds,
-		protocolEnabled:       options.Protocol.Enabled,
-		protocolIssuer:        options.Protocol.Issuer,
-		protocolIntrospection: options.Protocol.EnableIntrospection,
-		protocolLoginPath:     options.Protocol.LoginPath,
-		secretValue:           options.Secrets.MasterKey,
+		serverListenAddr:         options.Server.ListenAddr,
+		serverExtraListen:        options.Server.ExtraListenAddrs,
+		serverPublicBaseURL:      options.Server.PublicBaseURL,
+		serverPathPrefix:         options.Server.PathPrefix,
+		serverAllowedHosts:       options.Server.AllowedHosts,
+		serverTrustedProxies:     options.Server.TrustedProxies,
+		serverTLSProxyMode:       options.Server.TLSProxyMode,
+		serverTLSCertFiles:       options.Server.TLSCertFiles,
+		serverTLSKeyFiles:        options.Server.TLSKeyFiles,
+		serverTLSCAFile:          options.Server.TLSCAFile,
+		serverTLSPFXFile:         options.Server.TLSPFXFile,
+		serverTLSExpiryDays:      options.Server.TLSExpiryWarningDays,
+		serverTLSClientAuth:      options.Server.TLSClientAuthMode,
+		serverTLSClientCA:        options.Server.TLSClientCAFiles,
+		serverTLSClientMaps:      options.Server.TLSClientIdentities,
+		serverShutdownTimeout:    options.Server.ShutdownTimeoutSeconds,
+		secretPFXValue:           options.Secrets.TLSPFXPassword,
+		loggingLevel:             options.Logging.Level,
+		loggingFormat:            options.Logging.Format,
+		databaseDriver:           options.Database.Driver,
+		databasePath:             options.Database.Path,
+		databaseWAL:              options.Database.WAL,
+		databaseBusyTimeout:      options.Database.BusyTimeoutMS,
+		registrationEnabled:      options.Registration.Enabled,
+		registrationReview:       options.Registration.RequireReview,
+		registrationEmail:        options.Registration.RequireEmailVerification,
+		registrationRoles:        options.Registration.DefaultRoleIDs,
+		passkeyEnabled:           options.Passkey.Enabled,
+		passkeyRPID:              options.Passkey.RPID,
+		passkeyRPName:            options.Passkey.RPDisplayName,
+		passkeyOrigins:           options.Passkey.AllowedOrigins,
+		passkeyUserVerify:        options.Passkey.UserVerification,
+		appQRLoginEnabled:        options.AppQRLogin.Enabled,
+		appQRLoginClients:        options.AppQRLogin.AllowedClientIDs,
+		appQRLoginTTL:            options.AppQRLogin.RequestTTLSeconds,
+		appQRLoginInterval:       options.AppQRLogin.ClaimIntervalSeconds,
+		protocolEnabled:          options.Protocol.Enabled,
+		protocolIssuer:           options.Protocol.Issuer,
+		protocolIntrospection:    options.Protocol.EnableIntrospection,
+		protocolDeviceCode:       options.Protocol.DeviceCodeEnabled,
+		protocolLoginPath:        options.Protocol.LoginPath,
+		protocolResourceServices: &options.Protocol.ResourceServices,
+		secretValue:              options.Secrets.MasterKey,
 	}
 	errs := validateOverrides(&ov, "options")
 	return ov, errs
@@ -1608,6 +1946,151 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 			add(ConfigErrorRange, "secrets.tls_pfx_password",
 				fmt.Sprintf("PFX 密码不能超过 %d 字节", MaxSecretBytes))
 		}
+	}
+	return errs
+}
+
+// checkYAMLMailSection 校验 mail 段的嵌套结构与标量类型；未知字段/重复键/错误
+// 类型/null/非法秘密来源都返回诊断，不做 IO（密码来源值读取留给装配期）。
+func checkYAMLMailSection(node *yaml.Node) ConfigErrors {
+	if node.Kind == yaml.AliasNode {
+		return ConfigErrors{configErr(ConfigErrorType, "yaml", "mail", node.Line, "不支持 YAML 别名或锚点")}
+	}
+	if node.Kind != yaml.MappingNode {
+		return ConfigErrors{configErr(ConfigErrorType, "yaml", "mail", node.Line, "mail 必须是映射")}
+	}
+	var errs ConfigErrors
+	seenTop := make(map[string]int)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i]
+		value := node.Content[i+1]
+		name := key.Value
+		if first, duplicated := seenTop[name]; duplicated {
+			errs = append(errs, configErr(ConfigErrorDuplicateKey, "yaml", "mail."+name, key.Line,
+				"重复的键，首次出现在第 "+strconv.Itoa(first)+" 行"))
+			continue
+		}
+		seenTop[name] = key.Line
+		switch name {
+		case "enabled":
+			if value.Kind != yaml.ScalarNode || value.Tag != "!!bool" {
+				errs = append(errs, configErr(ConfigErrorType, "yaml", "mail.enabled", value.Line, "字段类型不正确"))
+			}
+		case "app_name":
+			if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+				errs = append(errs, configErr(ConfigErrorType, "yaml", "mail.app_name", value.Line, "字段类型不正确"))
+			}
+		case "smtp":
+			errs = append(errs, checkYAMLMappingKeys(value, "mail.smtp", map[string]string{
+				"addr": "!!str", "host": "!!str", "tls_mode": "!!str", "username": "!!str",
+				"timeout_seconds": "!!int", "allow_plaintext_local": "!!bool", "trusted_roots": "!!seq",
+			}, map[string]string{"password": "secret"})...)
+			for j := 0; j+1 < len(value.Content); j += 2 {
+				child := value.Content[j]
+				childValue := value.Content[j+1]
+				switch child.Value {
+				case "trusted_roots":
+					if childValue.Kind != yaml.SequenceNode {
+						errs = append(errs, configErr(ConfigErrorType, "yaml", "mail.smtp.trusted_roots", childValue.Line, "trusted_roots 必须是字符串列表"))
+						continue
+					}
+					for _, item := range childValue.Content {
+						if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
+							errs = append(errs, configErr(ConfigErrorType, "yaml", "mail.smtp.trusted_roots", item.Line, "trusted_roots 元素必须是字符串"))
+						}
+					}
+				case "password":
+					errs = append(errs, checkYAMLSecretMapping(childValue, "mail.smtp.password")...)
+				}
+			}
+		case "from":
+			errs = append(errs, checkYAMLMappingKeys(value, "mail.from", map[string]string{
+				"address": "!!str", "name": "!!str",
+			}, nil)...)
+		case "delivery":
+			errs = append(errs, checkYAMLMappingKeys(value, "mail.delivery", map[string]string{
+				"max_attempts": "!!int", "timeout_seconds": "!!int",
+			}, nil)...)
+		default:
+			errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", "mail."+name, key.Line, "未定义的配置字段"))
+		}
+	}
+	return errs
+}
+
+// checkYAMLMappingKeys 校验映射的键集合、重复键与标量类型；secretFields 中的键
+// 交给 checkYAMLSecretMapping 处理。
+func checkYAMLMappingKeys(node *yaml.Node, path string, leaves, secretFields map[string]string) ConfigErrors {
+	if node.Kind != yaml.MappingNode {
+		return ConfigErrors{configErr(ConfigErrorType, "yaml", path, node.Line, path+" 必须是映射")}
+	}
+	var errs ConfigErrors
+	seen := make(map[string]int)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i]
+		value := node.Content[i+1]
+		name := key.Value
+		if first, dup := seen[name]; dup {
+			errs = append(errs, configErr(ConfigErrorDuplicateKey, "yaml", path+"."+name, key.Line,
+				"重复的键，首次出现在第 "+strconv.Itoa(first)+" 行"))
+			continue
+		}
+		seen[name] = key.Line
+		if secretFields != nil && secretFields[name] == "secret" {
+			continue
+		}
+		tag, known := leaves[name]
+		if !known {
+			errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", path+"."+name, key.Line, "未定义的配置字段"))
+			continue
+		}
+		if value.Kind == yaml.ScalarNode && value.Tag == "null" {
+			errs = append(errs, configErr(ConfigErrorType, "yaml", path+"."+name, value.Line, "字段不能为 null"))
+			continue
+		}
+		if tag == "!!seq" {
+			if value.Kind != yaml.SequenceNode {
+				errs = append(errs, configErr(ConfigErrorType, "yaml", path+"."+name, value.Line, "字段必须是列表"))
+			}
+			continue
+		}
+		if value.Kind != yaml.ScalarNode || value.Tag != tag {
+			errs = append(errs, configErr(ConfigErrorType, "yaml", path+"."+name, value.Line, "字段类型不正确"))
+		}
+	}
+	return errs
+}
+
+// checkYAMLSecretMapping 校验 env/file 秘密来源映射（只允许一个来源）。
+func checkYAMLSecretMapping(node *yaml.Node, path string) ConfigErrors {
+	if node.Kind != yaml.MappingNode {
+		return ConfigErrors{configErr(ConfigErrorType, "yaml", path, node.Line, "秘密来源必须是 env/file 映射")}
+	}
+	var errs ConfigErrors
+	seen := make(map[string]int)
+	keys := 0
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i]
+		value := node.Content[i+1]
+		name := key.Value
+		if first, dup := seen[name]; dup {
+			errs = append(errs, configErr(ConfigErrorDuplicateKey, "yaml", path+"."+name, key.Line,
+				"重复的键，首次出现在第 "+strconv.Itoa(first)+" 行"))
+			continue
+		}
+		seen[name] = key.Line
+		switch name {
+		case "env", "file":
+			keys++
+			if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+				errs = append(errs, configErr(ConfigErrorType, "yaml", path+"."+name, value.Line, "秘密来源值必须是字符串"))
+			}
+		default:
+			errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", path+"."+name, key.Line, "秘密来源只允许 env 或 file"))
+		}
+	}
+	if keys != 1 {
+		errs = append(errs, configErr(ConfigErrorValue, "yaml", path, node.Line, "秘密来源必须且只能提供 env 或 file 之一"))
 	}
 	return errs
 }

@@ -50,6 +50,9 @@ type SMTPOptions struct {
 	// Username/Password 是显式认证配置；密码应为秘密来源，不得写入日志。
 	Username string
 	Password string
+	// PasswordProvider 是按需取密的回调（步骤 139）：优先于 Password，二者只能
+	// 设置一个；返回的字节在构造本次认证后立即清零，不长期保存明文。
+	PasswordProvider func() ([]byte, error)
 	// Timeout 是单封发送总时限；0 使用默认值。
 	Timeout time.Duration
 	// AllowPlaintextLocal 显式允许对回环地址使用明文连接（仅本地测试捕获器）。
@@ -98,10 +101,17 @@ func NewSMTPSender(opts SMTPOptions) (*SMTPSender, error) {
 	default:
 		return nil, fmt.Errorf("%w: 不支持的 TLS 模式 %q", ErrOptionsInvalid, opts.TLSMode)
 	}
+	if opts.Password != "" && opts.PasswordProvider != nil {
+		return nil, fmt.Errorf("%w: Password 与 PasswordProvider 只能设置一个", ErrOptionsInvalid)
+	}
 	hasUser := opts.Username != ""
-	hasPass := opts.Password != ""
+	hasPass := opts.Password != "" || opts.PasswordProvider != nil
 	if hasUser != hasPass {
 		return nil, fmt.Errorf("%w: 认证用户名与密码必须同时给出", ErrOptionsInvalid)
+	}
+	if hasUser && opts.Password != "" {
+		// 静态密码在构造期建立认证；PasswordProvider 在每次 Send 时按需构造。
+		_ = hasUser
 	}
 	if hasUser && opts.TLSMode == TLSModeNone {
 		return nil, fmt.Errorf("%w: 明文连接不得配置认证凭据", ErrOptionsInvalid)
@@ -111,6 +121,9 @@ func NewSMTPSender(opts SMTPOptions) (*SMTPSender, error) {
 		opts:     opts,
 		loopback: isLoopbackAddr(host),
 	}
+	if hasUser && opts.Password != "" {
+		s.auth = smtp.PlainAuth("", opts.Username, opts.Password, opts.Host)
+	}
 	if opts.TLSMode != TLSModeNone {
 		// 证书校验始终开启：只接受额外根证书，不提供跳过校验的配置入口。
 		s.tlsConfig = &tls.Config{
@@ -118,9 +131,6 @@ func NewSMTPSender(opts SMTPOptions) (*SMTPSender, error) {
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    opts.TrustedRoots,
 		}
-	}
-	if hasUser {
-		s.auth = smtp.PlainAuth("", opts.Username, opts.Password, opts.Host)
 	}
 	return s, nil
 }
@@ -191,8 +201,19 @@ func (s *SMTPSender) Send(ctx context.Context, message Message) error {
 			return s.sendFailure(ctx, "starttls", err)
 		}
 	}
-	if s.auth != nil {
-		if err := client.Auth(s.auth); err != nil {
+	auth := s.auth
+	if s.opts.Username != "" && s.opts.PasswordProvider != nil {
+		secret, secretErr := s.opts.PasswordProvider()
+		if secretErr != nil {
+			return newSendError(FailurePermanent, CodeAuthFailed, fmt.Errorf("读取 SMTP 密码失败: %w", secretErr))
+		}
+		auth = smtp.PlainAuth("", s.opts.Username, string(secret), s.opts.Host)
+		for i := range secret {
+			secret[i] = 0
+		}
+	}
+	if auth != nil {
+		if err := client.Auth(auth); err != nil {
 			return s.sendFailure(ctx, "auth", err)
 		}
 	}

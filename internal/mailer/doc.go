@@ -3,7 +3,7 @@
 //
 // 安全与边界：
 //   - 本包不提供"默认真实外发"：SMTP 适配必须显式给出服务器地址与认证配置，
-//     测试默认使用 internal/testmail 本地捕获器；不会自行读取真实用户地址。
+//     测试默认使用 internal/mailtest 外部 EvernightMail 进程夹具；不会自行读取真实用户地址。
 //   - SMTP 适配只允许显式 TLS 模式（STARTTLS / 隐式 TLS / 无 TLS 仅限回环测试），
 //     证书校验不可关闭：不提供 InsecureSkipVerify 开关，测试通过 TrustedRoots
 //     注入测试自签根证书完成校验。

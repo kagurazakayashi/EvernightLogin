@@ -12,12 +12,12 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	mailersqlite "github.com/kagurazakayashi/EvernightLogin/internal/mailer/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailtest"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
-	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -499,14 +499,7 @@ func TestDeliveryEndToEndWithTaskExecutor(t *testing.T) {
 	defer cancel()
 
 	// 真实 SMTP 适配 + testmail 本地捕获器作为发送器。
-	smtpServer, err := testmail.New(testmail.Options{})
-	if err != nil {
-		t.Fatalf("testmail: %v", err)
-	}
-	if err := smtpServer.Start(); err != nil {
-		t.Fatalf("启动 testmail: %v", err)
-	}
-	defer func() { _ = smtpServer.Close() }()
+	smtpServer := mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr: smtpServer.Addr().String(), TLSMode: mailer.TLSModeNone, AllowPlaintextLocal: true,
 	})
@@ -573,7 +566,7 @@ func TestDeliveryEndToEndWithTaskExecutor(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	msgs := smtpServer.Messages(testmail.Query{})
+	msgs := smtpServer.Snapshot(mailtest.Query{})
 	if len(msgs) != 1 {
 		t.Fatalf("testmail 应捕获 1 封，实际 %d", len(msgs))
 	}
@@ -796,7 +789,7 @@ func TestDeliveryRetryThenActualSend(t *testing.T) {
 	if err := retryService.Handler(ctx, retryJob); err != nil {
 		t.Fatalf("重试发送失败: %v", err)
 	}
-	msgs := server.Messages(testmail.Query{})
+	msgs := server.Snapshot(mailtest.Query{})
 	if len(msgs) != 1 {
 		t.Fatalf("testmail 应收到 1 封，实际 %d", len(msgs))
 	}
@@ -809,16 +802,8 @@ func TestDeliveryRetryThenActualSend(t *testing.T) {
 	}
 }
 
-// startTestMailForDelivery 启动本地 SMTP 捕获服务器。
-func startTestMailForDelivery(t *testing.T) *testmail.Server {
+// startTestMailForDelivery 启动 Mail 测试夹具作为本地 SMTP 捕获服务器。
+func startTestMailForDelivery(t *testing.T) *mailtest.Instance {
 	t.Helper()
-	server, err := testmail.New(testmail.Options{})
-	if err != nil {
-		t.Fatalf("testmail: %v", err)
-	}
-	if err := server.Start(); err != nil {
-		t.Fatalf("启动 testmail: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Close() })
-	return server
+	return mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
 }

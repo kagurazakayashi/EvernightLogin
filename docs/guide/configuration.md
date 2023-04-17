@@ -51,7 +51,7 @@ loginctl config set logging.level debug --file copy.yaml --dry-run
 loginctl config set-secret secrets.tls_pfx_password --source env:LOGIN_PFX_PASS --file copy.yaml
 ```
 
-预期（Windows amd64 实测）：默认配置 `field_count` 为 **37**；`config set` 预演输出
+预期（Windows amd64 实测）：默认配置 `field_count` 为 **51**；`config set` 预演输出
 `"written": false, "dry_run": true`，并给出 `class`（`hot-reloadable` 或
 `restart-required`）与 `needs_restart`。
 
@@ -135,15 +135,16 @@ secrets:
 
 ### 4.5a 协议端点（`protocol`，默认关闭，YAML 专用）
 
-`protocol` 段用于 OAuth 2.0 / OpenID Connect 协议端点，当前只支持 YAML（不提供独立
-环境变量），字段如下；未列出的字段或非法组合会拒绝加载，启用时缺少合法 Issuer 会
+`protocol` 段用于 OAuth 2.0 / OpenID Connect 协议端点；`device_code_enabled` 支持环境变量 `LOGIN_PROTOCOL_DEVICE_CODE_ENABLED`，其余字段仍以 YAML/代码选项为主，字段如下；未列出的字段或非法组合会拒绝加载，启用时缺少合法 Issuer 会
 拒绝启动。
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `protocol.enabled` | `false` | 协议端点总开关；也可用 `--enable-protocol` 覆盖 |
 | `protocol.issuer` | 空 | 固定公开签发方；必须为 https（本地回环 http 例外）、无尾斜杠，路径必须与 `server.path_prefix` 一致 |
-| `protocol.enable_introspection` | `false` | RFC 7662 状态查询；当前版本未装配资源服务注册表，设为 true 会拒绝启动 |
+| `protocol.device_code_enabled` | `false` | RFC 8628 设备码；需 `protocol.enabled=true` 且 `server.public_base_url` 可派生确认页；关闭时不声明 Discovery 能力 |
+| `protocol.enable_introspection` | `false` | RFC 7662 状态查询；启用前必须登记至少一个受信资源服务，否则拒绝启动 |
+| `protocol.resource_services` | 空列表 | 受信资源服务登记（`service_id/client_id/audience`，仅 YAML/代码选项）；客户端必须是 confidential、应用 active，audience 必须已在该客户端 Audiences 中登记 |
 | `protocol.login_path` | 空 | 未登录访问授权端点时跳转的站内登录页路径 |
 
 注意：Passkey 的 `passkey.user_verification` 默认 `required`；显式设为 `preferred` 或
@@ -167,6 +168,7 @@ secrets:
 | `app_qr_login.allowed_client_ids` | `[]` | restart-required | 否 | `LOGIN_APP_QR_LOGIN_ALLOWED_CLIENT_IDS` | 允许使用扫码登录的应用 ID（= OAuth client_id）白名单，最多 200 个；启用时必须非空 |
 | `app_qr_login.request_ttl_seconds` | `120` | restart-required | 否 | `LOGIN_APP_QR_LOGIN_REQUEST_TTL_SECONDS` | 请求有效期（秒），允许 30～300 |
 | `app_qr_login.claim_interval_seconds` | `1` | restart-required | 否 | `LOGIN_APP_QR_LOGIN_CLAIM_INTERVAL_SECONDS` | 发起端查询/领取最小间隔（秒），允许 1～5 |
+| `protocol.device_code_enabled` | `false` | restart-required | 否 | `LOGIN_PROTOCOL_DEVICE_CODE_ENABLED` | RFC 8628 设备码；需 `protocol.enabled=true` 且 `server.public_base_url` 可派生确认页；关闭时不声明 Discovery 能力 |
 
 ### 4.7 秘密（`secrets`）
 
@@ -174,6 +176,20 @@ secrets:
 |---|---|---|---|---|---|
 | `secrets.master_key` | 未配置 | restart-required | 是 | `LOGIN_SECRETS_MASTER_KEY` | 主密钥材料；本包只读取与脱敏，不生成、不轮换。YAML 中只能写 `env:`/`file:` 引用 |
 | `secrets.tls_pfx_password` | 未配置 | restart-required | 是 | `LOGIN_SECRETS_TLS_PFX_PASSWORD` | PFX 密码；同样只能来自受保护来源 |
+| `mail.enabled` | false | restart-required | 否 | `LOGIN_MAIL_ENABLED` | 生产邮件发送总开关；关闭时不读取密码/证书、不建立网络连接，邮件能力明确拒绝 |
+| `mail.smtp.addr` | 空 | restart-required | 否 | `LOGIN_MAIL_SMTP_ADDR` | SMTP 服务器 host:port；启用时必填 |
+| `mail.smtp.host` | 空 | restart-required | 否 | `LOGIN_MAIL_SMTP_HOST` | EHLO/TLS ServerName；空取 addr 主机部分 |
+| `mail.smtp.tls_mode` | starttls | restart-required | 否 | `LOGIN_MAIL_SMTP_TLS_MODE` | starttls\|implicit\|none；none 仅允许回环本地捕获器，绝不自动降级 |
+| `mail.smtp.trusted_roots` | [] | restart-required | 否 | `LOGIN_MAIL_SMTP_TRUSTED_ROOTS` | 额外信任的 CA PEM 绝对路径；只追加系统根，不关闭证书校验 |
+| `mail.smtp.username` | 空 | restart-required | 否 | `LOGIN_MAIL_SMTP_USERNAME` | SMTP 认证用户名；与密码必须同时配置或同时为空 |
+| `mail.smtp.password` | 未配置 | restart-required | 是 | `LOGIN_MAIL_SMTP_PASSWORD` | SMTP 密码来源映射（`{env: NAME}` 或 `{file: 绝对路径}`）；诊断只显示已配置/未配置 |
+| `mail.smtp.timeout_seconds` | 10 | restart-required | 否 | `LOGIN_MAIL_SMTP_TIMEOUT_SECONDS` | 单封发送总时限（1～120 秒） |
+| `mail.smtp.allow_plaintext_local` | false | restart-required | 否 | `LOGIN_MAIL_SMTP_ALLOW_PLAINTEXT_LOCAL` | 显式允许 tls_mode=none 的回环明文连接，且不得带认证 |
+| `mail.from.address` | 空 | restart-required | 否 | `LOGIN_MAIL_FROM_ADDRESS` | 发件地址 addr-spec；启用时必填 |
+| `mail.from.name` | 空 | restart-required | 否 | `LOGIN_MAIL_FROM_NAME` | 发件人显示名 |
+| `mail.app_name` | EvernightLogin | restart-required | 否 | `LOGIN_MAIL_APP_NAME` | 邮件品牌名（不含秘密） |
+| `mail.delivery.max_attempts` | 3 | restart-required | 否 | `LOGIN_MAIL_DELIVERY_MAX_ATTEMPTS` | 最大尝试次数（含首次，1～10） |
+| `mail.delivery.timeout_seconds` | 120 | restart-required | 否 | `LOGIN_MAIL_DELIVERY_TIMEOUT_SECONDS` | 单次投递任务超时（30～600 秒） |
 
 > 环境变量名是稳定契约：新增字段只能追加新变量，不能改名已有变量。
 > 秘密的环境变量既可直接提供值，也可在 YAML 中引用；诊断与错误输出始终脱敏。

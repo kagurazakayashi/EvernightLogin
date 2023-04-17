@@ -224,3 +224,25 @@ func nullString(value string) any {
 }
 
 var _ mailer.Store = (*Store)(nil)
+
+// Counts 实现 mailer.CountsStore：按状态统计投递记录数量。
+func (s *Store) Counts(ctx context.Context) (map[mailer.DeliveryState]int, error) {
+	rows, err := s.store.QueryContext(ctx, `SELECT state,COUNT(*) FROM mail_deliveries GROUP BY state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[mailer.DeliveryState]int, 5)
+	for rows.Next() {
+		var state string
+		var count int
+		if err := rows.Scan(&state, &count); err != nil {
+			return nil, err
+		}
+		counts[mailer.DeliveryState(state)] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
