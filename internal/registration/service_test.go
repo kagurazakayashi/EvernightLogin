@@ -24,6 +24,7 @@ import (
 	credentialsqlite "github.com/kagurazakayashi/EvernightLogin/internal/credential/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	mailersqlite "github.com/kagurazakayashi/EvernightLogin/internal/mailer/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailtest"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	registrationsqlite "github.com/kagurazakayashi/EvernightLogin/internal/registration/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
@@ -31,7 +32,6 @@ import (
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
-	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -849,7 +849,7 @@ func TestDeliveryEmailSenderEnqueuesVerification(t *testing.T) {
 }
 
 // decodeMailTextBody 解码邮件正文的 base64 传输编码。
-func decodeMailTextBody(t *testing.T, message testmail.Message) string {
+func decodeMailTextBody(t *testing.T, message mailtest.Message) string {
 	t.Helper()
 	encoded := strings.ReplaceAll(string(message.Body()), "\r\n", "")
 	encoded = strings.ReplaceAll(encoded, "\n", "")
@@ -868,14 +868,7 @@ func TestRegistrationEmailEndToEndWithTestmail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	smtpServer, err := testmail.New(testmail.Options{})
-	if err != nil {
-		t.Fatalf("testmail: %v", err)
-	}
-	if err := smtpServer.Start(); err != nil {
-		t.Fatalf("启动 testmail: %v", err)
-	}
-	defer func() { _ = smtpServer.Close() }()
+	smtpServer := mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr: smtpServer.Addr().String(), TLSMode: mailer.TLSModeNone, AllowPlaintextLocal: true,
 	})
@@ -974,7 +967,7 @@ func TestRegistrationEmailEndToEndWithTestmail(t *testing.T) {
 	}
 	waitCtx, waitCancel := context.WithTimeout(ctx, 8*time.Second)
 	defer waitCancel()
-	messages, err := smtpServer.Wait(waitCtx, testmail.Query{To: "e2e@example.test"})
+	messages, err := smtpServer.Wait(waitCtx, mailtest.Query{To: "e2e@example.test"})
 	if err != nil || len(messages) == 0 {
 		t.Fatalf("testmail 未捕获验证邮件: %v", err)
 	}

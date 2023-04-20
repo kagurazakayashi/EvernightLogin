@@ -20,6 +20,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	credentialsqlite "github.com/kagurazakayashi/EvernightLogin/internal/credential/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailtest"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	mfasqlite "github.com/kagurazakayashi/EvernightLogin/internal/mfa/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
@@ -29,7 +30,6 @@ import (
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
-	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	totpsqlite "github.com/kagurazakayashi/EvernightLogin/internal/totp/sqlite"
@@ -50,7 +50,7 @@ type testEnv struct {
 	store   mfa.Store
 	audit   *audit.Recorder
 	session *session.Service
-	mail    *testmail.Server
+	mail    *mailtest.Instance
 	totp    *totp.Service
 	now     time.Time
 }
@@ -106,14 +106,7 @@ func newTestEnv(t *testing.T, mutate func(*mfa.Options)) *testEnv {
 		t.Fatalf("会话服务: %v", err)
 	}
 	env.session = sessionService
-	mailServer, err := testmail.New(testmail.Options{Addr: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatalf("本地邮件捕获器: %v", err)
-	}
-	if err := mailServer.Start(); err != nil {
-		t.Fatalf("启动本地邮件捕获器: %v", err)
-	}
-	t.Cleanup(func() { _ = mailServer.Close() })
+	mailServer := mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
 	env.mail = mailServer
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr: mailServer.Addr().String(), TLSMode: mailer.TLSModeNone, AllowPlaintextLocal: true,
@@ -215,7 +208,7 @@ func (e *testEnv) waitCode() string {
 	e.t.Helper()
 	ctx, cancel := context.WithTimeout(e.ctx, 5*time.Second)
 	defer cancel()
-	messages, err := e.mail.Wait(ctx, testmail.Query{To: "alice@example.com"})
+	messages, err := e.mail.Wait(ctx, mailtest.Query{To: "alice@example.com"})
 	if err != nil || len(messages) == 0 {
 		e.t.Fatalf("未收到验证码邮件: %v", err)
 	}

@@ -45,11 +45,11 @@ type UIPageMFABackend interface {
 	CancelSecondFactor(ctx context.Context, request *http.Request) (UIPageMFACancelResult, error)
 
 	// BeginStrongSetupPasskey 为受限初始化会话开始真实 Passkey 注册 ceremony。
-	BeginStrongSetupPasskey(ctx context.Context, request *http.Request) (UIPageStrongSetupStart, error)
+	BeginStrongSetupPasskey(ctx context.Context, request *http.Request, currentPassword string) (UIPageStrongSetupStart, error)
 	// FinishStrongSetupPasskey 完成真实 Passkey 注册并调用 CompleteStrongSetup；
 	// 成功后受限会话撤销、必须重新登录。
 	FinishStrongSetupPasskey(ctx context.Context, request *http.Request,
-		response []byte) (UIPageStrongSetupResult, error)
+		response []byte, currentPassword string) (UIPageStrongSetupResult, error)
 
 	// BeginRecoveryCode 用恢复代码替代第二步：受控读取当前挑战并原子消费代码，
 	// 成功返回受限恢复会话 Cookie。
@@ -499,11 +499,13 @@ func (h *mfaPageHandlers) strongSetup(ctx context.Context, request *http.Request
 		if request.Method != http.MethodPost {
 			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
 		}
-		if _, ok := pageForm(request, page); !ok {
+		form, ok := pageForm(request, page, "current_password")
+		if !ok {
 			return UIPageOutcome{StatusCode: http.StatusBadRequest,
 				ErrorCode: "REQ_INVALID", ErrorSummary: textMFA("error.business.REQ_INVALID")}, nil
 		}
-		start, err := backend.BeginStrongSetupPasskey(ctx, request)
+		password, _ := singleValue(form, "current_password", 1024)
+		start, err := backend.BeginStrongSetupPasskey(ctx, request, password)
 		if err != nil {
 			return mfaErrorOutcome(err), nil
 		}
@@ -513,7 +515,7 @@ func (h *mfaPageHandlers) strongSetup(ctx context.Context, request *http.Request
 		if request.Method != http.MethodPost {
 			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
 		}
-		form, ok := pageForm(request, page, "passkey_response", "passkey_ceremony_id")
+		form, ok := pageForm(request, page, "passkey_response", "passkey_ceremony_id", "current_password")
 		if !ok {
 			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
 				ErrorSummary: textMFA("error.business.REQ_INVALID")}, nil
@@ -523,7 +525,8 @@ func (h *mfaPageHandlers) strongSetup(ctx context.Context, request *http.Request
 			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
 				ErrorSummary: textMFA("error.business.REQ_INVALID")}, nil
 		}
-		result, err := backend.FinishStrongSetupPasskey(ctx, request, []byte(encoded))
+		password, _ := singleValue(form, "current_password", 1024)
+		result, err := backend.FinishStrongSetupPasskey(ctx, request, []byte(encoded), password)
 		if err != nil {
 			return mfaErrorOutcome(err), nil
 		}

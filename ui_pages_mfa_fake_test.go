@@ -34,11 +34,11 @@ func (f *fakeMFABackend) CancelSecondFactor(context.Context, *http.Request) (UIP
 	return UIPageMFACancelResult{}, nil
 }
 func (f *fakeMFABackend) BeginStrongSetupPasskey(context.Context,
-	*http.Request) (UIPageStrongSetupStart, error) {
+	*http.Request, string) (UIPageStrongSetupStart, error) {
 	return f.start, nil
 }
 func (f *fakeMFABackend) FinishStrongSetupPasskey(context.Context, *http.Request,
-	[]byte) (UIPageStrongSetupResult, error) {
+	[]byte, string) (UIPageStrongSetupResult, error) {
 	return f.result, nil
 }
 func (f *fakeMFABackend) BeginRecoveryCode(context.Context, *http.Request,

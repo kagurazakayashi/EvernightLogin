@@ -76,6 +76,13 @@ type Options struct {
 	// StrongSetupMethods 是允许在初始化流程中绑定的强因素方法；默认
 	// [MethodPasskey]（邮件永远不允许）。宿主必须保证对应绑定入口已限制为受限会话。
 	StrongSetupMethods []authfact.Method
+	// RootReady 是 root 强认证初始化完成后的受控 bootstrap 状态更新回调；在
+	// 强认证完成的同一审计事务内调用，失败整体回滚（fail-closed）。
+	RootReady RootReadyMarker
+	// AdminResetBackend / AdminResetTargetGuard 是步骤 152 人工恢复执行器的受控
+	// MFA 重置依赖；未装配时 AdminResetFactors 明确拒绝，不影响普通 MFA 流程。
+	AdminResetBackend     AdminFactorResetBackend
+	AdminResetTargetGuard func(ctx context.Context, targetUserID string) error
 	// Policy 是宿主的 MFA 强制策略；nil 表示没有外部强制策略。
 	Policy         Policy
 	CodeTTL        time.Duration
@@ -270,17 +277,20 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 	requiresStrong := base.Restricted || base.Outcome != authn.OutcomeComplete ||
 		len(base.RequiredSteps) > 0
 	strongSetupStep := false
+	secondFactorStep := false
 	for _, step := range base.RequiredSteps {
 		switch step {
 		case authn.StepStrongAuthSetup:
 			strongSetupStep = true
+		case authn.StepSecondFactor:
+			secondFactorStep = true
 		case authn.StepPasswordChange:
 			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
 				"password_change_required", string(CodeMFARequired), request.RequestID)
 			return LoginStart{}, ErrStrongAuthRequired
 		}
 	}
-	if requiresStrong && !strongSetupStep {
+	if requiresStrong && !strongSetupStep && !secondFactorStep {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID}, "mfa.begin_denied",
 			"strong_auth_required", string(CodeMFARequired), request.RequestID)
 		return LoginStart{}, ErrStrongAuthRequired
@@ -1489,6 +1499,11 @@ func (s *Service) transition(ctx context.Context, challenge Challenge, attemptDi
 		if !ok {
 			return ErrChallengeInvalid
 		}
+		if challenge.Purpose == PurposeStrongSetup && s.opts.RootReady != nil {
+			if readyErr := s.opts.RootReady.MarkRootReady(txCtx, tx, challenge.UserID, now); readyErr != nil {
+				return readyErr
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -1768,6 +1783,11 @@ func (s *Service) markVerified(ctx context.Context, challenge Challenge,
 		}
 		if !ok {
 			return ErrChallengeInvalid
+		}
+		if challenge.Purpose == PurposeStrongSetup && s.opts.RootReady != nil {
+			if readyErr := s.opts.RootReady.MarkRootReady(txCtx, tx, challenge.UserID, now); readyErr != nil {
+				return readyErr
+			}
 		}
 		return nil
 	})

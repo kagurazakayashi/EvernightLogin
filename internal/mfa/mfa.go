@@ -519,3 +519,10 @@ var _ = credential.KindCode
 
 // MailSender 邮件发送接口别名（内部使用 mailer.Sender）。
 type MailSender = mailer.Sender
+
+// RootReadyMarker 在强认证完成的审计事务内把 root 初始化状态从 setup_verified
+// 推进到 ready。只有真正完成强因素绑定后才调用；非 root/已 ready/普通用户由实现
+// 自行判定并返回 nil。
+type RootReadyMarker interface {
+	MarkRootReady(ctx context.Context, tx audit.Tx, userID string, now time.Time) error
+}
