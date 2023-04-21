@@ -17,7 +17,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 )
 
-const caseSelectColumns = `c.id,c.target_user_id,COALESCE(u.username,''),
+const caseSelectColumns = `c.id,COALESCE(c.application_id,''),c.target_user_id,COALESCE(u.username,''),
 c.created_by_user_id,c.assignee_user_id,c.target_masked_email,c.reason,c.status,
 c.row_version,c.created_at_ms,c.updated_at_ms`
 
@@ -25,9 +25,9 @@ const getCaseSQL = `SELECT ` + caseSelectColumns + `
 FROM support_cases c LEFT JOIN users u ON u.id=c.target_user_id WHERE c.id=?`
 
 const insertCaseSQL = `INSERT INTO support_cases(
-id,target_user_id,created_by_user_id,assignee_user_id,reason,status,
+id,application_id,target_user_id,created_by_user_id,assignee_user_id,reason,status,
 target_masked_email,row_version,created_at_ms,updated_at_ms
-) VALUES(?,?,?,?,?,?,?,1,?,?)`
+) VALUES(?,?,?,?,?,?,?,?,1,?,?)`
 
 const insertEventSQL = `INSERT INTO support_case_events(
 id,case_id,seq,action,actor_type,actor_id,from_status,to_status,detail,created_at_ms
@@ -70,8 +70,13 @@ func (s *Store) CreateCaseTx(ctx context.Context, tx audit.Tx, record support.Ca
 	if event.ID == "" || event.CaseID != record.ID {
 		return fmt.Errorf("%w: 处理历史事件无效", support.ErrOptionsInvalid)
 	}
-	if _, err := tx.ExecContext(ctx, insertCaseSQL, record.ID, record.TargetUserID,
-		record.CreatedByUserID, record.AssigneeUserID, record.Reason, string(record.Status),
+	applicationID := any(nil)
+	if record.ApplicationID != "" {
+		applicationID = record.ApplicationID
+	}
+	if _, err := tx.ExecContext(ctx, insertCaseSQL, record.ID, applicationID,
+		record.TargetUserID, record.CreatedByUserID, record.AssigneeUserID, record.Reason,
+		string(record.Status),
 		record.TargetMaskedEmail, record.CreatedAt.UTC().UnixMilli(),
 		record.UpdatedAt.UTC().UnixMilli()); err != nil {
 		return fmt.Errorf("%w: %w", support.ErrStoreUnavailable, err)
@@ -108,6 +113,10 @@ func (s *Store) ListCases(ctx context.Context, query support.CaseQuery) ([]suppo
 	builder.WriteString(`SELECT ` + caseSelectColumns + ` FROM support_cases c
 LEFT JOIN users u ON u.id=c.target_user_id WHERE 1=1`)
 	args := make([]any, 0, 4)
+	if query.ApplicationID != "" {
+		builder.WriteString(` AND c.application_id=?`)
+		args = append(args, query.ApplicationID)
+	}
 	if query.AssigneeUserID != "" {
 		builder.WriteString(` AND c.assignee_user_id=?`)
 		args = append(args, query.AssigneeUserID)
@@ -268,9 +277,10 @@ func scanCase(rows *sql.Rows) (support.CaseRecord, error) {
 	var record support.CaseRecord
 	var status string
 	var createdAt, updatedAt int64
-	if err := rows.Scan(&record.ID, &record.TargetUserID, &record.TargetUsername,
-		&record.CreatedByUserID, &record.AssigneeUserID, &record.TargetMaskedEmail,
-		&record.Reason, &status, &record.RowVersion, &createdAt, &updatedAt); err != nil {
+	if err := rows.Scan(&record.ID, &record.ApplicationID, &record.TargetUserID,
+		&record.TargetUsername, &record.CreatedByUserID, &record.AssigneeUserID,
+		&record.TargetMaskedEmail, &record.Reason, &status, &record.RowVersion,
+		&createdAt, &updatedAt); err != nil {
 		return support.CaseRecord{}, err
 	}
 	record.Status = support.CaseStatus(status)

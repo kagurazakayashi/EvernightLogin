@@ -20,12 +20,12 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	credentialsqlite "github.com/kagurazakayashi/EvernightLogin/internal/credential/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailtest"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
 	passwordresetsqlite "github.com/kagurazakayashi/EvernightLogin/internal/passwordreset/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
-	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -90,7 +90,7 @@ type testEnv struct {
 	ctx     context.Context
 	raw     *storagesqlite.Store
 	audit   *audit.Recorder
-	mail    *testmail.Server
+	mail    *mailtest.Instance
 	now     time.Time
 	pass    *stubPasswords
 	sess    *stubSessions
@@ -136,14 +136,7 @@ func newTestEnv(t *testing.T, mutate func(*passwordreset.Options)) *testEnv {
 	if err != nil {
 		t.Fatalf("凭证服务: %v", err)
 	}
-	mailServer, err := testmail.New(testmail.Options{Addr: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatalf("邮件捕获器: %v", err)
-	}
-	if err := mailServer.Start(); err != nil {
-		t.Fatalf("启动邮件捕获器: %v", err)
-	}
-	t.Cleanup(func() { _ = mailServer.Close() })
+	mailServer := mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
 	env.mail = mailServer
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr: mailServer.Addr().String(), TLSMode: mailer.TLSModeNone, AllowPlaintextLocal: true,
@@ -233,7 +226,7 @@ func (e *testEnv) waitToken() string {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(e.ctx, time.Second)
-		messages, err := e.mail.Wait(ctx, testmail.Query{To: "alice@example.com"})
+		messages, err := e.mail.Wait(ctx, mailtest.Query{To: "alice@example.com"})
 		cancel()
 		if err == nil && len(messages) > 0 {
 			body := decodeMessageBody(messages[0])
@@ -427,7 +420,7 @@ func TestResetExpiredAndMailFailure(t *testing.T) {
 	}
 }
 
-func decodeMessageBody(message testmail.Message) string {
+func decodeMessageBody(message mailtest.Message) string {
 	raw := strings.ReplaceAll(string(message.Data), "\r\n", "\n")
 	parts := strings.SplitN(raw, "\n\n", 2)
 	encoded := raw
@@ -441,8 +434,8 @@ func decodeMessageBody(message testmail.Message) string {
 	return raw
 }
 
-func (e *testEnv) mailSnapshot() []testmail.Message {
-	return e.mail.Messages(testmail.Query{})
+func (e *testEnv) mailSnapshot() []mailtest.Message {
+	return e.mail.Snapshot(mailtest.Query{})
 }
 
 type failingSender struct{}

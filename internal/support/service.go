@@ -889,7 +889,7 @@ func (s *Service) now() time.Time { return s.opts.Now().UTC().Truncate(time.Mill
 
 func viewOf(record CaseRecord) CaseView {
 	return CaseView{
-		ID: record.ID, TargetUserID: record.TargetUserID,
+		ID: record.ID, ApplicationID: record.ApplicationID, TargetUserID: record.TargetUserID,
 		TargetMaskedUsername: maskUsername(record.TargetUsername),
 		TargetMaskedEmail:    record.TargetMaskedEmail,
 		Reason:               record.Reason, Status: record.Status,

@@ -14,6 +14,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailtest"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	policysqlite "github.com/kagurazakayashi/EvernightLogin/internal/policy/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
@@ -22,7 +23,6 @@ import (
 	reauthsqlite "github.com/kagurazakayashi/EvernightLogin/internal/reauth/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
-	"github.com/kagurazakayashi/EvernightLogin/internal/testmail"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
@@ -597,14 +597,7 @@ func TestRootOnlyRequiresCompleteAuthentication(t *testing.T) {
 
 // TestNotificationViaLocalTestmail 使用项目内本地 SMTP 捕获器验证告知真实投递路径。
 func TestNotificationViaLocalTestmail(t *testing.T) {
-	server, err := testmail.New(testmail.Options{Addr: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatalf("启动本地邮件捕获器: %v", err)
-	}
-	if err := server.Start(); err != nil {
-		t.Fatalf("开始监听: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Close() })
+	server := mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
 	sender, err := mailer.NewSMTPSender(mailer.SMTPOptions{
 		Addr: server.Addr().String(), TLSMode: mailer.TLSModeNone, AllowPlaintextLocal: true,
 	})
@@ -624,7 +617,7 @@ func TestNotificationViaLocalTestmail(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(env.ctx, 5*time.Second)
 	defer cancel()
-	messages, err := server.Wait(ctx, testmail.Query{To: "alice@example.com"})
+	messages, err := server.Wait(ctx, mailtest.Query{To: "alice@example.com"})
 	if err != nil || len(messages) == 0 {
 		t.Fatalf("本地捕获器未收到告知: %v", err)
 	}

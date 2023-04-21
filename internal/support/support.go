@@ -241,7 +241,9 @@ type TargetSnapshot struct {
 // CaseRecord 是求助单持久化记录。TargetUsername 由查询关联得到，仅用于返回前脱敏，
 // 不写入求助单表；目标邮箱只保存脱敏快照，原始验证邮箱只在发送找回时由服务读取。
 type CaseRecord struct {
-	ID                string
+	ID string
+	// ApplicationID 是应用受限客服工单所属应用；空表示系统/全局客服工单。
+	ApplicationID     string
 	TargetUserID      string
 	TargetUsername    string
 	CreatedByUserID   string
@@ -270,9 +272,11 @@ type EventRecord struct {
 // CaseQuery 是求助单列表查询；服务对普通工作人员强制 AssigneeUserID=本人。
 type CaseQuery struct {
 	AssigneeUserID string
-	Statuses       []CaseStatus
-	Limit          int
-	Offset         int
+	// ApplicationID 非空时只返回该应用的工单；空表示系统/全局查询。
+	ApplicationID string
+	Statuses      []CaseStatus
+	Limit         int
+	Offset        int
 }
 
 // CaseUpdate 是一次条件变更（行版本 + 非终态），与处理历史在同一事务内写入。
@@ -408,7 +412,9 @@ type TargetView struct {
 
 // CaseView 是返回给工作人员的求助单脱敏视图。
 type CaseView struct {
-	ID                   string
+	ID string
+	// ApplicationID 为空表示系统/全局工单；应用受限 API 只能读取本应用工单。
+	ApplicationID        string
 	TargetUserID         string
 	TargetMaskedUsername string
 	TargetMaskedEmail    string

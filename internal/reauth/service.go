@@ -74,15 +74,17 @@ type AuditRecorder interface {
 
 // Options 是再次认证服务依赖。
 type Options struct {
-	Store       Store
-	Audit       AuditRecorder
-	Policy      PolicyEvaluator
-	Passwords   PasswordVerifier
-	Mailer      mailer.Sender
-	FromAddress string
-	AppName     string
-	SupportURL  string
-	Templates   *mailer.TemplateSet
+	Store     Store
+	Audit     AuditRecorder
+	Policy    PolicyEvaluator
+	Passwords PasswordVerifier
+	// StrongFactors 是第二条强因素验证器；nil 时 strong 要求 fail-closed。
+	StrongFactors StrongFactorVerifier
+	Mailer        mailer.Sender
+	FromAddress   string
+	AppName       string
+	SupportURL    string
+	Templates     *mailer.TemplateSet
 	// AvailableStrengths 是当前环境已实现的认证强度；nil 时只认为 none/password
 	// 可用（MFA/Passkey 未实现），要求强认证的操作 fail-closed。
 	AvailableStrengths  []policy.Strength
@@ -406,7 +408,10 @@ func (s *Service) BeginChallenge(ctx context.Context, caller Caller, request Cha
 type VerifyChallengeRequest struct {
 	ChallengeID string
 	Password    string
-	RequestID   string
+	// TOTPCode 是策略要求 strong 时的第二条因素动态码；password-only 不得满足
+	// strong 要求。
+	TOTPCode  string
+	RequestID string
 }
 
 // ApprovalGrant 是验证成功后的短时一次性批准（明文令牌只在此返回一次）。
@@ -495,7 +500,44 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 		// 验证器报告的完成时间略晚于本服务截断后的时钟时按当前时间处理。
 		completedAt = now
 	}
-	// 以刚完成的密码验证重新评估策略：要求强认证或不可满足时不出具批准。
+	// 强认证要求：必须再完成真实第二因素（TOTP/Passkey），密码本身不得满足。
+	grantedStrength := policy.StrengthPassword
+	verificationComplete := verified.Complete
+	if record.RequiredStrength == policy.StrengthStrong {
+		if isNil(s.opts.StrongFactors) {
+			s.recordVerifyFailure(ctx, caller, record.ID, "strong_verifier_not_configured")
+			return ApprovalGrant{}, fmt.Errorf("%w: 未配置强因素验证实现", ErrMFARequired)
+		}
+		if request.TOTPCode == "" {
+			s.recordVerifyFailure(ctx, caller, record.ID, "strong_factor_required")
+			return ApprovalGrant{}, fmt.Errorf("%w: 需要第二因素动态码", ErrMFARequired)
+		}
+		strong, strongErr := s.opts.StrongFactors.VerifyStrongFactor(ctx,
+			StrongFactorVerifyRequest{UserID: caller.actor.ID, TOTPCode: request.TOTPCode,
+				RequestID: requestID})
+		if strongErr != nil || strong.UserID != caller.actor.ID || !strong.UserVerified {
+			attempts, increaseErr := s.opts.Store.IncreaseAttempts(ctx, record.ID, now)
+			if increaseErr != nil {
+				s.opts.Logger.Warn("再次认证强因素失败后递增尝试次数失败", "error", increaseErr)
+			}
+			if attempts >= record.MaxAttempts {
+				s.recordVerifyFailure(ctx, caller, record.ID, "attempts_exceeded")
+				return ApprovalGrant{}, ErrAttemptsExceeded
+			}
+			s.recordVerifyFailure(ctx, caller, record.ID, "invalid_strong_factor")
+			return ApprovalGrant{}, ErrAuthenticationFailed
+		}
+		completedAt = strong.CompletedAt
+		if completedAt.IsZero() {
+			completedAt = now
+		}
+		if completedAt.After(now) {
+			completedAt = now
+		}
+		grantedStrength = policy.StrengthStrong
+		verificationComplete = true
+	}
+	// 以刚完成的真实认证事实重新评估策略：要求更强或不可满足时不出具批准。
 	policyCaller, policyErr := toPolicyCaller(caller.actor)
 	if policyErr != nil {
 		return ApprovalGrant{}, ErrAccessDenied
@@ -503,7 +545,7 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 	decision, evaluateErr := s.opts.Policy.Evaluate(ctx, policyCaller, policy.EvaluateRequest{
 		ScopeID: record.ScopeID, OperationID: record.OperationID,
 		Verification: policy.Verification{VerifiedAt: completedAt,
-			Strength: policy.StrengthPassword, Confirmed: true},
+			Strength: grantedStrength, Confirmed: true},
 	})
 	if evaluateErr != nil {
 		mapped := s.mapEvaluateError(evaluateErr, decision)
@@ -527,8 +569,8 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 		ID: approvalID, ChallengeID: record.ID, TokenSHA256: tokenDigest,
 		UserID: caller.actor.ID, ScopeID: record.ScopeID, OperationID: record.OperationID,
 		TargetType: record.TargetType, TargetID: record.TargetID,
-		ParamsSHA256: record.ParamsSHA256, GrantedStrength: policy.StrengthPassword,
-		Complete: verified.Complete, GrantedAt: completedAt,
+		ParamsSHA256: record.ParamsSHA256, GrantedStrength: grantedStrength,
+		Complete: verificationComplete, GrantedAt: completedAt,
 		ExpiresAt: now.Add(s.opts.ApprovalTTL), CreatedAt: now,
 	}
 	critical := audit.CriticalRequest{
@@ -540,8 +582,8 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 				{Field: "operation_id", After: record.OperationID},
 				{Field: "target_type", After: record.TargetType},
 				{Field: "target_id", After: safeValue(record.TargetID)},
-				{Field: "granted_strength", After: string(policy.StrengthPassword)},
-				{Field: "authentication_complete", After: boolText(verified.Complete)},
+				{Field: "granted_strength", After: string(grantedStrength)},
+				{Field: "authentication_complete", After: boolText(verificationComplete)},
 			},
 		},
 		FailureReasonCode:   "reauth.approval_failed",
