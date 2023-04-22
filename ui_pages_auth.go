@@ -48,6 +48,18 @@ type UIPageAuthBackend interface {
 	AcceptInvitation(ctx context.Context, request *http.Request,
 		accept UIPageInvitationAcceptRequest) (UIPageInvitationAcceptResult, error)
 	Logout(ctx context.Context, request *http.Request) (*http.Cookie, error)
+	// BeginPasskeyLogin 开始可发现凭证/用户名 Passkey 密码less 登录。
+	BeginPasskeyLogin(ctx context.Context, request *http.Request) (UIPasskeyLoginStart, error)
+	// FinishPasskeyLogin 校验 WebAuthn 断言并返回真实会话 Cookie。
+	FinishPasskeyLogin(ctx context.Context, request *http.Request, response []byte) (UIPageLoginResult, error)
+}
+
+// UIPasskeyLoginStart 是 Passkey 密码less 登录的公开 WebAuthn 选项。
+type UIPasskeyLoginStart struct {
+	CeremonyID string
+	PublicKey  []byte
+	ExpiresAt  time.Time
+	RPID       string
 }
 
 // UIPageAuthError 是后端页面适配层可返回的稳定公开错误（不含内部细节）。
@@ -188,6 +200,10 @@ func newPageAuthPages(options UIPageAuthOptions) (*pageAuthPages, error) {
 			Layout: "layout/auth", Template: "page/auth/login"},
 		{Name: "auth.login.submit", Method: http.MethodPost, Path: "/login",
 			Access: UIAccessPublic, Layout: "layout/auth", Template: "page/auth/login"},
+		{Name: "auth.passkey_login", Method: http.MethodGet, Path: "/login/passkey",
+			Access: UIAccessPublic, Layout: "layout/auth", Template: "page/auth/passkey_login"},
+		{Name: "auth.passkey_login.finish", Method: http.MethodPost, Path: "/login/passkey/finish",
+			Access: UIAccessPublic, Layout: "layout/auth", Template: "page/auth/passkey_login"},
 		{Name: "auth.register", Method: http.MethodGet, Path: "/register",
 			Access: UIAccessPublic, Layout: "layout/auth", Template: "page/auth/register"},
 		{Name: "auth.register.submit", Method: http.MethodPost, Path: "/register",
@@ -222,10 +238,12 @@ func newPageAuthPages(options UIPageAuthOptions) (*pageAuthPages, error) {
 // 供宿主配置 transport CSRF 公开表单白名单/匿名令牌校验器。
 func UIPageAuthPublicFormPaths(prefix string) map[string]string {
 	return map[string]string{
-		prefix + "/login":             "auth.login",
-		prefix + "/register":          "auth.register",
-		prefix + "/invitation/accept": "auth.invitation",
-		prefix + "/email/verify":      "auth.email_verify",
+		prefix + "/login":                "auth.login",
+		prefix + "/login/passkey":        "auth.passkey_login",
+		prefix + "/login/passkey/finish": "auth.passkey_login",
+		prefix + "/register":             "auth.register",
+		prefix + "/invitation/accept":    "auth.invitation",
+		prefix + "/email/verify":         "auth.email_verify",
 		// 邮箱验证页的验证与重发两表单共用同一页面用途令牌（同一信任边界），
 		// 避免 GET 只签发单一令牌导致重发表单恒 403。
 		prefix + "/email/verify/resend": "auth.email_verify",
@@ -241,6 +259,8 @@ func formPurposeForRoute(routeName string) string {
 		return purpose
 	}
 	switch routeName {
+	case "auth.passkey_login", "auth.passkey_login.finish":
+		return "auth.passkey_login"
 	case "auth.login", "auth.login.submit":
 		return "auth.login"
 	case "auth.register", "auth.register.submit":
@@ -276,6 +296,8 @@ type authPageHandlers struct {
 func (h *authPageHandlers) HandlePage(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	switch page.RouteName {
+	case "auth.passkey_login", "auth.passkey_login.finish":
+		return h.passkeyLogin(ctx, request, page)
 	case "auth.login", "auth.login.submit":
 		return h.login(ctx, request, page)
 	case "auth.register", "auth.register.submit":
@@ -658,4 +680,44 @@ var builtinAuthMessages = map[string]string{
 func builtinAuthMessage(key string) (string, bool) {
 	message, ok := builtinAuthMessages[key]
 	return message, ok
+}
+
+// passkeyLogin 渲染/完成 Passkey 密码less 登录。
+func (h *authPageHandlers) passkeyLogin(ctx context.Context, request *http.Request,
+	page UIPageContext) (UIPageOutcome, error) {
+	if page.RouteName == "auth.passkey_login" {
+		if request.Method != http.MethodGet {
+			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
+		}
+		start, err := h.pages.options.Backend.BeginPasskeyLogin(ctx, request)
+		if err != nil {
+			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "AUTH_FAILED",
+				ErrorSummary: text("page.auth.login.error_generic")}, nil
+		}
+		return UIPageOutcome{Data: map[string]any{"PasskeyStart": start}}, nil
+	}
+	if request.Method != http.MethodPost {
+		return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
+	}
+	form, formErr := readPageForm(request, page.CSRFField,
+		[]string{"passkey_ceremony_id", "passkey_response"})
+	if formErr != nil {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
+			ErrorSummary: text("page.auth.login.error_generic")}, nil
+	}
+	encoded, _ := singleValue(form, "passkey_response", 24*1024)
+	if encoded == "" {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
+			ErrorSummary: text("page.auth.login.error_generic")}, nil
+	}
+	result, err := h.pages.options.Backend.FinishPasskeyLogin(ctx, request, []byte(encoded))
+	if err != nil || !result.Complete || result.Restricted {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "AUTH_FAILED",
+			ErrorSummary: text("page.auth.login.error_generic")}, nil
+	}
+	outcome := UIPageOutcome{RedirectPath: h.pages.options.PostLoginPath}
+	if result.Cookie != nil {
+		outcome.SetCookies = append(outcome.SetCookies, result.Cookie)
+	}
+	return outcome, nil
 }

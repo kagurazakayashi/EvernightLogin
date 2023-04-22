@@ -629,6 +629,11 @@ func accountErrorOutcome(err error, data any, fallbackKey string) UIPageOutcome 
 			outcome.StatusCode = http.StatusForbidden
 			outcome.ErrorCode = "ACCESS_DENIED"
 			outcome.ErrorSummary = text("common.state.forbidden")
+		case "FEATURE_NOT_ENABLED":
+			// 可选子能力未启用：明确不可调用，不伪装成空数据或权限拒绝。
+			outcome.StatusCode = http.StatusForbidden
+			outcome.ErrorCode = "FEATURE_NOT_ENABLED"
+			outcome.ErrorSummary = text("common.state.not_enabled")
 		case "REQ_INVALID", "CHALLENGE_INVALID":
 			outcome.ErrorCode = publicErr.Code
 			outcome.ErrorSummary = text(fallbackKey)
