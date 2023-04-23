@@ -761,3 +761,11 @@ func normalizeContext(ctx context.Context) context.Context {
 	}
 	return ctx
 }
+
+// TokenStateChecker 在令牌签名/撤销检查之后复核“当前状态”是否仍允许该令牌：
+// 用户停用、应用停用、成员移除、恢复代际失配等。依赖错误必须返回 error（状态
+// 查询按依赖不可用处理），不能伪造 inactive 或 active。
+type TokenStateChecker interface {
+	CheckAccessTokenState(ctx context.Context, claims token.AccessClaims) (active bool, reason string, err error)
+	CheckRefreshTokenState(ctx context.Context, clientID string) (active bool, reason string, err error)
+}

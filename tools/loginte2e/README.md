@@ -48,6 +48,8 @@ go build ./tools/loginte2e
 | `token` | 缺 grant_type/未知 grant_type 被拒；授权码兑换（Bearer/expires_in/id_token/refresh_token）；授权码重放 `invalid_grant`；错误 PKCE verifier 被拒；UserInfo 返回 sub；refresh 轮换且旧令牌重放被拒；撤销后 UserInfo 401；introspect 未认证 401（声明时）/未声明 404，正例需 `--client-secret-file` | 同上 |
 | `device` | device_authorization 申请（scope 自动回退）、未确认前轮询 `authorization_pending`、用户确认后领令牌、已领令牌重放 `invalid_grant`、取消后无法领令牌、缺 client_id 被拒 | `--client-id`（设备码客户端）；确认需 `--device-confirm-url` 或库注入 `DeviceConfirm` |
 | `qr` | 创建请求/二维码载荷不含领取绑定或令牌、错误领取绑定被拒、pending 状态、匿名读取确认上下文 401、确认端上下文、批准、approved 状态轮询、领取写入会话 Cookie 且正文无 Token、重复领取被拒、错误绑定领取被拒、取消流程 | `--client-id --session-cookie-file`（确认端） |
+| `tokenauthz` | 扩展 `/oauth/token/authorize`：资源客户端 Basic 认证成功/401、跨 audience 403、ID Token 混用拒绝、稳定 code/request_id | `--resource-client-id --resource-client-secret-file --audience --client-id --redirect-uri --session-cookie-file` |
+| `introspect` | `/oauth/introspect`：active/inactive、错误认证 401、未知令牌、跨 audience、ID Token 非 active、Discovery 一致 | 同上 |
 | `adminapi` | `/meta`（版本/前缀/强认证与每请求重鉴权契约）、`/error-codes` 投影与过滤、匿名与无效会话 401/403、未知路径 404、POST 方法 405、重复查询参数 400、只读端点稳定状态、响应不回显会话秘密 | `--admin-session-file` |
 | `all` | 按 `discovery→jwks→authcode→token→device→qr→adminapi` 顺序汇总，返回一份报告 | 取决于各套件 |
 

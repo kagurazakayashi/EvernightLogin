@@ -58,6 +58,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		scope         = flags.String("scope", loginte2e.DefaultScope, "授权请求 scope（空格/逗号分隔）")
 		deviceConfirm = flags.String("device-confirm-url", "",
 			"宿主设备确认页地址（可选，支持 {code} 占位符；协议包本身不提供确认页端点）")
+		resourceClientID = flags.String("resource-client-id", "",
+			"受信资源服务 confidential 客户端 ID（tokenauthz/introspect 套件）")
+		resourceSecretFile = flags.String("resource-client-secret-file", "",
+			"受保护的资源服务客户端密钥文件")
+		audience = flags.String("audience", "",
+			"预期资源 audience（tokenauthz/introspect 套件，也用于授权 resource 参数）")
 		listSuites = flags.Bool("list-suites", false, "列出可用套件")
 		showHelp   = flags.Bool("help", false, "显示帮助")
 	)
@@ -110,6 +116,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		ExpectedIssuer: *issuer, ClientID: *clientID, RedirectURI: *redirectURI,
 		Scopes: splitScope(*scope), AdminBasePath: *adminBasePath,
 		DeviceConfirmURL: *deviceConfirm,
+		ResourceClientID: *resourceClientID,
+		Audience:         *audience,
+	}
+	if *audience != "" {
+		config.Resources = []string{*audience}
+	}
+	if *resourceSecretFile != "" {
+		value, readErr := loginte2e.LoadClientSecretFile(*resourceSecretFile)
+		if readErr != nil {
+			fmt.Fprintln(stderr, "错误: 读取资源服务密钥文件失败:", readErr)
+			return loginte2e.ExitUsage
+		}
+		config.ResourceClientSecret = value
 	}
 	if *clientSecret != "" {
 		value, err := loginte2e.LoadClientSecretFile(*clientSecret)

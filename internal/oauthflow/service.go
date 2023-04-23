@@ -51,8 +51,11 @@ type Options struct {
 	// InspectClientAuthorizer 判定资源服务与刷新令牌所属客户端的关系；nil 时
 	// 刷新令牌元数据查询 fail-closed（不披露任何元数据）。
 	InspectClientAuthorizer InspectClientAuthorizer
-	RequestTTL              time.Duration
-	CodeTTL                 time.Duration
+	// TokenStateChecker 在签名验证/在线撤销之后复核当前账户/应用状态；nil 表示
+	// 不做额外复核（保持既有行为）。依赖错误必须按不可用拒绝，不得伪造状态。
+	TokenStateChecker TokenStateChecker
+	RequestTTL        time.Duration
+	CodeTTL           time.Duration
 	// RefreshAbsoluteTTL/RefreshIdleTTL 是刷新令牌族绝对有效期与单令牌空闲有效期。
 	RefreshAbsoluteTTL time.Duration
 	RefreshIdleTTL     time.Duration

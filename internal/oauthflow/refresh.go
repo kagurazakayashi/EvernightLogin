@@ -554,6 +554,16 @@ func (s *Service) InspectToken(ctx context.Context, request TokenInspectRequest)
 			s.recordInspection(ctx, request, false, "resource_server_client_relationship_denied")
 			return TokenInspection{Active: false}, nil
 		}
+		if checker := s.opts.TokenStateChecker; checker != nil {
+			active, reason, stateErr := checker.CheckRefreshTokenState(ctx, family.ClientID)
+			if stateErr != nil {
+				return TokenInspection{}, oauthTemporarilyUnavailable()
+			}
+			if !active {
+				s.recordInspection(ctx, request, false, "refresh_state_"+reason)
+				return TokenInspection{Active: false}, nil
+			}
+		}
 		inspection := TokenInspection{
 			Active: true, TokenType: "refresh_token", ClientID: family.ClientID,
 			Scope: joinScopes(family.Scopes), Audience: append([]string(nil), family.Audiences...),
@@ -600,6 +610,16 @@ func (s *Service) InspectToken(ctx context.Context, request TokenInspectRequest)
 	if revoked {
 		s.recordInspection(ctx, request, false, "revoked_access_token")
 		return TokenInspection{Active: false}, nil
+	}
+	if checker := s.opts.TokenStateChecker; checker != nil {
+		active, reason, stateErr := checker.CheckAccessTokenState(ctx, claims)
+		if stateErr != nil {
+			return TokenInspection{}, oauthTemporarilyUnavailable()
+		}
+		if !active {
+			s.recordInspection(ctx, request, false, "access_state_"+reason)
+			return TokenInspection{Active: false}, nil
+		}
 	}
 	inspection := TokenInspection{
 		Active: true, TokenType: "access_token", ClientID: claims.ClientID,
