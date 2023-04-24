@@ -15,6 +15,9 @@ func (s *Server) registerRoutes() {
 	if s.enabledInspect {
 		s.routes[s.routePath(PathIntrospect)] = http.HandlerFunc(s.handleIntrospect)
 	}
+	if s.opts.TokenAuthorize != nil {
+		s.routes[s.routePath(PathTokenAuthorize)] = s.opts.TokenAuthorize
+	}
 	if s.enabledDevice {
 		s.routes[s.routePath(PathDeviceAuthorization)] = http.HandlerFunc(s.handleDeviceAuthorization)
 		s.routes[s.routePath(PathDeviceCancel)] = http.HandlerFunc(s.handleDeviceCancel)

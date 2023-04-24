@@ -18,6 +18,7 @@
 //	GET  /oauth/userinfo                     UserInfo（Bearer Access Token，按 scope 裁剪）
 //	POST /oauth/revoke                       令牌撤销（RFC 7009）
 //	POST /oauth/introspect                   令牌状态查询（需要 EnableIntrospection）
+//	POST /oauth/token/authorize              Token+当前权限联合判定（可选注入扩展）
 //	POST /oauth/device_authorization         设备授权申请（需要 EnableDeviceFlow）
 //	POST /oauth/device/cancel                设备授权取消（本包扩展，需要 EnableDeviceFlow）
 //	POST /oauth/qr/request                   扫码登录：创建请求（匿名）
@@ -84,6 +85,9 @@ const (
 	PathRevoke = "/oauth/revoke"
 	// PathIntrospect 是令牌状态查询端点（RFC 7662）。
 	PathIntrospect = "/oauth/introspect"
+	// PathTokenAuthorize 是宿主扩展的 Token+当前权限联合判定端点（非标准 OAuth，
+	// 只有注入 TokenAuthorize 处理器时才挂载）。
+	PathTokenAuthorize = "/oauth/token/authorize"
 	// PathDeviceAuthorization 是设备授权申请端点（RFC 8628）。
 	PathDeviceAuthorization = "/oauth/device_authorization"
 	// PathDeviceCancel 是设备授权取消端点（本包扩展；非 RFC 8628 标准端点）。
@@ -188,6 +192,9 @@ type Options struct {
 	// EnableIntrospection 显式启用 RFC 7662 状态查询端点。只有 oauthflow 配置了
 	// InspectAuthorizer（与可选的 InspectClientAuthorizer）时才允许置 true。
 	EnableIntrospection bool
+	// TokenAuthorize 是扩展的 Token+当前权限联合判定处理器；nil 表示不挂载。
+	// 它必须自行完成调用方认证与授权，不得信任请求体自述身份。
+	TokenAuthorize http.Handler
 	// SessionCookieName 是浏览器会话 Cookie 名，用于判断请求是否使用 Cookie 会话
 	// （Cookie 会话的写请求必须带 CSRF 令牌；Bearer 会话不受 CSRF 影响）。空使用
 	// session.DefaultCookieName。
