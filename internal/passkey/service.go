@@ -719,7 +719,9 @@ func (s *Service) BeginSecondFactor(ctx context.Context, userID, contextID, requ
 	if err != nil {
 		return SecondFactorStart{}, ErrStoreUnavailable
 	}
-	if !found || !state.Active() || state.IsRoot {
+	// root 的第二因素必须允许 Passkey：root 始终要求强认证，且不能用密码替代；
+	// 密码less 主登录仍单独拒绝 root（见 BeginLogin），避免 root 绕过主密码。
+	if !found || !state.Active() {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: userID},
 			"passkey.second_factor_begin_denied", "account_not_eligible",
 			string(CodeAccessDenied), requestID)
