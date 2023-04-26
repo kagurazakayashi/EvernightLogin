@@ -6,17 +6,19 @@
 <ul class="ln-nav-list">
 <li>{{t "page.account.security_mfa.title"}}: {{if .EmailMFAEnabled}}{{t "common.state.enabled"}}{{else}}{{t "common.state.empty"}}{{end}}</li>
 <li>{{t "page.account.totp.title"}}: {{if .TOTPEnabled}}{{t "common.state.enabled"}}{{else}}{{t "common.state.empty"}}{{end}}</li>
-<li>{{t "page.account.passkeys.title"}}: {{format_number .PasskeyCount}}</li>
+<li>{{t "page.account.passkeys.title"}}: {{if .PasskeyAvailable}}{{format_number .PasskeyCount}}{{else}}{{t "common.state.not_enabled"}}{{end}}</li>
 <li>{{t "page.account.recovery_codes.title"}}: {{if .RecoveryAvailable}}{{format_number .RecoveryRemaining}}{{else}}{{t "common.state.empty"}}{{end}}</li>
 <li>{{t "page.account.sessions.title"}}: {{format_number .ActiveSessions}}</li>
+<li>{{t "page.account.grants.title"}}: {{if .OAuthAvailable}}{{t "common.state.enabled"}}{{else}}{{t "common.state.not_enabled"}}{{end}}</li>
 </ul>
 {{end}}
+{{$overview := .Data.Overview}}
 <ul class="ln-nav-list">
 <li><a href="{{route "account.security_mfa"}}">{{t "page.account.security_mfa.title"}}</a></li>
 <li><a href="{{route "account.security_totp"}}">{{t "page.account.totp.title"}}</a></li>
-<li><a href="{{route "account.security_passkeys"}}">{{t "page.account.passkeys.title"}}</a></li>
+{{if $overview.PasskeyAvailable}}<li><a href="{{route "account.security_passkeys"}}">{{t "page.account.passkeys.title"}}</a></li>{{else}}<li><span class="ln-meta">{{t "page.account.passkeys.title"}}: {{t "common.state.not_enabled"}}</span></li>{{end}}
 <li><a href="{{route "account.security_recovery_codes"}}">{{t "page.account.recovery_codes.title"}}</a></li>
 <li><a href="{{route "account.sessions"}}">{{t "page.account.sessions.title"}}</a></li>
-<li><a href="{{route "account.grants"}}">{{t "page.account.grants.title"}}</a></li>
+{{if $overview.OAuthAvailable}}<li><a href="{{route "account.grants"}}">{{t "page.account.grants.title"}}</a></li>{{else}}<li><span class="ln-meta">{{t "page.account.grants.title"}}: {{t "common.state.not_enabled"}}</span></li>{{end}}
 </ul>
 {{end}}

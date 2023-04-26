@@ -14,6 +14,7 @@
 <form method="post" action="{{route "account.security_recovery_codes.generate"}}" data-ln-module="async-form">{{csrf_field}}
 <input type="hidden" name="confirm" value="true">
 {{template "component.field" (dict "id" "recovery-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+{{template "component.field" (dict "id" "recovery-totp" "name" "totp_code" "type" "text" "label" (t "page.account.security_mfa.totp_code") "help" (t "page.account.recovery_codes.totp_help") "value" "" "required" true)}}
 <div class="ln-actions">{{template "component.button" (dict "label" (t "page.account.recovery_codes.regenerate") "variant" "danger" "type" "submit")}}</div></form>
 {{end}}
 {{end}}

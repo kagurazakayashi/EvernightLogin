@@ -382,8 +382,8 @@ func (a *SupportAdapter) recoveryView(ctx context.Context, staffUserID string,
 			ID: execution.ID, ExecutorUserID: execution.ExecutorUserID,
 			Status: execution.Status, SessionsRevoked: execution.SessionsRevoked,
 			FactorsReset: execution.FactorsReset, CredentialIssued: execution.ResetCredentialIssued,
-			Notification: execution.NotificationState, StartedAt: execution.StartedAt,
-			FinishedAt: execution.FinishedAt,
+			Notification: execution.NotificationState, ErrorCode: execution.ErrorCode,
+			StartedAt: execution.StartedAt, FinishedAt: execution.FinishedAt,
 		}
 		view.HasExecution = true
 	}

@@ -1,0 +1,16 @@
+{{define "page-title"}}{{t "page.auth.passkey_login.title"}}{{end}}
+{{define "content"}}
+{{with .Data.PasskeyStart}}
+<form method="post" action="{{route "auth.passkey_login.finish"}}" data-ln-module="webauthn" data-ln-mode="get" data-ln-options="{{printf "%s" .PublicKey}}" data-ln-webauthn-form data-ln-response-field="passkey_response">
+  {{csrf_field}}
+  <input type="hidden" name="passkey_ceremony_id" value="{{.CeremonyID}}">
+  <input type="hidden" name="passkey_response" value="">
+  <p class="ln-meta">{{t "page.auth.passkey_login.help"}}</p>
+  <p class="ln-meta" data-ln-webauthn-status role="status"></p>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.passkey_login.continue") "variant" "primary" "type" "button")}}</div>
+</form>
+{{else}}
+<p class="ln-meta">{{t "page.auth.passkey_login.unavailable"}}</p>
+{{end}}
+<p class="ln-meta"><a href="{{route "auth.login"}}">{{t "page.auth.passkey_login.password_fallback"}}</a></p>
+{{end}}

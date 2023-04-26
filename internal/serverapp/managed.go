@@ -20,6 +20,7 @@ import (
 	accountsqlite "github.com/kagurazakayashi/EvernightLogin/internal/account/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/auditops"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
@@ -27,9 +28,9 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
 	"github.com/kagurazakayashi/EvernightLogin/internal/backupadmin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
-	delegationsqlite "github.com/kagurazakayashi/EvernightLogin/internal/delegation/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/group"
 	groupsqlite "github.com/kagurazakayashi/EvernightLogin/internal/group/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/managedapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
 	oauthclientsqlite "github.com/kagurazakayashi/EvernightLogin/internal/oauthclient/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
@@ -42,6 +43,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
 	rolesqlite "github.com/kagurazakayashi/EvernightLogin/internal/role/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
+	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	"github.com/kagurazakayashi/EvernightLogin/internal/userbatch"
 	userbatchsqlite "github.com/kagurazakayashi/EvernightLogin/internal/userbatch/sqlite"
@@ -73,6 +75,14 @@ type ManagedServices struct {
 	// 应用域：应用资料/成员与 OAuth 客户端安全接入。
 	App         *app.Service
 	OAuthClient *oauthclient.Service
+	// 业务托管管理 API 的受信策略服务（步骤 146）；策略页面经此只读/受控写。
+	ManagedAPI *managedapi.Service
+	// ManagedPolicyActor 是页面读取策略的受信系统标识（只允许只读通道）。
+	ManagedPolicyActor audit.Actor
+	// ManagedPolicyApprovals 是页面策略写的一次性批准器（SetPolicy 消费）。
+	ManagedPolicyApprovals *managedPolicyApprovals
+	// Support 是客服工单服务（步骤 153 页面 / 156 管理 API 只读复用）。
+	Support *support.Service
 }
 
 // TaskHandlers 返回管理域提供的真实任务处理器（用户批量导入/导出）。
@@ -145,7 +155,18 @@ func BuildManagedServices(deps Deps, core *Services, runtime *TaskRuntime,
 		return nil, fmt.Errorf("构造权限引擎失败: %w", err)
 	}
 	checker := newPermissionChecker(access, roots)
-	guard := rootOnlyDelegationGuard{roots: roots}
+	// 步骤 149：优先复用核心装配阶段构造的真实委派引擎；独立构造 managed 服务
+	// （测试/嵌入路径）时若 core 未提供，则用同一真实 SQLite+审计依赖构造。
+	delegationService := core.Delegation
+	if delegationService == nil {
+		delegationService, err = newDelegationService(deps)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// root/本地/system 由包装器放行，其余主体交给真实委派引擎；不能把 root 交给
+	// 裸引擎（root 是 ActorUser，裸引擎会因缺少 Grant 拒绝 root）。
+	var guard delegation.Guard = productionDelegationGuard{roots: roots, engine: delegationService}
 	// 敏感操作（导出/清理/凭证轮换/策略修改等）统一经真实 reauth/policy 判定。
 	sensitive := gate.Reauth
 	recentAuth := recentAuthVerifier{maxAge: 10 * time.Minute, now: now}
@@ -241,15 +262,6 @@ func BuildManagedServices(deps Deps, core *Services, runtime *TaskRuntime,
 	if err != nil {
 		return nil, fmt.Errorf("构造用户批量服务失败: %w", err)
 	}
-	delegationStore, err := delegationsqlite.New(deps.Store)
-	if err != nil {
-		return nil, fmt.Errorf("构造委派存储失败: %w", err)
-	}
-	delegationService, err := delegation.New(delegation.Options{
-		Store: delegationStore, Audit: deps.Audit, Now: now, Logger: deps.Logger})
-	if err != nil {
-		return nil, fmt.Errorf("构造委派服务失败: %w", err)
-	}
 	managed := &ManagedServices{
 		Roots: roots, Checker: checker, Account: accountService, Profile: profileService,
 		Group: groupService, Onboarding: onboardingService, Batch: batchService,
@@ -285,6 +297,14 @@ func BuildManagedServices(deps Deps, core *Services, runtime *TaskRuntime,
 	}
 	managed.App = appService
 	managed.OAuthClient = oauthService
+	managedAPI, policyApprovals, policyActor, apiErr := buildManagedAPI(
+		deps, core, managed, guard, gate)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	managed.ManagedAPI = managedAPI
+	managed.ManagedPolicyActor = policyActor
+	managed.ManagedPolicyApprovals = policyApprovals
 	return managed, nil
 }
 

@@ -85,6 +85,27 @@ func (m *appsIntegrationManagedPolicy) GetPolicy(context.Context, audit.Actor, s
 	return m.view, m.err
 }
 
+// appsIntegrationAppAuthorizer 在既有白名单授权器上仅为页面测试管理员补
+// application.create 的用户操作者路径；其余动作仍走真实 StaticAuthorizer，
+// 不改变应用管理员/跨应用拒绝语义。
+type appsIntegrationAppAuthorizer struct {
+	static  *app.StaticAuthorizer
+	adminID string
+}
+
+func (a appsIntegrationAppAuthorizer) Authorize(ctx context.Context, caller app.Caller,
+	action app.Action, applicationID string) error {
+	if action == app.ActionCreateApplication && caller.Actor().ID == a.adminID {
+		return nil
+	}
+	return a.static.Authorize(ctx, caller, action, applicationID)
+}
+
+func (a appsIntegrationAppAuthorizer) ApplicationScope(ctx context.Context,
+	caller app.Caller) (bool, []string, error) {
+	return a.static.ApplicationScope(ctx, caller)
+}
+
 type appsIntegrationEnv struct {
 	t           *testing.T
 	adapter     *uiadminadapter.AppsAdapter
@@ -172,7 +193,8 @@ func newAppsIntegrationEnv(t *testing.T) *appsIntegrationEnv {
 		t.Fatalf("应用授权器: %v", err)
 	}
 	appService, err := app.New(app.Options{Store: appStore, Audit: recorder,
-		Authorizer: appAuthorizer, Transfers: delegationService, Now: nowFunc,
+		Authorizer: appsIntegrationAppAuthorizer{static: appAuthorizer, adminID: adminID},
+		Transfers:  delegationService, Now: nowFunc,
 		Random: nil, Logger: testDiscardLogger()})
 	if err != nil {
 		t.Fatalf("应用服务: %v", err)
@@ -605,5 +627,55 @@ func TestAppsIntegrationGrantsStatusAndCrossApp(t *testing.T) {
 	disabledApp, err := env.adapter.GetApplication(context.Background(), env.adminID, env.appA.ID)
 	if err != nil || disabledApp.Status != "disabled" {
 		t.Fatalf("停用后状态 = %+v err=%v", disabledApp, err)
+	}
+}
+
+// TestAppsIntegrationCreate 覆盖真实 app.Service 的页面新建应用：root/受信管理员
+// 成功创建且默认停用；应用管理员看不到入口且直接请求被服务端拒绝。
+func TestAppsIntegrationCreate(t *testing.T) {
+	env := newAppsIntegrationEnv(t)
+	adminUI := env.ui(env.adminID)
+	formPage := env.get(adminUI, "/admin/applications/create")
+	if formPage.Code != http.StatusOK ||
+		!strings.Contains(formPage.Body.String(), `name="client_type"`) {
+		t.Fatalf("管理员新建页 = %d body=%s", formPage.Code, formPage.Body.String())
+	}
+	created := env.post(adminUI, "/admin/applications/create", url.Values{
+		"csrf_token": {"token"}, "name": {"页面新建应用-集成"},
+		"description": {"合成数据"}, "client_type": {"public"},
+		"owner_user_id": {env.adminID}, "homepage": {"https://app.example.test"},
+		"icon_ref": {""}, "contact_info": {""}})
+	if created.Code != http.StatusOK ||
+		!strings.Contains(created.Body.String(), "应用已创建（默认停用）") {
+		t.Fatalf("管理员新建应用 = %d body=%s", created.Code, created.Body.String())
+	}
+	var newApp *app.Application
+	list, err := env.apps.ListApplications(context.Background(), env.localCaller,
+		app.ListRequest{Limit: 50})
+	if err != nil {
+		t.Fatalf("列出应用: %v", err)
+	}
+	for i := range list.Applications {
+		if list.Applications[i].Name == "页面新建应用-集成" {
+			newApp = &list.Applications[i]
+			break
+		}
+	}
+	if newApp == nil {
+		t.Fatal("新建应用未出现在真实服务列表")
+	}
+	if string(newApp.Status) != "disabled" || string(newApp.ClientType) != "public" ||
+		newApp.RowVersion != 1 {
+		t.Fatalf("新建应用初始状态/类型/版本 = %+v", *newApp)
+	}
+
+	appAdminUI := env.ui(env.appAdmin)
+	appAdminPage := env.get(appAdminUI, "/admin/applications/create")
+	if appAdminPage.Code != http.StatusForbidden {
+		t.Fatalf("应用管理员直接访问新建页应 403，得到 %d", appAdminPage.Code)
+	}
+	allowed, err := env.adapter.CanCreateApplication(context.Background(), env.appAdmin)
+	if err != nil || allowed {
+		t.Fatalf("应用管理员新建能力应为 false，得到 allowed=%v err=%v", allowed, err)
 	}
 }

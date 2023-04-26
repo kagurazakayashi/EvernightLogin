@@ -5,9 +5,12 @@ package login
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // appsPageHandlers 实现应用管理页处理器。
@@ -21,6 +24,10 @@ func (h *appsPageHandlers) HandlePage(ctx context.Context, request *http.Request
 	switch page.RouteName {
 	case "admin.applications":
 		return h.list(ctx, request, page)
+	case "admin.application_create":
+		return h.create(ctx, request, page)
+	case "admin.application_create.submit":
+		return h.createSubmit(ctx, request, page)
 	case "admin.application_profile":
 		return h.profile(ctx, request, page)
 	case "admin.application_profile.submit":
@@ -39,6 +46,8 @@ func (h *appsPageHandlers) HandlePage(ctx context.Context, request *http.Request
 		return h.credentialsSubmit(ctx, request, page)
 	case "admin.application_grants":
 		return h.grants(ctx, request, page)
+	case "admin.application_grants.submit":
+		return h.grantsSubmit(ctx, request, page)
 	case "admin.application_status":
 		return h.status(ctx, request, page)
 	case "admin.application_status.submit":
@@ -70,7 +79,73 @@ func (h *appsPageHandlers) list(ctx context.Context, request *http.Request,
 		"applications": result.Applications, "hasMore": result.HasMore,
 		"nextOffset": result.NextOffset, "status": query.Status, "sort": query.Sort,
 		"desc": request.URL.Query().Get("desc"), "offset": offset,
+		"canCreate": h.canCreate(ctx, page.Session.UserID),
 	}}, nil
+}
+
+// canCreate 报告当前后端是否提供真实的新建应用能力；页面仅据此显示入口，
+// 服务端每次 POST 仍重新授权。能力查询失败按不可用处理，不显示按钮。
+func (h *appsPageHandlers) canCreate(ctx context.Context, adminID string) bool {
+	backend, ok := h.pages.options.Backend.(UIAppsCreateBackend)
+	if !ok {
+		return false
+	}
+	allowed, err := backend.CanCreateApplication(ctx, adminID)
+	return err == nil && allowed
+}
+
+// ===== 新建应用 =====
+
+// create 渲染新建应用表单；只有后端支持新建时路由才会注册。
+func (h *appsPageHandlers) create(ctx context.Context, request *http.Request,
+	page UIPageContext) (UIPageOutcome, error) {
+	if !h.canCreate(ctx, page.Session.UserID) {
+		return UIPageOutcome{StatusCode: http.StatusForbidden,
+			ErrorSummary: text("page.admin.applications.create.unavailable")}, nil
+	}
+	return UIPageOutcome{Data: map[string]any{
+		"form": UIApplicationCreate{ClientType: "confidential"}}}, nil
+}
+
+// createSubmit 提交应用新建白名单；ID/状态/行版本由服务端生成，页面不伪造成功。
+func (h *appsPageHandlers) createSubmit(ctx context.Context, request *http.Request,
+	page UIPageContext) (UIPageOutcome, error) {
+	backend, ok := h.pages.options.Backend.(UIAppsCreateBackend)
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusNotFound,
+			ErrorSummary: text("page.admin.applications.create.unavailable")}, nil
+	}
+	form, formErr := readPageForm(request, page.CSRFField, []string{"name",
+		"description", "icon_ref", "homepage", "owner_user_id", "contact_info",
+		"client_type"})
+	if formErr != nil {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         map[string]any{"form": UIApplicationCreate{ClientType: "confidential"}},
+			ErrorSummary: text("page.admin.applications.create.invalid")}, nil
+	}
+	create := UIApplicationCreate{
+		Name:        strings.TrimSpace(form.Get("name")),
+		Description: strings.TrimSpace(form.Get("description")),
+		IconRef:     strings.TrimSpace(form.Get("icon_ref")),
+		Homepage:    strings.TrimSpace(form.Get("homepage")),
+		OwnerUserID: strings.TrimSpace(form.Get("owner_user_id")),
+		ContactInfo: strings.TrimSpace(form.Get("contact_info")),
+		ClientType:  strings.TrimSpace(form.Get("client_type")),
+	}
+	if create.Name == "" ||
+		(create.ClientType != "confidential" && create.ClientType != "public") {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data: map[string]any{"form": create}, ErrorSummary: text(
+				"page.admin.applications.create.invalid")}, nil
+	}
+	created, err := backend.CreateApplication(ctx, page.Session.UserID, create,
+		page.RequestID)
+	if err != nil {
+		return appsErrorOutcome(err, map[string]any{"form": create},
+			"page.admin.applications.create.create_failed"), nil
+	}
+	return UIPageOutcome{Data: map[string]any{"created": created,
+		"status": "created", "form": create}}, nil
 }
 
 // ===== 资料 =====
@@ -758,8 +833,8 @@ func (h *appsPageHandlers) renderCredentialsError(ctx context.Context, page UIPa
 
 // ===== 资源与接口/字段许可 =====
 
-// grants 显示“尚未启用”真实状态：当前没有真实的许可目录/读取/差异/写入接口。
-// 页面仍先通过真实服务读取当前应用以完成服务端授权，不渲染假开关。
+// grants 读取应用真实托管策略并渲染只读摘要/受控写表单。写表单只有在宿主注入
+// PolicyBackend + PolicyReauth 且适配器确认可写时出现；服务端不信任表单开关。
 func (h *appsPageHandlers) grants(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	appID, ok := appsQueryAppID(request)
@@ -776,7 +851,234 @@ func (h *appsPageHandlers) grants(ctx context.Context, request *http.Request,
 		return appsErrorOutcome(err, map[string]any{"app": application},
 			"page.admin.applications.grants.load_failed"), nil
 	}
-	return UIPageOutcome{Data: map[string]any{"app": application, "policy": policy}}, nil
+	canWrite := h.pages.options.PolicyBackend != nil &&
+		h.pages.options.PolicyReauth != nil && policy.CanWrite
+	return UIPageOutcome{Data: map[string]any{
+		"app": application, "policy": policy,
+		"policyForm": appsPolicyForm(policy), "canWrite": canWrite,
+		"saved": strings.TrimSpace(request.URL.Query().Get("saved")) == "1",
+	}}, nil
+}
+
+// grantsSubmit 受控写入应用策略：解析/白名单校验 → 一次性 reauth（绑定 app/
+// row_version/policy digest/request_id）→ managedapi.SetPolicy（行版本/审计/
+// 受信授权）。成功重定向回读取页；失败保留当前应用上下文与稳定错误摘要。
+func (h *appsPageHandlers) grantsSubmit(ctx context.Context, request *http.Request,
+	page UIPageContext) (UIPageOutcome, error) {
+	if h.pages.options.PolicyBackend == nil || h.pages.options.PolicyReauth == nil {
+		return UIPageOutcome{StatusCode: http.StatusForbidden,
+			ErrorSummary: text("page.admin.applications.grants.write_unavailable")}, nil
+	}
+	form, formErr := readPageForm(request, page.CSRFField, []string{
+		"app_id", "row_version", "policy_ops", "policy_service_ops", "policy_objects",
+		"policy_fields", "policy_max_limit", "policy_max_offset", "policy_max_batch",
+	})
+	if formErr != nil {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.applications.grants.invalid")}, nil
+	}
+	appID := strings.TrimSpace(form.Get("app_id"))
+	rowVersion, ok := appsParseRowVersion(form.Get("row_version"))
+	if appID == "" || !ok {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.applications.invalid_app")}, nil
+	}
+	change, parseErr := appsParsePolicyChange(form)
+	if parseErr != nil {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.applications.grants.invalid")}, nil
+	}
+	application, err := h.pages.options.Backend.GetApplication(ctx, page.Session.UserID, appID)
+	if err != nil {
+		return appsErrorOutcome(err, nil, "page.admin.applications.grants.load_failed"), nil
+	}
+	requestID := strings.TrimSpace(page.RequestID)
+	if requestID == "" {
+		// 直接调用页面处理器/测试没有 transport 请求编号时生成合法的关联编号；
+		// 生产链路仍使用真实 request_id 供审计与一次性绑定。
+		requestID = fmt.Sprintf("req_%d", time.Now().UnixNano())
+	}
+	binding := UIAppPolicyActionBinding{ApplicationID: appID, ExpectedRowVersion: rowVersion,
+		PolicyDigest: change.Digest(), RequestID: requestID}
+	if err := h.pages.options.PolicyReauth(ctx, page.Session.UserID, binding); err != nil {
+		return UIPageOutcome{StatusCode: http.StatusForbidden,
+			ErrorCode:    "REAUTH_REQUIRED",
+			ErrorSummary: text("page.admin.applications.common.reauth_required"),
+			Data:         map[string]any{"app": application}}, nil
+	}
+	if _, err := h.pages.options.PolicyBackend.SetManagedPolicy(ctx, page.Session.UserID,
+		appID, change, rowVersion, requestID, binding.PolicyDigest); err != nil {
+		return appsErrorOutcome(err, map[string]any{"app": application},
+			"page.admin.applications.grants.save_failed"), nil
+	}
+	// 重新读取服务端真实策略/应用，展示保存后的行版本；管理路由不允许通过
+	// RedirectQuery 携带 app_id，故采用同页渲染而非站外跳转。
+	after, reloadErr := h.pages.options.Backend.GetApplication(ctx, page.Session.UserID, appID)
+	if reloadErr != nil {
+		return appsErrorOutcome(reloadErr, map[string]any{"app": application},
+			"page.admin.applications.grants.load_failed"), nil
+	}
+	policy, policyErr := h.pages.options.Backend.GetManagedPolicy(ctx, page.Session.UserID, appID)
+	if policyErr != nil {
+		return appsErrorOutcome(policyErr, map[string]any{"app": after},
+			"page.admin.applications.grants.load_failed"), nil
+	}
+	return UIPageOutcome{Data: map[string]any{
+		"app": after, "policy": policy, "policyForm": appsPolicyForm(policy),
+		"canWrite": true, "saved": true,
+	}}, nil
+}
+
+// appsPolicyForm 把当前策略转换为可编辑文本域初始值。
+func appsPolicyForm(policy UIAppPolicyView) UIAppPolicyForm {
+	joinOps := func(operations []UIAppPolicyOperation) string {
+		ids := make([]string, 0, len(operations))
+		for _, operation := range operations {
+			ids = append(ids, operation.ID)
+		}
+		return strings.Join(ids, "\n")
+	}
+	objectLines := make([]string, 0, len(policy.Objects))
+	for _, scope := range policy.Objects {
+		objectLines = append(objectLines, scope.Object+"|"+scope.Mode+"|"+
+			strings.Join(scope.Resources, ","))
+	}
+	fieldLines := make([]string, 0, len(policy.Fields))
+	for _, fields := range policy.Fields {
+		fieldLines = append(fieldLines, fields.Object+"|"+strings.Join(fields.Read, ",")+
+			"|"+strings.Join(fields.Write, ","))
+	}
+	return UIAppPolicyForm{
+		Allowed: joinOps(policy.Allowed), ServiceAllowed: joinOps(policy.ServiceAllowed),
+		Objects: strings.Join(objectLines, "\n"), Fields: strings.Join(fieldLines, "\n"),
+		MaxLimit: policy.Limits.MaxLimit, MaxOffset: policy.Limits.MaxOffset,
+		MaxBatch: policy.Limits.MaxBatch,
+	}
+}
+
+// appsParsePolicyChange 严格解析表单文本域；未知格式/重复项/超限值在进入
+// managedapi 之前拒绝，最终仍由 managedapi.Validate 做权威校验。
+func appsParsePolicyChange(form url.Values) (UIAppPolicyChange, error) {
+	change := UIAppPolicyChange{
+		Allowed:        appsSplitPolicyList(form.Get("policy_ops")),
+		ServiceAllowed: appsSplitPolicyList(form.Get("policy_service_ops")),
+	}
+	objects, err := appsParsePolicyObjects(form.Get("policy_objects"))
+	if err != nil {
+		return UIAppPolicyChange{}, err
+	}
+	fields, err := appsParsePolicyFields(form.Get("policy_fields"))
+	if err != nil {
+		return UIAppPolicyChange{}, err
+	}
+	change.Objects = objects
+	change.Fields = fields
+	parseLimit := func(key string, fallback int) (int, error) {
+		value := strings.TrimSpace(form.Get(key))
+		if value == "" {
+			return fallback, nil
+		}
+		number, err := strconv.Atoi(value)
+		if err != nil || number <= 0 {
+			return 0, fmt.Errorf("上限必须是正整数")
+		}
+		return number, nil
+	}
+	if change.Limits.MaxLimit, err = parseLimit("policy_max_limit", 20); err != nil {
+		return UIAppPolicyChange{}, err
+	}
+	if change.Limits.MaxOffset, err = parseLimit("policy_max_offset", 100000); err != nil {
+		return UIAppPolicyChange{}, err
+	}
+	if change.Limits.MaxBatch, err = parseLimit("policy_max_batch", 10); err != nil {
+		return UIAppPolicyChange{}, err
+	}
+	return change, nil
+}
+
+// appsSplitPolicyList 按换行/逗号拆分操作 ID；去空、去重，保持输入顺序。
+func appsSplitPolicyList(value string) []string {
+	value = strings.ReplaceAll(value, ",", "\n")
+	seen := map[string]struct{}{}
+	result := make([]string, 0)
+	for _, line := range strings.Split(value, "\n") {
+		item := strings.TrimSpace(line)
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+// appsParsePolicyObjects 解析 object|mode|resources 行；mode 仅 all/resources。
+func appsParsePolicyObjects(value string) ([]UIAppPolicyObject, error) {
+	result := make([]UIAppPolicyObject, 0)
+	seen := map[string]struct{}{}
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) < 2 || len(parts) > 3 {
+			return nil, fmt.Errorf("对象范围格式错误")
+		}
+		object := strings.TrimSpace(parts[0])
+		mode := strings.TrimSpace(parts[1])
+		if object == "" || (mode != "all" && mode != "resources") {
+			return nil, fmt.Errorf("对象范围格式错误")
+		}
+		if _, exists := seen[object]; exists {
+			return nil, fmt.Errorf("对象范围重复")
+		}
+		seen[object] = struct{}{}
+		scope := UIAppPolicyObject{Object: object, Mode: mode}
+		if len(parts) == 3 {
+			scope.Resources = appsSplitPolicyList(parts[2])
+		}
+		if mode == "all" && len(scope.Resources) != 0 {
+			return nil, fmt.Errorf("all 范围不能携带资源")
+		}
+		if mode == "resources" && len(scope.Resources) == 0 {
+			return nil, fmt.Errorf("resources 范围必须列出资源")
+		}
+		result = append(result, scope)
+	}
+	return result, nil
+}
+
+// appsParsePolicyFields 解析 object|read,read|write,write 行。
+func appsParsePolicyFields(value string) ([]UIAppPolicyFields, error) {
+	result := make([]UIAppPolicyFields, 0)
+	seen := map[string]struct{}{}
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("字段规则格式错误")
+		}
+		object := strings.TrimSpace(parts[0])
+		if object == "" {
+			return nil, fmt.Errorf("字段规则缺少对象")
+		}
+		if _, exists := seen[object]; exists {
+			return nil, fmt.Errorf("字段规则重复")
+		}
+		seen[object] = struct{}{}
+		result = append(result, UIAppPolicyFields{
+			Object: object, Read: appsSplitPolicyList(parts[1]),
+			Write: appsSplitPolicyList(parts[2]),
+		})
+	}
+	return result, nil
 }
 
 // ===== 应用状态（停用/启用确认） =====

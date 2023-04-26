@@ -152,6 +152,9 @@ type SetPolicyRequest struct {
 	Policy             Policy
 	ExpectedRowVersion int64
 	RequestID          string
+	// ReauthBinding 是可选的页面一次性批准摘要（应用/行版本/规范化策略摘要）。
+	// 非空时随再次认证参数传入，宿主可用它拒绝“确认后替换策略”的重放。
+	ReauthBinding string
 }
 
 // GetPolicy 读取应用策略（受信配置通道）。
@@ -245,10 +248,17 @@ func (s *Service) SetPolicy(ctx context.Context, actor audit.Actor,
 	if err != nil {
 		return PolicyView{}, ErrAccessDenied
 	}
+	params := map[string]string{
+		"application_id":       request.ApplicationID,
+		"expected_row_version": fmt.Sprint(request.ExpectedRowVersion),
+	}
+	if request.ReauthBinding != "" {
+		params["reauth_binding"] = request.ReauthBinding
+	}
 	if _, err := s.opts.Reauth.Authorize(ctx, caller, reauth.Request{
 		ScopeID: "system", OperationID: "managed_api.policy.manage",
 		TargetType: "application", TargetID: request.ApplicationID,
-		Params:      map[string]string{"application_id": request.ApplicationID},
+		Params:      params,
 		Description: "修改应用托管管理 API 委托策略", RequestID: request.RequestID,
 	}); err != nil {
 		return PolicyView{}, fmt.Errorf("%w: %w", ErrAccessDenied, err)

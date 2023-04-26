@@ -13,8 +13,10 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/logging"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/maintenance"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
@@ -45,6 +47,20 @@ type ServeOptions struct {
 	EnableAdminAPI bool
 	// AdminAPIPrefix 覆盖管理 API 站内前缀；空使用 adminapi.DefaultBasePath。
 	AdminAPIPrefix string
+	// EnableManagedAPI 显式启用业务应用托管管理 API（internal/managedapi/httpapi，
+	// 默认 /api/managed/v1）；默认关闭。认证使用用户普通会话 Bearer 或应用客户端
+	// secret/证书，不复用管理强会话；未启用时请求 404。
+	EnableManagedAPI bool
+	// ManagedAPIPrefix 覆盖业务托管 API 站内前缀；空使用 /api/managed/v1。
+	ManagedAPIPrefix string
+	// EnableAppSupport 显式启用应用受限客服 API（OAuth 用户委托 Access Token +
+	// 应用成员/权限联合判定）；默认关闭。需要同时启用 OAuth 协议端点。
+	EnableAppSupport bool
+	// AppSupportPrefix 覆盖应用客服 API 站内前缀；空使用 /api/app/v1/support。
+	AppSupportPrefix string
+	// AppSupportAudience 覆盖应用客服资源 audience；空使用默认
+	// urn:evernight:app-support。
+	AppSupportAudience string
 	// Migrate 为 true（--migrate=apply）时先执行数据库迁移再启动。
 	Migrate bool
 	// MaintenanceStateDir 覆盖库外维护状态目录；空则使用数据库目录同级的
@@ -359,14 +375,37 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		return err
 	}
 
-	deps := Deps{Config: cfg, Store: store, Keyring: keyring,
+	mailRuntime, mailErr := BuildMailRuntime(cfg)
+	if mailErr != nil {
+		return fmt.Errorf("邮件运行时启动失败: %w", mailErr)
+	}
+	if cfg.Mail.Enabled {
+		if _, urlErr := buildMailURLs(cfg); urlErr != nil {
+			return urlErr
+		}
+	}
+	var taskRuntime *TaskRuntime
+	deps := Deps{Config: cfg, Store: store, Keyring: keyring, Mail: mailRuntime,
+		MailDeliveryProvider: func() *mailer.DeliveryService {
+			if taskRuntime == nil {
+				return nil
+			}
+			return taskRuntime.Mail()
+		},
 		Audit: auditRecorder, Logger: logger, Now: now,
 		AllowLegacyWithoutSensitive: options.AllowLegacyWithoutSensitive}
+	if mailRuntime.Enabled {
+		logger.Info("生产邮件发送已启用", "tls_mode", mailRuntime.TLSMode,
+			"from_domain", mailDomain(mailRuntime.From.Spec),
+			"delivery_max_attempts", cfg.Mail.Delivery.MaxAttempts,
+			"delivery_timeout_seconds", cfg.Mail.Delivery.TimeoutSeconds)
+	} else {
+		logger.Info("生产邮件发送未启用：邮件能力将以明确错误拒绝，不访问网络")
+	}
 
 	var handler http.Handler
 	var server *login.Server
 	var instance *login.Instance
-	var taskRuntime *TaskRuntime
 	mountPaths := make([]string, 0, len(options.ExtraMounts))
 	if maintenanceMode {
 		if len(options.ExtraMounts) > 0 {
@@ -413,11 +452,21 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		if managedErr != nil {
 			return managedErr
 		}
+		// 步骤 151：会话服务先于 authz 构造，这里把真实 AuthzAuthorizer 原子注入
+		// 延迟授权器；注入前管理强制下线 fail-closed。
+		if services.SessionAuthorizer != nil {
+			sessionScopeAuthorizer, authzErr := session.NewAuthzAuthorizer(managed.Checker)
+			if authzErr != nil {
+				return fmt.Errorf("装配管理强制下线授权器失败: %w", authzErr)
+			}
+			services.SessionAuthorizer.Set(sessionScopeAuthorizer)
+		}
 		securityDomains, securityErr := BuildSecurityDomains(deps, services, managed, gate)
 		if securityErr != nil {
 			return securityErr
 		}
 		strongPresenceRelay.Set(securityDomains.StrongFactors)
+		managed.Support = securityDomains.Support
 		protocolDomains, protocolErr := BuildProtocolDomains(deps, services, managed, gate)
 		if protocolErr != nil {
 			return protocolErr
@@ -442,7 +491,7 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		}
 		if options.EnableAdminAPI {
 			adminHandler, adminPrefix, adminErr := BuildAdminAPIServer(
-				deps, services, managed, taskRuntime, options.AdminAPIPrefix, gate)
+				deps, services, managed, taskRuntime, pages, options.AdminAPIPrefix, gate)
 			if adminErr != nil {
 				return adminErr
 			}
@@ -453,6 +502,38 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 			logger.Info("已启用管理 JSON API",
 				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+adminPrefix,
 				"note", "只挂载已装配领域服务路由；未装配域返回 404")
+		}
+		if options.EnableManagedAPI {
+			managedHandler, managedPrefix, managedErr := BuildManagedAPIHTTPHandler(
+				deps, services, managed, options.ManagedAPIPrefix)
+			if managedErr != nil {
+				return managedErr
+			}
+			mounts = append(mounts, HandlerMount{
+				Name: "managed-api", Prefix: managedPrefix, Handler: managedHandler,
+				KeepPrefix: true,
+			})
+			logger.Info("已启用业务应用托管管理 API",
+				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+managedPrefix,
+				"auth", "user-session-bearer-or-app-client-secret-certificate")
+		}
+		if options.EnableAppSupport {
+			if protocolDomains == nil {
+				return fmt.Errorf("启用应用客服 API 必须同时启用 OAuth 协议端点")
+			}
+			supportHandler, supportPrefix, supportErr := BuildAppSupportHandler(
+				deps, managed, protocolDomains, options.AppSupportAudience,
+				options.AppSupportPrefix)
+			if supportErr != nil {
+				return supportErr
+			}
+			mounts = append(mounts, HandlerMount{
+				Name: "app-support", Prefix: supportPrefix, Handler: supportHandler,
+				KeepPrefix: true,
+			})
+			logger.Info("已启用应用受限客服 API",
+				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+supportPrefix,
+				"auth", "oauth-user-delegated-access-token")
 		}
 		httpOptions, httpErr := BuildHTTPOptions(deps, pages, logger, accessWriter)
 		if httpErr != nil {

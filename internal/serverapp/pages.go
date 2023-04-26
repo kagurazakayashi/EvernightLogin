@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/pagecsrf"
 	"github.com/kagurazakayashi/EvernightLogin/internal/pagestate"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
@@ -117,10 +118,15 @@ type Pages struct {
 	CSRF       *pagecsrf.Provider
 	Sessions   *session.Service
 	PublicForm map[string]string
+	// 以下适配器同时供管理 API 写路由（步骤 156）复用，避免页面/API 两套授权。
+	Admin   *uiadminadapter.Adapter
+	RBAC    *uiadminadapter.RBACAdapter
+	Apps    *uiadminadapter.AppsAdapter
+	Support *uiadminadapter.SupportAdapter
 }
 
-// BuildPages 装配内置页面：ui.go 共 14 个页面选项，默认注册 12 个，条件注册 2 个
-// （安全中心需 Passkey 与协议端点同时启用、OAuth 页需协议端点启用），全部满足时 14 个。
+// BuildPages 装配内置页面：ui.go 共 14 个页面选项，安全中心随核心安全服务注册，
+// OAuth 授权页仍按协议端点条件注册；Passkey/OAuth 子能力在安全中心内按能力位显示。
 //
 // 已装配（全部使用真实领域服务与生产授权适配层）：
 //   - 账户入口页：登录/注册/邀请接受/邮箱验证/退出；
@@ -128,8 +134,8 @@ type Pages struct {
 //   - 两步验证页：第二因素、强认证初始化（Passkey）、恢复代码、受限恢复重绑、找回密码；
 //   - OAuth 授权/设备确认/扫码登录页（仅在协议端点启用时注册；设备码与扫码当前
 //     未启用，页面会显示受控的“能力未启用”状态）；
-//   - 安全中心页：MFA/TOTP/Passkey/恢复代码/会话/已授权应用（要求 Passkey 与协议
-//     端点都启用，否则不注册，避免半装配）；
+//   - 安全中心页：MFA/TOTP/恢复代码/会话始终可用（核心服务存在时）；Passkey 与
+//     已授权应用按实际子能力显示，未启用时明确不可用；
 //   - 用户/角色权限/审计/统计/报告/备份/应用管理页；
 //   - 客服求助与人工恢复页（人工恢复制度默认关闭，页面显示真实关闭状态）；
 //   - 敏感操作策略与安全通知页（真实 policy + reauth，写操作要求管理会话强认证）。
@@ -154,7 +160,7 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 	if err != nil {
 		return nil, fmt.Errorf("构造页面状态编解码器失败: %w", err)
 	}
-	authAdapter, err := uiauthadapter.New(uiauthadapter.Options{
+	authOptions := uiauthadapter.Options{
 		Authn:             services.Authn,
 		Sessions:          services.Sessions,
 		Registration:      services.Registration,
@@ -171,9 +177,21 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		PageState:     pageState,
 		App:           managed.App,
 		Account:       managed.Account,
-		Now:           now,
-		Logger:        logger,
-	})
+		// strong-setup Passkey / 恢复代码等页面级敏感操作必须走真实 reauth；
+		// 缺失会导致适配器 nil panic（不能以跳过再次认证继续）。
+		Reauth: gate.Reauth,
+		Now:    now,
+		Logger: logger,
+	}
+	// 步骤 142/65：OAuth 授权确认、设备码与扫码登录页面共享真实服务；未启用时
+	// 页面后端返回受控“未启用”，不伪造成功。协议域整体未装配时保持 nil，不能解引用。
+	if protocolDomains != nil {
+		authOptions.OAuth = protocolDomains.OAuthFlow
+		authOptions.QR = protocolDomains.QRLogin
+		authOptions.QRClientID = protocolDomains.QRClientID
+		authOptions.ApplicationNames = protocolDomains.QRApplicationNames
+	}
+	authAdapter, err := uiauthadapter.New(authOptions)
 	if err != nil {
 		return nil, fmt.Errorf("构造账户/两步验证页适配器失败: %w", err)
 	}
@@ -207,6 +225,12 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		PageAuth: &login.UIPageAuthOptions{
 			Backend:       authAdapter,
 			PostLoginPath: "/",
+			PasskeyLoginPath: func() string {
+				if securityDomains.Passkey != nil {
+					return "/login/passkey"
+				}
+				return ""
+			}(),
 		},
 		PageAccount: &login.UIPageAccountOptions{Backend: accountAdapter},
 		PageMFA: &login.UIPageMFAOptions{
@@ -217,16 +241,22 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		Now:    now,
 		Logger: logger,
 	}
-	// 安全中心页：需要 Passkey 服务（TOTP/Passkey/恢复代码管理）与授权流程服务
-	// （已授权应用列表/撤销）。任一缺失时不注册，避免把半装配的安全页暴露为可用。
-	if securityDomains.Passkey != nil && protocolDomains != nil && protocolDomains.OAuthFlow != nil {
+	// 安全中心按子能力组合：MFA/TOTP/恢复代码/会话/再次认证是核心必需；Passkey
+	// 与 OAuth 授权列表是可选子能力（nil 时页面显示“未启用”，后端返回稳定不可用
+	// 错误），不再因 Passkey 或 OAuth 单项关闭而整体不注册。隐藏/未启用不是授权。
+	if securityDomains.MFA != nil && securityDomains.TOTP != nil &&
+		securityDomains.Recovery != nil && services.Sessions != nil && gate.Reauth != nil {
+		var oauthService *oauthflow.Service
+		if protocolDomains != nil {
+			oauthService = protocolDomains.OAuthFlow
+		}
 		securityAdapter, securityErr := uisecurityadapter.New(uisecurityadapter.Options{
 			MFA:      securityDomains.MFA,
 			TOTP:     securityDomains.TOTP,
 			Passkeys: securityDomains.Passkey,
 			Recovery: securityDomains.Recovery,
 			Sessions: services.Sessions,
-			OAuth:    protocolDomains.OAuthFlow,
+			OAuth:    oauthService,
 			Reauth:   gate.Reauth,
 			Now:      now,
 			Logger:   logger,
@@ -326,6 +356,7 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 	}
 	appsAdapter, appsErr := uiadminadapter.NewApps(uiadminadapter.AppOptions{
 		Apps: managed.App, OAuth: managed.OAuthClient,
+		ManagedAPI: managed.ManagedAPI, ManagedPolicyActor: managed.ManagedPolicyActor,
 		Authorize: func(ctx context.Context, adminUserID, action,
 			applicationID string) error {
 			return managed.Checker.authorizePageActionScoped(ctx, adminUserID,
@@ -336,7 +367,22 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 	if appsErr != nil {
 		return nil, fmt.Errorf("构造应用管理页适配器失败: %w", appsErr)
 	}
-	webOptions.PageApps = &login.UIPageAppsOptions{Backend: appsAdapter}
+	webOptions.PageApps = &login.UIPageAppsOptions{
+		Backend:       appsAdapter,
+		PolicyBackend: appsAdapter,
+		// 策略写先经过真实管理强认证（root/管理会话近期事实），再登记一次性
+		// app/version/policy-digest/request-id 批准；managedapi.SetPolicy 只消费该批准。
+		PolicyReauth: func(ctx context.Context, userID string,
+			binding login.UIAppPolicyActionBinding) error {
+			if managed.ManagedPolicyApprovals == nil {
+				return fmt.Errorf("托管策略一次性批准器未装配")
+			}
+			if err := gate.ManagedPolicyReauth(ctx, userID, binding); err != nil {
+				return err
+			}
+			return managed.ManagedPolicyApprovals.Register(userID, binding)
+		},
+	}
 	// 客服/人工恢复页：真实 support/manualrecovery 服务；人工恢复制度默认关闭，
 	// 页面显示真实关闭状态与受控申请结果，不伪造审批或执行成功。
 	supportAdapter, supportErr := uiadminadapter.NewSupport(uiadminadapter.SupportOptions{
@@ -373,8 +419,25 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		WebUI:      web,
 		CSRF:       csrfProvider,
 		Sessions:   services.Sessions,
-		PublicForm: login.UIPageAuthPublicFormPaths(deps.Config.Server.PathPrefix),
+		PublicForm: publicFormPaths(deps.Config.Server.PathPrefix),
+		Admin:      adminAdapter, RBAC: rbacAdapter, Apps: appsAdapter, Support: supportAdapter,
 	}, nil
+}
+
+// publicFormPaths 合并认证页与 MFA/找回页的匿名公开表单路径用途；
+// 只取认证页映射会导致真实 serve 下 /login/forgot-password、
+// /login/reset-password 等公开表单被当作会话表单校验而恒 403。
+func publicFormPaths(prefix string) map[string]string {
+	paths := login.UIPageAuthPublicFormPaths(prefix)
+	for path, purpose := range login.UIPageMFAPublicFormPaths(prefix) {
+		paths[path] = purpose
+	}
+	// 步骤 162/163 回归：邮箱变更验证是匿名公开表单，漏合并会让真实 serve 的
+	// POST 被当作会话表单校验而恒 403 ACCESS_DENIED。
+	for path, purpose := range login.UIPageAccountPublicFormPaths(prefix) {
+		paths[path] = purpose
+	}
+	return paths
 }
 
 // BuildHTTPOptions 构造公开 HTTP 处理程序选项：固定前缀、访问日志、可信代理、

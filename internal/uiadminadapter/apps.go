@@ -36,7 +36,8 @@ type AppOptions struct {
 	ManagedAPI ManagedPolicyService
 	// ManagedPolicyActor 是宿主配置的受信只读通道标识（如 system 组件），其
 	// PolicyAuthorizer 必须显式允许该标识读取策略。页面层仍先经过 Authorize 钩子
-	// 与 UIAccessManagement 会话检查；写策略仍只允许受信配置通道，页面不提供写控件。
+	// 与 UIAccessManagement 会话检查；写策略由 SetManagedPolicy 以当前管理员
+	// 用户主体提交，再由 managedapi 的受信 PolicyAuthorizer/reauth/行版本校验。
 	ManagedPolicyActor audit.Actor
 	// Authorize 是宿主的页面层管理动作复核（可选）。参数 action 使用策略目录权限键：
 	// applications.update / applications.credentials.manage；宿主可另外定义
@@ -51,6 +52,13 @@ type AppOptions struct {
 type ManagedPolicyService interface {
 	GetPolicy(ctx context.Context, actor audit.Actor, applicationID,
 		requestID string) (managedapi.PolicyView, error)
+}
+
+// ManagedPolicyWriterService 是可选策略写契约；只读实现/测试替身无需实现它。
+// 生产 *managedapi.Service 同时满足两者。
+type ManagedPolicyWriterService interface {
+	SetPolicy(ctx context.Context, actor audit.Actor,
+		request managedapi.SetPolicyRequest) (managedapi.PolicyView, error)
 }
 
 // AppsAdapter 实现 login.UIAppsBackend。
@@ -119,6 +127,88 @@ func (a *AppsAdapter) oauthCaller(adminUserID, requestID string) (oauthclient.Ca
 }
 
 // mapAppsError 把 app/oauthclient 领域错误映射为稳定公开错误码。
+// mapManagedPolicyError 把托管策略错误映射为稳定页面错误码；不泄露内部细节。
+func mapManagedPolicyError(err error) error {
+	switch {
+	case errors.Is(err, managedapi.ErrVersionConflict):
+		return appsErr("CONFLICT")
+	case errors.Is(err, managedapi.ErrPolicyDisabled):
+		return appsErr("ACCESS_DENIED")
+	case errors.Is(err, managedapi.ErrAccessDenied):
+		return appsErr("ACCESS_DENIED")
+	case errors.Is(err, managedapi.ErrInvalidRequest):
+		return appsErr("REQ_INVALID")
+	case errors.Is(err, managedapi.ErrStoreUnavailable), errors.Is(err, managedapi.ErrAuditUnavailable):
+		return appsErr("UNAVAILABLE")
+	default:
+		return appsErr("INTERNAL_ERROR")
+	}
+}
+
+// managedPolicyOperationDescriptions 是策略操作目录的中文说明（页面展示用；机器
+// 标识仍是 managedapi 目录的唯一操作 ID）。
+var managedPolicyOperationDescriptions = map[string]string{
+	managedapi.OpApplicationGet: "读取本应用资料",
+	managedapi.OpMembersList:    "查询应用成员列表", managedapi.OpMembersGet: "读取应用成员",
+	managedapi.OpMembersUpdateProfile: "更新应用内成员资料", managedapi.OpMembersDisable: "禁用应用成员",
+	managedapi.OpMembersEnable: "启用应用成员", managedapi.OpMembersRemove: "移除应用成员",
+	managedapi.OpUsersCreate: "创建新账户并加入本应用",
+	managedapi.OpGroupsList:  "查询应用用户组", managedapi.OpGroupsGet: "读取应用用户组",
+	managedapi.OpGroupsCreate: "创建应用用户组", managedapi.OpGroupsUpdate: "更新应用用户组",
+	managedapi.OpGroupsDelete: "删除应用用户组", managedapi.OpGroupMembersList: "查询组成员",
+	managedapi.OpGroupMembersAdd: "加入组成员", managedapi.OpGroupMembersRemove: "移除组成员",
+	managedapi.OpRolesList: "查询应用角色", managedapi.OpRolesGet: "读取应用角色",
+	managedapi.OpRolesCreate: "创建应用角色", managedapi.OpRolesUpdate: "更新应用角色",
+	managedapi.OpRolesDelete: "删除应用角色", managedapi.OpRolePermissionsList: "查询角色权限",
+	managedapi.OpRoleAssignUser: "分配角色给用户", managedapi.OpRoleRevokeUser: "撤销用户角色",
+	managedapi.OpRoleAssignGroup: "分配角色给用户组", managedapi.OpRoleRevokeGroup: "撤销用户组角色",
+	managedapi.OpRoleAssignmentsList: "查询角色分配",
+	managedapi.OpPermissionsList:     "查询应用权限", managedapi.OpPermissionsGet: "读取应用权限",
+	managedapi.OpPermissionsCreate: "创建应用权限", managedapi.OpPermissionsUpdate: "更新应用权限",
+	managedapi.OpPermissionsDelete: "删除应用权限", managedapi.OpPermissionsEnable: "启用应用权限",
+	managedapi.OpPermissionsDisable: "停用应用权限",
+}
+
+// managedPolicyCatalog 返回完整操作目录（不受当前策略限制）；页面用复选框选择，
+// 提交后仍由 managedapi 严格校验未知操作/硬禁字段/上限。
+func managedPolicyCatalog() []login.UIAppPolicyOperationCatalog {
+	ids := managedapi.OperationIDs()
+	result := make([]login.UIAppPolicyOperationCatalog, 0, len(ids))
+	for _, id := range ids {
+		operation, ok := managedapi.LookupOperation(id)
+		if !ok {
+			continue
+		}
+		result = append(result, login.UIAppPolicyOperationCatalog{
+			ID: id, Object: operation.ObjectType, Write: operation.Write,
+			ServiceOK:   operation.ServiceAllowed,
+			Description: managedPolicyOperationDescriptions[id],
+		})
+	}
+	return result
+}
+
+// managedPolicyFieldCatalog 返回对象字段目录与可写字段建议；读字段来自 managedapi
+// 的公开目录，写字段排除 id/scope/status/时间戳/builtin 等不可变标识。
+func managedPolicyFieldCatalog() []login.UIAppPolicyFieldCatalog {
+	writable := map[string][]string{
+		"application": {"name", "description"},
+		"member":      {"display_name", "title", "note"},
+		"user":        {"username", "nickname", "biography"},
+		"group":       {"key", "name", "description"},
+		"role":        {"key", "name", "description", "limits", "enabled"},
+		"permission":  {"key", "name", "description", "limits", "enabled"},
+	}
+	result := make([]login.UIAppPolicyFieldCatalog, 0, len(managedapi.ObjectTypes))
+	for _, object := range managedapi.ObjectTypes {
+		result = append(result, login.UIAppPolicyFieldCatalog{
+			Object: object, Read: managedapi.FieldsOf(object),
+			Write: append([]string{}, writable[object]...),
+		})
+	}
+	return result
+}
+
 func mapAppsError(err error) error {
 	if err == nil {
 		return nil
@@ -126,11 +216,14 @@ func mapAppsError(err error) error {
 	code := "INTERNAL_ERROR"
 	appCode := app.CodeOf(err)
 	oauthCode := oauthclient.CodeOf(err)
+	managedCode := managedapi.CodeOf(err)
 	switch {
 	case appCode != "" && appCode != app.CodeInternalError:
 		code = string(appCode)
 	case oauthCode != "" && oauthCode != oauthclient.CodeInternalError:
 		code = string(oauthCode)
+	case managedCode != "" && managedCode != managedapi.CodeInternalError:
+		code = string(managedCode)
 	}
 	return &login.UIAppsError{Code: code}
 }
@@ -228,6 +321,46 @@ func (a *AppsAdapter) GetApplication(ctx context.Context, adminUserID,
 		return login.UIApplicationView{}, err
 	}
 	record, err := a.opts.Apps.GetApplication(ctx, caller, applicationID)
+	if err != nil {
+		return login.UIApplicationView{}, mapAppsError(err)
+	}
+	return a.toApplicationView(ctx, adminUserID, record), nil
+}
+
+// CanCreateApplication 只对宿主返回“是否显示新建入口”；真实 POST 仍由
+// CreateApplication 重新经过页面授权、app.Service Authorizer 与审计。没有
+// 宿主 Authorize 钩子时无法安全判断页面能力，保守返回 false，不显示静态按钮。
+func (a *AppsAdapter) CanCreateApplication(ctx context.Context,
+	adminUserID string) (bool, error) {
+	if adminUserID == "" || !account.ValidUserID(adminUserID) {
+		return false, nil
+	}
+	if a.opts.Authorize == nil {
+		return false, nil
+	}
+	if err := a.opts.Authorize(ctx, adminUserID, "applications.create", ""); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// CreateApplication 以页面管理会话登记应用；ID/状态/版本由领域服务生成，创建
+// 成功后默认停用。页面层能力位只影响展示，实际授权由 applications.create 权限、
+// 应用服务 Authorizer 与审计共同判定。
+func (a *AppsAdapter) CreateApplication(ctx context.Context, adminUserID string,
+	create login.UIApplicationCreate, requestID string) (login.UIApplicationView, error) {
+	if err := a.check(ctx, adminUserID, "applications.create", ""); err != nil {
+		return login.UIApplicationView{}, err
+	}
+	caller, err := a.appCaller(adminUserID, requestID)
+	if err != nil {
+		return login.UIApplicationView{}, err
+	}
+	record, err := a.opts.Apps.CreateApplication(ctx, caller, app.CreateRequest{
+		Name: create.Name, Description: create.Description, IconRef: create.IconRef,
+		Homepage: create.Homepage, OwnerUserID: create.OwnerUserID,
+		ContactInfo: create.ContactInfo, ClientType: app.ClientType(create.ClientType),
+	})
 	if err != nil {
 		return login.UIApplicationView{}, mapAppsError(err)
 	}
@@ -705,8 +838,8 @@ func (a *AppsAdapter) RevokeCertificate(ctx context.Context, adminUserID, applic
 	return nil
 }
 
-// GetManagedPolicy 读取应用真实托管管理 API 委托策略（只读；写策略必须由受信配置
-// 通道完成，页面不提供写控件）。
+// GetManagedPolicy 读取应用真实托管管理 API 委托策略（受信系统只读通道）。写策略
+// 由 SetManagedPolicy 在页面一次性强认证绑定后提交，不在本读取路径放行。
 func (a *AppsAdapter) GetManagedPolicy(ctx context.Context, adminUserID,
 	applicationID string) (login.UIAppPolicyView, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
@@ -720,12 +853,15 @@ func (a *AppsAdapter) GetManagedPolicy(ctx context.Context, adminUserID,
 		return login.UIAppPolicyView{State: "unavailable",
 			Reason: "受信策略读取标识未配置或无效；未读取任何策略内容"}, nil
 	}
+	canWrite := a.canWriteManagedPolicy(ctx, adminUserID, applicationID)
 	view, err := a.opts.ManagedAPI.GetPolicy(ctx, a.opts.ManagedPolicyActor, applicationID, "")
 	if err != nil {
 		switch {
 		case errors.Is(err, managedapi.ErrPolicyDisabled):
 			return login.UIAppPolicyView{State: "not_configured",
-				ApplicationID: applicationID}, nil
+				ApplicationID: applicationID, CanWrite: canWrite,
+				Limits:  login.UIAppPolicyLimits{MaxLimit: 20, MaxOffset: 100000, MaxBatch: 10},
+				Catalog: managedPolicyCatalog(), FieldCatalog: managedPolicyFieldCatalog()}, nil
 		case errors.Is(err, managedapi.ErrAccessDenied):
 			return login.UIAppPolicyView{State: "unavailable",
 				Reason: "受信策略读取通道未获准读取该应用策略；未展示任何策略内容"}, nil
@@ -736,7 +872,10 @@ func (a *AppsAdapter) GetManagedPolicy(ctx context.Context, adminUserID,
 	result := login.UIAppPolicyView{State: "policy", ApplicationID: view.ApplicationID,
 		RowVersion: view.RowVersion, UpdatedBy: view.UpdatedBy,
 		Limits: login.UIAppPolicyLimits{MaxLimit: view.Policy.Limits.MaxLimit,
-			MaxOffset: view.Policy.Limits.MaxOffset, MaxBatch: view.Policy.Limits.MaxBatch}}
+			MaxOffset: view.Policy.Limits.MaxOffset, MaxBatch: view.Policy.Limits.MaxBatch},
+		CanWrite: canWrite}
+	result.Catalog = managedPolicyCatalog()
+	result.FieldCatalog = managedPolicyFieldCatalog()
 	appendOps := func(ids []string) []login.UIAppPolicyOperation {
 		operations := make([]login.UIAppPolicyOperation, 0, len(ids))
 		for _, id := range ids {
@@ -760,5 +899,74 @@ func (a *AppsAdapter) GetManagedPolicy(ctx context.Context, adminUserID,
 		result.Fields = append(result.Fields, login.UIAppPolicyFields{Object: fields.Object,
 			Read: append([]string{}, fields.Read...), Write: append([]string{}, fields.Write...)})
 	}
+	return result, nil
+}
+
+// canWriteManagedPolicy 用真实 PolicyAuthorizer 探测当前管理员是否具有策略写
+// 受信资格：root/受信本地管理员的用户主体被允许；应用管理员/普通用户被拒绝。
+// 该探测只返回能力位，不写任何内容；最终写仍由 SetPolicy 全部重新校验。
+func (a *AppsAdapter) canWriteManagedPolicy(ctx context.Context, adminUserID,
+	applicationID string) bool {
+	if _, ok := a.opts.ManagedAPI.(ManagedPolicyWriterService); !ok {
+		return false
+	}
+	actor := audit.Actor{Type: audit.ActorUser, ID: adminUserID}
+	_, err := a.opts.ManagedAPI.GetPolicy(ctx, actor, applicationID, "")
+	return err == nil || errors.Is(err, managedapi.ErrPolicyDisabled)
+}
+
+// SetManagedPolicy 写入应用真实托管管理 API 委托策略（步骤 146）。页面先经过
+// UIAccessManagement 强会话/CSRF 与一次性 reauth 绑定；本方法再重新校验管理员
+// 管理权限，并由 managedapi.SetPolicy 做受信 PolicyAuthorizer、行版本、策略结构、
+// 审计同事务与应用状态校验。错误以稳定 UIAppsError 返回，页面不伪造成功。
+func (a *AppsAdapter) SetManagedPolicy(ctx context.Context, adminUserID, applicationID string,
+	change login.UIAppPolicyChange, expectedRowVersion int64, requestID,
+	policyDigest string) (login.UIAppPolicyView, error) {
+	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+		return login.UIAppPolicyView{}, err
+	}
+	writer, writable := a.opts.ManagedAPI.(ManagedPolicyWriterService)
+	if a.opts.ManagedAPI == nil || !writable {
+		return login.UIAppPolicyView{}, appsErr("UNAVAILABLE")
+	}
+	if expectedRowVersion < 0 || requestID == "" ||
+		policyDigest == "" || change.Digest() != policyDigest {
+		return login.UIAppPolicyView{}, appsErr("REQ_INVALID")
+	}
+	policy := managedapi.Policy{
+		Version: 1,
+		Operations: managedapi.PolicyOperations{
+			Allowed:        append([]string{}, change.Allowed...),
+			ServiceAllowed: append([]string{}, change.ServiceAllowed...),
+		},
+		Limits: managedapi.PolicyLimits{MaxLimit: change.Limits.MaxLimit,
+			MaxOffset: change.Limits.MaxOffset, MaxBatch: change.Limits.MaxBatch},
+	}
+	for _, scope := range change.Objects {
+		policy.Objects = append(policy.Objects, managedapi.ObjectScope{
+			Object: scope.Object, Mode: scope.Mode,
+			Resources: append([]string{}, scope.Resources...)})
+	}
+	for _, fields := range change.Fields {
+		policy.Fields = append(policy.Fields, managedapi.ObjectFields{
+			Object: fields.Object, Read: append([]string{}, fields.Read...),
+			Write: append([]string{}, fields.Write...)})
+	}
+	actor := audit.Actor{Type: audit.ActorUser, ID: adminUserID}
+	view, err := writer.SetPolicy(ctx, actor, managedapi.SetPolicyRequest{
+		ApplicationID: applicationID, Policy: policy,
+		ExpectedRowVersion: expectedRowVersion, RequestID: requestID,
+		ReauthBinding: policyDigest,
+	})
+	if err != nil {
+		return login.UIAppPolicyView{}, mapManagedPolicyError(err)
+	}
+	result := login.UIAppPolicyView{State: "policy", ApplicationID: view.ApplicationID,
+		RowVersion: view.RowVersion, UpdatedBy: view.UpdatedBy,
+		Limits: login.UIAppPolicyLimits{MaxLimit: view.Policy.Limits.MaxLimit,
+			MaxOffset: view.Policy.Limits.MaxOffset, MaxBatch: view.Policy.Limits.MaxBatch},
+		CanWrite: true}
+	result.Catalog = managedPolicyCatalog()
+	result.FieldCatalog = managedPolicyFieldCatalog()
 	return result, nil
 }

@@ -13,12 +13,14 @@
       {{csrf_field}}
       <input type="hidden" name="passkey_ceremony_id" value="{{.CeremonyID}}">
       <input type="hidden" name="passkey_response" value="">
+      {{template "component.field" (dict "id" "strong-setup-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
       <p class="ln-meta" data-ln-webauthn-status role="status"></p>
       <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.strong_setup.bind_passkey") "variant" "primary" "type" "button")}}</div>
     </form>
   {{else}}
     <form method="post" action="{{route "auth.strong_setup.passkey_start"}}" data-ln-module="async-form">
       {{csrf_field}}
+      {{template "component.field" (dict "id" "strong-setup-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
       <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.strong_setup.bind_passkey") "variant" "primary" "type" "submit")}}</div>
     </form>
   {{end}}

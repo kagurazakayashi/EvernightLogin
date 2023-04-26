@@ -29,6 +29,8 @@ type fakeAppsBackend struct {
 	certificate   *login.UIAppCertificate
 	secret        string
 	profileUpdate login.UIApplicationChange
+	createRequest login.UIApplicationCreate
+	canCreate     bool
 	memberState   bool
 	stateChanged  bool
 }
@@ -69,6 +71,26 @@ func (f *fakeAppsBackend) UpdateApplication(_ context.Context, _, _ string,
 	updated.Description = change.Description
 	updated.RowVersion++
 	return updated, nil
+}
+
+func (f *fakeAppsBackend) CanCreateApplication(context.Context, string) (bool, error) {
+	return f.canCreate, nil
+}
+
+func (f *fakeAppsBackend) CreateApplication(_ context.Context, _ string,
+	create login.UIApplicationCreate, _ string) (login.UIApplicationView, error) {
+	if err := f.fail("create"); err != nil {
+		return login.UIApplicationView{}, err
+	}
+	f.createRequest = create
+	created := f.app
+	created.ID = "app_22222222222222222222222222222222"
+	created.Name = create.Name
+	created.Description = create.Description
+	created.ClientType = create.ClientType
+	created.Status = "disabled"
+	created.RowVersion = 1
+	return created, nil
 }
 
 func (f *fakeAppsBackend) SetApplicationState(_ context.Context, _, _ string, enable bool,
@@ -247,7 +269,8 @@ func newAppsFakeBackend() *fakeAppsBackend {
 		credentials: login.UIAppCredentials{Registered: true, ClientType: "confidential",
 			Secrets: []login.UIAppSecretInfo{{ID: "sec_existing", Prefix: "elc_old_",
 				Status: "active"}}},
-		secret: "elc_live_super-secret-once-value",
+		secret:    "elc_live_super-secret-once-value",
+		canCreate: true,
 	}
 }
 
@@ -289,7 +312,8 @@ func TestUIPageAppsRoutesContract(t *testing.T) {
 		"admin.application_members.submit", "admin.application_security",
 		"admin.application_security.submit", "admin.application_credentials",
 		"admin.application_credentials.submit", "admin.application_grants",
-		"admin.application_status", "admin.application_status.submit"} {
+		"admin.application_status", "admin.application_status.submit",
+		"admin.application_create", "admin.application_create.submit"} {
 		if !routes[name] {
 			t.Fatalf("缺少步骤 70 路由 %s", name)
 		}
@@ -590,5 +614,75 @@ func TestUIPageAppsSecurityCheckedAndEcho(t *testing.T) {
 		!strings.Contains(rotateBody, "数据或凭证状态已变化") ||
 		strings.Contains(rotateBody, "无法确认刚才的写入结果") {
 		t.Fatalf("轮换冲突文案不精确 = %d", rotateFailed.Code)
+	}
+}
+
+// fakeAppsNoCreate 只提供既有 UIAppsBackend，不实现可选新建契约；用于验证页面
+// 不注册新建路由、不渲染静态按钮，而不是让按钮点击后失败。
+type fakeAppsNoCreate struct {
+	login.UIAppsBackend
+}
+
+// TestUIPageAppsCreate 验证新建应用页真实提交路径、默认停用提示与无能力后端隐藏。
+func TestUIPageAppsCreate(t *testing.T) {
+	backend := newAppsFakeBackend()
+	ui := newAppsTestUI(t, backend, true)
+	list := serveAppsPage(ui, http.MethodGet, "/admin/applications", nil)
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "新建应用") {
+		t.Fatalf("支持新建时列表缺少入口 = %d", list.Code)
+	}
+	formPage := serveAppsPage(ui, http.MethodGet, "/admin/applications/create", nil)
+	if formPage.Code != http.StatusOK ||
+		!strings.Contains(formPage.Body.String(), `name="client_type"`) {
+		t.Fatalf("新建应用页渲染 = %d", formPage.Code)
+	}
+	created := serveAppsPage(ui, http.MethodPost, "/admin/applications/create",
+		url.Values{"csrf_token": {"token"}, "name": {"页面新建应用"},
+			"description": {"合成数据"}, "client_type": {"public"},
+			"owner_user_id": {""}, "homepage": {""}, "icon_ref": {""},
+			"contact_info": {""}})
+	if created.Code != http.StatusOK ||
+		!strings.Contains(created.Body.String(), "应用已创建（默认停用）") ||
+		!strings.Contains(created.Body.String(), "app_22222222222222222222222222222222") ||
+		backend.createRequest.Name != "页面新建应用" ||
+		backend.createRequest.ClientType != "public" {
+		t.Fatalf("新建应用提交 = %d body=%s", created.Code, created.Body.String())
+	}
+
+	// 后端未实现可选 Create 契约：不注册路由、不显示入口，避免静态按钮。
+	noCreate := fakeAppsNoCreate{UIAppsBackend: newAppsFakeBackend()}
+	noCreateUI := newAppsTestUI(t, noCreate, true)
+	for _, route := range noCreateUI.Routes() {
+		if route.Name == "admin.application_create" ||
+			route.Name == "admin.application_create.submit" {
+			t.Fatalf("无新建能力后端不应注册路由 %s", route.Name)
+		}
+	}
+	noCreateList := serveAppsPage(noCreateUI, http.MethodGet, "/admin/applications", nil)
+	if noCreateList.Code != http.StatusOK ||
+		strings.Contains(noCreateList.Body.String(), "新建应用") {
+		t.Fatalf("无新建能力时不应显示静态入口 = %d", noCreateList.Code)
+	}
+	missing := serveAppsPage(noCreateUI, http.MethodGet, "/admin/applications/create", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("无新建能力时创建路由应为 404，得到 %d", missing.Code)
+	}
+}
+
+// TestUIPageAppsCreateInvalidForm 验证非法名称/客户端类型不会调用后端。
+func TestUIPageAppsCreateInvalidForm(t *testing.T) {
+	backend := newAppsFakeBackend()
+	ui := newAppsTestUI(t, backend, true)
+	for name, form := range map[string]url.Values{
+		"空名称":  {"csrf_token": {"token"}, "name": {""}, "client_type": {"public"}},
+		"非法类型": {"csrf_token": {"token"}, "name": {"x"}, "client_type": {"browser"}},
+	} {
+		response := serveAppsPage(ui, http.MethodPost, "/admin/applications/create", form)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("%s 应返回 400，得到 %d", name, response.Code)
+		}
+		if backend.createRequest.Name != "" {
+			t.Fatalf("%s 不应调用后端 CreateApplication", name)
+		}
 	}
 }

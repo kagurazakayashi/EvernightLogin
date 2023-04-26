@@ -8,12 +8,12 @@ package serverapp
 //     关闭时协议路径不存在（404）。
 //   - 固定 Issuer 来自配置（protocol.issuer），必须与 server.path_prefix 路径一致；
 //     四个端点地址逐字节由 Issuer + protocolapi 路径常量生成。
-//   - RFC 7662 状态查询需要资源服务注册表，当前版本尚未建模：显式启用时启动失败，
-//     不声明未实现能力。
-//   - 设备码流程需要设备确认页与短码密钥环；当前版本未启用（端点不挂载，Discovery
-//     不声明）。
-//   - 扫码登录服务需要独立 HMAC 密钥环与白名单；当前未装配，页面/协议 QR 端点不
-//     提供（不伪造）。
+//   - RFC 7662 状态查询需要受信资源服务登记，启用时校验登记并注入授权器；
+//     未登记资源服务拒绝启动，不声明未实现能力。
+//   - 设备码流程需要设备确认页与短码密钥环；当前仍在 143 范围，未启用时端点
+//     不挂载、Discovery 不声明。
+//   - 扫码登录服务在 app_qr_login.enabled 时构造，白名单应用必须存在且 active；
+//     关闭时页面/协议 QR 端点返回受控错误，不伪造能力。
 //   - 令牌签名私钥由 internal/token 用主密钥环加密保存并自动生成；签名材料不写入
 //     配置或日志。
 
@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/app"
+	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	oauthclientsqlite "github.com/kagurazakayashi/EvernightLogin/internal/oauthclient/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
@@ -34,6 +36,8 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/oidc"
 	oidcsqlite "github.com/kagurazakayashi/EvernightLogin/internal/oidc/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/protocolapi"
+	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
+	qrloginsqlite "github.com/kagurazakayashi/EvernightLogin/internal/qrlogin/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 	tokensqlite "github.com/kagurazakayashi/EvernightLogin/internal/token/sqlite"
@@ -41,12 +45,17 @@ import (
 
 // ProtocolDomains 是 OAuth/OIDC 协议与页面共用的真实服务集合。
 type ProtocolDomains struct {
-	Tokens     *token.Service
-	OIDC       *oidc.Service
-	OAuthFlow  *oauthflow.Service
-	Protocol   *protocolapi.Server
-	Mounts     []HandlerMount
-	revocation *revocationLinker
+	Tokens    *token.Service
+	OIDC      *oidc.Service
+	OAuthFlow *oauthflow.Service
+	// QRLogin/QRClientID/QRApplicationNames 是扫码登录页面/协议共享装配；
+	// QRLogin 为 nil 表示未启用（页面与协议端点都不提供）。
+	QRLogin            *qrlogin.Service
+	QRClientID         string
+	QRApplicationNames map[string]string
+	Protocol           *protocolapi.Server
+	Mounts             []HandlerMount
+	revocation         *revocationLinker
 }
 
 // revocationLinker 解决 oidc（需要 oauthflow 做在线撤销检查）与 oauthflow（需要
@@ -88,10 +97,6 @@ func BuildProtocolDomains(deps Deps, services *Services, managed *ManagedService
 	}
 	if gate == nil || gate.Reauth == nil {
 		return nil, fmt.Errorf("协议端点缺少敏感操作闸门")
-	}
-	if deps.Config.Protocol.EnableIntrospection {
-		return nil, fmt.Errorf("协议状态查询（RFC 7662）需要资源服务注册表，当前版本尚未实现；" +
-			"请关闭 protocol.enable_introspection")
 	}
 	issuer := protocolIssuer(deps)
 	if issuer == "" {
@@ -175,22 +180,103 @@ func BuildProtocolDomains(deps Deps, services *Services, managed *ManagedService
 		return nil, fmt.Errorf("构造授权流程客户端来源失败: %w", err)
 	}
 	loginPath := strings.TrimSpace(deps.Config.Protocol.LoginPath)
+	deviceVerificationURI := ""
+	if deps.Config.Protocol.DeviceCodeEnabled {
+		publicBase := strings.TrimRight(strings.TrimSpace(deps.Config.Server.PublicBaseURL), "/")
+		if publicBase == "" {
+			return nil, fmt.Errorf("启用设备码时必须配置 server.public_base_url")
+		}
+		deviceVerificationURI = publicBase + "/oauth/device"
+	}
+	resourceRegistry, err := loadResourceRegistry(context.Background(), deps)
+	if err != nil {
+		return nil, fmt.Errorf("资源服务登记校验失败: %w", err)
+	}
+	inspectEnabled := deps.Config.Protocol.EnableIntrospection
+	var inspectAuthorizer oauthflow.InspectAuthorizer
+	var inspectClientAuthorizer oauthflow.InspectClientAuthorizer
+	var tokenStateChecker oauthflow.TokenStateChecker
+	if inspectEnabled {
+		if len(resourceRegistry.byClient) == 0 {
+			return nil, fmt.Errorf("启用状态查询前必须登记至少一个受信资源服务")
+		}
+		inspectAuthorizer = resourceInspectAuthorizer{registry: resourceRegistry}
+		inspectClientAuthorizer = resourceInspectClientAuthorizer{registry: resourceRegistry}
+		checker, checkerErr := newTokenStateChecker(deps)
+		if checkerErr != nil {
+			return nil, fmt.Errorf("构造令牌当前状态复核器失败: %w", checkerErr)
+		}
+		tokenStateChecker = checker
+	}
 	flow, err := oauthflow.New(oauthflow.Options{
 		Store: flowStore, Audit: deps.Audit, Clients: flowClients,
 		ClientAuth: managed.OAuthClient, Sessions: services.Sessions,
 		SessionRevoker: services.Sessions, Tokens: tokenService,
 		Reauth: gate.Reauth, OIDC: oidcService, TokenVerifier: tokenService,
-		// 状态查询未启用：不注入 InspectAuthorizer（fail-closed）。
-		Now: now, Logger: deps.Logger,
+		DeviceVerificationURI:   deviceVerificationURI,
+		DeviceUserCodeKeyring:   deps.Keyring,
+		InspectAuthorizer:       inspectAuthorizer,
+		InspectClientAuthorizer: inspectClientAuthorizer,
+		TokenStateChecker:       tokenStateChecker,
+		Now:                     now, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造授权流程服务失败: %w", err)
 	}
 	linker.flow = flow
 
+	resourceAuthorize, err := buildResourceAuthorizeHandler(deps, resourceRegistry,
+		managed.OAuthClient, tokenService, flow, tokenClients, managed.Authz)
+	if err != nil {
+		return nil, err
+	}
+
+	var qrLogin *qrlogin.Service
+	var qrClientID string
+	var qrApplicationNames map[string]string
+	if deps.Config.AppQRLogin.Enabled {
+		qrStore, qrErr := qrloginsqlite.New(deps.Store)
+		if qrErr != nil {
+			return nil, fmt.Errorf("构造扫码登录存储失败: %w", qrErr)
+		}
+		qrAppStore, qrErr := appsqlite.New(deps.Store)
+		if qrErr != nil {
+			return nil, fmt.Errorf("构造扫码应用读取器失败: %w", qrErr)
+		}
+		allowed := append([]string(nil), deps.Config.AppQRLogin.AllowedClientIDs...)
+		if len(allowed) == 1 {
+			qrClientID = allowed[0]
+		}
+		qrApplicationNames = make(map[string]string, len(allowed))
+		for _, applicationID := range allowed {
+			application, lookupErr := qrAppStore.GetApplication(context.Background(), applicationID)
+			if lookupErr != nil {
+				return nil, fmt.Errorf("扫码白名单应用 %q 不可读: %w", applicationID, lookupErr)
+			}
+			if application.Status != app.StatusActive {
+				return nil, fmt.Errorf("扫码白名单应用 %q 不是 active 状态", applicationID)
+			}
+			qrApplicationNames[applicationID] = application.Name
+		}
+		qrLogin, err = qrlogin.New(qrlogin.Options{
+			Store: qrStore, Audit: deps.Audit, Clients: clientStore, Applications: qrAppStore,
+			Sessions: services.Sessions, SessionIssuer: services.Sessions, Reauth: gate.Reauth,
+			Keyring: deps.Keyring, Enabled: true, AllowedClientIDs: allowed,
+			RequestTTL:    time.Duration(deps.Config.AppQRLogin.RequestTTLSeconds) * time.Second,
+			ClaimInterval: time.Duration(deps.Config.AppQRLogin.ClaimIntervalSeconds) * time.Second,
+			Now:           now, Logger: deps.Logger,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("构造扫码登录服务失败: %w", err)
+		}
+	}
 	server, err := protocolapi.New(protocolapi.Options{
 		OAuth: flow, OIDC: oidcService, Tokens: tokenService,
 		Sessions: services.Sessions, ClientAuth: managed.OAuthClient,
+		TokenAuthorize:      resourceAuthorize,
+		EnableIntrospection: inspectEnabled,
+		EnableDeviceFlow:    deps.Config.Protocol.DeviceCodeEnabled,
+		QRLogin:             qrLogin, QRClientID: qrClientID,
 		BasePath:  deps.Config.Server.PathPrefix,
 		LoginPath: loginPath,
 		Logger:    deps.Logger, Now: now,
@@ -223,6 +309,7 @@ func BuildProtocolDomains(deps Deps, services *Services, managed *ManagedService
 	}
 	return &ProtocolDomains{
 		Tokens: tokenService, OIDC: oidcService, OAuthFlow: flow,
+		QRLogin: qrLogin, QRClientID: qrClientID, QRApplicationNames: qrApplicationNames,
 		Protocol: server, Mounts: mounts, revocation: linker,
 	}, nil
 }

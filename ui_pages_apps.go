@@ -13,18 +13,23 @@ package login
 //     不回填明文、不写 localStorage/URL/隐藏字段；一次响应由框架 no-store。
 //   - 回调/授权方式/Scope/audience/PKCE 使用明确控件；危险回调由真实 oauthclient
 //     服务拒绝，页面按字段展示可纠正说明，不部分保存。
-//   - 资源与接口/字段许可的真实管理接口当前不存在（步骤 70 已核实），页面只显示
-//     明确“尚未启用”和真实原因，不渲染假开关/静态配置/mock 成功。
+//   - 资源与接口/字段许可页（步骤 146）通过可选 UIAppsPolicyBackend 读取真实
+//     managedapi 策略，并在受信写入通道 + 一次性强认证绑定时提供受控编辑；未注入
+//     可选后端时保持只读，不渲染假开关/mock 成功。
 //   - 服务器 TLS 私钥不属于本页面：页面只管理应用自身 OAuth 客户端凭证与公钥证书，
 //     不接受私钥材料，未实现的设置显示“尚未启用”。
 //   - 应用停用不等于删除；停用/启用显示服务端 Changed 语义，不伪造第二次变更。
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +38,13 @@ import (
 // UIPageAppsOptions 是步骤 70 应用管理页配置。
 type UIPageAppsOptions struct {
 	Backend UIAppsBackend
+	// PolicyBackend 是步骤 146 可选策略读写契约；未注入时应用许可页保持只读，
+	// 既有 UIAppsBackend 实现无需新增方法（向后兼容）。
+	PolicyBackend UIAppsPolicyBackend
+	// PolicyReauth 是策略写前置的一次性强认证回调。它必须由宿主在真实管理会话/
+	// 再次认证通过后调用，并把同一 app/version/policy-digest/request-id 绑定交给
+	// 策略后端；页面表单本身不是授权。
+	PolicyReauth func(ctx context.Context, userID string, binding UIAppPolicyActionBinding) error
 }
 
 // UIAppsBackend 是应用管理页面调用真实 app/oauthclient 服务的最小契约；适配器负责
@@ -72,6 +84,33 @@ type UIAppsBackend interface {
 	// GetManagedPolicy 读取该应用真实的托管管理 API 委托策略（受信读取通道）。
 	// 后端未装配/未获准必须返回明确状态与真实原因，不能伪装成“未启用”。
 	GetManagedPolicy(ctx context.Context, adminID, appID string) (UIAppPolicyView, error)
+}
+
+// UIAppsCreateBackend 是应用管理页的可选新建能力。它单独成接口，避免要求所有
+// 既有 UIAppsBackend 测试替身/宿主实现同时新增方法；页面只在后端实现该接口时
+// 注册“新建应用”路由并显示入口，不渲染无法完成操作的静态按钮。
+type UIAppsCreateBackend interface {
+	// CanCreateApplication 返回当前管理员是否具备新建应用的页面能力，仅用于
+	// 决定是否显示入口；实际创建仍由领域服务重新授权。依赖失败应返回错误，
+	// 页面按“不可用”处理而不是显示按钮。
+	CanCreateApplication(ctx context.Context, adminID string) (bool, error)
+	// CreateApplication 以当前管理会话身份登记一个应用。应用 ID、作用范围、初始
+	// 状态（停用）与行版本由领域服务生成；页面提交的字段只是创建白名单，授权、
+	// 负责人资格、审计与失败原子性仍由真实 app.Service 判定。
+	CreateApplication(ctx context.Context, adminID string, create UIApplicationCreate,
+		requestID string) (UIApplicationView, error)
+}
+
+// UIApplicationCreate 是应用新建页提交白名单。应用 ID/状态/行版本/ScopeID 由
+// 服务端生成；客户端类型在创建后不可修改。
+type UIApplicationCreate struct {
+	Name        string
+	Description string
+	IconRef     string
+	Homepage    string
+	OwnerUserID string
+	ContactInfo string
+	ClientType  string
 }
 
 // UIAppsError 是应用管理适配层返回的稳定公开错误。
@@ -289,6 +328,10 @@ type UIAppPolicyView struct {
 	Objects        []UIAppPolicyObject
 	Fields         []UIAppPolicyFields
 	Limits         UIAppPolicyLimits
+	// Catalog/FieldCatalog/CanWrite 仅用于步骤 146 可写页面；旧只读适配器留空。
+	Catalog      []UIAppPolicyOperationCatalog
+	FieldCatalog []UIAppPolicyFieldCatalog
+	CanWrite     bool
 }
 
 // UIAppPolicyOperation 是策略里声明的操作及目录中文说明。
@@ -319,6 +362,106 @@ type UIAppPolicyLimits struct {
 	MaxLimit  int
 	MaxOffset int
 	MaxBatch  int
+}
+
+// UIAppsPolicyBackend 是步骤 146 的可选策略读写契约；与 UIAppsBackend 分开定义，
+// 避免破坏既有宿主适配器。GetManagedPolicy 与 UIAppsBackend 的同名方法签名一致，
+// adapter 同时实现两者即可注入。
+type UIAppsPolicyBackend interface {
+	GetManagedPolicy(ctx context.Context, adminID, appID string) (UIAppPolicyView, error)
+	SetManagedPolicy(ctx context.Context, adminID, appID string, change UIAppPolicyChange,
+		expectedRowVersion int64, requestID, policyDigest string) (UIAppPolicyView, error)
+}
+
+// UIAppPolicyOperationCatalog 是页面可选择的真实操作目录项（服务端生成，不接受
+// 前端自定义操作 ID）。
+type UIAppPolicyOperationCatalog struct {
+	ID          string
+	Object      string
+	Description string
+	Write       bool
+	ServiceOK   bool
+}
+
+// UIAppPolicyFieldCatalog 是某对象类型在目录里的可读/可写字段全集（最终仍受
+// managedapi 硬禁字段与策略校验约束）。
+type UIAppPolicyFieldCatalog struct {
+	Object string
+	Read   []string
+	Write  []string
+}
+
+// UIAppPolicyChange 是页面提交的策略变更；执行端会转换为受信策略结构并再次验证。
+type UIAppPolicyChange struct {
+	Allowed        []string
+	ServiceAllowed []string
+	Objects        []UIAppPolicyObject
+	Fields         []UIAppPolicyFields
+	Limits         UIAppPolicyLimits
+}
+
+// UIAppPolicyActionBinding 是一次策略写的一次性强认证绑定：应用、行版本与规范化
+// 策略摘要 + request_id 必须与真正写入完全一致，旧确认不能复用到另一变更。
+// UIAppPolicyForm 是可写许可页的文本域初始值（页面只是编辑辅助；服务端仍严格
+// 解析并重新校验）。列表使用换行/逗号分隔，对象/字段规则各占一行。
+type UIAppPolicyForm struct {
+	Allowed        string
+	ServiceAllowed string
+	Objects        string
+	Fields         string
+	MaxLimit       int
+	MaxOffset      int
+	MaxBatch       int
+}
+
+type UIAppPolicyActionBinding struct {
+	ApplicationID      string
+	ExpectedRowVersion int64
+	PolicyDigest       string
+	RequestID          string
+}
+
+// Digest 返回策略变更的规范化 SHA-256 摘要（十六进制）。页面、适配器与
+// managedapi 一次性批准使用同一摘要，避免确认后替换策略内容。
+func (c UIAppPolicyChange) Digest() string {
+	canonical := struct {
+		Allowed        []string
+		ServiceAllowed []string
+		Objects        []UIAppPolicyObject
+		Fields         []UIAppPolicyFields
+		Limits         UIAppPolicyLimits
+	}{
+		Allowed:        append([]string{}, c.Allowed...),
+		ServiceAllowed: append([]string{}, c.ServiceAllowed...),
+		Objects:        append([]UIAppPolicyObject{}, c.Objects...),
+		Fields:         append([]UIAppPolicyFields{}, c.Fields...),
+		Limits:         c.Limits,
+	}
+	sort.Strings(canonical.Allowed)
+	sort.Strings(canonical.ServiceAllowed)
+	for index := range canonical.Objects {
+		canonical.Objects[index].Resources = append([]string{},
+			canonical.Objects[index].Resources...)
+		sort.Strings(canonical.Objects[index].Resources)
+	}
+	sort.Slice(canonical.Objects, func(i, j int) bool {
+		return canonical.Objects[i].Object < canonical.Objects[j].Object
+	})
+	for index := range canonical.Fields {
+		canonical.Fields[index].Read = append([]string{}, canonical.Fields[index].Read...)
+		canonical.Fields[index].Write = append([]string{}, canonical.Fields[index].Write...)
+		sort.Strings(canonical.Fields[index].Read)
+		sort.Strings(canonical.Fields[index].Write)
+	}
+	sort.Slice(canonical.Fields, func(i, j int) bool {
+		return canonical.Fields[i].Object < canonical.Fields[j].Object
+	})
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
 }
 
 // UIAppsFieldDiff 是资料/安全设置本次实际生效的差异行。
@@ -365,12 +508,28 @@ func newPageAppsPages(options UIPageAppsOptions) (*pageAppsPages, error) {
 		{Name: "admin.application_grants", Method: http.MethodGet,
 			Path: "/admin/applications/grants", Access: UIAccessManagement,
 			Layout: "layout/base", Template: "page/admin/application_grants"},
+		{Name: "admin.application_grants.submit", Method: http.MethodPost,
+			Path: "/admin/applications/grants", Access: UIAccessManagement,
+			Layout: "layout/base", Template: "page/admin/application_grants"},
 		{Name: "admin.application_status", Method: http.MethodGet,
 			Path: "/admin/applications/status", Access: UIAccessManagement,
 			Layout: "layout/base", Template: "page/admin/application_status"},
 		{Name: "admin.application_status.submit", Method: http.MethodPost,
 			Path: "/admin/applications/status", Access: UIAccessManagement,
 			Layout: "layout/base", Template: "page/admin/application_status"},
+	}
+	// 新建应用是可选能力：只有真实后端实现 UIAppsCreateBackend 时才注册路由与
+	// 入口，避免页面出现点了却无法执行的静态按钮。新建后应用默认停用，启用与
+	// 客户端凭证仍需走各自的受控页面/服务。
+	if _, ok := options.Backend.(UIAppsCreateBackend); ok {
+		routes = append(routes,
+			UIRoute{Name: "admin.application_create", Method: http.MethodGet,
+				Path: "/admin/applications/create", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/application_create"},
+			UIRoute{Name: "admin.application_create.submit", Method: http.MethodPost,
+				Path: "/admin/applications/create", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/application_create"},
+		)
 	}
 	for _, route := range routes {
 		pages.routes = append(pages.routes, route)
@@ -495,6 +654,9 @@ func appsChecked(values url.Values, key string) bool {
 // builtinAppsMessages 是应用管理页摘要使用的中文基线（模板静态文案仍走 i18n 键）。
 var builtinAppsMessages = map[string]string{
 	"page.admin.applications.common.forbidden":             "你没有管理该应用的权限，或管理强认证已过期；服务端已拒绝",
+	"page.admin.applications.grants.invalid":               "策略表单格式不正确；请按帮助格式填写操作、对象范围与字段规则",
+	"page.admin.applications.grants.save_failed":           "策略保存失败；未写入任何变更，请根据错误摘要修正后重试",
+	"page.admin.applications.grants.write_unavailable":     "当前部署未装配受信策略写入或一次性强认证通道，页面不允许保存",
 	"page.admin.applications.common.reauth_required":       "该操作需要重新完成强认证，请按提示重新验证；确认框本身不是授权",
 	"page.admin.applications.common.conflict":              "数据或凭证状态已变化，请重新读取并比较后再试",
 	"page.admin.applications.common.client_disabled":       "此应用已停用，当前操作不可用；停用不等于删除",
