@@ -140,6 +140,16 @@ func newServeCommand() *cobra.Command {
 		"启用管理 JSON API（复用管理会话/CSRF 契约；默认关闭，未启用时 404）")
 	flags.StringVar(&options.AdminAPIPrefix, "admin-api-prefix", "",
 		"管理 API 站内前缀（默认 /admin/v1，不允许覆盖页面命名空间）")
+	flags.BoolVar(&options.EnableManagedAPI, "enable-managed-api", false,
+		"启用业务应用托管管理 API（用户 Bearer/应用客户端认证；默认关闭，未启用时 404）")
+	flags.StringVar(&options.ManagedAPIPrefix, "managed-api-prefix", "",
+		"业务托管 API 站内前缀（默认 /api/managed/v1）")
+	flags.BoolVar(&options.EnableAppSupport, "enable-app-support", false,
+		"启用应用受限客服 API（需 OAuth 协议端点；默认关闭）")
+	flags.StringVar(&options.AppSupportPrefix, "app-support-prefix", "",
+		"应用客服 API 站内前缀（默认 /api/app/v1/support）")
+	flags.StringVar(&options.AppSupportAudience, "app-support-audience", "",
+		"应用客服资源 OAuth audience（默认 urn:evernight:app-support）")
 	flags.StringVar(&migrateValue, "migrate", "",
 		"执行数据库迁移后再启动：--migrate 或 --migrate=apply")
 	flags.Lookup("migrate").NoOptDefVal = "apply"
