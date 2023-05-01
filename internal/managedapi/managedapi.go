@@ -139,12 +139,18 @@ var operations = map[string]Operation{
 
 	OpGroupsList:         {ID: OpGroupsList, Permissions: []string{"groups.read"}, ObjectType: ObjectGroup, ServiceAllowed: true},
 	OpGroupsGet:          {ID: OpGroupsGet, Permissions: []string{"groups.read"}, ObjectType: ObjectGroup, ServiceAllowed: true},
+	OpGroupsCreate:       {ID: OpGroupsCreate, Permissions: []string{"groups.manage"}, ObjectType: ObjectGroup, Write: true},
+	OpGroupsUpdate:       {ID: OpGroupsUpdate, Permissions: []string{"groups.manage"}, ObjectType: ObjectGroup, Write: true},
+	OpGroupsDelete:       {ID: OpGroupsDelete, Permissions: []string{"groups.manage"}, ObjectType: ObjectGroup, Write: true},
 	OpGroupMembersList:   {ID: OpGroupMembersList, Permissions: []string{"groups.read"}, ObjectType: ObjectGroup, ServiceAllowed: true},
 	OpGroupMembersAdd:    {ID: OpGroupMembersAdd, Permissions: []string{"groups.manage"}, ObjectType: ObjectGroup, Write: true},
 	OpGroupMembersRemove: {ID: OpGroupMembersRemove, Permissions: []string{"groups.manage"}, ObjectType: ObjectGroup, Write: true},
 
 	OpRolesList:           {ID: OpRolesList, Permissions: []string{"roles.read"}, ObjectType: ObjectRole, ServiceAllowed: true},
 	OpRolesGet:            {ID: OpRolesGet, Permissions: []string{"roles.read"}, ObjectType: ObjectRole, ServiceAllowed: true},
+	OpRolesCreate:         {ID: OpRolesCreate, Permissions: []string{"roles.manage"}, ObjectType: ObjectRole, Write: true},
+	OpRolesUpdate:         {ID: OpRolesUpdate, Permissions: []string{"roles.manage"}, ObjectType: ObjectRole, Write: true},
+	OpRolesDelete:         {ID: OpRolesDelete, Permissions: []string{"roles.manage"}, ObjectType: ObjectRole, Write: true},
 	OpRolePermissionsList: {ID: OpRolePermissionsList, Permissions: []string{"roles.read"}, ObjectType: ObjectRole, ServiceAllowed: true},
 	OpRoleAssignUser:      {ID: OpRoleAssignUser, Permissions: []string{"roles.assign"}, ObjectType: ObjectRole, Write: true},
 	OpRoleRevokeUser:      {ID: OpRoleRevokeUser, Permissions: []string{"roles.assign"}, ObjectType: ObjectRole, Write: true},
@@ -152,8 +158,13 @@ var operations = map[string]Operation{
 	OpRoleRevokeGroup:     {ID: OpRoleRevokeGroup, Permissions: []string{"roles.assign"}, ObjectType: ObjectRole, Write: true},
 	OpRoleAssignmentsList: {ID: OpRoleAssignmentsList, Permissions: []string{"roles.read"}, ObjectType: ObjectRole, ServiceAllowed: true},
 
-	OpPermissionsList: {ID: OpPermissionsList, Permissions: []string{"permissions.read"}, ObjectType: ObjectPermission, ServiceAllowed: true},
-	OpPermissionsGet:  {ID: OpPermissionsGet, Permissions: []string{"permissions.read"}, ObjectType: ObjectPermission, ServiceAllowed: true},
+	OpPermissionsList:    {ID: OpPermissionsList, Permissions: []string{"permissions.read"}, ObjectType: ObjectPermission, ServiceAllowed: true},
+	OpPermissionsGet:     {ID: OpPermissionsGet, Permissions: []string{"permissions.read"}, ObjectType: ObjectPermission, ServiceAllowed: true},
+	OpPermissionsCreate:  {ID: OpPermissionsCreate, Permissions: []string{"permissions.manage"}, ObjectType: ObjectPermission, Write: true},
+	OpPermissionsUpdate:  {ID: OpPermissionsUpdate, Permissions: []string{"permissions.manage"}, ObjectType: ObjectPermission, Write: true},
+	OpPermissionsDelete:  {ID: OpPermissionsDelete, Permissions: []string{"permissions.manage"}, ObjectType: ObjectPermission, Write: true},
+	OpPermissionsEnable:  {ID: OpPermissionsEnable, Permissions: []string{"permissions.manage"}, ObjectType: ObjectPermission, Write: true},
+	OpPermissionsDisable: {ID: OpPermissionsDisable, Permissions: []string{"permissions.manage"}, ObjectType: ObjectPermission, Write: true},
 }
 
 // LookupOperation 返回操作定义。
@@ -256,8 +267,14 @@ func CodeOf(err error) ErrorCode {
 	switch {
 	case errors.Is(err, ErrInvalidRequest):
 		return CodeReqInvalid
-	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrPolicyDisabled):
+	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrPolicyDisabled),
+		errors.Is(err, role.ErrAccessDenied), errors.Is(err, group.ErrAccessDenied),
+		errors.Is(err, permission.ErrAccessDenied),
+		errors.Is(err, role.ErrBuiltinProtected), errors.Is(err, permission.ErrBuiltinProtected):
 		return CodeAccessDenied
+	case errors.Is(err, role.ErrScopeInvalid), errors.Is(err, permission.ErrScopeInvalid),
+		errors.Is(err, group.ErrScopeInvalid):
+		return CodeAppScopeMismatch
 	case errors.Is(err, ErrObjectForbidden):
 		return CodeResourceForbidden
 	case errors.Is(err, ErrVersionConflict):
