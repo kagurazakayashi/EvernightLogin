@@ -6,8 +6,8 @@
 //     环境变量明文或标准输入回显，也从不打印秘密。
 //   - 认证判定完全复用 internal/session 的 Validate/ListSessions/RevokeSession：
 //     会话有效期、账户状态、安全版本、应用成员失效等由服务层重新读取数据库判定。
-//   - 管理强制下线需要已完成强认证的管理会话；本项目的 MFA/管理强认证尚未实现，
-//     因此不提供 admin-revoke，避免用本地参数冒充管理认证。
+//   - 管理强制下线`session admin-revoke`走在线管理 API，需要已完成强认证的管理
+//     会话；本文件不把本地参数当作管理认证，在线路径见 online_session_cmd.go。
 package managecli
 
 import (
@@ -30,11 +30,14 @@ const sessionCommandUsage = `用法：
   loginctl session list --session-file <f> --keyring-file <f> [--page N] [--page-size N] \
 [--config <file>] [--json]
   loginctl session revoke <session_id> --session-file <f> --keyring-file <f> [--config <file>] [--json]
+  loginctl session admin-revoke (--user <id> | --session-id <id>) [--scope-app <app>] \
+      --reason <原因> --confirm ADMIN-REVOKE <在线公共参数>
 
 安全说明：
   - 会话秘密只从 --session-file 读取；该文件必须是受保护普通文件，不接受命令行明文。
   - --keyring-file 是主密钥环文件（与备份/会话摘要分离保管），不会写入输出。
-  - revoke 只能撤销本人名下会话；管理强制下线需要已完成强认证的管理会话，本步不提供。`
+  - revoke 只能撤销本人名下会话；管理强制下线需走 session admin-revoke 在线命令，
+    由服务端重新校验管理强认证、permissions/作用范围/root 保护与审计。`
 
 // maxSessionSecretFileBytes 是会话秘密文件大小上限，避免误读大文件。
 const maxSessionSecretFileBytes = 64 << 10
@@ -69,13 +72,11 @@ func (r *runner) runSession(args []string) int {
 	case "revoke":
 		return r.runSessionRevoke(rest)
 	case "admin-revoke":
-		return r.fail("MANAGEMENT_STRONG_AUTH_UNAVAILABLE", ExitForbidden,
-			"管理强制下线需要已完成强认证的管理会话；当前项目未实现 MFA/管理强认证，"+
-				"本地参数不能冒充管理认证", nil)
+		return r.runSessionAdminRevoke(rest)
 	case "help", "-h", "--help":
 		return r.helpText("session", sessionCommandUsage)
 	default:
-		return r.usage("未知的 session 子命令 %q（可用：whoami/list/revoke）", subcommand)
+		return r.usage("未知的 session 子命令 %q（可用：whoami/list/revoke/admin-revoke）", subcommand)
 	}
 }
 

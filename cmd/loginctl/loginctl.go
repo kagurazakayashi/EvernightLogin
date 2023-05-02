@@ -64,7 +64,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, factory Promp
 		return runRestoreReenable(args[1:], stdout, stderr)
 	case "config", "diag", "migrate", "task", "session", "user",
 		"group", "role", "app", "permission", "notify",
-		"audit", "reports", "backups", "notifications", "tasks":
+		"audit", "reports", "backups", "notifications", "tasks", "admin":
 		// 步骤 84 常规管理/诊断/设置命令与在线管理命令：本地运维边界不联网；
 		// group/role/app/permission/notify 是本地管理命令组（只读 + 受控建组，
 		// 需要委派/敏感策略的写动作返回 MANAGEMENT_WRITE_NOT_EXPOSED）；在线域
@@ -208,9 +208,12 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl diag health|ready|database|certificate|mail|all ...")
 	fmt.Fprintln(out, "  loginctl migrate status|apply ...")
 	fmt.Fprintln(out, "  loginctl task list|get|wait|cancel ...")
-	fmt.Fprintln(out, "  loginctl session whoami|list|revoke ...")
+	fmt.Fprintln(out, "  loginctl session whoami|list|revoke ...（本人会话，需 --session-file）")
+	fmt.Fprintln(out, "  loginctl session admin-revoke ...（管理强制下线，在线，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl user list|get|disable|enable ...")
 	fmt.Fprintln(out, "  loginctl group|role|app list|get|... |permission list |notify status|test")
+	fmt.Fprintln(out, "  loginctl admin users|user|groups|group|roles|role|permissions|applications|")
+	fmt.Fprintln(out, "      application|support-cases|support-case ...（在线只读管理，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl audit|reports|backups|notifications|tasks ...（在线管理，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl help | version")
 	fmt.Fprintln(out)

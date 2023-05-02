@@ -78,8 +78,23 @@ var configFieldKinds = map[string]configFieldKind{
 	"app_qr_login.allowed_client_ids":         configKindList,
 	"app_qr_login.request_ttl_seconds":        configKindInt,
 	"app_qr_login.claim_interval_seconds":     configKindInt,
+	"protocol.device_code_enabled":            configKindBool,
 	"secrets.master_key":                      configKindSecret,
 	"secrets.tls_pfx_password":                configKindSecret,
+	"mail.enabled":                            configKindBool,
+	"mail.smtp.addr":                          configKindString,
+	"mail.smtp.host":                          configKindString,
+	"mail.smtp.tls_mode":                      configKindString,
+	"mail.smtp.trusted_roots":                 configKindList,
+	"mail.smtp.username":                      configKindString,
+	"mail.smtp.password":                      configKindSecret,
+	"mail.smtp.timeout_seconds":               configKindInt,
+	"mail.smtp.allow_plaintext_local":         configKindBool,
+	"mail.from.address":                       configKindString,
+	"mail.from.name":                          configKindString,
+	"mail.app_name":                           configKindString,
+	"mail.delivery.max_attempts":              configKindInt,
+	"mail.delivery.timeout_seconds":           configKindInt,
 }
 
 // configCommandUsage 是 config 组的帮助文本。

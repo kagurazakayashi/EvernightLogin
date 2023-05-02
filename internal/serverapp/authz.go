@@ -9,9 +9,10 @@ package serverapp
 //     这里。
 //   - 普通用户必须通过 authz.Service.Check 在目标作用范围内持有对应权限键；查不到
 //     角色/权限数据一律拒绝，不缓存、不从前端自报身份推导。
-//   - 委派转授检查（delegation.Guard）本阶段只允许受信系统/本地管理员与 root；普通
-//     管理员的细粒度转授策略（可转授清单、自我提权、目标白名单）尚未装配，明确拒绝而
-//     不是放行（见报告缺口）。
+//   - 委派转授检查（delegation.Guard）由 productionDelegationGuard 包装真实
+//     delegation.Service：root/受信本地管理员/system 先放行，其余主体必须持有有效
+//     Grant 且目标/权限/范围通过引擎检查（禁止自我提权、组间接提权、跨应用与停用后
+//     恢复）；包装器绝不对未知主体全放行。
 //   - 查询授权器只允许系统/本地管理员或用户查询自己；管理员查询他人有效权限需要的
 //     应用管理员数据范围策略尚待装配，缺失时 fail-closed。
 
@@ -28,6 +29,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/bootstrap"
 	bootstrapsqlite "github.com/kagurazakayashi/EvernightLogin/internal/bootstrap/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
+	delegationsqlite "github.com/kagurazakayashi/EvernightLogin/internal/delegation/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/group"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
@@ -101,6 +103,31 @@ type permissionChecker struct {
 func newPermissionChecker(access *authz.Service, roots *hostRootChecker) *permissionChecker {
 	return &permissionChecker{access: access, roots: roots,
 		enabled: access != nil && roots != nil}
+}
+
+// Check 实现 session.PermissionChecker：委托真实 authz 引擎；root 在管理强制
+// 下线场景按“受保护超级管理员”语义允许检查自身权限（目标 root 保护仍由会话
+// 服务在读取目标后拒绝），其余调用一律走真实权限判定，不伪造放行。
+func (p *permissionChecker) Check(ctx context.Context, caller authz.Caller,
+	request authz.CheckRequest) (authz.CheckResult, error) {
+	if p == nil || p.access == nil {
+		return authz.CheckResult{Allowed: false}, errAuthorizerNotConfigured
+	}
+	if caller.Actor().Type == audit.ActorUser {
+		if root, err := p.roots.isRoot(ctx, caller.Actor().ID); err == nil && root {
+			return authz.CheckResult{SubjectUserID: caller.Actor().ID, Allowed: true}, nil
+		}
+	}
+	return p.access.Check(ctx, caller, request)
+}
+
+// EffectivePermissions 实现 session.PermissionChecker：委托真实 authz 引擎。
+func (p *permissionChecker) EffectivePermissions(ctx context.Context, caller authz.Caller,
+	subjectUserID, scopeID string, options authz.ListOptions) (authz.EffectiveResult, error) {
+	if p == nil || p.access == nil {
+		return authz.EffectiveResult{}, errAuthorizerNotConfigured
+	}
+	return p.access.EffectivePermissions(ctx, caller, subjectUserID, scopeID, options)
 }
 
 // check 判定 userID 是否在 scopeID 内持有 permissionKey。
@@ -631,9 +658,9 @@ func (a onboardingManagementAuthorizer) AuthorizeManagement(ctx context.Context,
 	return a.checker.check(ctx, actor.ID, "users.update", "system")
 }
 
-// rootOnlyDelegationGuard 是 delegation.Guard 的本阶段实现：受信系统/本地管理员与
-// root 允许；普通管理员的细粒度转授策略（可转授清单、自我提权、目标白名单）尚未
-// 装配，一律拒绝并返回明确错误。绝不使用全放行替身。
+// rootOnlyDelegationGuard 是步骤 149 之前的旧 fail-closed 实现：受信系统/本地管理员
+// 与 root 允许，普通管理员一律拒绝。它保留作回滚/对照，不再注入生产装配；生产使用
+// productionDelegationGuard + 真实 delegation.Service。
 type rootOnlyDelegationGuard struct {
 	roots *hostRootChecker
 }
@@ -680,6 +707,126 @@ func (g rootOnlyDelegationGuard) CheckScopeRestoration(ctx context.Context,
 	return g.allow(ctx, actor)
 }
 
+// productionDelegationGuard 是步骤 149 的生产委派检查：root、受信本地管理员与
+// system 主体先按既有 root 识别器放行；其余主体必须交给真实 delegation.Service
+// 按“可转授资格 + 当前持有 + 自我提权 + 目标白名单 + 数据范围”检查。
+//
+// 不能直接用 delegation.Service 替换旧 rootOnlyDelegationGuard：root 在管理 API
+// 中是 ActorUser，裸引擎会因缺少 Grant 拒绝 root。本包装只对受信主体放行，绝不
+// 对未知主体放行，也不重复写审计（领域服务在审计事务内记录）。
+type productionDelegationGuard struct {
+	roots  *hostRootChecker
+	engine *delegation.Service
+}
+
+// newDelegationService 用真实 SQLite 委派存储与审计构造委派引擎；Store/Audit 缺失
+// 时明确失败，不能降级为全放行。
+func newDelegationService(deps Deps) (*delegation.Service, error) {
+	if deps.Store == nil {
+		return nil, fmt.Errorf("构造委派服务缺少存储依赖")
+	}
+	if deps.Audit == nil {
+		return nil, fmt.Errorf("构造委派服务缺少审计依赖")
+	}
+	store, err := delegationsqlite.New(deps.Store)
+	if err != nil {
+		return nil, fmt.Errorf("构造委派存储失败: %w", err)
+	}
+	service, err := delegation.New(delegation.Options{
+		Store: store, Audit: deps.Audit, Now: deps.Now, Logger: deps.Logger})
+	if err != nil {
+		return nil, fmt.Errorf("构造委派服务失败: %w", err)
+	}
+	return service, nil
+}
+
+// allow 判定是否为受信 root/本地/system 主体；未知主体交给真实引擎检查。
+func (g productionDelegationGuard) allow(ctx context.Context, actor audit.Actor) (bool, error) {
+	if g.roots == nil {
+		return false, errAuthorizerNotConfigured
+	}
+	return g.roots.trustedActor(ctx, actor)
+}
+
+// engineOrError 返回真实引擎；未装配时 fail-closed。
+func (g productionDelegationGuard) engineOrError() (*delegation.Service, error) {
+	if g.engine == nil {
+		return nil, errAuthorizerNotConfigured
+	}
+	return g.engine, nil
+}
+
+// CheckPermissionAccess 实现 delegation.Guard。
+func (g productionDelegationGuard) CheckPermissionAccess(ctx context.Context,
+	tx audit.Tx, actor audit.Actor, scopeID string, permissions []delegation.PermissionRef,
+	targets []delegation.Target) error {
+	trusted, err := g.allow(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if trusted {
+		return nil
+	}
+	engine, err := g.engineOrError()
+	if err != nil {
+		return err
+	}
+	return engine.CheckPermissionAccess(ctx, tx, actor, scopeID, permissions, targets)
+}
+
+// CheckAssignment 实现 delegation.Guard。
+func (g productionDelegationGuard) CheckAssignment(ctx context.Context,
+	tx audit.Tx, actor audit.Actor, scopeID string, permissions []delegation.PermissionRef,
+	target delegation.Target) error {
+	trusted, err := g.allow(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if trusted {
+		return nil
+	}
+	engine, err := g.engineOrError()
+	if err != nil {
+		return err
+	}
+	return engine.CheckAssignment(ctx, tx, actor, scopeID, permissions, target)
+}
+
+// CheckPermissionActivation 实现 delegation.Guard。
+func (g productionDelegationGuard) CheckPermissionActivation(ctx context.Context,
+	tx audit.Tx, actor audit.Actor, scopeID string, permissions []delegation.PermissionRef,
+	targets []delegation.Target) error {
+	trusted, err := g.allow(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if trusted {
+		return nil
+	}
+	engine, err := g.engineOrError()
+	if err != nil {
+		return err
+	}
+	return engine.CheckPermissionActivation(ctx, tx, actor, scopeID, permissions, targets)
+}
+
+// CheckScopeRestoration 实现 delegation.Guard。
+func (g productionDelegationGuard) CheckScopeRestoration(ctx context.Context,
+	tx audit.Tx, actor audit.Actor, scopeID string) error {
+	trusted, err := g.allow(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if trusted {
+		return nil
+	}
+	engine, err := g.engineOrError()
+	if err != nil {
+		return err
+	}
+	return engine.CheckScopeRestoration(ctx, tx, actor, scopeID)
+}
+
 // 编译期契约确认。
 var (
 	_ authz.Authorizer                = selfQueryAuthorizer{}
@@ -692,5 +839,6 @@ var (
 	_ oauthclient.Authorizer          = oauthclientAuthorizer{}
 	_ onboarding.ManagementAuthorizer = onboardingManagementAuthorizer{}
 	_ delegation.Guard                = rootOnlyDelegationGuard{}
+	_ delegation.Guard                = productionDelegationGuard{}
 	_ bootstrap.RootAccount           = bootstrap.RootAccount{}
 )

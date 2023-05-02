@@ -147,8 +147,10 @@ func TestSessionMissingFlagsUsage(t *testing.T) {
 	if _, _, exit := runCLI(t, "session", "whoami"); exit != ExitUsage {
 		t.Fatalf("缺少参数退出码 = %d，期望 %d", exit, ExitUsage)
 	}
-	if _, _, exit := runCLI(t, "session", "admin-revoke", "ses_x"); exit != ExitForbidden {
-		t.Fatalf("管理下线应明确不可用，退出码 = %d，期望 %d", exit, ExitForbidden)
+	// 步骤 151：管理下线已接在线命令；缺少目标/理由/确认词应返回用法错误，
+	// 不发起网络请求，也不伪成功。
+	if _, _, exit := runCLI(t, "session", "admin-revoke", "ses_x"); exit != ExitUsage {
+		t.Fatalf("管理下线缺参退出码 = %d，期望 %d", exit, ExitUsage)
 	}
 }
 

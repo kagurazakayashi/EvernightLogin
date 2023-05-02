@@ -6,9 +6,10 @@
 //   - 不实现自己的权限放行规则：读写都调用既有 internal/group、internal/role、
 //     internal/app 服务，并复用各包既有的 StaticAuthorizer（LocalAdminIDs 只含该
 //     显式操作者）；本包只暴露少量读命令与受控建组，未开放的写动作直接拒绝。
-//   - 委派转授检查注入 fail-closed 的 delegation.GuardFuncs（回调为空即拒绝）：
-//     本步只开放不需要委派转授的读取与建组；角色分配、应用启停等需要委派/敏感
-//     策略的动作不开放，CLI 明确返回 MANAGEMENT_WRITE_NOT_EXPOSED 而不是绕过。
+//   - 委派转授检查注入真实 local SQLite + audit 构造的 delegation.Service（步骤 149）：
+//     本地 --operator 为受信 local_admin，引擎对其受信通道放行并将目标限制交给领域
+//     服务；不再使用空 GuardFuncs 的全拒替身。角色分配、应用启停等需要委派/敏感
+//     策略的在线动作仍不开放，CLI 明确返回 MANAGEMENT_WRITE_NOT_EXPOSED 而不是绕过。
 //   - 所有读取由领域服务写真实读审计（服务内既有行为），输出不含秘密。
 package managecli
 
@@ -21,6 +22,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
+	delegationsqlite "github.com/kagurazakayashi/EvernightLogin/internal/delegation/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/group"
 	groupsqlite "github.com/kagurazakayashi/EvernightLogin/internal/group/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/preset"
@@ -59,8 +61,9 @@ func (r *runner) managementWriteNotExposed(domain, action, reason string) int {
 
 // domainBase 是一次域命令共享的底层资源与审计写入器。
 type domainBase struct {
-	raw      *storagesqlite.Store
-	recorder *audit.Recorder
+	raw        *storagesqlite.Store
+	recorder   *audit.Recorder
+	delegation *delegation.Service
 }
 
 func (b *domainBase) close() {
@@ -89,10 +92,21 @@ func (r *runner) openDomainBase(values map[string]string) (*domainBase, int) {
 		_ = raw.Close()
 		return nil, r.fail("AUDIT_STORE_UNAVAILABLE", ExitError, "无法构造审计写入器", nil)
 	}
-	return &domainBase{raw: raw, recorder: recorder}, ExitOK
+	delegationStore, err := delegationsqlite.New(raw)
+	if err != nil {
+		_ = raw.Close()
+		return nil, r.fail("DELEGATION_STORE_UNAVAILABLE", ExitError, "无法构造委派存储", nil)
+	}
+	delegationService, err := delegation.New(delegation.Options{
+		Store: delegationStore, Audit: recorder, Now: r.options.Now})
+	if err != nil {
+		_ = raw.Close()
+		return nil, r.fail("DELEGATION_STORE_UNAVAILABLE", ExitError, "无法构造委派服务", nil)
+	}
+	return &domainBase{raw: raw, recorder: recorder, delegation: delegationService}, ExitOK
 }
 
-// openGroupService 构造真实用户组服务（本地操作者授权，委派检查 fail-closed）。
+// openGroupService 构造真实用户组服务（本地操作者授权 + 真实委派引擎）。
 func (r *runner) openGroupService(values map[string]string,
 	operator string) (*domainBase, *group.Service, int) {
 	if _, err := group.LocalBootstrapCaller(operator); err != nil {
@@ -114,7 +128,7 @@ func (r *runner) openGroupService(values map[string]string,
 		return nil, nil, r.fail("GROUP_STORE_UNAVAILABLE", ExitError, "无法构造用户组授权器", nil)
 	}
 	service, err := group.New(group.Options{Store: store, Audit: base.recorder,
-		Authorizer: authorizer, Transfers: delegation.GuardFuncs{},
+		Authorizer: authorizer, Transfers: base.delegation,
 		AllowLegacyWithoutSensitive: true, Now: r.options.Now})
 	if err != nil {
 		base.close()
@@ -123,7 +137,7 @@ func (r *runner) openGroupService(values map[string]string,
 	return base, service, ExitOK
 }
 
-// openRoleService 构造真实角色服务（本地操作者授权，委派检查 fail-closed）。
+// openRoleService 构造真实角色服务（本地操作者授权 + 真实委派引擎）。
 func (r *runner) openRoleService(values map[string]string,
 	operator string) (*domainBase, *role.Service, int) {
 	if _, err := role.LocalBootstrapCaller(operator); err != nil {
@@ -145,7 +159,7 @@ func (r *runner) openRoleService(values map[string]string,
 		return nil, nil, r.fail("ROLE_STORE_UNAVAILABLE", ExitError, "无法构造角色授权器", nil)
 	}
 	service, err := role.New(role.Options{Store: store, Audit: base.recorder,
-		Authorizer: authorizer, Transfers: delegation.GuardFuncs{},
+		Authorizer: authorizer, Transfers: base.delegation,
 		AllowLegacyWithoutSensitive: true, Now: r.options.Now})
 	if err != nil {
 		base.close()
@@ -154,7 +168,7 @@ func (r *runner) openRoleService(values map[string]string,
 	return base, service, ExitOK
 }
 
-// openAppService 构造真实应用服务（本地操作者授权，委派检查 fail-closed）。
+// openAppService 构造真实应用服务（本地操作者授权 + 真实委派引擎）。
 func (r *runner) openAppService(values map[string]string,
 	operator string) (*domainBase, *app.Service, int) {
 	if _, err := app.LocalBootstrapCaller(operator); err != nil {
@@ -176,7 +190,7 @@ func (r *runner) openAppService(values map[string]string,
 		return nil, nil, r.fail("APP_STORE_UNAVAILABLE", ExitError, "无法构造应用授权器", nil)
 	}
 	service, err := app.New(app.Options{Store: store, Audit: base.recorder,
-		Authorizer: authorizer, Transfers: delegation.GuardFuncs{},
+		Authorizer: authorizer, Transfers: base.delegation,
 		Now: r.options.Now})
 	if err != nil {
 		base.close()

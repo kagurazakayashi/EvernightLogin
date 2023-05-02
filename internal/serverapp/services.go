@@ -19,6 +19,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	credentialsqlite "github.com/kagurazakayashi/EvernightLogin/internal/credential/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
 	onboardingsqlite "github.com/kagurazakayashi/EvernightLogin/internal/onboarding/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
@@ -32,12 +33,17 @@ import (
 
 // Deps 是装配宿主服务所需的显式依赖；所有资源由调用方拥有和关闭。
 type Deps struct {
-	Config  login.Config
-	Store   *storagesqlite.Store
-	Keyring *secrets.Keyring
-	Audit   *audit.Recorder
-	Logger  *slog.Logger
-	Now     func() time.Time
+	Config login.Config
+	// Mail 是真实邮件运行时（步骤 139）；nil 表示未装配（等价于未配置发送器）。
+	Mail *MailRuntime
+	// MailDeliveryProvider 延迟返回可靠投递服务（任务运行时构造完成后可用）；
+	// 供注册服务在早期装配阶段使用，未装配时返回 nil。
+	MailDeliveryProvider func() *mailer.DeliveryService
+	Store                *storagesqlite.Store
+	Keyring              *secrets.Keyring
+	Audit                *audit.Recorder
+	Logger               *slog.Logger
+	Now                  func() time.Time
 	// AllowLegacyWithoutSensitive 显式允许会话管理访问仅走旧强认证闸门而未经敏感
 	// 操作策略判定（步骤 39 未装配的过渡开关）。默认 false（fail-closed）。
 	AllowLegacyWithoutSensitive bool
@@ -91,6 +97,12 @@ type Services struct {
 	Registration      *registration.Service
 	RegistrationStore *registrationsqlite.Store
 	Onboarding        *onboarding.Service
+	// Delegation 是共享的真实委派引擎（同时供 managed 侧 group/role/app 等使用）；
+	// 只有真实 SQLite + 审计构造成功才存在，nil 时相关 Guard 必须 fail-closed。
+	Delegation *delegation.Service
+	// SessionAuthorizer 是延迟注入的管理强制下线范围授权器（步骤 151）；
+	// managed 授权层构造完成后由宿主 Set，未注入前 fail-closed。
+	SessionAuthorizer *lazySessionScopeAuthorizer
 }
 
 // SecurityHooks 是宿主提供给认证/会话服务的延迟安全依赖；nil 字段表示该依赖
@@ -128,6 +140,15 @@ func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造首次初始化存储失败: %w", err)
 	}
+	roots, err := newHostRootChecker(bootstrapStore)
+	if err != nil {
+		return nil, fmt.Errorf("构造 root 识别器失败: %w", err)
+	}
+	delegationService, err := newDelegationService(deps)
+	if err != nil {
+		return nil, err
+	}
+	productionGuard := productionDelegationGuard{roots: roots, engine: delegationService}
 	credentialStore, err := credentialsqlite.New(deps.Store)
 	if err != nil {
 		return nil, fmt.Errorf("构造一次性凭证存储失败: %w", err)
@@ -145,8 +166,10 @@ func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造会话存储失败: %w", err)
 	}
+	sessionAuthorizer := newLazySessionScopeAuthorizer()
 	sessionService, err := session.New(sessionStore, session.Options{
-		Store: sessionStore, Audit: deps.Audit, Keyring: deps.Keyring,
+		Authorizer: sessionAuthorizer,
+		Store:      sessionStore, Audit: deps.Audit, Keyring: deps.Keyring,
 		// 敏感操作策略（步骤 39）尚未装配：默认 fail-closed，管理访问被拒绝。
 		// 仅当宿主显式开启 --allow-legacy-without-sensitive 时才允许旧闸门路径，
 		// 该开关不改变认证/授权判定本身的强度，只影响未装配策略时的拒绝点。
@@ -161,10 +184,20 @@ func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 		return nil, fmt.Errorf("构造会话服务失败: %w", err)
 	}
 
-	if cfg.Registration.Enabled && cfg.Registration.RequireEmailVerification {
-		return nil, fmt.Errorf("配置要求注册邮箱验证，但独立服务尚未装配真实邮件投递通道；" +
-			"请关闭 registration.require_email_verification 或先完成邮件能力装配")
+	// 步骤 140：注册邮箱验证接入真实邮件投递。要求在启动期 fail-closed 检查
+	// “要求验证但无邮件能力”和公开链接基址，不能等用户注册时才发现。
+	if err := validateMailRegistration(cfg); err != nil {
+		return nil, err
 	}
+	mailURLs, _ := buildMailURLs(cfg)
+	var registrationMailer registration.EmailSender
+	if cfg.Mail.Enabled {
+		registrationMailer = &lazyRegistrationMailer{
+			provider: deps.MailDeliveryProvider,
+			appName:  deps.Mail.AppDisplayName(),
+		}
+	}
+	_ = mailURLs
 	defaultRoles := make([]registration.DefaultRole, 0, len(cfg.Registration.DefaultRoleIDs))
 	for _, roleID := range cfg.Registration.DefaultRoleIDs {
 		defaultRoles = append(defaultRoles, registration.DefaultRole{
@@ -176,8 +209,10 @@ func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 	}
 	registrationService, err := registration.New(registration.Options{
 		Store: registrationStore, Audit: deps.Audit, Credentials: credentialService,
+		Mailer: registrationMailer, VerificationURLBase: mailURLs.VerifyEmail,
+		AppName: cfg.Mail.AppName,
 		Enabled: cfg.Registration.Enabled, RequireReview: cfg.Registration.RequireReview,
-		RequireEmailVerification: false, DefaultRoles: defaultRoles,
+		RequireEmailVerification: cfg.Registration.RequireEmailVerification, DefaultRoles: defaultRoles,
 		PasswordPolicy: authn.DefaultPasswordPolicy(), HashParams: authn.DefaultParams(),
 		Now: now, Logger: logger,
 	})
@@ -190,9 +225,9 @@ func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 	}
 	onboardingService, err := onboarding.New(onboarding.Options{
 		Store: onboardingStore, Audit: deps.Audit,
-		// 真实委派检查器（角色/权限/委派域）本 MVP 未装配；零值 GuardFuncs 对
-		// 所有委派检查 fail-closed，邀请创建/角色分配一律拒绝，不会放宽权限。
-		Guard: delegation.GuardFuncs{}, Credentials: credentialService,
+		// 步骤 149：root/受信本地/system 由包装器放行，其余主体交给真实 delegation
+		// 引擎；不再使用空 GuardFuncs 的全拒替身。
+		Guard: productionGuard, Credentials: credentialService,
 		PasswordPolicy: authn.DefaultPasswordPolicy(), HashParams: authn.DefaultParams(),
 		Now: now, Logger: logger,
 	})
@@ -207,6 +242,7 @@ func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 		Registration:      registrationService,
 		RegistrationStore: registrationStore,
 		Onboarding:        onboardingService,
+		Delegation:        delegationService,
 	}, nil
 }
 

@@ -123,6 +123,8 @@ func RunWithOptions(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		return r.runDomain(group, rest)
 	case "audit", "reports", "backups", "notifications", "tasks":
 		return r.runOnline(group, rest)
+	case "admin":
+		return r.runAdmin(rest)
 	default:
 		fmt.Fprintf(stderr, "错误：未知的管理命令 %q（用法：loginctl help）\n", group)
 		return ExitUsage
@@ -155,6 +157,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl session whoami --session-file <f> --keyring-file <f> [--config <file>] [--json]")
 	fmt.Fprintln(out, "  loginctl session list --session-file <f> --keyring-file <f> [--page N] [--page-size N] [--json]")
 	fmt.Fprintln(out, "  loginctl session revoke <session_id> --session-file <f> --keyring-file <f> [--json]")
+	fmt.Fprintln(out, "  loginctl session admin-revoke (--user <id> | --session-id <id>) --reason <原因> --confirm ADMIN-REVOKE <在线公共参数>")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "本地用户管理（需要 --operator 本地管理员标识；写操作需要 --confirm）：")
 	fmt.Fprintln(out, "  loginctl user list --operator <id> [--config <file>] [--status <s>] [--limit N] [--json]")
@@ -183,6 +186,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl backups schedules list|get|create|edit|enable|disable|delete ...")
 	fmt.Fprintln(out, "  loginctl backups retention get|set ...")
 	fmt.Fprintln(out, "  loginctl backups cleanup preview|submit ...")
+	fmt.Fprintln(out, "  loginctl admin users|user|groups|group|roles|role|permissions|applications|application|support-cases|support-case [...]")
 	fmt.Fprintln(out, "  loginctl notifications status|test ...")
 	fmt.Fprintln(out, "  loginctl tasks get <task_id> ...")
 	fmt.Fprintln(out, "  公共参数：--server <url>（默认 http://127.0.0.1:8080） --api-path </admin/v1> \\")
