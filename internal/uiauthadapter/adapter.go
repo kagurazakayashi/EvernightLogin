@@ -29,6 +29,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
 	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
@@ -59,8 +60,10 @@ type Options struct {
 	// PageState 是步骤 64 临时页面状态的签名编解码器；MFA 非 nil 时必填。
 	PageState *pagestate.Codec
 	// 步骤 65：OAuth 授权确认/设备码与扫码登录页所需真实服务与受控展示配置。
-	OAuth      *oauthflow.Service
-	QR         *qrlogin.Service
+	OAuth *oauthflow.Service
+	QR    *qrlogin.Service
+	// Reauth 是页面级 Passkey 注册/恢复代码等敏感操作的再次认证执行器。
+	Reauth     *reauth.Service
 	App        *app.Service
 	Account    *account.Service
 	QRClientID string
@@ -97,6 +100,43 @@ func New(options Options) (*Adapter, error) {
 }
 
 // PasswordLogin 执行真实密码认证与会话签发；只有完整非受限结果才标记 Complete。
+// BeginPasskeyLogin 开始可发现凭证 Passkey 密码less 登录；不在本方法签发会话。
+func (a *Adapter) BeginPasskeyLogin(ctx context.Context,
+	request *http.Request) (login.UIPasskeyLoginStart, error) {
+	if a.opts.Passkeys == nil {
+		return login.UIPasskeyLoginStart{}, &login.UIPageAuthError{Code: "FEATURE_NOT_ENABLED"}
+	}
+	start, err := a.opts.Passkeys.BeginLogin(ctx, passkey.LoginStartRequest{
+		RequestID: requestIDFromRequest(request),
+		Client:    session.ClientInfo{UserAgent: request.UserAgent(), Address: request.RemoteAddr}})
+	if err != nil {
+		return login.UIPasskeyLoginStart{}, publicMFAError(err)
+	}
+	return login.UIPasskeyLoginStart{CeremonyID: start.CeremonyID,
+		PublicKey: []byte(start.PublicKey), ExpiresAt: start.ExpiresAt, RPID: start.RPID}, nil
+}
+
+// FinishPasskeyLogin 校验断言并返回真实会话 Cookie；会话由 passkey 服务在真实
+// 认证器验证通过后签发，本方法不提升/伪造任何身份。
+func (a *Adapter) FinishPasskeyLogin(ctx context.Context, request *http.Request,
+	response []byte) (login.UIPageLoginResult, error) {
+	if a.opts.Passkeys == nil {
+		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "FEATURE_NOT_ENABLED"}
+	}
+	ceremonyID := strings.TrimSpace(request.PostForm.Get("passkey_ceremony_id"))
+	result, err := a.opts.Passkeys.FinishLogin(ctx, passkey.LoginFinishRequest{
+		CeremonyID: ceremonyID, Response: response, RequestID: requestIDFromRequest(request)})
+	if err != nil {
+		return login.UIPageLoginResult{}, publicMFAError(err)
+	}
+	cookie, cookieErr := a.opts.Sessions.NewCookie(result.Session)
+	if cookieErr != nil {
+		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+	}
+	return login.UIPageLoginResult{UserID: result.Authenticated.UserID,
+		Username: result.Authenticated.Username, Complete: true, Cookie: cookie}, nil
+}
+
 func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
 	loginRequest login.UIPasswordLoginRequest) (login.UIPageLoginResult, error) {
 	clientIP, _ := transport.ClientIPFromContext(ctx)

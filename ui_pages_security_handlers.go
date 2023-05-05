@@ -88,7 +88,19 @@ func (h *securityPageHandlers) totp(ctx context.Context, request *http.Request,
 		if request.Method != http.MethodPost {
 			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
 		}
-		binding, err := backend.BeginTOTP(ctx, userID, page.RequestID)
+		form, formOK := pageForm(request, page, "current_password")
+		if !formOK {
+			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
+				ErrorSummary: securityText("error.business.REQ_INVALID")}, nil
+		}
+		password, _ := singleValue(form, "current_password", 1024)
+		var binding UITOTPBinding
+		var err error
+		if reauthBackend, ok := backend.(UIPageSecurityReauthBackend); ok {
+			binding, err = reauthBackend.BeginTOTPWithPassword(ctx, userID, password, page.RequestID)
+		} else {
+			binding, err = backend.BeginTOTP(ctx, userID, page.RequestID)
+		}
 		if err != nil {
 			return accountErrorOutcome(err, map[string]any{}, ""), nil
 		}
@@ -149,7 +161,7 @@ func (h *securityPageHandlers) passkeys(ctx context.Context, request *http.Reque
 		if request.Method != http.MethodPost {
 			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
 		}
-		form, ok := pageForm(request, page, "ceremony_id", "passkey_response", "name")
+		form, ok := pageForm(request, page, "ceremony_id", "passkey_response", "name", "current_password")
 		if !ok {
 			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
 				ErrorSummary: securityText("error.business.REQ_INVALID")}, nil
@@ -157,9 +169,17 @@ func (h *securityPageHandlers) passkeys(ctx context.Context, request *http.Reque
 		ceremonyID, _ := singleValue(form, "ceremony_id", 128)
 		response, _ := singleValue(form, "passkey_response", 24*1024)
 		name, _ := singleValue(form, "name", 64)
-		if err := backend.FinishPasskeyRegistration(ctx, userID, UIPasskeyFinish{
-			CeremonyID: ceremonyID, Response: []byte(response), Name: name}); err != nil {
-			return accountErrorOutcome(err, map[string]any{}, ""), nil
+		password, _ := singleValue(form, "current_password", 1024)
+		finish := UIPasskeyFinish{CeremonyID: ceremonyID, Response: []byte(response), Name: name,
+			CurrentPassword: password}
+		var finishErr error
+		if reauthBackend, ok := backend.(UIPageSecurityReauthBackend); ok {
+			finishErr = reauthBackend.FinishPasskeyRegistrationWithPassword(ctx, userID, finish)
+		} else {
+			finishErr = backend.FinishPasskeyRegistration(ctx, userID, finish)
+		}
+		if finishErr != nil {
+			return accountErrorOutcome(finishErr, map[string]any{}, ""), nil
 		}
 		return UIPageOutcome{Data: map[string]any{"Done": "passkey_added"}}, nil
 	case "account.security_passkeys.rename":
@@ -207,7 +227,7 @@ func (h *securityPageHandlers) recovery(ctx context.Context, request *http.Reque
 		if request.Method != http.MethodPost {
 			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
 		}
-		form, ok := pageForm(request, page, "current_password", "confirm")
+		form, ok := pageForm(request, page, "current_password", "totp_code", "confirm")
 		if !ok {
 			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
 				ErrorSummary: securityText("error.business.REQ_INVALID")}, nil
@@ -217,7 +237,8 @@ func (h *securityPageHandlers) recovery(ctx context.Context, request *http.Reque
 				ErrorSummary: securityText("page.account.recovery_codes.regenerate_warning")}, nil
 		}
 		password, _ := singleValue(form, "current_password", 1024)
-		codes, err := backend.GenerateRecoveryCodes(ctx, userID, password, page.RequestID)
+		totpCode, _ := singleValue(form, "totp_code", 16)
+		codes, err := backend.GenerateRecoveryCodes(ctx, userID, password, totpCode, page.RequestID)
 		if err != nil {
 			return accountErrorOutcome(err, map[string]any{}, ""), nil
 		}

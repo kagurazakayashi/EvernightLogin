@@ -72,6 +72,13 @@ type securityIntegrationEnv struct {
 
 func newSecurityIntegrationEnv(t *testing.T) *securityIntegrationEnv {
 	t.Helper()
+	return newSecurityIntegrationEnvOptions(t, true, true)
+}
+
+// newSecurityIntegrationEnvOptions 与 newSecurityIntegrationEnv 相同，但可独立关闭
+// 安全中心的 Passkey/OAuth 子能力（真实服务仍在环境中，仅适配器按部署能力不注入）。
+func newSecurityIntegrationEnvOptions(t *testing.T, passkeysEnabled, oauthEnabled bool) *securityIntegrationEnv {
+	t.Helper()
 	env := newMFAPageEnv(t)
 	ctx := context.Background()
 	nowFunc := func() time.Time { return env.now }
@@ -146,11 +153,18 @@ VALUES(?,'public','["authorization_code"]','["https://client.example/cb"]','[]',
 	if err != nil {
 		t.Fatalf("再次认证服务: %v", err)
 	}
-	adapter, err := uisecurityadapter.New(uisecurityadapter.Options{
-		MFA: env.mfa, TOTP: env.totp, Passkeys: env.passkeys, Recovery: env.recovery,
-		Sessions: env.sessions, OAuth: flow, Reauth: reauthService,
+	adapterOptions := uisecurityadapter.Options{
+		MFA: env.mfa, TOTP: env.totp, Recovery: env.recovery,
+		Sessions: env.sessions, Reauth: reauthService,
 		ApplicationNames: map[string]string{clientID: "安全测试应用"},
-		Now:              nowFunc, Logger: logger})
+		Now:              nowFunc, Logger: logger}
+	if passkeysEnabled {
+		adapterOptions.Passkeys = env.passkeys
+	}
+	if oauthEnabled {
+		adapterOptions.OAuth = flow
+	}
+	adapter, err := uisecurityadapter.New(adapterOptions)
 	if err != nil {
 		t.Fatalf("安全中心适配器: %v", err)
 	}
@@ -319,5 +333,65 @@ func TestSecurityBackendRealServices(t *testing.T) {
 		url.Values{"current_password": {"correct horse battery staple"}})
 	if all.Code != http.StatusSeeOther || all.Header().Get("Location") != "/login" {
 		t.Fatalf("退出全部会话失败: %d", all.Code)
+	}
+}
+
+// TestSecurityCenterCapabilityCombinations 四组合真实服务测试：Passkey×OAuth 任一
+// 关闭都不得让 MFA/TOTP/恢复代码/会话整体消失；关闭项隐藏并明确不可调用，开启项
+// 仍可访问；不 panic、不把未启用伪装成空数据。
+func TestSecurityCenterCapabilityCombinations(t *testing.T) {
+	combinations := []struct {
+		name            string
+		passkeys, oauth bool
+	}{{"off-off", false, false}, {"on-off", true, false}, {"off-on", false, true}, {"on-on", true, true}}
+	for _, combination := range combinations {
+		combination := combination
+		t.Run(combination.name, func(t *testing.T) {
+			env := newSecurityIntegrationEnvOptions(t, combination.passkeys, combination.oauth)
+			overview := env.request(http.MethodGet, "/account/security", nil)
+			if overview.Code != http.StatusOK {
+				t.Fatalf("安全中心概览不可用: %d body=%s", overview.Code, overview.Body.String())
+			}
+			for _, corePath := range []string{
+				"/account/security/mfa", "/account/security/totp",
+				"/account/security/recovery-codes", "/account/sessions",
+			} {
+				response := env.request(http.MethodGet, corePath, nil)
+				if response.Code != http.StatusOK {
+					t.Fatalf("核心子页面 %s 在组合 %s 下不可用: %d", corePath, combination.name, response.Code)
+				}
+			}
+			passkeyPage := env.request(http.MethodGet, "/account/security/passkeys", nil)
+			expectedPasskeyStatus := http.StatusOK
+			if !combination.passkeys {
+				expectedPasskeyStatus = http.StatusForbidden
+				if !strings.Contains(overview.Body.String(), "此功能尚未启用") {
+					t.Fatalf("关闭 Passkey 时概览缺少未启用说明")
+				}
+				start := env.request(http.MethodPost, "/account/security/passkeys/register", url.Values{})
+				if start.Code != http.StatusForbidden {
+					t.Fatalf("关闭 Passkey 时注册入口应 403，实际 %d", start.Code)
+				}
+			}
+			if passkeyPage.Code != expectedPasskeyStatus {
+				t.Fatalf("Passkey 页状态 = %d，期望 %d", passkeyPage.Code, expectedPasskeyStatus)
+			}
+			grantsPage := env.request(http.MethodGet, "/account/grants", nil)
+			expectedGrantsStatus := http.StatusOK
+			if !combination.oauth {
+				expectedGrantsStatus = http.StatusForbidden
+				if !strings.Contains(overview.Body.String(), "此功能尚未启用") {
+					t.Fatalf("关闭 OAuth 时概览缺少未启用说明")
+				}
+				revoke := env.request(http.MethodPost, "/account/grants/revoke", url.Values{
+					"authorization_id": {"aur_missing"}, "current_password": {"wrong"}})
+				if revoke.Code != http.StatusForbidden {
+					t.Fatalf("关闭 OAuth 时授权撤回入口应 403，实际 %d", revoke.Code)
+				}
+			}
+			if grantsPage.Code != expectedGrantsStatus {
+				t.Fatalf("授权列表页状态 = %d，期望 %d", grantsPage.Code, expectedGrantsStatus)
+			}
+		})
 	}
 }

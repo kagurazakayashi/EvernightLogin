@@ -38,7 +38,9 @@ type ReauthChallenger interface {
 	NotifyOutcome(ctx context.Context, result reauth.Result, outcome reauth.Outcome) error
 }
 
-// Options 是适配器依赖；缺少真实服务时拒绝构造（fail-closed）。
+// Options 是适配器依赖：MFA/TOTP/Recovery/Sessions/Reauth 是安全中心核心必需；
+// Passkeys/OAuth 为可选子能力，nil 表示未启用，对应方法返回 FEATURE_NOT_ENABLED，
+// 不 panic、不伪造空列表。核心缺失时拒绝构造（fail-closed）。
 type Options struct {
 	MFA      *mfa.Service
 	TOTP     *totp.Service
@@ -58,10 +60,9 @@ type Adapter struct{ opts Options }
 
 // New 校验依赖并构造适配器。
 func New(options Options) (*Adapter, error) {
-	if options.MFA == nil || options.TOTP == nil || options.Passkeys == nil ||
-		options.Recovery == nil || options.Sessions == nil || options.OAuth == nil ||
-		options.Reauth == nil {
-		return nil, fmt.Errorf("安全中心页面适配器缺少必需服务")
+	if options.MFA == nil || options.TOTP == nil ||
+		options.Recovery == nil || options.Sessions == nil || options.Reauth == nil {
+		return nil, fmt.Errorf("安全中心页面适配器缺少核心服务")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -72,9 +73,17 @@ func New(options Options) (*Adapter, error) {
 	return &Adapter{opts: options}, nil
 }
 
+// featureNotEnabled 返回可选子能力未启用的稳定错误；调用方映射为 403 与明确提示，
+// 不把它伪装成空数据或成功。
+func featureNotEnabled() error { return mapped("FEATURE_NOT_ENABLED") }
+
 // GetOverview 返回真实事实摘要（不输出安全结论）。
 func (a *Adapter) GetOverview(ctx context.Context, userID string) (login.UISecurityOverview, error) {
-	overview := login.UISecurityOverview{}
+	overview := login.UISecurityOverview{
+		MFAAvailable: true, TOTPAvailable: true,
+		RecoveryCodesAvailable: true, SessionsAvailable: true,
+		PasskeyAvailable: a.opts.Passkeys != nil, OAuthAvailable: a.opts.OAuth != nil,
+	}
 	factors, err := a.factors(ctx, userID)
 	if err != nil {
 		return overview, err
@@ -85,11 +94,13 @@ func (a *Adapter) GetOverview(ctx context.Context, userID string) (login.UISecur
 		return overview, err
 	}
 	overview.TOTPEnabled = totpState.Enabled
-	passkeys, err := a.ListPasskeys(ctx, userID)
-	if err != nil {
-		return overview, err
+	if a.opts.Passkeys != nil {
+		passkeys, listErr := a.ListPasskeys(ctx, userID)
+		if listErr != nil {
+			return overview, listErr
+		}
+		overview.PasskeyCount = len(passkeys)
 	}
-	overview.PasskeyCount = len(passkeys)
 	recoveryInventory, err := a.GetRecoveryCodes(ctx, userID)
 	if err != nil {
 		return overview, err
@@ -216,6 +227,29 @@ func (a *Adapter) BeginTOTP(ctx context.Context, userID, requestID string) (logi
 		URI: start.URI, ExpiresAt: start.ExpiresAt}, nil
 }
 
+// BeginTOTPWithPassword 是页面级 reauth 扩展：先以当前密码完成 mfa.add 一次性
+// 批准，再在同一请求上下文开始 TOTP 绑定；策略仍由真实 reauth 服务判定，缺密码/
+// 弱认证/策略要求强认证时 fail-closed。
+func (a *Adapter) BeginTOTPWithPassword(ctx context.Context, userID, currentPassword,
+	requestID string) (login.UITOTPBinding, error) {
+	challengeCtx, result, err := a.approve(ctx, userID, "mfa.add", "user", userID,
+		map[string]string{"action": "totp_bind"}, currentPassword, requestID, "绑定验证器")
+	if err != nil {
+		return login.UITOTPBinding{}, err
+	}
+	caller, callerErr := totp.UserCaller(userID)
+	if callerErr != nil {
+		return login.UITOTPBinding{}, securityErr("ACCESS_DENIED")
+	}
+	start, beginErr := a.opts.TOTP.BeginBinding(challengeCtx, caller, requestID)
+	a.notify(result, beginErr)
+	if beginErr != nil {
+		return login.UITOTPBinding{}, mapTOTPError(beginErr)
+	}
+	return login.UITOTPBinding{BindingID: start.BindingID, Secret: start.Secret,
+		URI: start.URI, ExpiresAt: start.ExpiresAt}, nil
+}
+
 // ConfirmTOTP 用动态码确认绑定。
 func (a *Adapter) ConfirmTOTP(ctx context.Context, userID string, confirm login.UISecurityConfirm) error {
 	caller, err := totp.UserCaller(userID)
@@ -253,6 +287,9 @@ func (a *Adapter) RemoveTOTP(ctx context.Context, userID, currentPassword, code,
 
 // ListPasskeys 返回真实 Passkey 元数据。
 func (a *Adapter) ListPasskeys(ctx context.Context, userID string) ([]login.UIPasskey, error) {
+	if a.opts.Passkeys == nil {
+		return nil, featureNotEnabled()
+	}
 	caller, err := passkey.UserCaller(userID)
 	if err != nil {
 		return nil, securityErr("ACCESS_DENIED")
@@ -274,6 +311,9 @@ func (a *Adapter) ListPasskeys(ctx context.Context, userID string) ([]login.UIPa
 // BeginPasskeyRegistration 由服务端选择用途后开始注册。
 func (a *Adapter) BeginPasskeyRegistration(ctx context.Context, userID,
 	requestID string) (login.UIPasskeyRegistration, error) {
+	if a.opts.Passkeys == nil {
+		return login.UIPasskeyRegistration{}, featureNotEnabled()
+	}
 	caller, err := passkey.UserCaller(userID)
 	if err != nil {
 		return login.UIPasskeyRegistration{}, securityErr("ACCESS_DENIED")
@@ -290,6 +330,9 @@ func (a *Adapter) BeginPasskeyRegistration(ctx context.Context, userID,
 // FinishPasskeyRegistration 验证真实 WebAuthn 断言后启用凭证。
 func (a *Adapter) FinishPasskeyRegistration(ctx context.Context, userID string,
 	finish login.UIPasskeyFinish) error {
+	if a.opts.Passkeys == nil {
+		return featureNotEnabled()
+	}
 	caller, err := passkey.UserCaller(userID)
 	if err != nil {
 		return securityErr("ACCESS_DENIED")
@@ -303,9 +346,41 @@ func (a *Adapter) FinishPasskeyRegistration(ctx context.Context, userID string,
 	return nil
 }
 
+// FinishPasskeyRegistrationWithPassword 是页面级 reauth 扩展：先以当前密码完成
+// passkey.register 一次性批准，再调用真实 WebAuthn finish；批准与策略仍由真实
+// reauth/服务层判定，绝不绕过强认证或伪造成功。
+func (a *Adapter) FinishPasskeyRegistrationWithPassword(ctx context.Context, userID string,
+	finish login.UIPasskeyFinish) error {
+	if a.opts.Passkeys == nil {
+		return featureNotEnabled()
+	}
+	challengeCtx, result, err := a.approve(ctx, userID, "passkey.register", "user", userID,
+		map[string]string{"action": "passkey_register"}, finish.CurrentPassword,
+		newRequestID(a.opts.Now()), "注册 Passkey")
+	if err != nil {
+		return err
+	}
+	caller, callerErr := passkey.UserCaller(userID)
+	if callerErr != nil {
+		return securityErr("ACCESS_DENIED")
+	}
+	_, finishErr := a.opts.Passkeys.FinishRegistration(challengeCtx, caller,
+		passkey.RegistrationFinishRequest{CeremonyID: finish.CeremonyID,
+			Response: finish.Response, Name: finish.Name,
+			RequestID: newRequestID(a.opts.Now())})
+	a.notify(result, finishErr)
+	if finishErr != nil {
+		return mapPasskeyError(finishErr)
+	}
+	return nil
+}
+
 // RenamePasskey 仅改显示名（服务不要求再次认证）。
 func (a *Adapter) RenamePasskey(ctx context.Context, userID, credentialID, name,
 	requestID string) error {
+	if a.opts.Passkeys == nil {
+		return featureNotEnabled()
+	}
 	caller, err := passkey.UserCaller(userID)
 	if err != nil {
 		return securityErr("ACCESS_DENIED")
@@ -320,6 +395,9 @@ func (a *Adapter) RenamePasskey(ctx context.Context, userID, credentialID, name,
 // RemovePasskey 由服务内部 passkey.remove 再认证并检查最后登录方式。
 func (a *Adapter) RemovePasskey(ctx context.Context, userID, credentialID,
 	currentPassword, requestID string) error {
+	if a.opts.Passkeys == nil {
+		return featureNotEnabled()
+	}
 	challengeCtx, result, err := a.approve(ctx, userID, "passkey.remove", "user", userID,
 		map[string]string{"credential_id": credentialID}, currentPassword, requestID,
 		"撤销 Passkey 凭证")
@@ -356,10 +434,10 @@ func (a *Adapter) GetRecoveryCodes(ctx context.Context, userID string) (login.UI
 
 // GenerateRecoveryCodes 需 recovery.codes.rotate 再认证后生成新组。
 func (a *Adapter) GenerateRecoveryCodes(ctx context.Context, userID, currentPassword,
-	requestID string) ([]string, error) {
+	totpCode, requestID string) ([]string, error) {
 	challengeCtx, result, err := a.approve(ctx, userID, "recovery.codes.rotate", "user",
 		userID, map[string]string{"action": "rotate"}, currentPassword, requestID,
-		"更新恢复代码")
+		"更新恢复代码", totpCode)
 	if err != nil {
 		return nil, err
 	}
@@ -484,6 +562,9 @@ func (a *Adapter) RevokeAllSessions(ctx context.Context, request *http.Request,
 // ListGrants 分页读取本人已授权应用（真实 oauthflow 查询）。
 func (a *Adapter) ListGrants(ctx context.Context, request *http.Request, page,
 	pageSize int) (login.UIGrantPage, error) {
+	if a.opts.OAuth == nil {
+		return login.UIGrantPage{}, featureNotEnabled()
+	}
 	secret, err := a.sessionSecret(request)
 	if err != nil {
 		return login.UIGrantPage{}, err
@@ -523,6 +604,9 @@ func (a *Adapter) ListGrants(ctx context.Context, request *http.Request, page,
 // RevokeGrant 撤回本人授权，返回真实撤销计数。
 func (a *Adapter) RevokeGrant(ctx context.Context, request *http.Request,
 	authorizationID, currentPassword, requestID string) (login.UIGrantRevokeResult, error) {
+	if a.opts.OAuth == nil {
+		return login.UIGrantRevokeResult{}, featureNotEnabled()
+	}
 	secret, err := a.sessionSecret(request)
 	if err != nil {
 		return login.UIGrantRevokeResult{}, err
@@ -573,7 +657,8 @@ func (a *Adapter) userID(ctx context.Context, secret string) (string, error) {
 
 // approve 执行绑定操作/目标/参数的 reauth 挑战并把批准信号放入上下文。
 func (a *Adapter) approve(ctx context.Context, userID, operationID, targetType, targetID string,
-	params map[string]string, currentPassword, requestID, description string) (context.Context, reauth.Result, error) {
+	params map[string]string, currentPassword, requestID, description string,
+	totpCode ...string) (context.Context, reauth.Result, error) {
 	caller, err := reauth.UserCaller(userID)
 	if err != nil {
 		return ctx, reauth.Result{}, securityErr("ACCESS_DENIED")
@@ -592,13 +677,21 @@ func (a *Adapter) approve(ctx context.Context, userID, operationID, targetType, 
 	if currentPassword == "" {
 		return ctx, reauth.Result{}, securityErr("REAUTH_REQUIRED")
 	}
+	secondFactor := ""
+	if len(totpCode) > 0 {
+		secondFactor = strings.TrimSpace(totpCode[0])
+	}
 	grant, verifyErr := a.opts.Reauth.VerifyChallenge(ctx, caller,
 		reauth.VerifyChallengeRequest{ChallengeID: challenge.ID,
-			Password: currentPassword, RequestID: requestID})
+			Password: currentPassword, TOTPCode: secondFactor, RequestID: requestID})
 	if verifyErr != nil {
 		return ctx, reauth.Result{}, mapReauthVerifyError(verifyErr)
 	}
-	signals := reauth.Signals{VerifiedAt: a.opts.Now().UTC(), Strength: policy.StrengthPassword,
+	strength := policy.StrengthPassword
+	if grant.GrantedStrength == policy.StrengthStrong {
+		strength = policy.StrengthStrong
+	}
+	signals := reauth.Signals{VerifiedAt: a.opts.Now().UTC(), Strength: strength,
 		Complete: true, Confirmed: true, ApprovalToken: grant.Token}
 	return reauth.WithSignals(ctx, signals), result, nil
 }

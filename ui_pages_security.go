@@ -46,7 +46,7 @@ type UIPageSecurityBackend interface {
 	RemovePasskey(ctx context.Context, userID, credentialID, currentPassword, requestID string) error
 
 	GetRecoveryCodes(ctx context.Context, userID string) (UIRecoveryInventory, error)
-	GenerateRecoveryCodes(ctx context.Context, userID, currentPassword, requestID string) ([]string, error)
+	GenerateRecoveryCodes(ctx context.Context, userID, currentPassword, totpCode, requestID string) ([]string, error)
 
 	ListSessions(ctx context.Context, request *http.Request, page, pageSize int) (UISessionPage, error)
 	RevokeSession(ctx context.Context, request *http.Request, targetSessionID,
@@ -62,13 +62,23 @@ type UIPageSecurityBackend interface {
 }
 
 // UISecurityOverview 是安全中心只读事实摘要（不输出“安全/不安全”结论）。
+//
+// 能力位与状态分开：*Available 表示部署/服务是否启用该子能力；EmailMFAEnabled/
+// TOTPEnabled/PasskeyCount/Recovery* 是当前用户的事实状态。页面据能力位隐藏或
+// 明确标注未启用，但隐藏不是授权，未启用的后端方法仍返回稳定错误。
 type UISecurityOverview struct {
-	EmailMFAEnabled   bool
-	TOTPEnabled       bool
-	PasskeyCount      int
-	RecoveryAvailable bool
-	RecoveryRemaining int
-	ActiveSessions    int64
+	MFAAvailable           bool
+	TOTPAvailable          bool
+	RecoveryCodesAvailable bool
+	SessionsAvailable      bool
+	PasskeyAvailable       bool
+	OAuthAvailable         bool
+	EmailMFAEnabled        bool
+	TOTPEnabled            bool
+	PasskeyCount           int
+	RecoveryAvailable      bool
+	RecoveryRemaining      int
+	ActiveSessions         int64
 }
 
 // UIMFAFactor 是邮件因素公开视图。
@@ -134,6 +144,16 @@ type UIPasskeyFinish struct {
 	CeremonyID string
 	Response   []byte
 	Name       string
+	// CurrentPassword 仅用于页面级 reauth（passkey.register）；不会写入日志/存储。
+	CurrentPassword string
+}
+
+// UIPageSecurityReauthBackend 是可选的安全中心写操作页面级 reauth 扩展：
+// 未实现时页面保持原契约（写操作由服务端 fail-closed），实现后可在同一请求中
+// 用当前密码取得一次性批准并重试原操作，不降级任何策略。
+type UIPageSecurityReauthBackend interface {
+	BeginTOTPWithPassword(ctx context.Context, userID, currentPassword, requestID string) (UITOTPBinding, error)
+	FinishPasskeyRegistrationWithPassword(ctx context.Context, userID string, finish UIPasskeyFinish) error
 }
 
 // UIRecoveryInventory 是恢复代码组只读概览。

@@ -71,7 +71,7 @@ func (f *fakeSecurityBackend) RemovePasskey(context.Context, string, string, str
 func (f *fakeSecurityBackend) GetRecoveryCodes(context.Context, string) (login.UIRecoveryInventory, error) {
 	return login.UIRecoveryInventory{HasActiveGroup: true, Generation: 2, CodesRemaining: 5}, nil
 }
-func (f *fakeSecurityBackend) GenerateRecoveryCodes(context.Context, string, string, string) ([]string, error) {
+func (f *fakeSecurityBackend) GenerateRecoveryCodes(context.Context, string, string, string, string) ([]string, error) {
 	f.generate = true
 	return []string{"AAAA-BBBB", "CCCC-DDDD"}, nil
 }
@@ -161,10 +161,10 @@ func TestSecurityPagesRendering(t *testing.T) {
 	get("/account/sessions", "当前会话")
 	get("/account/grants", "示例应用")
 	// TOTP 绑定页必须本地渲染 SVG 二维码，不出现纯文本种子。
-	binding := securityRequest(ui, http.MethodPost, "/account/security/totp/bind", url.Values{})
+	binding := securityRequest(ui, http.MethodPost, "/account/security/totp/bind", url.Values{"current_password": {"test-password"}})
 	if binding.Code != http.StatusOK || !strings.Contains(binding.Body.String(), "<svg") ||
 		strings.Contains(binding.Body.String(), "JBSWY3DPEHPK3PXP") {
-		t.Fatalf("TOTP 绑定页二维码失败: %d", binding.Code)
+		t.Fatalf("TOTP 绑定页二维码失败: %d body=%s", binding.Code, binding.Body.String())
 	}
 	// 邮件添加页只显示遮罩邮箱与一次性挑战字段，不回显验证码。
 	addStart := securityRequest(ui, http.MethodPost, "/account/security/mfa", url.Values{})

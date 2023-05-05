@@ -20,6 +20,7 @@ var publicCodes = map[string]bool{
 	"CONFLICT": true, "RATE_LIMITED": true, "AUTHZ_UNAVAILABLE": true,
 	"DB_UNAVAILABLE": true, "AUDIT_WRITE_FAILED": true, "MAIL_DELIVERY_FAILED": true,
 	"AUTH_FAILED": true, "INTERNAL_ERROR": true,
+	"FEATURE_NOT_ENABLED": true,
 }
 
 func mapped(code string) error {
