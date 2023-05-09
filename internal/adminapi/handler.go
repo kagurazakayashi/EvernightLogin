@@ -40,6 +40,11 @@ func (s *Server) buildRoutes() []route {
 	add(http.MethodGet, "meta", s.handleMeta)
 	add(http.MethodGet, "error-codes", s.handleErrorCodes)
 
+	if s.sessionRevoker != nil {
+		// 步骤 151：管理员强制下线。权限/作用范围/强认证/root 保护/审计全部由
+		// 会话服务重新判定；本层只做参数与错误映射。
+		add(http.MethodPost, "sessions/revoke", s.handleSessionAdminRevoke)
+	}
 	if s.audit != nil {
 		add(http.MethodGet, "audit/events", s.handleAuditEventList)
 		add(http.MethodGet, "audit/events/{event_id}", s.handleAuditEventGet)
@@ -101,6 +106,17 @@ func (s *Server) buildRoutes() []route {
 	// 避免“可管理会话即可读任意任务元数据”的 IDOR。
 	if s.tasks != nil && s.taskAuthorizer != nil {
 		add(http.MethodGet, "tasks/{task_id}", s.handleTaskGet)
+	}
+	for _, domainRoute := range s.domainRoutes {
+		domainRoute := domainRoute
+		add(domainRoute.Method, domainRoute.Pattern, func(c *callContext) error {
+			data, err := domainRoute.Handler(c.request.Context(), c.caller, c.request)
+			if err != nil {
+				return s.domainProblem(err)
+			}
+			s.writeSuccess(c.writer, c.requestID, data)
+			return nil
+		})
 	}
 	// 通知端点始终挂载：未装配本地捕获/配置时返回稳定的能力错误码，便于 CLI
 	// 明确区分“不可用”与“路径不存在”（绝不伪成功、绝不真实外发）。
@@ -373,4 +389,22 @@ func (s *Server) relativePath(path, rawPath string) (string, bool) {
 		}
 	}
 	return relative, true
+}
+
+// domainProblem 把宿主领域路由错误映射为统一 problem。DomainError 的 Code 必须
+// 已登记；未识别错误一律 500，不输出内部细节。
+func (s *Server) domainProblem(err error) *problem {
+	var domainErr *DomainError
+	if errors.As(err, &domainErr) && domainErr != nil {
+		code := domainErr.Code
+		if _, ok := s.codes[code]; !ok {
+			code = string(codeInternalError)
+		}
+		problem := s.codeProblem(code, domainErr.Cause)
+		if domainErr.Message != "" {
+			problem.message = domainErr.Message
+		}
+		return problem
+	}
+	return s.codeProblem(string(codeInternalError), err)
 }

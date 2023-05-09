@@ -60,6 +60,46 @@ type ErrorCodeInfo struct {
 // 全部交给既有会话服务。
 //
 // 每次请求都重新调用 AuthorizeManagement，禁止缓存“已验证”结论。
+// SessionAdminRevoker 是可选的“管理员强制下线”会话能力（步骤 151）。
+// 生产实现是 *session.Service；测试替身可不实现，此时管理 API 不挂载该路由，
+// 不会退化为无授权放行。
+type SessionAdminRevoker interface {
+	AdminRevoke(ctx context.Context, adminSecret string, request session.AdminRevokeRequest) (session.AdminRevokeResult, error)
+}
+
+// DomainHandler 是宿主补充的领域路由处理器（步骤 156）。认证、CSRF、统一
+// envelope/错误映射由本包统一处理；领域授权、敏感策略与审计由 DomainHandler
+// 内部调用真实服务完成，禁止只依赖本层会话。
+type DomainHandler func(ctx context.Context, caller account.Caller, request *http.Request) (any, error)
+
+// DomainRoute 是宿主补充的一条管理 API 路由。未装配的领域不注册路由（404）。
+type DomainRoute struct {
+	Method  string
+	Pattern string
+	Handler DomainHandler
+}
+
+// DomainError 是领域路由返回的稳定错误；Code 必须是错误码投影中的码。
+type DomainError struct {
+	Code    string
+	Message string
+	Cause   error
+}
+
+// Error 实现 error。
+func (e *DomainError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
+
+// Unwrap 返回底层原因（只用于内部映射，不对外输出）。
+func (e *DomainError) Unwrap() error { return e.Cause }
+
 type ManagementSession interface {
 	// SessionSecretFromRequest 只从 Cookie 或 Authorization: Bearer 读取会话秘密。
 	SessionSecretFromRequest(request *http.Request) (string, bool)
@@ -157,6 +197,14 @@ type NotificationStatus struct {
 	Channels     []string `json:"channels,omitempty"`
 	DeliveryMode string   `json:"delivery_mode"`
 	Note         string   `json:"note,omitempty"`
+	// TLSMode/FromDomain/AppName/DeliveryCounts/LastErrorCodes 是步骤 139 的
+	// 脱敏聚合扩展：只暴露 TLS 模式、发件域名、品牌名与计数/错误码，不含
+	// 完整地址、账号、密码、正文或收件人。
+	TLSMode        string         `json:"tls_mode,omitempty"`
+	FromDomain     string         `json:"from_domain,omitempty"`
+	AppName        string         `json:"app_name,omitempty"`
+	DeliveryCounts map[string]int `json:"delivery_counts,omitempty"`
+	LastErrorCodes []string       `json:"last_error_codes,omitempty"`
 }
 
 // NotificationTestResult 是本地捕获测试的摘要：只返回捕获编号、渠道键、脱敏
@@ -234,6 +282,10 @@ type Options struct {
 	// AuditRecorder 是管理 API 自身动作（通知测试）的真实审计写入器；为空时
 	// 通知测试 fail-closed（审计不可用拒绝关键操作）。生产实现是 *audit.Recorder。
 	AuditRecorder AuditRecorder
+	// DomainRoutes 是宿主补充的领域管理路由（用户/组/角色/应用/客服等）。
+	// 每个处理器必须自行调用真实领域服务与授权器；本包只负责 session/CSRF/
+	// envelope/错误码映射与路径参数解析。
+	DomainRoutes []DomainRoute
 	// Notifications 是宿主注入的通知读取/本地捕获测试实现；为空时通知读取返回
 	// MAIL_DIAGNOSTICS_UNAVAILABLE、测试返回 NOTIFICATION_TEST_DISABLED。
 	Notifications NotificationService
@@ -254,6 +306,7 @@ type Server struct {
 	basePath       string
 	version        string
 	session        ManagementSession
+	sessionRevoker SessionAdminRevoker
 	audit          AuditService
 	reports        ReportService
 	plans          ReportPlanService
@@ -263,6 +316,7 @@ type Server struct {
 	sensitive      reauth.OperationRunner
 	auditRecorder  AuditRecorder
 	notifications  NotificationService
+	domainRoutes   []DomainRoute
 	logger         *slog.Logger
 	now            func() time.Time
 	maxBodyBytes   int64
@@ -351,12 +405,16 @@ func New(options Options) (*Server, error) {
 		sensitive:      options.Sensitive,
 		auditRecorder:  options.AuditRecorder,
 		notifications:  options.Notifications,
+		domainRoutes:   append([]DomainRoute(nil), options.DomainRoutes...),
 		logger:         logger,
 		now:            now,
 		maxBodyBytes:   maxBodyBytes,
 		requestTimeout: timeout,
 		newRequestID:   newRequestID,
 		codes:          codes,
+	}
+	if revoker, ok := options.Session.(SessionAdminRevoker); ok {
+		server.sessionRevoker = revoker
 	}
 	server.routes = server.buildRoutes()
 	if len(server.routes) == 0 {

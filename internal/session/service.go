@@ -1373,6 +1373,15 @@ func (s *Service) AdminRevoke(ctx context.Context, adminSecret string, request A
 	if targetSessionID != "" && !validSessionID(targetSessionID) {
 		return AdminRevokeResult{}, fmt.Errorf("%w: 目标会话 ID 格式无效", ErrInvalidRequest)
 	}
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		// 兼容既有服务级调用者（旧测试/嵌入代码）：缺省记录固定动作原因；
+		// 管理 API/CLI 入口另行强制要求显式理由。
+		reason = RevokeReasonAdminRevoke
+	}
+	if len([]rune(reason)) > MaxAdminRevokeReasonBytes {
+		return AdminRevokeResult{}, fmt.Errorf("%w: 管理员强制下线理由不能超过 %d 字符", ErrInvalidRequest, MaxAdminRevokeReasonBytes)
+	}
 	if request.RequestID != "" && !validRequestID(request.RequestID) {
 		return AdminRevokeResult{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
 	}
@@ -1432,17 +1441,17 @@ func (s *Service) AdminRevoke(ctx context.Context, adminSecret string, request A
 		if err := s.authorizeAdmin(ctx, actor, scopeAppID, ""); err != nil {
 			return AdminRevokeResult{}, s.denyAdminRevoke(ctx, admin, scopeAppID, "", targetSessionID, request.RequestID, "authorization_denied")
 		}
-		return s.adminRevokeSession(ctx, admin, actor, scopeAppID, targetSessionID, request.RequestID)
+		return s.adminRevokeSession(ctx, admin, actor, scopeAppID, targetSessionID, request.RequestID, reason)
 	}
 	if err := s.authorizeAdmin(ctx, actor, scopeAppID, targetUserID); err != nil {
 		return AdminRevokeResult{}, s.denyAdminRevoke(ctx, admin, scopeAppID, targetUserID, "", request.RequestID, "authorization_denied")
 	}
-	return s.adminRevokeUser(ctx, admin, actor, scopeAppID, targetUserID, request.RequestID)
+	return s.adminRevokeUser(ctx, admin, actor, scopeAppID, targetUserID, request.RequestID, reason)
 }
 
 // adminRevokeSession 按会话 ID 执行管理员强制下线。调用方必须已完成范围级授权与
 // 强认证闸门；本函数先读取目标，再做范围/root/目标级授权判断。
-func (s *Service) adminRevokeSession(ctx context.Context, admin Session, actor audit.Actor, scopeAppID, targetSessionID, requestID string) (AdminRevokeResult, error) {
+func (s *Service) adminRevokeSession(ctx context.Context, admin Session, actor audit.Actor, scopeAppID, targetSessionID, requestID, reason string) (AdminRevokeResult, error) {
 	record, found, err := s.store.Load(ctx, targetSessionID)
 	if err != nil {
 		return AdminRevokeResult{}, s.storeFailure(ctx, "读取目标会话", err)
@@ -1480,6 +1489,7 @@ func (s *Service) adminRevokeSession(ctx context.Context, admin Session, actor a
 			{Field: "revoke_reason", After: RevokeReasonAdminRevoke},
 			{Field: "scope_app_id", After: scopeAppID},
 			{Field: "target_user_id", After: record.UserID},
+			{Field: "reason", After: reason},
 		},
 	}
 	critical := audit.CriticalRequest{
@@ -1514,7 +1524,7 @@ func (s *Service) adminRevokeSession(ctx context.Context, admin Session, actor a
 
 // adminRevokeUser 按目标用户执行管理员强制下线（可限定应用范围）。调用方必须已
 // 完成强认证闸门与针对该目标用户的授权检查。
-func (s *Service) adminRevokeUser(ctx context.Context, admin Session, actor audit.Actor, scopeAppID, targetUserID, requestID string) (AdminRevokeResult, error) {
+func (s *Service) adminRevokeUser(ctx context.Context, admin Session, actor audit.Actor, scopeAppID, targetUserID, requestID, reason string) (AdminRevokeResult, error) {
 	state, found, err := s.store.LoadUserState(ctx, targetUserID)
 	if err != nil {
 		return AdminRevokeResult{}, s.storeFailure(ctx, "读取目标账户状态", err)
@@ -1537,6 +1547,8 @@ func (s *Service) adminRevokeUser(ctx context.Context, admin Session, actor audi
 		Changes: []audit.FieldChange{
 			{Field: "revoke_reason", After: RevokeReasonAdminRevoke},
 			{Field: "scope_app_id", After: scopeAppID},
+			{Field: "target_user_id", After: targetUserID},
+			{Field: "reason", After: reason},
 		},
 	}
 	critical := audit.CriticalRequest{

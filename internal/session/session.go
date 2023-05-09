@@ -482,7 +482,13 @@ type AdminRevokeRequest struct {
 	TargetUserID    string
 	TargetSessionID string
 	RequestID       string
+	// Reason 是管理员填写的下线理由（仅审计/排障，不属于授权依据），上限
+	// MaxAdminRevokeReasonBytes，必填以避免“无理由强制下线”。
+	Reason string
 }
+
+// MaxAdminRevokeReasonBytes 是管理员强制下线理由的长度上限（字符）。
+const MaxAdminRevokeReasonBytes = 256
 
 // AdminRevokeResult 是管理员强制下线结果。Revoked 是实际撤销的活动会话数量；
 // 目标不存在、已失效或超出作用范围时按幂等成功返回 0。
