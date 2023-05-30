@@ -574,3 +574,78 @@ func TestUIPageSupportInboxUnavailable(t *testing.T) {
 		t.Fatalf("审批工作台不可用状态 = %d", inbox.Code)
 	}
 }
+
+// TestUIPageSupportExecuteGatingAndFailedHint 覆盖步骤 153：执行入口按真实制度/
+// 批准/内容绑定/能力位显示，不可执行时展示真实原因；failed 终态给出重试指引。
+func TestUIPageSupportExecuteGatingAndFailedHint(t *testing.T) {
+	newApproved := func() *fakeSupportBackend {
+		backend := newSupportFakeBackend()
+		backend.recovery.Status = "approved"
+		backend.recovery.HasApproval = true
+		backend.recovery.Approval = backend.approval
+		backend.recovery.ContentConsistent = true
+		return backend
+	}
+	// 可执行：详情显示执行入口。
+	backend := newApproved()
+	ui := newSupportTestUI(t, backend, supportTestStaffID)
+	page := serveSupportPage(ui, http.MethodGet,
+		"/support/recovery/request?request_id="+supportTestRequestID, nil)
+	if page.Code != 200 || !strings.Contains(supportBody(page), "/support/recovery/execute?request_id=") {
+		t.Fatalf("可执行时详情应显示执行入口 = %d", page.Code)
+	}
+	// 无执行能力：显示拒绝原因，不显示入口。
+	backend = newApproved()
+	backend.caps.ExecuteRecovery = false
+	ui = newSupportTestUI(t, backend, supportTestStaffID)
+	page = serveSupportPage(ui, http.MethodGet,
+		"/support/recovery/request?request_id="+supportTestRequestID, nil)
+	body := supportBody(page)
+	if strings.Contains(body, "/support/recovery/execute?request_id=") ||
+		!strings.Contains(body, "你没有执行该人工恢复") {
+		t.Fatalf("无执行能力时不应显示入口 = %d", page.Code)
+	}
+	// 制度关闭：显示未启用原因，不显示入口。
+	backend = newApproved()
+	backend.policy.Enabled = false
+	ui = newSupportTestUI(t, backend, supportTestStaffID)
+	page = serveSupportPage(ui, http.MethodGet,
+		"/support/recovery/request?request_id="+supportTestRequestID, nil)
+	body = supportBody(page)
+	if strings.Contains(body, "/support/recovery/execute?request_id=") ||
+		!strings.Contains(body, "人工恢复流程尚未由 root/宿主启用") {
+		t.Fatalf("制度关闭时不应显示执行入口 = %d", page.Code)
+	}
+	// 内容变化：原批准失效，不显示入口。
+	backend = newApproved()
+	backend.recovery.ContentConsistent = false
+	ui = newSupportTestUI(t, backend, supportTestStaffID)
+	page = serveSupportPage(ui, http.MethodGet,
+		"/support/recovery/request?request_id="+supportTestRequestID, nil)
+	body = supportBody(page)
+	if strings.Contains(body, "/support/recovery/execute?request_id=") ||
+		!strings.Contains(body, "原批准不再有效") {
+		t.Fatalf("内容变化时不应显示执行入口 = %d", page.Code)
+	}
+	// failed 终态：显示失败重试指引，不伪造重试按钮。
+	backend = newSupportFakeBackend()
+	backend.recovery.Status = "failed"
+	ui = newSupportTestUI(t, backend, supportTestStaffID)
+	page = serveSupportPage(ui, http.MethodGet,
+		"/support/recovery/request?request_id="+supportTestRequestID, nil)
+	body = supportBody(page)
+	if !strings.Contains(body, "执行失败") || strings.Contains(body, "action=\"/support/recovery/execute\"") {
+		t.Fatalf("失败终态提示不符 = %d", page.Code)
+	}
+	// failed 执行记录显示稳定错误码（不显示底层消息/秘密）。
+	backend.recovery.HasExecution = true
+	backend.recovery.Execution = backend.execution
+	backend.recovery.Execution.Status = "failed"
+	backend.recovery.Execution.ErrorCode = "MAIL_DELIVERY_FAILED"
+	page = serveSupportPage(ui, http.MethodGet,
+		"/support/recovery/request?request_id="+supportTestRequestID, nil)
+	body = supportBody(page)
+	if !strings.Contains(body, "MAIL_DELIVERY_FAILED") || !strings.Contains(body, "执行失败错误码") {
+		t.Fatalf("失败错误码展示缺失 = %d", page.Code)
+	}
+}

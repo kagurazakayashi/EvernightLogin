@@ -366,9 +366,12 @@ func (h *supportPageHandlers) renderRecoveryDetail(ctx context.Context, page UIP
 	policy, policyErr := h.pages.options.Backend.RecoveryPolicy(ctx, page.Session.UserID)
 	isInitiator := view.InitiatorUserID != "" && view.InitiatorUserID == page.Session.UserID
 	isTarget := view.TargetUserID != "" && view.TargetUserID == page.Session.UserID
+	executeBlocked := supportExecuteBlockedKey(policy, policyErr == nil, view, caps)
 	data := map[string]any{
 		"request": view, "capabilities": caps, "policy": policy,
 		"policyAvailable": policyErr == nil, "notice": notice,
+		"policyEnabled": policy.Enabled,
+		"canExecute":    executeBlocked == "", "executeBlockedKey": executeBlocked,
 		"staffID":     page.Session.UserID,
 		"isInitiator": isInitiator, "isTarget": isTarget,
 		"statusLabel":         supportRecoveryStatusLabel(view.Status),
@@ -394,6 +397,29 @@ func supportRecoveryTerminal(status string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// supportExecuteBlockedKey 返回执行被阻止的真实原因 i18n 键；空字符串表示可执行。
+// 只用于页面呈现，最终执行仍由 manualrecovery 服务按申请/批准/等待期/内容绑定/
+// 权限失败关闭地重新判定。
+func supportExecuteBlockedKey(policy UISupportRecoveryPolicy, policyAvailable bool,
+	view UISupportRecoveryView, caps UISupportCapabilities) string {
+	switch {
+	case !policyAvailable:
+		return "page.support.recovery_request.policy_unavailable"
+	case !policy.Enabled:
+		return "page.support.recovery_request.not_enabled"
+	case !caps.ExecuteRecovery:
+		return "page.support.recovery_execute.denied"
+	case view.Status != "approved":
+		return "page.support.recovery_execute.not_approved"
+	case !view.HasApproval:
+		return "page.support.recovery_execute.not_approved"
+	case !view.ContentConsistent:
+		return "page.support.recovery_request.content_changed"
+	default:
+		return ""
 	}
 }
 
@@ -579,12 +605,12 @@ func (h *supportPageHandlers) recoveryExecuteConfirm(ctx context.Context, reques
 	}
 	caps := h.supportCapabilities(ctx, page)
 	policy, policyErr := h.pages.options.Backend.RecoveryPolicy(ctx, page.Session.UserID)
-	canExecute := policy.Enabled && view.Status == "approved" && caps.ExecuteRecovery &&
-		view.HasApproval
+	blockedKey := supportExecuteBlockedKey(policy, policyErr == nil, view, caps)
+	canExecute := blockedKey == ""
 	return UIPageOutcome{Data: map[string]any{
 		"request": view, "capabilities": caps, "policy": policy,
 		"policyAvailable": policyErr == nil, "staffID": page.Session.UserID,
-		"canExecute":       canExecute,
+		"canExecute": canExecute, "executeBlockedKey": blockedKey,
 		"statusLabel":      supportRecoveryStatusLabel(view.Status),
 		"operationLabel":   supportOperationLabel(view.Operation),
 		"deliveryLabel":    supportDeliveryLabel(view.Delivery),

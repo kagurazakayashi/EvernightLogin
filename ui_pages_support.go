@@ -168,8 +168,11 @@ type UISupportExecutionView struct {
 	FactorsReset     bool
 	CredentialIssued bool
 	Notification     string
-	StartedAt        time.Time
-	FinishedAt       time.Time
+	// ErrorCode 是执行失败时的稳定公开错误码（不含底层消息/秘密），仅用于页面显示
+	// 失败原因与后续处理指引；成功时为空。
+	ErrorCode  string
+	StartedAt  time.Time
+	FinishedAt time.Time
 }
 
 // UISupportRecoveryView 是人工恢复申请的组合公开视图。

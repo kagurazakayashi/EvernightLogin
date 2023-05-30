@@ -40,7 +40,11 @@
   </dl>
   <p class="ln-meta">{{t "page.support.recovery_request.independent_required"}}</p>
 </section>
-{{if $root.Data.policyAvailable}}
+{{if not $root.Data.policyAvailable}}
+<div class="ln-state" role="status"><p class="ln-state__title">{{t "page.support.recovery_request.policy_unavailable"}}</p></div>
+{{else if not $root.Data.policy.Enabled}}
+<div class="ln-state" role="status"><p class="ln-state__title">{{t "page.support.recovery_request.not_enabled"}}</p></div>
+{{else}}
 <section aria-labelledby="recovery-policy">
   <h2 id="recovery-policy">{{t "page.support.recovery_request.policy_title"}}</h2>
   <dl>
@@ -74,6 +78,7 @@
     <dt>{{t "page.support.recovery_request.sessions_revoked"}}</dt><dd>{{$request.Execution.SessionsRevoked}}</dd>
     <dt>{{t "page.support.recovery_request.factors_reset"}}</dt><dd>{{if $request.Execution.FactorsReset}}{{t "common.state.yes"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
     <dt>{{t "page.support.recovery_request.credential_issued"}}</dt><dd>{{if $request.Execution.CredentialIssued}}{{t "page.support.recovery_request.credential_issued_notice"}}{{else}}{{t "common.state.no"}}{{end}}</dd>
+    {{if $request.Execution.ErrorCode}}<dt>{{t "page.support.recovery_request.execution_error_code"}}</dt><dd><code>{{$request.Execution.ErrorCode}}</code></dd>{{end}}
     <dt>{{t "page.support.recovery_request.notification"}}</dt><dd>{{if eq $request.Execution.Notification "sent"}}{{t "manual_recovery.notification.sent"}}{{else if eq $request.Execution.Notification "pending"}}{{t "manual_recovery.notification.pending"}}{{else if eq $request.Execution.Notification "failed"}}{{t "manual_recovery.notification.failed"}}{{else if eq $request.Execution.Notification "not_configured"}}{{t "manual_recovery.notification.not_configured"}}{{else}}{{t "page.support.recovery_request.notification_unknown"}}{{end}}</dd>
     <dt>{{t "page.support.recovery_request.started_at"}}</dt><dd>{{format_time $request.Execution.StartedAt "UTC"}}</dd>
     <dt>{{t "page.support.recovery_request.finished_at"}}</dt><dd>{{if $request.Execution.FinishedAt.IsZero}}—{{else}}{{format_time $request.Execution.FinishedAt "UTC"}}{{end}}</dd>
@@ -113,9 +118,11 @@
     </form>
   </div>
   {{end}}
-  {{if $root.Data.capabilities.ExecuteRecovery}}
+  {{if $root.Data.canExecute}}
   <p><a href="{{route "support.recovery_execute"}}?request_id={{$request.ID}}">{{t "page.support.recovery_approval.execute"}}</a></p>
-  {{else}}<p class="ln-meta">{{t "page.support.recovery_execute.denied"}}</p>{{end}}
+  {{else}}<p class="ln-meta">{{t $root.Data.executeBlockedKey}}</p>{{end}}
+  {{else if eq $request.Status "failed"}}
+  <div class="ln-state" role="status"><p class="ln-state__title">{{t "page.support.recovery_request.failed_hint"}}</p></div>
   {{else}}
   <p class="ln-meta">{{t "page.support.recovery_request.terminal_hint"}}</p>
   {{end}}

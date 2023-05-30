@@ -40,7 +40,10 @@
   {{template "component.button" (dict "label" (t "page.support.recovery_approval.execute") "type" "submit" "variant" "danger")}}
 </form>
 {{else}}
-<div class="ln-state"><p>{{t "page.support.recovery_execute.not_ready"}}</p></div>
+<div class="ln-state" role="status">
+  <p class="ln-state__title">{{t $root.Data.executeBlockedKey}}</p>
+  <p class="ln-meta">{{t "page.support.recovery_execute.not_ready"}}</p>
+</div>
 {{end}}
 {{else}}
 <div class="ln-state"><p class="ln-state__title">{{t "page.support.common.forbidden"}}</p></div>
