@@ -1,0 +1,44 @@
+{{define "page-title"}}{{t "page.admin.applications.create.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.created}}
+  {{template "component.banner" (dict "tone" "success" "message" (t "page.admin.applications.create.created"))}}
+  <dl>
+    <dt>{{t "page.admin.applications.profile.app_id"}}</dt><dd><code>{{.ID}}</code></dd>
+    <dt>{{t "common.label.status"}}</dt><dd>{{t "page.admin.applications.status_disabled"}}</dd>
+    <dt>{{t "page.admin.applications.profile.row_version"}}</dt><dd>{{.RowVersion}}</dd>
+  </dl>
+  <p class="ln-meta">{{t "page.admin.applications.create.created_hint"}}</p>
+  <p><a class="ln-button ln-button--primary" href="{{route "admin.application_profile"}}?app_id={{.ID}}">{{t "page.admin.applications.profile.title"}}</a>
+     <a class="ln-button ln-button--secondary" href="{{route "admin.application_status"}}?app_id={{.ID}}">{{t "page.admin.applications.status.title"}}</a></p>
+{{else}}
+<p>{{t "page.admin.applications.create.description"}}</p>
+<form method="post" action="{{route "admin.application_create.submit"}}" novalidate autocomplete="off">
+  {{csrf_field}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="app-create-client-type">{{t "page.admin.applications.profile.client_type"}}</label>
+    <select class="ln-input" id="app-create-client-type" name="client_type">
+      <option value="confidential"{{if eq .Data.form.ClientType "confidential"}} selected{{end}}>{{t "page.admin.applications.client_type_confidential"}}</option>
+      <option value="public"{{if eq .Data.form.ClientType "public"}} selected{{end}}>{{t "page.admin.applications.client_type_public"}}</option>
+    </select>
+    <p class="ln-field__help">{{t "page.admin.applications.create.client_type.help"}}</p>
+  </div>
+  {{template "component.field" (dict "id" "app-create-name" "name" "name" "label" (t "page.admin.applications.profile.name") "value" .Data.form.Name "help" (t "page.admin.applications.profile.name.help") "autocomplete" "off")}}
+  {{template "component.field" (dict "id" "app-create-description" "name" "description" "label" (t "page.admin.applications.profile.description") "value" .Data.form.Description "textarea" true "help" (t "page.admin.applications.profile.description.help"))}}
+  <div class="ln-field">
+    <span class="ln-field__label">{{t "page.admin.applications.profile.client_type"}}</span>
+    <p>{{t "page.admin.applications.client_type_confidential"}}</p>
+    <p class="ln-field__help">{{t "page.admin.applications.create.client_type.help"}}</p>
+  </div>
+  {{template "component.field" (dict "id" "app-create-icon" "name" "icon_ref" "label" (t "page.admin.applications.profile.icon_ref") "value" .Data.form.IconRef "help" (t "page.admin.applications.profile.icon_ref.help"))}}
+  {{template "component.field" (dict "id" "app-create-homepage" "name" "homepage" "label" (t "page.admin.applications.profile.homepage") "value" .Data.form.Homepage "help" (t "page.admin.applications.profile.homepage.help"))}}
+  {{template "component.field" (dict "id" "app-create-owner" "name" "owner_user_id" "label" (t "page.admin.applications.profile.owner") "value" .Data.form.OwnerUserID "help" (t "page.admin.applications.profile.owner.help"))}}
+  {{template "component.field" (dict "id" "app-create-contact" "name" "contact_info" "label" (t "page.admin.applications.profile.contact_info") "value" .Data.form.ContactInfo "help" (t "page.admin.applications.profile.contact_info.help"))}}
+  <p class="ln-meta">{{t "page.admin.applications.create.scope_hint"}}</p>
+  <div class="ln-actions">
+    {{template "component.button" (dict "label" (t "page.admin.applications.create.submit") "variant" "primary" "type" "submit")}}
+    <a class="ln-button ln-button--secondary" href="{{route "admin.applications"}}">{{t "common.action.back"}}</a>
+  </div>
+</form>
+{{end}}
+{{end}}
