@@ -159,3 +159,19 @@ loginctl restore-init-state ...
 - 不要把主密钥环文件与数据库、备份放在同一目录；不要把秘密放进命令行、环境变量副本
   或 shell 历史。
 - 应急操作也会写审计；审计不可用时按失败处理，不留下“成功但没有记录”的假象。
+
+## 在线管理读取与本地离线边界（步骤 156 dev + 审计 PARTIAL）
+
+> 状态：步骤 156 已出 dev 报告与审计（PARTIAL，接近 PASS）：domain routes/在线只读命令/帮助/
+> 未认证拒绝路径已真实测试；真实强认证成功写 E2E 与少量写面未完成。不能把“命令存在”当作
+> 三端一致性最终验收；以 `loginctl help` 与最终记录为准；见 `docs/acceptance/requirements-matrix-login.md`。
+
+- **在线只读**：`loginctl admin users|user|groups|group|roles|role|permissions|applications|application|support-cases|support-case`
+  通过运行中的 `login-server` 管理 JSON API 读取，凭据只从受保护的 `--session-file` 读取；
+  认证、CSRF、权限/数据范围与领域授权全部由服务端重新判定，未装配领域返回 404 而不是空成功。
+  `--json` 输出统一 envelope；错误码/退出码与 audit/reports 等在线命令一致。
+- **在线写入**：管理员强制下线使用 `loginctl session admin-revoke`（需强认证管理会话、确认词与理由）；
+  其他管理写入口仍以服务端真实 API 为准，页面/API/CLI 共用同一授权与审计，不在本地库直写绕过。
+- **本地离线命令**（`user/group/role/permission/app` 的本地管理、`root-recover`、`restore-*`、
+  `maintenance-*`）：面向已认证本地管理员/应急维护边界，需要本地数据库/维护状态与 `--operator`/`--confirm`；
+  它们不替代在线管理 API 的委派、数据范围与审计语义。普通在线管理请优先使用 API/页面/在线命令。
