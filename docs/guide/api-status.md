@@ -48,9 +48,10 @@ Handler 会在 `<prefix>/openapi.json` 提供该文档。
 | 通用响应 | `x-login-common-error-responses`：400/401/403/404/405/413/414/415/429/500/504 的说明 |
 
 **它不包含**业务接口（账户、权限、OAuth/OIDC、设备码、扫码、管理、报告、备份等）的
-路径定义。真实状态：**OAuth/OIDC 协议端点与管理 JSON API 已装配**（可配置开关，
-默认关闭：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`）；**设备码、
-扫码登录、令牌状态查询（introspection）未启用**；维护模式一律 503（见
+路径定义。真实状态：**OAuth/OIDC 协议端点、管理 JSON API、托管 API 与应用客服 API 已装配**
+（可配置开关，默认关闭：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`、
+`--enable-managed-api`、`--enable-app-support`）；**设备码、扫码登录、令牌状态查询
+（introspection）仅部分实现且未完成验收（142–145，143 未交付）**；维护模式一律 503（见
 [deployment-modes.md](deployment-modes.md) 第 3.1 节与 `standalone-service.md` 第
 3.8 节）。不要按“OpenAPI 里有”去对接，
 也不要为了对接去改本文件；协议契约目前以受信 Go API 与
@@ -119,7 +120,7 @@ document, err := login.OpenAPIDocument("/login") // /login 是路径前缀，可
 | 缺口 | 影响 |
 |---|---|
 | 业务 HTTP API 与 OpenAPI 业务路径未提供 | 不能用标准 HTTP 客户端对接账户/OAuth/OIDC/管理能力 |
-| 独立服务可启动，页面/协议按开关提供 | `login-server serve` 可启动并服务健康检查与 14 个页面选项（默认注册 12、条件注册 2），具备单实例数据库锁、访问日志轮转、后台任务执行器/调度器（邮件投递本地禁用、Webhook 投递）、管理会话强认证门禁、真实敏感操作 policy+reauth 链；OAuth/OIDC 协议端点（Discovery/JWKS/授权/令牌/UserInfo/撤销）与管理 JSON API 已实现但默认关闭；设备码/令牌状态查询/扫码登录未启用 |
+| 独立服务可启动，页面/协议按开关提供 | `login-server serve` 可启动并服务健康检查与 14 个页面选项（默认注册 12、条件注册 2），具备单实例数据库锁、访问日志轮转、后台任务执行器/调度器（邮件投递本地禁用、Webhook 投递）、管理会话强认证门禁、真实敏感操作 policy+reauth 链；OAuth/OIDC 协议端点（Discovery/JWKS/授权/令牌/UserInfo/撤销）、管理 JSON API、托管 API 与应用客服 API 已实现但默认关闭；设备码/令牌状态查询/扫码登录仅部分实现且未完成验收（142–145） |
 | 完整服务装配入口未公开 | 外部宿主无法只靠公开 API 装配完整身份服务；独立进程请用 `login-server` |
 | `cmd/*` 参数与输出不承诺稳定 | 发布包脚本应以本文与 `--help` 为准，不要长期依赖输出文本 |
 | 未发布 `v1.0.0` | 破坏性变更策略按 `host_integration.md` 第 2 节执行，但仍应做适配测试 |

@@ -20,6 +20,10 @@ const (
 	SuiteDevice = "device"
 	// SuiteQR 扫码登录流程。
 	SuiteQR = "qr"
+	// SuiteTokenAuthz 扩展 Token+当前权限联合判定端点契约。
+	SuiteTokenAuthz = "tokenauthz"
+	// SuiteIntrospect 标准 RFC 7662 状态查询契约。
+	SuiteIntrospect = "introspect"
 	// SuiteAdminAPI 管理 JSON API 只读契约。
 	SuiteAdminAPI = "adminapi"
 	// SuiteAll 按固定顺序运行全部套件。

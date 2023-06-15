@@ -12,7 +12,7 @@ import (
 // 与管理 API。顺序稳定便于比对历史报告。
 var orderedSuites = []string{
 	SuiteDiscovery, SuiteJWKS, SuiteAuthCode, SuiteToken,
-	SuiteDevice, SuiteQR, SuiteAdminAPI,
+	SuiteDevice, SuiteQR, SuiteTokenAuthz, SuiteIntrospect, SuiteAdminAPI,
 }
 
 // KnownSuites 返回所有合法套件名（含 all）。
@@ -88,6 +88,10 @@ func (r *Runner) dispatch(ctx context.Context) error {
 		return r.runDeviceSuite(ctx)
 	case SuiteQR:
 		return r.runQRSuite(ctx)
+	case SuiteTokenAuthz:
+		return r.runTokenAuthzSuite(ctx)
+	case SuiteIntrospect:
+		return r.runIntrospectSuite(ctx)
 	case SuiteAdminAPI:
 		return r.runAdminSuite(ctx)
 	default:

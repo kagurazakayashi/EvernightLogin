@@ -1,8 +1,8 @@
 # 业务接入契约
 
 本文面向接入 login 的业务应用，说明当前可用的接入形态、四类认证/授权契约、示例凭证
-生成方式与 Token 保存边界。HTTP 路由尚未暴露的部分会明确标注，不要按“已上线的接口”
-对接。
+生成方式与 Token 保存边界。协议/管理/托管/应用客服 HTTP 路由已装配但默认关闭；设备码/
+扫码/状态查询等部分实现且未完成验收，未明确标注为可用的能力不要按“已上线接口”对接。
 
 ## 1. 接入形态与当前状态
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | 嵌入模式（宿主 Go 进程装配 `login.Instance`） | 已实现（Go API） | 宿主自行持有数据库、会话、页面与 HTTP 服务；本模块不监听端口、不建全局实例 |
 | 独立服务进程（`login-server serve`）基础 HTTP 能力 | 已实现（MVP） | 健康检查、OpenAPI 文档与内置账户入口页；配置/迁移/密钥/审计/维护门禁/单实例锁/TLS/访问日志轮转/后台任务运行时/协议与管理 API 挂载点/优雅关闭已装配 |
-| 独立服务 HTTP 端点（OAuth/OIDC/设备码/扫码/管理 API） | **未实现** | 目前只有健康检查、OpenAPI 与内嵌页面路由；协议实现是受信 Go API，未暴露 HTTP 路由 |
+| 独立服务 HTTP 端点（OAuth/OIDC/管理 API/托管 API/应用客服 API） | **已装配，默认关闭；部分能力未完成验收** | `--enable-protocol`、`--enable-admin-api`、`--enable-managed-api`、`--enable-app-support` 分别开启；设备码/扫码/状态查询部分实现（142–145，143 未交付），不按已交付端点对接 |
 | 本模块内示例程序（`examples/`） | 可编译运行 | 用临时 SQLite 与真实服务演示服务端语义；外部宿主**不能**导入 `internal/` 包，因此示例不等于可直接对接的 SDK |
 | 外部消费示例（`examples/external-consumer`，独立 module） | 可编译运行 | 只导入公开包（配置/实例/页面/扩展），用于宿主集成 |
 
@@ -160,7 +160,8 @@ go run ./examples/app-qr-login      # 已有：APP 扫网页二维码确认登�
 ## 10. 未实现/未验证
 
 - OAuth/OIDC 协议端点与管理 JSON API 已装配但默认关闭（`protocol.enabled`/
-  `--enable-protocol`、`--enable-admin-api`）；设备码、扫码登录、令牌状态查询未启用；
+  `--enable-protocol`、`--enable-admin-api`、`--enable-managed-api`、`--enable-app-support`）；
+  设备码、扫码登录、令牌状态查询仅部分实现且未完成验收（142–145，143 未交付）；
   内置 14 个页面选项（默认 12、条件 2）。真实第三方 OIDC 客户端、移动端相机扫码、
   真实浏览器联调未实测。
 - 刷新令牌重放、撤销、密钥轮换的跨进程/并发压力未实测；`internal/*` 未公开包装，外部

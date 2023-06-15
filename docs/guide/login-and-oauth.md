@@ -2,9 +2,10 @@
 
 本文面向“我要让业务接入登录”的开发者，说明当前可用的登录方式、协议契约与真实状态。
 先记住一条：**OAuth/OIDC 协议端点已装配并可按配置开关启用（默认关闭）**；设备码、
-扫码登录、令牌状态查询（introspection）未启用，维护模式一律 503。标准 HTTP 客户端
-在启用 `protocol.enabled`（或 `--enable-protocol`）后可对接授权/令牌/Discovery/JWKS/
-UserInfo/撤销端点。
+扫码登录、令牌状态查询（introspection）为**部分实现且未完成验收**（142–145，143 未交付），
+默认关闭、不按已交付能力对接，维护模式一律 503。标准 HTTP 客户端在启用
+`protocol.enabled`（或 `--enable-protocol`）后可对接授权/令牌/Discovery/JWKS/UserInfo/撤销端点；
+设备码/扫码/状态查询需以 142–145 收口后的验收记录为准。
 
 ## 1. 术语先解释
 
@@ -32,12 +33,12 @@ UserInfo/撤销端点。
 | 密码登录 / 会话 | `internal/authn`、`internal/session` | 页面路由已接线（需宿主装配后端） | 服务端会话 Cookie + CSRF；不在浏览器存长期 Token |
 | 两步验证（TOTP/邮件/恢复代码） | `internal/totp`、`internal/mfa`、`internal/recovery` | 页面已实现 | 受限恢复会话与强制重新绑定 |
 | Passkey / WebAuthn | `internal/passkey` | 页面已实现 | 启用需配置 RP ID 与允许来源 |
-| OAuth 授权码 + PKCE + 刷新 | `internal/oauthflow`、`internal/oauthclient`、`internal/token` | **未暴露** | 示例 `examples/oidc-login` |
-| OIDC Discovery / ID Token / UserInfo | `internal/oidc` | **未暴露** | 只声明已实现能力 |
-| 服务身份（client credentials） | `internal/oauthflow`、`internal/tokenauthz` | **未暴露** | 示例 `examples/service-identity` |
-| 设备码授权 | `internal/oauthflow` | **未暴露** | 协议契约见下文 |
-| APP 扫码登录网页 | `internal/qrlogin` | **未暴露** | 示例 `examples/app-qr-login` |
-| 权限联合校验 | `internal/tokenauthz` | 供业务服务调用的 Go 契约 | 见第 6 节 |
+| OAuth 授权码 + PKCE + 刷新 | `internal/oauthflow`、`internal/oauthclient`、`internal/token` | **已装配，默认关闭** | 示例 `examples/oidc-login`；真实 HTTP 黑盒验收待 158/160 |
+| OIDC Discovery / ID Token / UserInfo | `internal/oidc` | **已装配，默认关闭** | 只声明已实现能力；真实第三方客户端互操作未测 |
+| 服务身份（client credentials） | `internal/oauthflow`、`internal/tokenauthz` | **已装配，默认关闭** | 示例 `examples/service-identity` |
+| 设备码授权 | `internal/oauthflow` | **部分实现/未完成验收（143）** | 默认关闭；设备确认页/装配待 143 |
+| APP 扫码登录网页 | `internal/qrlogin` | **部分实现/验收中（142）** | 默认关闭；完整批准→领取闭环 未测试 |
+| 权限联合校验 | `internal/tokenauthz` | Go 契约已实现；真实 HTTP 黑盒验收待 144 | 见第 6 节 |
 
 完整协议细节（参数表、安全要求、对客户端校验要求）见
 `docs/deployment/integration.md` 第 2～6 节；本文只给接入者必须知道的最小集。
@@ -148,9 +149,7 @@ go run .\examples\app-qr-login
 
 ## 9. 未实现/未实测（如实登记）
 
-- 设备码、扫码登录、令牌状态查询（introspection）的 HTTP 端点**未启用**（协议服务不声明
-  未实现能力）；OAuth/OIDC 其他端点与管理 JSON API 需显式开关（默认关闭），未开启时 404、
-  维护模式 503。
+- 设备码、扫码登录、令牌状态查询（introspection）**仅部分实现且未完成验收**（142–145，143 未交付）；默认关闭，Discovery 只声明已实现能力，不能按已交付端点对接。OAuth/OIDC 其他端点、管理 JSON API、托管 API 与应用客服 API 需显式开关（默认关闭），未开启时 404、维护模式 503。
 - 真实第三方 OIDC 客户端、移动端相机扫码、真实浏览器联调未实测。
 - 刷新令牌重放/撤销/密钥轮换的跨进程与并发压力未实测。
 - `internal/*` 未公开包装，外部宿主不能直接导入这些协议实现。

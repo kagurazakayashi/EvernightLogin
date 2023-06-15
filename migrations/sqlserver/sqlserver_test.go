@@ -48,7 +48,7 @@ func translatedStatements(t *testing.T) []string {
 	return statements
 }
 
-// TestTranslateAllSQLiteMigrations 是 44 条迁移确定性翻译的机器可查验收：
+// TestTranslateAllSQLiteMigrations 是 46 条迁移确定性翻译的机器可查验收：
 // 表/索引/触发器/重命名/种子数量、排序规则、主键非聚集、无 SQLite 语法泄漏。
 func TestTranslateAllSQLiteMigrations(t *testing.T) {
 	source, err := migrate.LoadMigrations(migrations.SQLite)
@@ -59,8 +59,8 @@ func TestTranslateAllSQLiteMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("翻译失败: %v", err)
 	}
-	if len(translated) != 44 || len(source) != 44 {
-		t.Fatalf("迁移数量错误：源 %d，翻译 %d，期望 44", len(source), len(translated))
+	if len(translated) != 46 || len(source) != 46 {
+		t.Fatalf("迁移数量错误：源 %d，翻译 %d，期望 46", len(source), len(translated))
 	}
 	for index := range source {
 		if translated[index].Version != source[index].Version ||
@@ -112,11 +112,11 @@ func TestTranslateAllSQLiteMigrations(t *testing.T) {
 			t.Errorf("翻译结果含裸 rowid: %s", snippet(statement))
 		}
 	}
-	if tables != 95 {
-		t.Errorf("CREATE TABLE 数量 %d，期望 95", tables)
+	if tables != 96 {
+		t.Errorf("CREATE TABLE 数量 %d，期望 96", tables)
 	}
-	if primaryKeys != 95 {
-		t.Errorf("NONCLUSTERED 主键数量 %d，期望 95", primaryKeys)
+	if primaryKeys != 96 {
+		t.Errorf("NONCLUSTERED 主键数量 %d，期望 96", primaryKeys)
 	}
 	if collations < 300 {
 		t.Errorf("显式二进制排序规则数量 %d，明显偏少", collations)
@@ -141,7 +141,7 @@ func TestTranslateAllSQLiteMigrations(t *testing.T) {
 	if strings.Contains(joined, "trg_audit_maintenance_log_no_replace") {
 		t.Errorf("语义不可用的 INSERT 替换保护触发器不应生成")
 	}
-	t.Logf("迁移静态计数：44 条 / 95 表 / 95 非聚集主键 / %d 处显式 BINARY 排序规则 / "+
+	t.Logf("迁移静态计数：46 条 / 96 表 / 96 非聚集主键 / %d 处显式 BINARY 排序规则 / "+
 		"%d 个过滤唯一索引 / %d 个触发器 / %d 次 sp_rename / %d 条种子 INSERT",
 		collations, filteredIndexes, triggers, renames, seeds)
 }

@@ -171,6 +171,6 @@ curl -s -o NUL -w "%{http_code}" http://127.0.0.1:8080/login        :: 期望 20
   等域处理器待对应服务装配。
 - HTTP 初始化端点不提供（这是安全设计，不是缺口）；远程无法创建 root。
 - OAuth/OIDC 协议端点与管理 JSON API 已实现但默认关闭（`protocol.enabled` /
-  `--enable-protocol`、`--enable-admin-api`）；设备码、令牌状态查询与扫码登录未启用。
+  `--enable-protocol`、`--enable-admin-api`）；设备码/令牌状态查询/扫码登录部分实现且未完成验收（142–145，143 未交付），默认关闭。
   启用后协议发现/令牌端点真实可用，关闭时 404、维护模式 503。
 - 迁移、诊断、备份命令均为本地工具，不提供远程执行；不要把本地工具包装成网络接口。

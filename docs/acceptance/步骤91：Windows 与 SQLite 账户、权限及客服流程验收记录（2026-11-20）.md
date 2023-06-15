@@ -1,3 +1,5 @@
+> 历史注记（步骤 136）：本文所引 `internal/testmail` / `tools/testmaild` 已在步骤 136 删除并迁移为父项目 `internal/mailtest`（外部 EvernightMail 进程夹具）。本文作为当时验收证据保留原文，不改写。
+
 # 步骤91：Windows 与 SQLite 账户、权限及客服流程验收记录（2026-11-20）
 
 本记录只覆盖步骤 91 约定的验收范围：账户生命周期、应用隔离、权限委派与客服人工恢复；

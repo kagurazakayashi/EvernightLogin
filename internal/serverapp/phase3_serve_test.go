@@ -172,13 +172,13 @@ func TestManagementPagesRequireStrongAuthSession(t *testing.T) {
 			t.Fatalf("%s 响应不是 HTML 页面: %.120s", pagePath, body)
 		}
 	}
-	// 个人资料页已装配：强认证会话可读取；安全中心页在 Passkey 未启用时不注册
-	// （404，不暴露半装配页面）。
+	// 个人资料页已装配：强认证会话可读取；安全中心核心能力（MFA/TOTP/恢复代码/
+	// 会话）不依赖 Passkey 与 OAuth，应正常注册；Passkey/OAuth 子能力显示未启用。
 	if status, body := getWithCookie(t, client, base+"/account/profile", strongCookie); status != http.StatusOK {
 		t.Fatalf("个人资料页状态码 = %d，期望 200（body 前 160: %.160s）", status, body)
 	}
-	if status, _ := getWithCookie(t, client, base+"/account/security", strongCookie); status != http.StatusNotFound {
-		t.Fatalf("Passkey 未启用时安全中心页状态码 = %d，期望 404", status)
+	if status, body := getWithCookie(t, client, base+"/account/security", strongCookie); status != http.StatusOK {
+		t.Fatalf("Passkey 未启用时安全中心核心页应可用，状态码 = %d（body 前 160: %.160s）", status, body)
 	}
 	// 4) 伪造 Cookie 仍然是 401。
 	forged := &http.Cookie{Name: session.DefaultCookieName, Value: "forged-session-value"}

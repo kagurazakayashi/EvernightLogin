@@ -1,0 +1,349 @@
+{
+  "draft": true,
+  "step_order": [
+    "159",
+    "160",
+    "161",
+    "162",
+    "163"
+  ],
+  "status": "EXECUTED_PARTIAL_159_FAIL_BLOCKED",
+  "baseline": {
+    "repo": "P:/go/src/github.com/kagurazakayashi/EvernightLogin",
+    "head_at_prep": "200bfac (dirty; read-only recheck required before execution)",
+    "platform": "Windows 11 + SQLite + loopback; only synthetic accounts/data",
+    "mail": "EvernightMail step 133/134 independently accepted and unlocked; reuse for 162 only"
+  },
+  "evidence_contract": {
+    "per_case": "docs/acceptance/步骤NN-*.md row: requirement | scenario | synthetic data | command | expected | actual | evidence | status",
+    "raw": "<work>/evidence/stepNN-*.json + console log + screenshots/CDP trace/HTTP status",
+    "sanitize": "never print/copy passwords, TOTP seeds, recovery codes, session secrets, tokens, private keys",
+    "cleanup": "stop owned processes, wait port release, delete temp dirs/copies, assert repository DB untouched"
+  },
+  "steps": {
+    "159": {
+      "title": "real browser Passkey/TOTP/recovery codes/replaceable pages",
+      "assets": [
+        "internal/passkey tests (virtual ceremony only)",
+        "internal/mfa + internal/recovery",
+        "web/templates/page/account|auth|mfa",
+        "scripts/e2e-login-server.ps1 page smoke",
+        "Chrome C:/Program Files/Google/Chrome/Application/chrome.exe; Edge C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+      ],
+      "dependencies": [
+        "138/159 prerequisites",
+        "passkey/mfa pages assembled",
+        "clean or documented dirty baseline"
+      ],
+      "stages": [
+        {
+          "id": "159-A",
+          "case": "Chrome CDP + WebAuthn virtual authenticator: register Passkey",
+          "entry": "chrome --remote-debugging-port=<p> --user-data-dir=<tmp>; CDP WebAuthn.enable/addVirtualAuthenticator; open /account/profile or /security",
+          "expected": "credential registered; audit; no secrets in console",
+          "status": "READY_AFTER_120/159"
+        },
+        {
+          "id": "159-B",
+          "case": "Passkey login + UV/cancel",
+          "entry": "same browser; automatic presence simulation; /login",
+          "expected": "success; cancel/UV failure paths stable; no fallback bypass",
+          "status": "READY_AFTER_ASSEMBLY"
+        },
+        {
+          "id": "159-C",
+          "case": "TOTP enroll/verify and recovery codes",
+          "entry": "browser /mfa; software TOTP generator; consume recovery codes",
+          "expected": "recovery consumption enters restricted recovery; rebind + relogin; last-factor protection",
+          "status": "PARTIAL"
+        },
+        {
+          "id": "159-D",
+          "case": "RP ID/origin misconfiguration and authenticator cancel",
+          "entry": "temporary config variants; browser CDP setUserVerified false/cancel",
+          "expected": "fail-closed; explicit error",
+          "status": "READY_AFTER_ASSEMBLY"
+        }
+      ],
+      "not_tested": [
+        "real Windows Hello/YubiKey/security key hardware (if unavailable)",
+        "real screen reader/keyboard-only full journey",
+        "non-Windows browsers"
+      ],
+      "status": "PARTIAL_PASSKEY_REGISTRATION_TOTP_FIXED_RECOVERY_AND_PASSKEY_LOGIN_DEFERRED",
+      "execution": {
+        "pass": [
+          "real Chrome/CDP virtual authenticator",
+          "registration/password login",
+          "Passkey registration 200/list",
+          "TOTP bind_start/confirm 200",
+          "TOTP second-factor login 303 /home",
+          "same-step replay rejected"
+        ],
+        "fail_partial": [
+          "recovery code generation still 400 MFA_REQUIRED (reauth only password; recovery requires strong)",
+          "Passkey login page still reports not enabled"
+        ],
+        "not_tested": [
+          "TOTP remove/last-factor",
+          "recovery consume/restricted/rebind",
+          "real hardware/Windows Hello/screen reader/non-Windows"
+        ],
+        "evidence": "docs/acceptance/evidence/step159/browser-after-fix.log",
+        "fix_files": [
+          "ui_pages_security.go",
+          "ui_pages_security_handlers.go",
+          "internal/uisecurityadapter/adapter.go",
+          "web/templates/page/account/security_totp.html",
+          "web/templates/page/account/security_passkeys.html",
+          "web/i18n/zh-CN.json"
+        ]
+      },
+      "deferred": [
+        {
+          "id": "DEFERRED-159-RECOVERY",
+          "reason": "recovery.Generate requires strong auth; page reauth only supports current password, no TOTP/Passkey reauth input",
+          "files": [
+            "internal/reauth",
+            "internal/uisecurityadapter",
+            "internal/serverapp/security_domains.go",
+            "ui_pages_security*",
+            "templates"
+          ]
+        },
+        {
+          "id": "DEFERRED-159-PASSKEY-LOGIN",
+          "reason": "no passwordless Passkey login page/route/backend contract; only passkey service and MFA second-factor page exist",
+          "files": [
+            "ui_pages_auth*",
+            "internal/uiauthadapter",
+            "internal/serverapp/pages.go",
+            "templates"
+          ]
+        }
+      ]
+    },
+    "160": {
+      "title": "external OAuth clients, device code and APP QR scan",
+      "assets": [
+        "tools/loginte2e suites discovery/jwks/authcode/token/device/qr/adminapi",
+        "examples/oidc-login, app-qr-login, service-identity",
+        "internal/oauthflow|qrlogin|tokenauthz step92 tests",
+        "scripts/e2e-login-server.ps1 protocol/admin runs"
+      ],
+      "dependencies": [
+        "142/143/144/145 assembly",
+        "146-148 client registration/admin APIs/pages",
+        "session/admin protected files"
+      ],
+      "stages": [
+        {
+          "id": "160-A",
+          "case": "Discovery fixed issuer/paths/JWKS",
+          "entry": "loginte2e discovery --server http://127.0.0.1:<p> --json",
+          "expected": "issuer/paths/capabilities match, no over-claim",
+          "status": "READY_AFTER_142/144"
+        },
+        {
+          "id": "160-B",
+          "case": "authcode+PKCE and negative clients",
+          "entry": "loginte2e authcode/token ... --session-cookie-file <protected> --client-id ... --redirect-uri ...",
+          "expected": "PKCE downgrade/replay/wrong callback/cross-client rejected",
+          "status": "READY_AFTER_142"
+        },
+        {
+          "id": "160-C",
+          "case": "refresh rotation, revoke, introspection",
+          "entry": "loginte2e token ... --client-secret-file <protected>",
+          "expected": "old token revoked; introspection auth/scope checks",
+          "status": "BLOCKED_145"
+        },
+        {
+          "id": "160-D",
+          "case": "device code confirm/poll/cancel",
+          "entry": "loginte2e device --device-confirm-url <page>",
+          "expected": "pending/confirmed/replay/cancel",
+          "status": "BLOCKED_143"
+        },
+        {
+          "id": "160-E",
+          "case": "QR login confirm/claim binding",
+          "entry": "loginte2e qr --client-id --session-cookie-file",
+          "expected": "binding mismatch/repeat claim denied; no token in page",
+          "status": "BLOCKED_142/143"
+        }
+      ],
+      "not_tested": [
+        "real third-party OIDC client (e.g. official SDK/browser)",
+        "real phone APP",
+        "external network/HTTPS real deployment"
+      ]
+    },
+    "161": {
+      "title": "business management frontend, support, app isolation",
+      "assets": [
+        "web/templates/page/{admin,app,support,account,auth,oauth}",
+        "step93 acceptance tests",
+        "internal/support/authorizer tests",
+        "internal/manualrecovery tests",
+        "adminapi phase3 tests (401/403 page routes)"
+      ],
+      "dependencies": [
+        "146-156 management/support/force-logout/CLI consistency",
+        "browser automation + direct HTTP"
+      ],
+      "stages": [
+        {
+          "id": "161-A",
+          "case": "role x app matrix (root/system admin/app admin/support/user)",
+          "entry": "browser login each synthetic identity; direct HTTP GET/POST; /admin/users|/admin/roles|/admin/applications|/support",
+          "expected": "A/B isolation; no system/root/other-app access; field whitelist",
+          "status": "BLOCKED_146-156"
+        },
+        {
+          "id": "161-B",
+          "case": "support ticket/verify/approve/recovery; no secrets",
+          "entry": "browser support pages + direct HTTP; inspect response bodies/screenshots",
+          "expected": "no passwords/recovery codes/secrets visible; actor audit",
+          "status": "PARTIAL"
+        },
+        {
+          "id": "161-C",
+          "case": "revoke then stale page/token",
+          "entry": "browser old page + direct HTTP with revoked session/token",
+          "expected": "401/403 immediately; no cached success",
+          "status": "BLOCKED_151/156"
+        },
+        {
+          "id": "161-D",
+          "case": "responsive/error feedback",
+          "entry": "viewport 360/768/1024 screenshots; invalid form/HTTP errors",
+          "expected": "readable layouts, reproducible errors",
+          "status": "PARTIAL"
+        }
+      ],
+      "not_tested": [
+        "real screen reader",
+        "real mobile devices",
+        "full visual pixel diff"
+      ]
+    },
+    "162": {
+      "title": "mail delivery failure, code invalidation, security notices",
+      "assets": [
+        "scripts/e2e-mail-delivery.ps1 (base real Mail fixture; faults currently disabled in generated Mail config)",
+        "EvernightMail fault rules (SMTP auth/protocol/recipient/delay/disconnect/duplicate/reorder/accept-after-failure) + web/API",
+        "Login mail config (mail.enabled, smtp.addr/tls_mode/trusted_roots/from, delivery.max_attempts/timeouts)",
+        "139 mail E2E evidence"
+      ],
+      "dependencies": [
+        "Mail 133/134 accepted (yes)",
+        "139 mail assembly + env override fix",
+        "140/141 verification/MFA/reset/notices",
+        "100/101 queue/logging"
+      ],
+      "stages": [
+        {
+          "id": "162-A",
+          "case": "SMTP auth error/TLS error",
+          "entry": "start Mail with wrong auth/cert fault; Login mail enabled loopback; trigger email",
+          "expected": "stable error code; bounded retry; no secret log",
+          "status": "BLOCKED_139/141"
+        },
+        {
+          "id": "162-B",
+          "case": "temporary/permanent reject, disconnect before/after accept, delay",
+          "entry": "Mail fault rules via YAML/API; trigger; inspect queue/log/audit/short timeout",
+          "expected": "retry count/backoff; accepted-not-delivered distinction",
+          "status": "BLOCKED_139/141"
+        },
+        {
+          "id": "162-C",
+          "case": "duplicate delivery and sensitive op idempotency",
+          "entry": "Mail duplicate/reorder rules; consume same token twice",
+          "expected": "no duplicate sensitive action; replay rejected",
+          "status": "BLOCKED_139/141"
+        },
+        {
+          "id": "162-D",
+          "case": "verification/reset/MFA/support notice links",
+          "entry": "registration/email change/MFA/password reset/support flows; short validity; verify email not marked verified on failure",
+          "expected": "expiry/consumption/audit",
+          "status": "BLOCKED_140/141"
+        }
+      ],
+      "not_tested": [
+        "real external SMTP/Webhook",
+        "real reverse proxy/TLS cert chain",
+        "long duration queue"
+      ]
+    },
+    "163": {
+      "title": "audit reports, hot backup, offline viewer, credential invalidation",
+      "assets": [
+        "cmd/login-backup (create/verify/info/list/preview/export/extract)",
+        "cmd/loginctl audit/reports/backups/restore/maintenance",
+        "scripts/e2e-login-server.ps1 maintenance run",
+        "step93/94 acceptance records + tests",
+        "docs/guide/backup-and-restore.md"
+      ],
+      "dependencies": [
+        "146-156 audit/report APIs/pages",
+        "152 manual recovery/restore policy",
+        "clean temp SQLite + protected keys"
+      ],
+      "stages": [
+        {
+          "id": "163-A",
+          "case": "audit query/cleanup permissions and actor",
+          "entry": "loginctl audit events list --session-file <protected>; admin API audit filters",
+          "expected": "403/404 for unauthorized; actor + canceler recorded",
+          "status": "BLOCKED_146/155/156"
+        },
+        {
+          "id": "163-B",
+          "case": "reports five formats",
+          "entry": "loginctl reports ...; admin API report download; TestStep93",
+          "expected": "HTML/PDF/Markdown/CSV/JSON same snapshot; revoke download denied",
+          "status": "PARTIAL"
+        },
+        {
+          "id": "163-C",
+          "case": "hot backup + offline verify/view/export",
+          "entry": "login-backup create/verify/info/list/preview/export/extract on temp DB; SHA/inventory checks",
+          "expected": "authenticated snapshot, offline view, no key in backup",
+          "status": "READY_AFTER_TEMP_DB"
+        },
+        {
+          "id": "163-D",
+          "case": "maintenance restore/fallback and credential invalidation",
+          "entry": "loginctl maintenance-enter; restore-preflight/apply; probe old session/refresh/recovery code/JWKS cache",
+          "expected": "old credentials invalid; failure stays maintenance; audit retained",
+          "status": "BLOCKED_152"
+        },
+        {
+          "id": "163-E",
+          "case": "JWKS cache offline boundary",
+          "entry": "offline network block + cached JWKS/TTL probes",
+          "expected": "no outbound; stale cache behavior explicit",
+          "status": "PARTIAL"
+        }
+      ],
+      "not_tested": [
+        "GB-scale DB",
+        "real ENOSPC/OS kill",
+        "cross-machine restore",
+        "non-SQLite backup"
+      ]
+    }
+  },
+  "not_tested_risks": [
+    "step157/158 not complete; 159-163 no dev reports",
+    "138 Phase B PARTIAL; 139 security audit FAIL",
+    "140-156 management/registration/QR/device/authz/pages/CLI missing",
+    "real hardware authenticator and true mobile/client interop",
+    "non-Windows/non-SQLite runtime",
+    "dirty working tree/no committed reproducible baseline"
+  ],
+  "executed_at_159": "2026-11-21T23:15:00+08:00"
+}

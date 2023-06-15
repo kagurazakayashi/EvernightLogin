@@ -14,7 +14,7 @@
   `init` 作为一次性初始化任务单独执行（不要把 root 初始化逻辑塞进容器启动脚本）。
 - 当前镜像**不是开箱即用的完整对外 OAuth2/OIDC 服务**：协议端点与管理 JSON API 已装配但
   默认关闭（需配置 `protocol.enabled`/`--enable-protocol`、`--enable-admin-api`）；
-  设备码/扫码/令牌状态查询未启用；root Passkey 强认证绑定已接线但未做真机互操作；邮件
+  设备码/扫码/令牌状态查询仅部分实现且未完成验收（142–145，143 未交付）；root Passkey 强认证绑定已接线但未做真机互操作；邮件
   外发仍本地禁用（限制见 `standalone-service.md` 第 6 节）。
 - 备份工具 `cmd/login-backup` 与管理 CLI `cmd/loginctl` 可在容器内以独立命令运行
   （需要挂载数据库与密钥卷）。

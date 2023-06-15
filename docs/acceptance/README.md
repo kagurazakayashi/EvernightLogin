@@ -12,6 +12,11 @@
 | `步骤94：并发、任务取消、故障注入与备份恢复演练记录（2026-11-20）.md` | 并发唯一性、任务取消语义、故障注入、备份/恢复与回退演练 |
 | `步骤95：安全审查、依赖检查与性能检查记录（2026-11-20）.md` | 安全审查、依赖/漏洞检查与性能探针结果 |
 | `步骤96：需求覆盖、验证状态与交付核对记录（2026-11-20）.md` | 第一版最终交付核对：需求覆盖矩阵、验证状态、阻塞清单与可交付结论 |
+| `requirements-matrix-login.md` | 步骤 157 最终版 v1.0：需求→代码→生产装配入口→页面/CLI/API→测试证据矩阵（24 章+不变量+20 缺口；11 PASS-H/11 PARTIAL/1 N/A/1 DOC；PASS-A=0，非发布通过） |
+| `step162-邮件投递失败与验证码失效验收记录（2026-11-21）.md` | 真实 login-server + EvernightMail 故障投递验收复跑：CSRF 修复后邮箱变更/旧邮箱告知失败通过；15 PASS/3 PARTIAL/2 NOT_TESTED（Mail duplicate Copier/找回MFA队列/客服外部环境保留） |
+| `step164-安全审查、依赖检查与有界并发回归记录（2026-11-21）.md` | 静态安全审查、依赖/构建/vet、有界并发与故障回归（PASS_WITH_NOTES；govulncheck/gosec/race NOT_TESTED） |
+| `step165-文档最终核对记录（2026-11-21）.md` | 文档最终核对（含 LICENSE/README 许可证小节）：能力状态/计数/邮件/管理面/示例索引；verify-docs PASS、链接 0；FINAL（空环境复现 DEFERRED，待干净基线） |
+| `step166-发布候选与最终验收记录（2026-11-21，dirty候选）.md` | 六目标构建/发布候选（LICENSE_FIXED 复跑）：6/6 built、verify **183/0**（完整含 Windows 冒烟；skip 171/0）、LICENSE/署名逐包通过；CANDIDATE/BLOCKED_FINAL（剩余脏树/干净基线、Mail pin、157/158–163 收口） |
 | `OWASP_ASVS_第一版适用性对照.md` | OWASP ASVS 4.0.3 第一版适用性内部自评与未覆盖项清单（**非认证、不宣称合规**） |
 
 ## 使用约定

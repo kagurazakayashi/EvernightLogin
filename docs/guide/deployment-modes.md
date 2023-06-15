@@ -75,7 +75,7 @@ login 有两种使用形态。嵌入模式把组件装配进宿主 Go 程序；�
 | `login-server --version` / `--help` | 可用（退出码 0） |
 | `login-server`（无参数） | 退出码 1，stderr 明确提示使用 `serve`/`init` |
 | 首次配置 HTTP 入口 | **不提供**（安全设计：root 只能本地受控创建） |
-| OAuth/OIDC 协议端点与管理 JSON API | **已装配**（可配置开关，默认关闭）：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`；设备码、扫码登录、令牌状态查询（introspection）未启用；维护模式 503 |
+| OAuth/OIDC 协议端点与管理 JSON API | **已装配**（可配置开关，默认关闭）：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`；设备码/扫码/令牌状态查询（introspection）仅部分实现且未完成验收（142–145，143 未交付）；维护模式 503 |
 | 发布包（`login-server.exe` 等二进制） | 可用于本地初始化与启动内置账户入口页；**不等同于完整 OAuth2/OIDC 服务** |
 
 ```bat
@@ -104,7 +104,7 @@ login-server.exe
 
 仍缺（不得当作已完成）：
 
-4. 设备码、扫码登录、令牌状态查询（introspection）未启用；协议/管理 API 默认关闭，
+4. 设备码、扫码登录、令牌状态查询（introspection）仅部分实现且未完成验收（142–145，143 未交付）；协议/管理 API 默认关闭，
    未开启时对应路径 404，维护模式 503。
 5. root 强认证（Passkey）绑定已接线，但尚未在真实浏览器/硬件认证器上做互操作实测；
    绑定完成前 root 保持受限状态、管理页 fail-closed（预期行为）。
@@ -117,14 +117,14 @@ login-server.exe
 
 ### 3.3 独立部署当前真实能力与开关
 
-- 页面选项共 14 个：默认注册 12 个，另 2 个条件注册；安全中心页需要 `passkey.enabled` + `protocol.enabled`，OAuth 页面需要
+- 页面选项共 14 个：安全中心随核心安全服务注册，Passkey/OAuth 子能力单独开关（关闭时页面明确标注未启用、接口返回 403），OAuth 页面需要
   `protocol.enabled`，否则对应页面不注册（404）。
 - 敏感操作统一经 `internal/policy` + `internal/reauth`：导出/清理/保留策略/凭证轮换/
   策略修改/TOTP/Passkey/恢复代码/邮箱变更；未满足近期认证、一次性批准、强认证或审计
   可用性时 fail-closed。安全告知在未配置邮件发送器时记录明确失败（不真实外发）。
 - 协议端点默认关闭，`protocol.enabled: true`（或 `--enable-protocol`）开启；Issuer 必须
-  为 https（本地回环 http 例外）且路径与 `server.path_prefix` 一致；设备码/状态查询/
-  扫码登录未启用。
+  为 https（本地回环 http 例外）且路径与 `server.path_prefix` 一致；设备码/状态查询/扫码登录
+  部分实现且未完成验收（142–145），默认关闭。
 - 管理 JSON API 默认关闭，`--enable-admin-api` 开启；复用管理会话与 CSRF 契约，写操作
   仍要求近期再次认证。
 - 数据范围是**已声明的设计边界**：粒度是「功能权限 + 作用域」，无部门/资源级 scope；

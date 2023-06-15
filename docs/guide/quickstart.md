@@ -3,7 +3,7 @@
 本文给出一条**当前版本真实可执行**的最短路径：从空配置开始，校验配置、迁移一个临时
 数据库、做本地诊断、执行首次安全初始化，并真实启动独立 HTTP 服务。每一步都给出可
 复现命令与预期结果；OAuth/OIDC 协议端点与管理 JSON API 已实现（可配置开关，默认关闭），
-未启用的能力（设备码、扫码登录、令牌状态查询/introspection）与未真机互操作项在文末如实
+部分实现/未完成验收的能力（设备码、扫码登录、令牌状态查询/introspection，142–145）与未真机互操作项在文末如实
 列出，不把规划写成可用。
 
 > 运行环境：Windows 11 / amd64 / Go 1.27.4（本项目唯一运行实测平台）。
@@ -43,7 +43,7 @@ go run .\examples\config-load -config %TEMP%\login-begin\does-not-exist.yaml
 
 预期（Windows amd64 实测）：
 
-- `config show --json` 退出码 0，`data.field_count` 为 `37`，秘密字段显示 `[UNSET]`；
+- `config show --json` 退出码 0，`data.field_count` 为 `51`，秘密字段显示 `[UNSET]`；
   `hot_reloadable` 只有 `server.shutdown_timeout_seconds`、`logging.level`、
   `logging.format` 三项。
 - 指定不存在的文件时退出码 1，输出“配置检查失败：配置错误(…读取 YAML 配置文件失败)”。
@@ -57,7 +57,7 @@ go run .\examples\config-load -config %TEMP%\login-begin\does-not-exist.yaml
 %TEMP%\login-begin\loginctl.exe config validate --config docs\deployment\samples\login.server.example.yaml --json
 ```
 
-预期：退出码 0，`data.valid` 为 `true`，`data.field_count` 为 `37`。
+预期：退出码 0，`data.valid` 为 `true`，`data.field_count` 为 `51`。
 
 样例文件里的域名、路径、证书名都是**占位符**，`tls_terminating_proxy` 等字段只是演示
 组合；真正部署前必须替换，并按 [configuration.md](configuration.md) 校正。
@@ -83,8 +83,8 @@ if not exist %TEMP%\login-begin\data mkdir %TEMP%\login-begin\data
 
 - 第 1 条退出码 1，错误码 `DATABASE_NOT_INITIALIZED`，明确说明“不会创建新数据库”。
 - 不带 `--confirm MIGRATE` 的 `migrate apply` 退出码 2，错误码 `USAGE_INVALID`。
-- 带确认的 `migrate apply` 退出码 0，`data.applied` 列出 `0001`…`0044` 共 44 个迁移。
-- 复查 `migrate status`：`applied_count=44`、`applied_version="0044"`、`current=true`。
+- 带确认的 `migrate apply` 退出码 0，`data.applied` 列出 `0001`…`0046` 共 46 个迁移。
+- 复查 `migrate status`：`applied_count=46`、`applied_version="0046"`、`current=true`。
 
 迁移只作用于临时库；已应用的迁移不可改写，真实部署中迁移前必须先备份（见
 [backup-and-restore.md](backup-and-restore.md)）。
@@ -101,7 +101,7 @@ if not exist %TEMP%\login-begin\data mkdir %TEMP%\login-begin\data
 预期（Windows amd64 实测）：
 
 - `diag database`：退出码 0，`database`、`database.integrity`、`migration` 三项均为
-  `ok`（若刚迁移完，版本为 `0044`）。
+  `ok`（若刚迁移完，版本为 `0046`）。
 - `diag health`：退出码 **1**，状态 `degraded`；配置、数据库、迁移为 `ok`，`maintenance`
   为 `unverified`（没有提供 `--state-dir` 与主密钥环，无法验证维护状态）。这是**如实
   降级**，不是“坏了”。
@@ -213,5 +213,5 @@ rmdir /s /q %TEMP%\login-begin
 | `go run ./examples/deployment-minimal` | 0 | 装配自检，不监听端口 |
 
 下一步阅读：[deployment-modes.md](deployment-modes.md)（选部署形态）→
-[configuration.md](configuration.md)（配好 37 个字段）→
+[configuration.md](configuration.md)（配好 51 个字段）→
 [api-status.md](api-status.md)（宿主集成）。

@@ -11,7 +11,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
-// TestTranslateAllSQLiteMigrations 是 44 个既有迁移的 MySQL 版本静态验收：
+// TestTranslateAllSQLiteMigrations 是 46 个既有迁移的 MySQL 版本静态验收：
 // 全部可翻译、版本/描述一致、SQLite 语法不泄漏、引擎/字符集/排序规则正确。
 func TestTranslateAllSQLiteMigrations(t *testing.T) {
 	source, err := migrate.LoadMigrations(migrations.SQLite)
@@ -22,8 +22,8 @@ func TestTranslateAllSQLiteMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("翻译 MySQL 迁移失败: %v", err)
 	}
-	if len(translated) != 44 || len(translated) != len(source) {
-		t.Fatalf("迁移数量 = %d/%d，期望 44", len(translated), len(source))
+	if len(translated) != 46 || len(translated) != len(source) {
+		t.Fatalf("迁移数量 = %d/%d，期望 46", len(translated), len(source))
 	}
 	for index := range source {
 		if translated[index].Version != source[index].Version {
@@ -59,14 +59,14 @@ func TestTranslateAllSQLiteMigrations(t *testing.T) {
 	if regexp.MustCompile(`(?i)(^|[^_A-Za-z0-9])rowid([^_A-Za-z0-9]|$)`).MatchString(joined) {
 		t.Error("MySQL 迁移仍含裸 rowid")
 	}
-	if count := strings.Count(joined, "CREATE TABLE "); count != 95 {
-		t.Errorf("CREATE TABLE 数量 = %d，期望 95", count)
+	if count := strings.Count(joined, "CREATE TABLE "); count != 96 {
+		t.Errorf("CREATE TABLE 数量 = %d，期望 96", count)
 	}
-	if count := strings.Count(joined, "ENGINE=InnoDB"); count != 95 {
-		t.Errorf("InnoDB 表数量 = %d，期望 95", count)
+	if count := strings.Count(joined, "ENGINE=InnoDB"); count != 96 {
+		t.Errorf("InnoDB 表数量 = %d，期望 96", count)
 	}
-	if count := strings.Count(joined, "COLLATE=utf8mb4_0900_as_cs"); count != 95 {
-		t.Errorf("显式表排序规则数量 = %d，期望 95", count)
+	if count := strings.Count(joined, "COLLATE=utf8mb4_0900_as_cs"); count != 96 {
+		t.Errorf("显式表排序规则数量 = %d，期望 96", count)
 	}
 	if count := strings.Count(joined, "SIGNAL SQLSTATE '45000'"); count != 4 {
 		t.Errorf("触发器 SIGNAL 数量 = %d，期望 4", count)

@@ -1,0 +1,100 @@
+{
+  "draft": false,
+  "step": 158,
+  "title": "Windows + SQLite initialization, account and permission end-to-end acceptance",
+  "status": "EXECUTED_PARTIAL",
+  "blocked_by": [],
+  "work_root_template": "<temp>/login-step158",
+  "baseline": {
+    "repo": "P:/go/src/github.com/kagurazakayashi/EvernightLogin",
+    "head_at_prep": "200bfac (dirty; recheck read-only before execution)",
+    "platform": "Windows 11 + SQLite, real process, loopback only",
+    "no_destructive_actions_in_draft": true
+  },
+  "evidence_contract": {
+    "per_stage": "evidence/s<N>-<name>.json + console log + exit code",
+    "aggregate": "evidence/step158-summary.json",
+    "sanitize": "never print root password, master key, session secrets, tokens",
+    "cleanup": "stop serve, wait port release, delete temp dir, assert no repository DB change"
+  },
+  "stages": [
+    {
+      "id": "S0",
+      "case": "baseline/build",
+      "entry": "go build ./cmd/login-server ./cmd/loginctl ./tools/loginte2e",
+      "status": "PASS"
+    },
+    {
+      "id": "S1",
+      "case": "empty dir + config + protected secrets + init root",
+      "entry": "login-server init --config <work>/login.yaml --master-key-file <work>/secrets/master.key --password-file <work>/secrets/password.txt --operator step158",
+      "status": "PASS"
+    },
+    {
+      "id": "S2",
+      "case": "real serve + health/openapi/login/access log",
+      "entry": "login-server serve --config ... --enable-protocol --enable-admin-api",
+      "status": "PASS"
+    },
+    {
+      "id": "S3",
+      "case": "strong-factor binding",
+      "entry": "go test ./internal/passkey ./internal/serverapp -run TestMFASecurityKeySecondFactorWithRealPasskeyCeremony|TestServeRejectsNonRequiredPasskeyUV",
+      "status": "PARTIAL_NOT_TESTED"
+    },
+    {
+      "id": "S4",
+      "case": "register/admin create/review",
+      "entry": "go test -run TestStep91RegistrationInviteAndReview .",
+      "status": "PARTIAL_GO_LEVEL_PASS_HTTP_NOT_TESTED"
+    },
+    {
+      "id": "S5",
+      "case": "profile rename/email change",
+      "entry": "go test -run TestStep91ProfileAndEmailChange|TestStep91AccountLifecycleAndSessionInvalidation .",
+      "status": "PARTIAL_GO_LEVEL_PASS_HTTP_NOT_TESTED"
+    },
+    {
+      "id": "S6",
+      "case": "groups/roles/permissions + two-app isolation",
+      "entry": "go test -run TestStep91PermissionMatrixAcrossApps|TestStep91SelfEscalationAndCrossAppDenied . + loginctl group/role/app/permission list",
+      "status": "PARTIAL_GO_LEVEL_AND_CLI_READ_PASS_HTTP_NOT_TESTED"
+    },
+    {
+      "id": "S7",
+      "case": "disable/enable/session invalidation",
+      "entry": "go test -run TestStep91AccountLifecycleAndSessionInvalidation . + loginctl user disable/session",
+      "status": "PARTIAL_GO_LEVEL_PASS_HTTP_NOT_TESTED"
+    },
+    {
+      "id": "S8",
+      "case": "refusal paths",
+      "entry": "e2e script negative paths + loginctl online no-session/fake-session + loginte2e token negatives",
+      "status": "PASS_TESTED_SCOPE"
+    },
+    {
+      "id": "S9",
+      "case": "audit evidence + cleanup",
+      "entry": "TestStep91 audit assertions + loginctl audit events list (admin API/strong auth) + cleanup",
+      "status": "PARTIAL_HYGIENE_PASS_ONLINE_AUDIT_NOT_TESTED"
+    }
+  ],
+  "not_tested_risks": [
+    "real browser/Passkey/strong-factor ceremony (step159)",
+    "real HTTP management strong-auth session/business writes",
+    "CLI online audit query / role-app-permission writes (not exposed)",
+    "non-Windows/non-SQLite by project rule",
+    "dirty uncommitted candidate baseline"
+  ],
+  "executed_at": "2026-11-21T22:47:00+08:00",
+  "result": {
+    "e2e_pass": 48,
+    "e2e_fail": 0,
+    "e2e_not_tested": 5,
+    "teststep91_pass": 6,
+    "teststep91_fail": 0,
+    "evidence": "docs/acceptance/evidence/step158/",
+    "acceptance_record": "docs/acceptance/步骤158：Windows 与 SQLite 初始化、账户与权限端到端验收记录（2026-11-21）.md",
+    "notes": "HTTP management strong-auth/browser/Passkey and CLI online audit remain NOT_TESTED/PARTIAL; not a clean committed baseline."
+  }
+}

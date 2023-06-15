@@ -4,7 +4,7 @@
 # 监听；首次初始化 `init` 应作为一次性运维任务单独执行（不在容器启动脚本内创建 root）。
 # 当前独立服务为宿主装配 MVP：健康检查/OpenAPI 与 14 个页面选项（默认 12、条件 2）
 # 可用；OAuth/OIDC 协议端点与管理 JSON API 已装配但默认关闭（需配置开关），设备码/扫码/
-# 令牌状态查询未启用，不能当作开箱即用的完整对外身份服务。
+# 令牌状态查询部分实现且未完成验收（142–145），不能当作开箱即用的完整对外身份服务。
 #
 # 构建（在仓库根目录）：
 #   docker build -f docs/deployment/samples/Dockerfile -t evernight-login:dev .

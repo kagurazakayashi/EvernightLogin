@@ -23,6 +23,8 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
+	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
@@ -217,7 +219,7 @@ func (a *Adapter) CancelSecondFactor(ctx context.Context,
 
 // BeginStrongSetupPasskey 开始真实 Passkey 注册（PurposeBoth：可同时用于主登录与第二步）。
 func (a *Adapter) BeginStrongSetupPasskey(ctx context.Context,
-	request *http.Request) (login.UIPageStrongSetupStart, error) {
+	request *http.Request, currentPassword string) (login.UIPageStrongSetupStart, error) {
 	state, _, err := a.loadMFAState(ctx, request)
 	if err != nil {
 		return login.UIPageStrongSetupStart{}, err
@@ -229,7 +231,15 @@ func (a *Adapter) BeginStrongSetupPasskey(ctx context.Context,
 	if callerErr != nil {
 		return login.UIPageStrongSetupStart{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
 	}
-	start, startErr := a.opts.Passkeys.BeginRegistrationWithPurpose(ctx, caller,
+	if strings.TrimSpace(currentPassword) == "" {
+		return login.UIPageStrongSetupStart{}, &login.UIPageAuthError{Code: "REAUTH_REQUIRED"}
+	}
+	challengeCtx, _, approveErr := a.approvePasskey(ctx, state.UserID, currentPassword,
+		requestIDFromRequest(request), "注册 Passkey")
+	if approveErr != nil {
+		return login.UIPageStrongSetupStart{}, approveErr
+	}
+	start, startErr := a.opts.Passkeys.BeginRegistrationWithPurpose(challengeCtx, caller,
 		requestIDFromRequest(request), passkey.PurposeBoth)
 	if startErr != nil {
 		return login.UIPageStrongSetupStart{}, publicMFAError(startErr)
@@ -240,7 +250,7 @@ func (a *Adapter) BeginStrongSetupPasskey(ctx context.Context,
 
 // FinishStrongSetupPasskey 完成真实注册并调用 CompleteStrongSetup；成功后撤销受限会话。
 func (a *Adapter) FinishStrongSetupPasskey(ctx context.Context, request *http.Request,
-	response []byte) (login.UIPageStrongSetupResult, error) {
+	response []byte, currentPassword string) (login.UIPageStrongSetupResult, error) {
 	state, secret, err := a.loadMFAState(ctx, request)
 	if err != nil {
 		return login.UIPageStrongSetupResult{}, err
@@ -257,7 +267,15 @@ func (a *Adapter) FinishStrongSetupPasskey(ctx context.Context, request *http.Re
 	if callerErr != nil {
 		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
 	}
-	if _, finishErr := a.opts.Passkeys.FinishRegistration(ctx, caller,
+	if strings.TrimSpace(currentPassword) == "" {
+		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "REAUTH_REQUIRED"}
+	}
+	challengeCtx, _, approveErr := a.approvePasskey(ctx, state.UserID, currentPassword,
+		requestIDFromRequest(request), "注册 Passkey")
+	if approveErr != nil {
+		return login.UIPageStrongSetupResult{}, approveErr
+	}
+	if _, finishErr := a.opts.Passkeys.FinishRegistration(challengeCtx, caller,
 		passkey.RegistrationFinishRequest{CeremonyID: ceremonyID, Response: response,
 			RequestID: requestIDFromRequest(request)}); finishErr != nil {
 		return login.UIPageStrongSetupResult{}, publicMFAError(finishErr)
@@ -544,4 +562,38 @@ func clientIPFromRequest(request *http.Request) string {
 		host = host[:index]
 	}
 	return strings.Trim(host, "[]")
+}
+
+// approvePasskey 通过真实 reauth 完成 passkey.register 的页面级再次认证；只产生
+// 一次性批准信号，不把密码写入日志/存储。
+func (a *Adapter) approvePasskey(ctx context.Context, userID, currentPassword,
+	requestID, description string) (context.Context, reauth.Result, error) {
+	caller, err := reauth.UserCaller(userID)
+	if err != nil {
+		return ctx, reauth.Result{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
+	challenge, err := a.opts.Reauth.BeginChallenge(ctx, caller, reauth.ChallengeRequest{
+		ScopeID: "system", OperationID: "passkey.register", TargetType: "user",
+		TargetID: userID, Params: map[string]string{"purpose": "both"},
+		Description: description, RequestID: requestID})
+	if err != nil {
+		return ctx, reauth.Result{}, publicMFAError(err)
+	}
+	result := reauth.Result{OperationID: "passkey.register", TargetType: "user", TargetID: userID,
+		UserID: userID}
+	if !challenge.Required {
+		return ctx, result, nil
+	}
+	grant, verifyErr := a.opts.Reauth.VerifyChallenge(ctx, caller, reauth.VerifyChallengeRequest{
+		ChallengeID: challenge.ID, Password: currentPassword, RequestID: requestID})
+	if verifyErr != nil {
+		return ctx, reauth.Result{}, publicMFAError(verifyErr)
+	}
+	strength := policy.StrengthPassword
+	if grant.GrantedStrength == policy.StrengthStrong {
+		strength = policy.StrengthStrong
+	}
+	ctx = reauth.WithSignals(ctx, reauth.Signals{VerifiedAt: a.opts.Now().UTC(),
+		Strength: strength, Complete: true, Confirmed: true, ApprovalToken: grant.Token})
+	return ctx, result, nil
 }
