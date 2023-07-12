@@ -15,7 +15,7 @@ import (
 // 只向用户最近一个已验证邮箱发送，不包含恢复代码、验证摘要或会话秘密。
 //
 // 装配说明：真实外发必须由宿主指定发送器（SMTP/本地捕获器）与发件地址；测试可
-// 使用 internal/testmail 捕获器验证内容，不得把测试收件器装配进生产路径。
+// 使用 internal/mailtest 外部 EvernightMail 夹具验证内容，不得把测试收件器装配进生产路径。
 type MailNotifier struct {
 	store      Store
 	sender     mailer.Sender
