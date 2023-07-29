@@ -35,3 +35,6 @@ __pycache__/
 # 压缩包包含本地 AI 文件，不应提交包本身
 /login_开发启动包*.zip
 SHA256SUMS.txt
+# 本地验收证据与构建产物（历史证据留存本机，不进入 Git）
+/docs/acceptance/evidence/
+*.exe
