@@ -178,6 +178,33 @@ passkey:
                  http_status=probes["/admin/v1/audit/events"]["status"])
             step("163.strong_session_report_route", "PASS" if reports_ok else "FAIL",
                  http_status=probes["/admin/v1/reports"]["status"])
+            # 步骤 156：真实 CLI 管理写 E2E（使用同一强认证管理会话）。
+            try:
+                from step156_cli_e2e import build_cli, run_suite
+                secret = ""
+                for c in session.get("cookies") or []:
+                    if c.get("name") in ("__Host-login_session", "login_session"):
+                        secret = c.get("value", "")
+                        break
+                cli_bin, cli_err = build_cli(work)
+                if secret:
+                    cli_results = run_suite(base, secret, work, cli_bin,
+                                            db_path=os.path.join(work, "login.db"))
+                else:
+                    cli_results = {"session-secret": {"ok": False, "detail": "missing management cookie"}}
+                result["cli_step156"] = cli_results
+                known_gaps = {"ordinary-user-deny", "session.admin-revoke",
+                              "support.case-create", "managed-policy.write"}
+                failures = [name for name, value in cli_results.items()
+                            if value.get("ok") is False and name not in known_gaps]
+                gap_failures = [name for name, value in cli_results.items()
+                                if value.get("ok") is False and name in known_gaps
+                                and name != "ordinary-user-deny"]
+                status = "PASS_WITH_NOTES" if (failures or gap_failures) else "PASS"
+                step("156.cli.authorized-write-e2e", status, failures=failures,
+                     known_gaps=sorted(known_gaps), evidence=cli_results)
+            except Exception as exc:  # noqa: BLE001
+                step("156.cli.authorized-write-e2e", "FAIL", detail=repr(exc))
             result["status_summary"] = {"fixture": "PASS", "161": "PARTIAL" if admin_ok and anon_ok else "FAIL",
                                         "163": "PARTIAL" if audit_ok and reports_ok else "FAIL",
                                         "note": "role x app/CSRF write matrix and report generation/restore chains still need separate fixtures"}

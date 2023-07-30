@@ -102,6 +102,21 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			"skipped": result.Skipped}, nil
 	})
 
+	add(http.MethodDelete, "roles/{role_id}", func(ctx context.Context,
+		caller account.Caller, request *http.Request) (any, error) {
+		if pages.RBAC == nil {
+			return nil, &adminapi.DomainError{Code: "INTERNAL_ERROR", Message: "RBAC 适配器未装配"}
+		}
+		body, err := adminWriteBody(request)
+		if err != nil {
+			return nil, err
+		}
+		if err := pages.RBAC.DeleteRole(ctx, caller.Actor().ID, adminLastPathPart(request),
+			adminRequestID(body, request)); err != nil {
+			return nil, adminUIError(err)
+		}
+		return map[string]any{"deleted": true}, nil
+	})
 	add(http.MethodPut, "roles/{role_id}", func(ctx context.Context,
 		caller account.Caller, request *http.Request) (any, error) {
 		if pages.RBAC == nil {

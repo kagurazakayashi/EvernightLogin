@@ -122,7 +122,7 @@ async function main() {
       result.secondFactorNoOptions = true;
     }
     const probes = {};
-    for (const path of ['/home','/account/security','/admin','/admin/users','/admin/applications','/admin/roles','/admin/audit','/admin/reports','/admin/v1/users','/admin/v1/applications','/admin/v1/audit/events','/admin/v1/audit/retention','/admin/v1/reports','/admin/v1/backups','/admin/v1/notifications','/admin/v1/sessions']) {
+    for (const path of ['/home','/account/security','/admin','/admin/users','/admin/applications','/admin/roles','/admin/audit','/admin/reports','/admin/v1/users','/admin/v1/applications','/admin/v1/audit/events','/admin/v1/audit/retention','/admin/v1/audit/exports','/admin/v1/reports','/admin/v1/report-plans','/admin/v1/backups','/admin/v1/backups/capabilities','/admin/v1/backups/jobs','/admin/v1/notifications','/admin/v1/sessions']) {
       const r = await get(path);
       probes[path] = { status: r.status, snippet: textOf(r.text).slice(0, 100) };
     }

@@ -220,13 +220,20 @@ database: {{driver: sqlite, path: "{db.replace(chr(92), '/')}", wal: true, busy_
                                                                "identifier": "root", "password": password})
         step("login.root.password", "PASS" if status == 303 else "FAIL",
              http_status=status, location=headers.get("Location", ""), detail=re.sub(r'<[^>]+>', ' ', login_result)[:500])
+        # 测试夹具通过明文回环访问：__Host- Cookie 在产品里 Secure=true，Python
+        # cookiejar 默认不会在 http 上发送；仅在夹具内把已收到的同值 Cookie 标记为
+        # 非 Secure（不改变服务器校验，仅让测试客户端模拟浏览器同源请求）。
+        for c in client.jar:
+            c.secure = False
         second_path = headers.get("Location", "")
         if "second-factor" not in second_path:
             step("login.root.second-factor", "FAIL", detail=login_result[:200])
             return finish(result, evidence_dir, args.keep, work)
-        status, _, second_page = client.get(second_path)
+        status, headers2, second_page = client.get(second_path)
         set_page_csrf(client, second_page)
-        step("second-factor.page", "PASS" if status == 200 else "FAIL", http_status=status)
+        step("second-factor.page", "PASS" if status == 200 else "FAIL", http_status=status,
+             location=headers2.get("Location", ""), cookie_names=[c.name for c in client.jar],
+             detail=re.sub(r'<[^>]+>', ' ', second_page)[:200])
         fields = hidden_fields(second_page)
         code = totp(secret)
         payload = {k: v for k, v in fields.items() if k not in ("code",)}
@@ -256,6 +263,126 @@ database: {{driver: sqlite, path: "{db.replace(chr(92), '/')}", wal: true, busy_
         step("161.authenticated_admin_routes", "PASS" if admin_ok else "FAIL",
              detail={p: probes[p]["status"] for p in ["/admin/users", "/admin/applications", "/admin/roles"]})
         step("161.anonymous_denied", "PASS" if anon_ok else "FAIL", detail=unauth)
+        result["session"] = {"cookie_names": [c.name for c in client.jar], "authenticated": status == 303}
+
+        # ---- 步骤 156：真实 CLI 管理写 E2E（强认证管理会话 + 真实 serve）----
+        cli_bin = os.path.join(work, "loginctl.exe")
+        cli_build = subprocess.run(["go", "build", "-o", cli_bin, "./cmd/loginctl"], cwd=BASE,
+                                   capture_output=True, text=True)
+        step("156.cli.build", "PASS" if cli_build.returncode == 0 else "FAIL",
+             detail=(cli_build.stdout + cli_build.stderr)[-200:])
+        session_secret = ""
+        for c in client.jar:
+            if c.name == "__Host-login_session":
+                session_secret = c.value
+        session_file = os.path.join(work, "management-session.secret")
+        with open(session_file, "w", encoding="utf-8") as f:
+            f.write(session_secret)
+        protected_file(session_file)
+        cli_env = {k: v for k, v in os.environ.items()
+                   if k.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
+        cli_results = {}
+
+        def cli(args, expect_zero=True):
+            proc = subprocess.run([cli_bin] + args + ["--server", BASE_URL,
+                   "--session-file", session_file, "--json"], cwd=work, capture_output=True,
+                   text=True, timeout=60, env=cli_env)
+            payload = {}
+            for line in proc.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("{"):
+                    try: payload = json.loads(line)
+                    except Exception: pass
+            ok = (proc.returncode == 0) == expect_zero
+            return ok, proc.returncode, payload, (proc.stderr or proc.stdout)[-200:]
+
+        ok, code, payload, detail = cli(["admin", "users"])
+        cli_results["users.list"] = {"ok": ok, "exit": code, "detail": detail}
+        step("156.cli.admin.users", "PASS" if ok else "FAIL", exit=code)
+        body = json.dumps({"username": "step156user", "nickname": "156", "language": "zh-CN",
+                           "timezone": "Asia/Shanghai"}, ensure_ascii=False)
+        ok, code, created, detail = cli(["admin", "write", "users", "--body", body,
+                                         "--confirm", "ADMIN-WRITE"])
+        user_id = ""
+        if isinstance(created, dict):
+            user_id = str((created.get("data") or {}).get("id", ""))
+        cli_results["users.create"] = {"ok": ok, "exit": code, "user_id": bool(user_id), "detail": detail}
+        step("156.cli.users.create", "PASS" if ok and user_id else "FAIL", exit=code)
+        group_body = json.dumps({"scope_id": "system", "group_key": "step156group",
+                                 "name": "step156 group", "description": "e2e"}, ensure_ascii=False)
+        ok, code, payload, detail = cli(["admin", "write", "groups", "--body", group_body,
+                                         "--confirm", "ADMIN-WRITE"])
+        cli_results["group.create"] = {"ok": ok, "exit": code, "detail": detail}
+        step("156.cli.group.create", "PASS" if ok else "FAIL", exit=code)
+        role_body = json.dumps({"scope_id": "system", "key": "step156role", "name": "step156 role",
+                                "description": "e2e"}, ensure_ascii=False)
+        ok, code, payload, detail = cli(["admin", "write", "roles", "--body", role_body,
+                                         "--confirm", "ADMIN-WRITE"])
+        cli_results["role.create"] = {"ok": ok, "exit": code, "detail": detail}
+        step("156.cli.role.create", "PASS" if ok else "FAIL", exit=code)
+        app_body = json.dumps({"name": "step156 app", "description": "e2e",
+                               "client_type": "public", "owner_user_id": user_id}, ensure_ascii=False)
+        ok, code, app_created, detail = cli(["admin", "write", "applications", "--body", app_body,
+                                             "--confirm", "ADMIN-WRITE"])
+        app_id = ""
+        row_version = 0
+        if isinstance(app_created, dict):
+            data = app_created.get("data") or {}
+            app_id = str(data.get("id", ""))
+            row_version = int(data.get("row_version", 0) or 0)
+        cli_results["application.create"] = {"ok": ok, "exit": code, "app_id": bool(app_id),
+                                             "row_version": row_version, "detail": detail}
+        step("156.cli.application.create", "PASS" if ok and app_id else "FAIL", exit=code)
+        if app_id:
+            update_body = json.dumps({"name": "step156 app v2", "expected_row_version": row_version},
+                                     ensure_ascii=False)
+            ok, code, updated, detail = cli(["admin", "write", "applications/" + app_id,
+                                             "--body", update_body, "--confirm", "ADMIN-WRITE"])
+            new_version = int(((updated.get("data") or {}).get("row_version", 0) or 0)) if isinstance(updated, dict) else 0
+            cli_results["application.update"] = {"ok": ok, "exit": code, "row_version": new_version, "detail": detail}
+            step("156.cli.application.update", "PASS" if ok else "FAIL", exit=code)
+            stale_body = json.dumps({"name": "step156 app stale", "expected_row_version": row_version},
+                                    ensure_ascii=False)
+            ok, code, stale, detail = cli(["admin", "write", "applications/" + app_id,
+                                           "--body", stale_body, "--confirm", "ADMIN-WRITE"], expect_zero=False)
+            cli_results["application.version-conflict"] = {"ok": ok, "exit": code, "detail": detail}
+            step("156.cli.application.version-conflict", "PASS" if ok else "FAIL", exit=code)
+            policy_ok, policy_code, policy_payload, policy_detail = cli(
+                ["admin", "application", app_id, "members"])
+            step("156.cli.application.members-read", "PASS" if policy_ok else "FAIL", exit=policy_code)
+            cli_results["application.members-read"] = {"ok": policy_ok, "exit": policy_code}
+        revoke_args = ["session", "admin-revoke", "--user", user_id, "--reason", "step156 e2e",
+                       "--confirm", "ADMIN-REVOKE"]
+        ok, code, revoked, detail = cli(revoke_args)
+        cli_results["session.admin-revoke"] = {"ok": ok, "exit": code, "detail": detail}
+        step("156.cli.session.admin-revoke", "PASS" if ok else "FAIL", exit=code)
+        result["cli"] = cli_results
+        # 过期强认证：把当前管理会话 strong_auth 时间置 0，CLI 写必须失败；随后恢复。
+        import sqlite3
+        session_id = ""
+        conn = sqlite3.connect(db)
+        try:
+            row = conn.execute("SELECT id,strong_auth_verified_at_ms FROM sessions WHERE user_id IS NOT NULL AND revoked_at_ms IS NULL ORDER BY created_at_ms DESC LIMIT 1").fetchone()
+            if row:
+                session_id, old_ts = row[0], row[1]
+                conn.execute("UPDATE sessions SET strong_auth_verified_at_ms=0 WHERE id=?", (session_id,))
+                conn.commit()
+                ok, code, payload, detail = cli(["admin", "users"], expect_zero=False)
+                step("156.cli.expired-strong-auth", "PASS" if ok and code != 0 else "FAIL",
+                     exit=code, detail=detail)
+                cli_results["session.expired-strong-auth"] = {"ok": ok, "exit": code}
+                conn.execute("UPDATE sessions SET strong_auth_verified_at_ms=? WHERE id=?",
+                             (old_ts, session_id))
+                conn.commit()
+        finally:
+            conn.close()
+        step("156.cli.ordinary-user-deny", "NOT_TESTED",
+             note="fixture 未创建可登录的普通用户密码凭据；由内部授权测试/后续夹具补")
+        page_ok = probes["/admin/v1/users"]["status"] == 200 and unauth["/admin/v1/users"] in (401, 403)
+        step("156.cli.page-permission", "PASS" if page_ok else "FAIL",
+             detail={"authenticated": probes["/admin/v1/users"]["status"],
+                     "anonymous": unauth["/admin/v1/users"]})
+
         audit_ok = probes["/admin/v1/audit/events"]["status"] == 200
         reports_ok = probes["/admin/v1/reports"]["status"] in (200, 403)
         step("163.strong_session_audit_route", "PASS" if audit_ok else "FAIL", http_status=probes["/admin/v1/audit/events"]["status"])

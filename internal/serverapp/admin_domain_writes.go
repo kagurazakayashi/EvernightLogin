@@ -124,6 +124,7 @@ func buildAdminWriteRoutes(managed *ManagedServices, pages *Pages) []adminapi.Do
 		view, err := pages.Apps.UpdateApplication(ctx, caller.Actor().ID, appID,
 			login.UIApplicationChange{Name: adminString(body, "name"),
 				Description: adminString(body, "description"), Homepage: adminString(body, "homepage"),
+				OwnerUserID: adminString(body, "owner_user_id"),
 				ContactInfo: adminString(body, "contact_info")},
 			adminInt64(body, "expected_row_version"), adminRequestID(body, request))
 		if err != nil {

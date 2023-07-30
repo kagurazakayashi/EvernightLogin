@@ -21,10 +21,11 @@ const adminCommandUsage = `用法：
   loginctl admin role <role_id> <在线公共参数>
   loginctl admin permissions [--scope-id system] [--limit 20] [--offset 0] <在线公共参数>
   loginctl admin applications [--limit 20] [--offset 0] <在线公共参数>
-  loginctl admin application <application_id> [members] <在线公共参数>
+  loginctl admin application <application_id> [members|managed-policy] <在线公共参数>
   loginctl admin support-cases [--status <s>] [--limit 20] [--offset 0] <在线公共参数>
   loginctl admin support-case <case_id> <在线公共参数>
-  loginctl admin write <path> --body '<JSON对象>' --confirm ADMIN-WRITE <在线公共参数>
+  loginctl admin write <path> --body '<JSON对象>' [--method POST|PUT|DELETE] \
+      --confirm ADMIN-WRITE <在线公共参数>
     （写路径见服务端已挂载路由；服务端仍强制强认证/CSRF/领域授权/审计）
 
 在线公共参数与 audit/reports 等命令相同（--server/--api-path/--session-file/--ca-file/
@@ -82,10 +83,14 @@ func (r *runner) runAdmin(args []string) int {
 		}
 		path = "/applications/" + url.PathEscape(positional[0])
 		if len(positional) == 2 {
-			if positional[1] != "members" {
-				return r.usage("admin application 的第二个参数只允许 members")
+			switch positional[1] {
+			case "members":
+				path += "/members"
+			case "managed-policy", "policy":
+				path += "/managed-policy"
+			default:
+				return r.usage("admin application 的第二个参数只允许 members|managed-policy")
 			}
-			path += "/members"
 		}
 	case "support-cases":
 		path = "/support/cases"
@@ -159,7 +164,8 @@ func writeAdminView(out io.Writer, data map[string]any) {
 func (r *runner) runAdminWrite(args []string) int {
 	r.usageText = adminCommandUsage
 	values, positional, err := parseFlags(args, onlineFlagDefs(
-		flagDef{name: "body", value: true}, flagDef{name: "confirm", value: true}))
+		flagDef{name: "body", value: true}, flagDef{name: "confirm", value: true},
+		flagDef{name: "method", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -179,9 +185,17 @@ func (r *runner) runAdminWrite(args []string) int {
 		return r.usage("--body 不是合法 JSON 对象")
 	}
 	fields["confirm"] = true
+	method := strings.ToUpper(strings.TrimSpace(values["method"]))
+	switch method {
+	case "":
+		method = "POST"
+	case "POST", "PUT", "DELETE", "PATCH":
+	default:
+		return r.usage("--method 只允许 POST/PUT/DELETE/PATCH")
+	}
 	path := "/" + strings.TrimPrefix(positional[0], "/")
 	return r.withOnline(values, func(target *onlineTarget) int {
-		reply, failure := target.doJSON(r.ctx, "POST", path, nil, fields)
+		reply, failure := target.doJSON(r.ctx, method, path, nil, fields)
 		if failure != nil {
 			return r.onlineFailure("执行管理写操作", failure)
 		}
