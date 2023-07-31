@@ -455,8 +455,13 @@ func TestCreateBackupWithAttachmentsAndConfig(t *testing.T) {
 	if !report.Authenticated || !report.ManifestAvailable {
 		t.Fatalf("校验报告未标记认证通过：%+v", report)
 	}
-	if report.BackupID != result.BackupID || report.Database.SchemaVersionNumber != 44 {
-		t.Fatalf("校验报告元数据不一致：%+v", report)
+	var expectedSchemaVersion string
+	if err := env.store.DB().QueryRow(
+		`SELECT version FROM schema_history ORDER BY version DESC LIMIT 1`).Scan(&expectedSchemaVersion); err != nil {
+		t.Fatalf("读取当前数据库最高迁移失败：%v", err)
+	}
+	if report.BackupID != result.BackupID || report.Database.SchemaVersion != expectedSchemaVersion {
+		t.Fatalf("校验报告元数据不一致：%+v（期望 schema=%s）", report, expectedSchemaVersion)
 	}
 	if len(report.Entries) != 3 {
 		t.Fatalf("校验条目数 = %d，期望 3", len(report.Entries))
@@ -481,8 +486,8 @@ func TestCreateBackupWithAttachmentsAndConfig(t *testing.T) {
 		`SELECT version FROM schema_history ORDER BY version DESC LIMIT 1`).Scan(&version); err != nil {
 		t.Fatalf("读取提取快照迁移版本失败：%v", err)
 	}
-	if !strings.HasPrefix(version, "0044") {
-		t.Fatalf("提取快照最高迁移 = %s，期望 0043", version)
+	if version != expectedSchemaVersion {
+		t.Fatalf("提取快照最高迁移 = %s，期望 %s", version, expectedSchemaVersion)
 	}
 	var integrity string
 	if err := snapshot.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {

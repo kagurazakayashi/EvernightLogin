@@ -91,8 +91,9 @@ func TestViewerListSnapshotAndPreview(t *testing.T) {
 	if !snapshot.Supported || snapshot.Engine != "sqlite" {
 		t.Fatalf("快照能力声明异常：%+v", snapshot)
 	}
-	if len(snapshot.SchemaHistory) != 44 {
-		t.Fatalf("schema_history 条数 = %d，期望 44", len(snapshot.SchemaHistory))
+	if len(snapshot.SchemaHistory) != snapshot.SchemaVersionNumber {
+		t.Fatalf("schema_history 条数 = %d，与快照最高迁移版本 %d 不一致",
+			len(snapshot.SchemaHistory), snapshot.SchemaVersionNumber)
 	}
 	if snapshot.SchemaVersion != report.Database.SchemaVersion {
 		t.Fatalf("schema 版本不一致：%s vs %s", snapshot.SchemaVersion,
