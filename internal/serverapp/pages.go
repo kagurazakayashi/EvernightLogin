@@ -437,6 +437,11 @@ func publicFormPaths(prefix string) map[string]string {
 	for path, purpose := range login.UIPageAccountPublicFormPaths(prefix) {
 		paths[path] = purpose
 	}
+	// OAuth 授权同意、设备确认、扫码确认是匿名公开表单；真实 serve 中它们与
+	// /oauth 协议挂载共享路径，漏合并会让页面 POST 被当作会话表单 CSRF 校验而恒 403。
+	for path, purpose := range login.UIPageOAuthPublicFormPaths(prefix) {
+		paths[path] = purpose
+	}
 	return paths
 }
 

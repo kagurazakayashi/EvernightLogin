@@ -1,6 +1,7 @@
 package serverapp
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"path"
@@ -102,6 +103,23 @@ func ComposeHandler(base http.Handler, pathPrefix string, mounts []HandlerMount)
 	})
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestPath := request.URL.Path
+		// 页面优先仅限与协议端点共享路径的 OAuth/设备/扫码页面：先让内置页面处理
+		// 程序尝试；只有它返回 404 时才交给协议/管理挂载，避免 /oauth/device 等页面
+		// 被协议处理程序整体遮蔽。其它路径仍保持“挂载点优先”的既有语义。
+		if pageFirstPath(normalizedPrefix, requestPath) {
+			buffered := &bufferedResponseWriter{header: make(http.Header)}
+			base.ServeHTTP(buffered, request)
+			if buffered.statusCode() != http.StatusNotFound {
+				for key, values := range buffered.header {
+					for _, value := range values {
+						writer.Header().Add(key, value)
+					}
+				}
+				writer.WriteHeader(buffered.statusCode())
+				_, _ = writer.Write(buffered.body.Bytes())
+				return
+			}
+		}
 		for _, item := range mounted {
 			if requestPath != item.mountedPath &&
 				!strings.HasPrefix(requestPath, item.mountedPath+"/") {
@@ -126,6 +144,27 @@ func ComposeHandler(base http.Handler, pathPrefix string, mounts []HandlerMount)
 		}
 		base.ServeHTTP(writer, request)
 	}), nil
+}
+
+// pageFirstPath 报告路径是否是内置页面与协议端点共享的页面路径。这些页面必须
+// 优先由 UI 处理程序提供（设备确认、授权同意、扫码确认），否则会被 /oauth 挂载的
+// 协议处理程序遮蔽并 404。其余路径保持挂载点优先，避免改变管理/协议路由语义。
+func pageFirstPath(prefix, requestPath string) bool {
+	relative := requestPath
+	if prefix != "" {
+		if !strings.HasPrefix(relative, prefix+"/") {
+			return false
+		}
+		relative = strings.TrimPrefix(relative, prefix)
+	}
+	switch relative {
+	case "/oauth/authorize", "/oauth/device", "/oauth/device/confirm",
+		"/login/qr", "/login/qr/poll", "/login/qr/claim", "/login/qr/regenerate",
+		"/login/qr/cancel", "/app/scan":
+		return true
+	default:
+		return false
+	}
 }
 
 // normalizePathPrefix 去掉前缀末尾的斜杠；空前缀（根部署）保持为空。
@@ -174,4 +213,31 @@ func pathConflicts(first, second string) bool {
 		return true
 	}
 	return strings.HasPrefix(first, second+"/") || strings.HasPrefix(second, first+"/")
+}
+
+// bufferedResponseWriter 缓冲基础处理程序的响应，用于“页面优先、挂载回退”。
+// 它只服务小型页面/404 探测；404 时不把基础处理程序的响应头/正文写入真实响应。
+type bufferedResponseWriter struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (b *bufferedResponseWriter) Header() http.Header { return b.header }
+func (b *bufferedResponseWriter) WriteHeader(status int) {
+	if b.status == 0 {
+		b.status = status
+	}
+}
+func (b *bufferedResponseWriter) Write(data []byte) (int, error) {
+	if b.status == 0 {
+		b.status = http.StatusOK
+	}
+	return b.body.Write(data)
+}
+func (b *bufferedResponseWriter) statusCode() int {
+	if b.status == 0 {
+		return http.StatusOK
+	}
+	return b.status
 }

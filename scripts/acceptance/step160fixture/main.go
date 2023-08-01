@@ -30,6 +30,7 @@ type result struct {
 	BaseURL            string `json:"base_url"`
 	ResourceClientID   string `json:"resource_client_id"`
 	ResourceSecretFile string `json:"resource_secret_file"`
+	OIDCAppID          string `json:"oidc_app_id"`
 }
 
 func main() {
@@ -136,9 +137,23 @@ func main() {
 		ApplicationID: resourceApp.ID, ExpectedRowVersion: resourceApp.RowVersion}); err != nil {
 		panic(err)
 	}
+	oidcApp, err := managed.App.CreateApplication(ctx, appCaller, app.CreateRequest{
+		Name: "oidc-app", OwnerUserID: user.ID, ClientType: app.ClientTypePublic})
+	if err != nil {
+		panic(err)
+	}
+	if _, err := managed.App.EnableApplication(ctx, appCaller, app.StatusRequest{
+		ApplicationID: oidcApp.ID, ExpectedRowVersion: oidcApp.RowVersion}); err != nil {
+		panic(err)
+	}
+	if _, err := managed.App.AddApplicationMember(ctx, appCaller, app.AddMemberRequest{
+		ApplicationID: oidcApp.ID, UserID: user.ID}); err != nil {
+		panic(err)
+	}
 	resourceSecret := "resource-secret-step160-9f3a7c1b"
 	nowMS := time.Now().UnixMilli()
-	insertPublicClient(store.DB(), application.ID, nowMS)
+	insertPublicClient(store.DB(), application.ID, []string{"https://resource.example.test/api"}, nowMS)
+	insertPublicClient(store.DB(), oidcApp.ID, []string{baseURL}, nowMS)
 	insertConfidentialClient(store.DB(), resourceApp.ID, resourceSecret, nowMS)
 	resourceSecretPath := filepath.Join(dir, "resource-secret.txt")
 	if err := os.WriteFile(resourceSecretPath, []byte(resourceSecret), 0o600); err != nil {
@@ -183,20 +198,21 @@ app_qr_login:
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(result{AppID: application.ID,
 		Session: sessionPath, ConfigPath: configPath, MasterKey: keyPath, BaseURL: baseURL,
-		ResourceClientID: resourceApp.ID, ResourceSecretFile: resourceSecretPath})
+		ResourceClientID: resourceApp.ID, ResourceSecretFile: resourceSecretPath,
+		OIDCAppID: oidcApp.ID})
 }
 
-func insertPublicClient(db *sql.DB, clientID string, nowMS int64) {
+func insertPublicClient(db *sql.DB, clientID string, audiences []string, nowMS int64) {
 	grants, _ := json.Marshal([]string{"authorization_code", "refresh_token",
 		"urn:ietf:params:oauth:grant-type:device_code"})
-	redirects, _ := json.Marshal([]string{"http://127.0.0.1:9999/callback"})
+	redirects, _ := json.Marshal([]string{"http://127.0.0.1:19081/callback"})
 	scopes, _ := json.Marshal([]string{"openid", "profile", "offline_access"})
-	audiences, _ := json.Marshal([]string{"https://resource.example.test/api"})
+	audiencesJSON, _ := json.Marshal(audiences)
 	methods, _ := json.Marshal([]string{})
 	if _, err := db.Exec(`INSERT INTO oauth_clients(client_id,client_type,grant_types_json,redirect_uris_json,
 post_logout_redirect_uris_json,scopes_json,audiences_json,auth_methods_json,require_pkce,row_version,
 created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,1,?,?)`, clientID, "public", grants, redirects,
-		"[]", scopes, audiences, methods, 1, nowMS, nowMS); err != nil {
+		"[]", scopes, audiencesJSON, methods, 1, nowMS, nowMS); err != nil {
 		panic(err)
 	}
 }
@@ -205,12 +221,12 @@ func insertConfidentialClient(db *sql.DB, clientID, secret string, nowMS int64) 
 	grants, _ := json.Marshal([]string{"client_credentials"})
 	redirects, _ := json.Marshal([]string{})
 	scopes, _ := json.Marshal([]string{"resource.read"})
-	audiences, _ := json.Marshal([]string{"https://resource.example.test/api"})
+	audiencesJSON, _ := json.Marshal([]string{"https://resource.example.test/api"})
 	methods, _ := json.Marshal([]string{"client_secret_basic", "client_secret_post"})
 	if _, err := db.Exec(`INSERT INTO oauth_clients(client_id,client_type,grant_types_json,redirect_uris_json,
 post_logout_redirect_uris_json,scopes_json,audiences_json,auth_methods_json,require_pkce,row_version,
 created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,0,1,?,?)`, clientID, "confidential", grants,
-		redirects, "[]", scopes, audiences, methods, nowMS, nowMS); err != nil {
+		redirects, "[]", scopes, audiencesJSON, methods, nowMS, nowMS); err != nil {
 		panic(err)
 	}
 	digest := sha256.Sum256([]byte(secret))

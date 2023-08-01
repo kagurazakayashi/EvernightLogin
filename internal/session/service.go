@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -147,6 +148,7 @@ type Service struct {
 	events            securityevent.Emitter
 	allowLegacy       bool
 	recoveryGate      RecoverySessionGate
+	gateMu            sync.RWMutex
 	recoveryTTL       time.Duration
 	allowRootRecovery bool
 	allowRootStrong   bool
@@ -721,11 +723,14 @@ func (s *Service) IssueRecoverySession(ctx context.Context, request RecoverySess
 	if request.RequestID != "" && !validRequestID(request.RequestID) {
 		return IssuedSession{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
 	}
-	if isNilInterface(s.recoveryGate) {
+	s.gateMu.RLock()
+	gate := s.recoveryGate
+	s.gateMu.RUnlock()
+	if isNilInterface(gate) {
 		s.recordRecoveryRejection(ctx, request, "recovery_gate_not_configured")
 		return IssuedSession{}, ErrRecoveryNotAllowed
 	}
-	if err := s.recoveryGate.AuthorizeRecoverySession(ctx, request); err != nil {
+	if err := gate.AuthorizeRecoverySession(ctx, request); err != nil {
 		s.recordRecoveryRejection(ctx, request, "recovery_attempt_not_authorized")
 		return IssuedSession{}, ErrRecoveryNotAllowed
 	}
@@ -851,6 +856,19 @@ func (s *Service) IssueRecoverySession(ctx context.Context, request RecoverySess
 
 // recordRecoveryRejection 记录恢复会话签发被拒绝的失败审计；审计不可用只写运行
 // 日志，不改变“拒绝签发”的结论，也不泄露恢复代码/尝试内容。
+// SetRecoveryGate 在宿主完成恢复服务装配后注入受限恢复会话授权器。只允许装配期
+// 调用一次；之后恢复代码流程才能签发受限恢复会话，未注入时保持 fail-closed。
+func (s *Service) SetRecoveryGate(gate RecoverySessionGate) {
+	if gate == nil {
+		return
+	}
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	if s.recoveryGate == nil {
+		s.recoveryGate = gate
+	}
+}
+
 func (s *Service) recordRecoveryRejection(ctx context.Context, request RecoverySessionRequest, reason string) {
 	event := audit.Event{
 		Actor:      audit.Actor{Type: audit.ActorAnonymous},

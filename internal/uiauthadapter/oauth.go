@@ -14,7 +14,9 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
+	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
@@ -98,6 +100,8 @@ func publicOAuthError(err error) error {
 		return &login.UIPageAuthError{Code: code}
 	}
 	switch {
+	case errors.Is(err, oauthflow.ErrDeviceAuthorizationReauthRequired):
+		return &login.UIPageAuthError{Code: "ACCESS_DENIED"}
 	case errors.Is(err, oauthflow.ErrConsentNotFound):
 		return &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	case errors.Is(err, qrlogin.ErrRequestNotFound), errors.Is(err, qrlogin.ErrRequestExpired),
@@ -122,6 +126,22 @@ func (a *Adapter) sessionSecretOrError(request *http.Request) (string, error) {
 		return "", &login.UIPageAuthError{Code: "AUTH_FAILED"}
 	}
 	return secret, nil
+}
+
+// withSessionReauthSignals 把已验证会话的近期强认证事实交给敏感操作策略。
+// OAuth 同意/设备确认/扫码确认属于需要近期认证的操作；页面本身已完成用户确认
+// （点击批准），因此这里只转发服务端会话中的强认证时间与强度，不接受客户端自述。
+// 会话没有有效强认证时保持原上下文，由 oauthflow/qrlogin fail-closed 拒绝。
+func (a *Adapter) withSessionReauthSignals(ctx context.Context, secret string) context.Context {
+	if a.opts.Sessions == nil || strings.TrimSpace(secret) == "" {
+		return ctx
+	}
+	record, err := a.opts.Sessions.Validate(ctx, secret)
+	if err != nil || record.StrongAuthVerifiedAt.IsZero() {
+		return ctx
+	}
+	return reauth.WithSignals(ctx, reauth.Signals{VerifiedAt: record.StrongAuthVerifiedAt,
+		Strength: policy.StrengthStrong, Complete: true, Confirmed: true})
 }
 
 // BeginConsent 从授权请求参数创建真实确认请求并补充受控应用名/scope 说明。
@@ -211,7 +231,8 @@ func (a *Adapter) DecideConsent(ctx context.Context, request *http.Request,
 	if err != nil {
 		return login.UIPageConsentResult{}, err
 	}
-	result, decideErr := a.opts.OAuth.DecideAuthorization(ctx, secret,
+	result, decideErr := a.opts.OAuth.DecideAuthorization(
+		a.withSessionReauthSignals(ctx, secret), secret,
 		oauthflow.DecideRequest{RequestID: decision.RequestID, Approve: decision.Approve,
 			DecisionRequestID: requestIDFromRequest(request)})
 	if decideErr != nil {
@@ -265,7 +286,8 @@ func (a *Adapter) DeviceDecide(ctx context.Context, request *http.Request,
 	if err != nil {
 		return login.UIPageDeviceResult{}, err
 	}
-	result, decideErr := a.opts.OAuth.DecideDeviceAuthorization(ctx, secret,
+	result, decideErr := a.opts.OAuth.DecideDeviceAuthorization(
+		a.withSessionReauthSignals(ctx, secret), secret,
 		oauthflow.DeviceDecisionRequest{UserCode: decision.UserCode, Approve: decision.Approve,
 			RequestID: requestIDFromRequest(request)})
 	if decideErr != nil {
@@ -451,10 +473,11 @@ func (a *Adapter) DecideQR(ctx context.Context, request *http.Request,
 		AuditRequestID: requestIDFromRequest(request)}
 	var prompt qrlogin.Prompt
 	var decideErr error
+	decisionCtx := a.withSessionReauthSignals(ctx, secret)
 	if decision.Approve {
-		prompt, decideErr = a.opts.QR.Approve(ctx, decideRequest)
+		prompt, decideErr = a.opts.QR.Approve(decisionCtx, decideRequest)
 	} else {
-		prompt, decideErr = a.opts.QR.Deny(ctx, decideRequest)
+		prompt, decideErr = a.opts.QR.Deny(decisionCtx, decideRequest)
 	}
 	if decideErr != nil {
 		return login.UIPageQRPrompt{}, publicOAuthError(decideErr)

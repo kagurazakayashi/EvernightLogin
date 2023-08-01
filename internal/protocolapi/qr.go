@@ -388,10 +388,11 @@ func (s *Server) handleQRDecision(writer http.ResponseWriter, request *http.Requ
 		ExpectedVersion: body.ExpectedVersion, AuditRequestID: requestID}
 	var prompt qrlogin.Prompt
 	var decideErr error
+	decisionCtx := s.withSessionReauthSignals(request.Context(), secret)
 	if body.Approve {
-		prompt, decideErr = s.opts.QRLogin.Approve(request.Context(), decideRequest)
+		prompt, decideErr = s.opts.QRLogin.Approve(decisionCtx, decideRequest)
 	} else {
-		prompt, decideErr = s.opts.QRLogin.Deny(request.Context(), decideRequest)
+		prompt, decideErr = s.opts.QRLogin.Deny(decisionCtx, decideRequest)
 	}
 	if decideErr != nil {
 		s.writeQRProblem(writer, request, requestID, decideErr)

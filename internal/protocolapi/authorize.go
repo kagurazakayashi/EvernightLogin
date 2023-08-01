@@ -219,7 +219,8 @@ func (s *Server) handleAuthorizeDecision(writer http.ResponseWriter, request *ht
 		s.writeOAuthInvalidRequest(writer, request, requestID, "未知的授权决定")
 		return
 	}
-	result, decideErr := s.opts.OAuth.DecideAuthorization(request.Context(), sessionSecret,
+	result, decideErr := s.opts.OAuth.DecideAuthorization(
+		s.withSessionReauthSignals(request.Context(), sessionSecret), sessionSecret,
 		oauthflow.DecideRequest{RequestID: confirmationID, Approve: approve,
 			DecisionRequestID: requestID})
 	if decideErr != nil {

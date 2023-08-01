@@ -63,7 +63,9 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oidc"
+	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
 )
@@ -674,4 +676,20 @@ func encodeHex(buffer []byte) string {
 		output[index*2+1] = alphabet[value&0x0f]
 	}
 	return string(output)
+}
+
+// withSessionReauthSignals 把协议端点上已验证会话的近期强认证事实传给敏感操作
+// 策略。协议端点没有页面层的附加 reauth 交互；会话本身已完成强认证且仍在
+// 策略有效期内时，Bearer/会话 Cookie 的确认请求本身即用户确认。没有有效强认证
+// 时保持原上下文，由 oauthflow/qrlogin fail-closed 拒绝。
+func (s *Server) withSessionReauthSignals(ctx context.Context, secret string) context.Context {
+	if s == nil || s.opts.Sessions == nil || strings.TrimSpace(secret) == "" {
+		return ctx
+	}
+	record, err := s.opts.Sessions.Validate(ctx, secret)
+	if err != nil || record.StrongAuthVerifiedAt.IsZero() {
+		return ctx
+	}
+	return reauth.WithSignals(ctx, reauth.Signals{VerifiedAt: record.StrongAuthVerifiedAt,
+		Strength: policy.StrengthStrong, Complete: true, Confirmed: true})
 }

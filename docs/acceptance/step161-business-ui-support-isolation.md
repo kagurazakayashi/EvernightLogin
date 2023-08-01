@@ -48,3 +48,7 @@ go test -run 'TestUIPageSupport|TestUIPageAdmin|TestUIPageRBAC|TestUIPageApps' .
 ## 2026-11-22 00:19 强认证夹具补跑
 
 真实 root Passkey strong-setup + 第二因素取得管理会话后：`/admin/users`、`/admin/applications`、`/admin/roles`、`/admin/audit`、`/admin/reports` 及主要 `/admin/v1/*` 路由真实 **200**；未认证 admin 页面/API **401**，`/admin` 404。**完整角色×应用矩阵、客服页面/HTTP、撤权后旧页面/旧令牌仍 NOT_TESTED**，需多账户/多应用种子后补跑。证据：`docs/acceptance/evidence/strong-auth-fixture/`。
+
+## 2026-11-22 02:14 最终补跑（VERDICT：PARTIAL）
+
+详见 `docs/acceptance/evidence/step161/step161-final.md`：真实 root 强会话管理页/API、普通用户 403、A/B 应用创建、客服页面无秘密 PASS；客服员工强认证登录、app-scoped 权限隔离、管理员强制下线 NOT_TESTED/PARTIAL，161 保持 PARTIAL。

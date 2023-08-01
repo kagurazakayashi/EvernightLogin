@@ -39,4 +39,13 @@ func TestPublicFormPathsIncludeMFAAndPasswordReset(t *testing.T) {
 			t.Fatalf("认证公开表单 %s 用途不符", path)
 		}
 	}
+	oauth := login.UIPageOAuthPublicFormPaths("/base")
+	if len(oauth) == 0 {
+		t.Fatal("OAuth 公开表单映射为空")
+	}
+	for path, purpose := range oauth {
+		if paths[path] != purpose {
+			t.Fatalf("OAuth 公开表单 %s 用途不符: %q", path, paths[path])
+		}
+	}
 }

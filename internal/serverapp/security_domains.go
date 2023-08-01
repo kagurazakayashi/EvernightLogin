@@ -233,11 +233,14 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		Sessions: services.Sessions, Reauth: gate.Reauth,
 		Requirements: recoveryRequirements{},
 		AuthLevels:   recoveryAuthLevels{},
+		Binder:       &recoveryPasskeyBinder{passkeys: passkeyService, now: now},
 		Now:          now, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造恢复服务失败: %w", err)
 	}
+	// 恢复服务同时是 session 受限恢复会话的授权闸门；装配后立即接线。
+	services.Sessions.SetRecoveryGate(recoveryService)
 
 	resetURLBase := mailURLs.PasswordReset
 	if resetURLBase == "" {

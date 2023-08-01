@@ -435,9 +435,9 @@ func (a *Adapter) GetRecoveryCodes(ctx context.Context, userID string) (login.UI
 // GenerateRecoveryCodes 需 recovery.codes.rotate 再认证后生成新组。
 func (a *Adapter) GenerateRecoveryCodes(ctx context.Context, userID, currentPassword,
 	totpCode, requestID string) ([]string, error) {
-	challengeCtx, result, err := a.approve(ctx, userID, "recovery.codes.rotate", "user",
+	challengeCtx, result, err := a.approveWithMinimum(ctx, userID, "recovery.codes.rotate", "user",
 		userID, map[string]string{"action": "rotate"}, currentPassword, requestID,
-		"更新恢复代码", totpCode)
+		"更新恢复代码", policy.StrengthStrong, totpCode)
 	if err != nil {
 		return nil, err
 	}
@@ -659,13 +659,22 @@ func (a *Adapter) userID(ctx context.Context, secret string) (string, error) {
 func (a *Adapter) approve(ctx context.Context, userID, operationID, targetType, targetID string,
 	params map[string]string, currentPassword, requestID, description string,
 	totpCode ...string) (context.Context, reauth.Result, error) {
+	return a.approveWithMinimum(ctx, userID, operationID, targetType, targetID, params,
+		currentPassword, requestID, description, policy.StrengthNone, totpCode...)
+}
+
+// approveWithMinimum 与 approve 相同，但允许页面适配层要求不低于策略的认证强度。
+func (a *Adapter) approveWithMinimum(ctx context.Context, userID, operationID, targetType,
+	targetID string, params map[string]string, currentPassword, requestID, description string,
+	minimumStrength policy.Strength, totpCode ...string) (context.Context, reauth.Result, error) {
 	caller, err := reauth.UserCaller(userID)
 	if err != nil {
 		return ctx, reauth.Result{}, securityErr("ACCESS_DENIED")
 	}
 	challenge, err := a.opts.Reauth.BeginChallenge(ctx, caller, reauth.ChallengeRequest{
 		ScopeID: "system", OperationID: operationID, TargetType: targetType,
-		TargetID: targetID, Params: params, Description: description, RequestID: requestID})
+		TargetID: targetID, Params: params, Description: description, RequestID: requestID,
+		MinimumStrength: minimumStrength})
 	if err != nil {
 		return ctx, reauth.Result{}, mapReauthError(err)
 	}

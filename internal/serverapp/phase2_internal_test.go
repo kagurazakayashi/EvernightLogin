@@ -230,6 +230,41 @@ func TestComposeHandlerMounts(t *testing.T) {
 	}
 }
 
+// TestComposeHandlerPageFirstRoutes 验证 OAuth 页面与协议挂载共享路径时页面优先，
+// 其它路径仍保持挂载点优先（步骤160 真实 serve /oauth/device 404 回归）。
+func TestComposeHandlerPageFirstRoutes(t *testing.T) {
+	base := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/base/oauth/device" {
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write([]byte("page"))
+			return
+		}
+		writer.WriteHeader(http.StatusTeapot)
+	})
+	mount := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("mount"))
+	})
+	handler, err := ComposeHandler(base, "/base", []HandlerMount{
+		{Name: "oauth", Prefix: "/oauth", Handler: mount},
+	})
+	if err != nil {
+		t.Fatalf("构造挂载处理程序失败: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet,
+		"http://127.0.0.1/base/oauth/device", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "page" {
+		t.Fatalf("页面优先状态 = %d %q", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"http://127.0.0.1/base/oauth/token", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "mount" {
+		t.Fatalf("协议挂载状态 = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestComposeHandlerRejectsInvalidMounts 验证非法挂载配置 fail-closed。
 func TestComposeHandlerRejectsInvalidMounts(t *testing.T) {
 	base := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})

@@ -51,3 +51,21 @@ go test ./internal/reports ./internal/auditops ./internal/adminapi   PASS（47.7
 - 真实 root 强认证管理会话下 `/admin/v1/audit/events`、`/admin/v1/audit/retention`、`/admin/v1/reports`、`/admin/v1/backups` 均 **200**（路由可达性 PASS）。
 - 备份 CLI create/verify/info/list/tables/preview/export JSON+CSV、错误密钥/篡改/DB 未变 PASS。
 - `maintenance-enter`/`restore-preflight` 原 INTERNAL_ERROR 已定位为 **验收脚本缺少 `restore-init-state` 且 state-dir 位于数据库目录内**；修正脚本后 init-state/maintenance-enter/preflight 均 PASS。报告生成/下载、恢复 apply/回滚、恢复后凭据失效链仍 NOT_TESTED。证据：`docs/acceptance/evidence/strong-auth-fixture/`。
+
+## 2026-11-22 02:10 最终补跑（VERDICT：PASS_WITH_NOTES）
+
+详见 `docs/acceptance/evidence/step163/step163-final.md`：真实 root 强会话下审计/保留/报告/计划/备份路由 200；backup CLI create/verify/info/list/preview/export/extract PASS；maintenance init-state/enter/preflight PASS。报告五格式生成/下载、restore apply/回滚、恢复后凭据不复活仍 NOT_TESTED，不能勾选完整 163。
+
+## 5. 追加（真实维护恢复链，PASS_WITH_NOTES）
+
+脚本：`scripts/acceptance/step163_restore.py`；证据：`docs/acceptance/evidence/step163/step163-restore-result.json`、`step163-restore.log`。
+
+真实执行（临时 SQLite/回环，不碰真实库）：
+1. 真实 `login-server init` + `login-backup create`（B0）；真实 serve 用 root 密码登录创建真实会话（sessions=1），再备份 B1。
+2. `restore-init-state`（库外状态，HMAC）→ `maintenance-enter` → `restore-preflight`（10 项全 ok）→ `restore-apply --service-stopped --confirm RESTORE`：
+   - 成功，generation=1，`revoked.sessions=1`、`mfa_challenges=1`、`one_time_credentials=1`、`total_deleted=3`，`maintenance_exited=true`，审计合并 12 条；
+   - 恢复后活动会话=0，`audit_events=26` 可读，`report_history` 表可读（0 条）。
+3. 恢复后重启真实 serve：`/healthz` 200；使用恢复前旧 Cookie 访问 `/home` 返回 401（旧会话未复活）。
+4. 失败注入：再次维护 → 篡改备份 → preflight 失败（退出 1）；数据库 SHA-256 与失败前一致；随后 `maintenance-exit` 清理。
+
+结论：恢复 apply/失败回退/旧会话不复活/审计可读 **PASS**。报告受控生成/下载（HTML/PDF/CSV/JSON/Markdown）**NOT_TESTED**：当前无独立 ad-hoc 生成入口，页面生成需计划任务/强管理页面交互；`internal/reports` 五格式/计划/取消服务层测试 PASS，但本轮未生成真实报告产物，未虚报。

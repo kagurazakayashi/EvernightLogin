@@ -312,6 +312,9 @@ type ChallengeRequest struct {
 	Params      map[string]string
 	Description string
 	RequestID   string
+	// MinimumStrength 是可信页面适配层要求的更强认证下限；只能提高、不能降低
+	// 策略要求的强度。为空表示只按策略。
+	MinimumStrength policy.Strength
 }
 
 // Challenge 是操作绑定认证挑战。Required=false 表示当前策略不需要额外认证。
@@ -354,6 +357,9 @@ func (s *Service) BeginChallenge(ctx context.Context, caller Caller, request Cha
 	}
 	mappedEvaluate := s.mapEvaluateError(evaluateErr, decision)
 	requiredStrength := decision.RequiredStrength
+	if request.MinimumStrength.Known() && strengthRank(request.MinimumStrength) > strengthRank(requiredStrength) {
+		requiredStrength = request.MinimumStrength
+	}
 	if !decision.Sensitive || !decision.ReauthRequired {
 		// 未知操作/作用域、策略不可用等非“需要验证”类错误必须拒绝，不得 fail-open
 		// 返回 Required=false。
@@ -603,7 +609,7 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 		return ApprovalGrant{}, mapCriticalError(err)
 	}
 	return ApprovalGrant{Token: token, ExpiresAt: approval.ExpiresAt,
-		GrantedStrength: policy.StrengthPassword, OperationID: record.OperationID,
+		GrantedStrength: grantedStrength, OperationID: record.OperationID,
 		TargetType: record.TargetType, TargetID: record.TargetID}, nil
 }
 
@@ -1037,4 +1043,16 @@ func (l *failureLimiter) allow(key string, now time.Time) bool {
 		}
 	}
 	return true
+}
+
+// strengthRank 返回认证强度的单调排序，用于“只能提高”的下限比较。
+func strengthRank(strength policy.Strength) int {
+	switch strength {
+	case policy.StrengthStrong:
+		return 2
+	case policy.StrengthPassword:
+		return 1
+	default:
+		return 0
+	}
 }

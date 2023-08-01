@@ -234,6 +234,19 @@ type RegistrationFinishRequest struct {
 // 凭证绑定的是服务端挑战中的用户，客户端无法把认证器凭证登记到别的账户；凭证 ID
 // 全表唯一，重复或跨用户登记被拒绝。
 func (s *Service) FinishRegistration(ctx context.Context, caller Caller, request RegistrationFinishRequest) (CredentialMetadata, error) {
+	return s.finishRegistration(ctx, caller, request, false)
+}
+
+// FinishRegistrationTrusted 由受控恢复流程使用：恢复代码已验证并处于受限恢复会话，
+// 新强因素绑定由恢复服务授权；不跳过 WebAuthn 校验，只跳过额外的 passkey.register
+// 再次认证（恢复代码本身已是替代第二因素的强认证事实）。不得暴露给普通页面入口。
+func (s *Service) FinishRegistrationTrusted(ctx context.Context, caller Caller,
+	request RegistrationFinishRequest) (CredentialMetadata, error) {
+	return s.finishRegistration(ctx, caller, request, true)
+}
+
+func (s *Service) finishRegistration(ctx context.Context, caller Caller,
+	request RegistrationFinishRequest, trustedRecovery bool) (CredentialMetadata, error) {
 	ctx = normalizeContext(ctx)
 	if err := s.requireUserCaller(caller); err != nil {
 		return CredentialMetadata{}, err
@@ -306,13 +319,20 @@ func (s *Service) FinishRegistration(ctx context.Context, caller Caller, request
 		return CredentialMetadata{}, fmt.Errorf("%w: 认证器注册响应未通过校验", ErrCeremonyInvalid)
 	}
 	// 近期认证必须在真实写入前执行；策略不满足时 fail-closed，不创建凭证。
-	authorization, err := s.authorize(ctx, caller, operationRegister, request.RequestID,
-		map[string]string{"operation": "register", "usage": ceremony.Purpose.usage(), "name": name},
-		"注册 Passkey 凭证")
-	if err != nil {
-		s.recordFailure(ctx, caller.Actor(), "passkey.register_finish_denied", reauthReason(err),
-			string(CodeOf(err)), request.RequestID)
-		return CredentialMetadata{}, err
+	// 受控恢复流程已完成恢复代码验证（恢复代码替代第二因素的强认证事实），由恢复
+	// 服务决定是否允许绑定新强因素；这里只跳过重复的 passkey.register 敏感审批，
+	// WebAuthn 注册响应仍必须通过上面的真实校验。
+	var authorization reauth.Result
+	if !trustedRecovery {
+		var authErr error
+		authorization, authErr = s.authorize(ctx, caller, operationRegister, request.RequestID,
+			map[string]string{"operation": "register", "usage": ceremony.Purpose.usage(), "name": name},
+			"注册 Passkey 凭证")
+		if authErr != nil {
+			s.recordFailure(ctx, caller.Actor(), "passkey.register_finish_denied", reauthReason(authErr),
+				string(CodeOf(authErr)), request.RequestID)
+			return CredentialMetadata{}, authErr
+		}
 	}
 	recordID, idErr := s.newID("cred_")
 	if idErr != nil {

@@ -1297,3 +1297,19 @@ func sortRBACPresetRoles(entries []login.UIRBACPresetRoleDiff) {
 		}
 	}
 }
+
+// DeleteRole 删除非内置角色并记录审计；内置角色与仍有引用的角色由领域服务拒绝。
+func (a *RBACAdapter) DeleteRole(ctx context.Context, adminUserID, roleID,
+	requestID string) error {
+	if err := a.check(ctx, adminUserID, rbacActionRolesManage); err != nil {
+		return err
+	}
+	caller, err := role.UserCaller(adminUserID)
+	if err != nil {
+		return rbacErr("ACCESS_DENIED")
+	}
+	if err := a.opts.Roles.DeleteRole(ctx, caller, strings.TrimSpace(roleID)); err != nil {
+		return mapRBACError(err)
+	}
+	return nil
+}
