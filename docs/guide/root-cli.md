@@ -150,7 +150,7 @@ loginctl restore-init-state ...
   领域未装配时如实返回连接失败/404/503 等稳定错误，不本地伪造成功、不直连数据库。
 - 逐条用法以 `loginctl help`、`loginctl <命令组> --help` 为准；CLI 的退出码与 JSON 外壳见
   本文第 1、2 节，CLI 一致性的真实验收记录见
-  `docs/acceptance/步骤93：页面、自助管理、审计报告与 CLI 一致性验收记录（2026-11-20）.md`。
+  `docs/acceptance/requirements-matrix-login.md` 与 `docs/acceptance/step156-authorization-write-e2e.md`。
 
 ## 9. 安全边界
 

@@ -94,7 +94,7 @@
     "teststep91_pass": 6,
     "teststep91_fail": 0,
     "evidence": "docs/acceptance/evidence/step158/",
-    "acceptance_record": "docs/acceptance/步骤158：Windows 与 SQLite 初始化、账户与权限端到端验收记录（2026-11-21）.md",
+    "acceptance_record": "docs/acceptance/步骤158：Windows 与 SQLite 初始化、账户与权限端到端验收记录.md",
     "notes": "HTTP management strong-auth/browser/Passkey and CLI online audit remain NOT_TESTED/PARTIAL; not a clean committed baseline."
   }
 }

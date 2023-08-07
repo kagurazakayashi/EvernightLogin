@@ -42,7 +42,7 @@ dependencies and NOT_TESTED risks.
 
 ## 2026-11-21 实际执行状态
 
-步骤 158 已在 Windows+SQLite 执行：e2e 48 PASS/0 FAIL/5 NOT_TESTED，TestStep91 6/6 PASS，CLI 临时库读取/建组与迁移状态证据已产出；HTTP 管理强认证/浏览器/Passkey/在线审计仍为 PARTIAL/NOT_TESTED。详见 `docs/acceptance/步骤158：Windows 与 SQLite 初始化、账户与权限端到端验收记录（2026-11-21）.md`。
+步骤 158 已在 Windows+SQLite 执行：e2e 48 PASS/0 FAIL/5 NOT_TESTED，TestStep91 6/6 PASS，CLI 临时库读取/建组与迁移状态证据已产出；HTTP 管理强认证/浏览器/Passkey/在线审计仍为 PARTIAL/NOT_TESTED。详见 `docs/acceptance/步骤158：Windows 与 SQLite 初始化、账户与权限端到端验收记录.md`。
 
 ## 步骤 159 执行状态
 

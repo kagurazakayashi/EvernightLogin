@@ -6,7 +6,7 @@
 部分实现/未完成验收的能力（设备码、扫码登录、令牌状态查询/introspection，142–145）与未真机互操作项在文末如实
 列出，不把规划写成可用。
 
-> 运行环境：Windows 11 / amd64 / Go 1.27.4（本项目唯一运行实测平台）。
+> 运行环境：Windows 11 / amd64 / Go 1.27.x（本项目唯一运行实测平台）。更完整的部署、Web 管理台、CLI/API 接入与安全运维说明见根目录 [README.md](../../README.md)。
 > 全部命令默认**在仓库根目录**执行，示例使用 cmd 语法；PowerShell 请把
 > `set X=Y` 写成 `$env:X="Y"`、把 `%TEMP%\x` 写成 `$env:TEMP\x`。
 > 临时文件只放在仓库外的临时目录，不接触仓库内 `database/login.db`。

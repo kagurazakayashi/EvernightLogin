@@ -39,7 +39,7 @@
 | [../acceptance/README.md](../acceptance/README.md) | 验收记录索引，含 OWASP ASVS 4.0.3 第一版适用性内部自评与未覆盖项（**非认证、不宣称合规**） |
 | [../acceptance/requirements-matrix-login.md](../acceptance/requirements-matrix-login.md) | 步骤 157 需求矩阵起草：24 章需求→代码→生产入口→证据与当前缺口（**142–156 在途，非最终通过**） |
 | [../database/存储模型与迁移设计.md](../database/存储模型与迁移设计.md) | 数据库表、迁移与版本口径 |
-| [../../README.md](../../README.md) | 按开发阶段记录的功能与技术细节（偏开发日志） |
+| [../../README.md](../../README.md) | 面向部署者/管理员的新手部署、Web 管理台、CLI/API 接入与安全运维总览（入门优先；本指南为深入细节） |
 
 ## 1.1 示例索引
 

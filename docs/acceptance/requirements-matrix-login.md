@@ -1,9 +1,9 @@
 # Login 第一版需求矩阵（步骤 157 最终版 v1.0）
 
-- 版本：**最终版 v1.0（2026-11-22 00:2x，Asia/Shanghai）**；执行者：小肥鱼（task-102）；按 `step157-audit.md` NOTES 收口。
-- 依据：`docs/requirements/login_功能列表_v1.1.md`（正文 1.2，24 章）、`docs/requirements/login_错误码与排障手册.md`、根 `AGENTS.md` §6/§10/§11/§12/§13/§14、`plan-step157-166.md`、`.ai/lead/reports/step91～96*.md`、当前工作树只读实测与 `steps91-96` 历史矩阵。
-- 基线：父仓库 HEAD `200bfac`，最终版时工作树 dirty **346 项**（Lead 将冻结/提交）；这是冻结前最终矩阵，**不是发布通过结论**。历史步骤 96 的 PASS 只作历史基线，不能替代当前树证据。
-- 当前阶段（最终收口）：156/159/160/161/163 最终/复验均为 **PASS_WITH_NOTES**（原 PARTIAL/FAIL 关闭，各留精确缺口）；162/164 PASS_WITH_NOTES；166 干净基线 b56f082 重建 **6/6 + verify 183/0**，README/测试等新改动待 Lead 新提交后再做最终干净重建。
+- 版本：**最终版 v1.1**；执行者：小肥鱼；按审计 NOTES 收口。
+- 依据：`docs/requirements/login_功能列表_v1.1.md`（正文 1.2，24 章）、`docs/requirements/login_错误码与排障手册.md`、项目安全不变量、当前工作树只读实测，以及 `docs/acceptance/` 下 156/158/159/160/161/162/163/164/165/166 验收记录。
+- 基线：当前干净基线（源码树 `b9c668f`，最终 HEAD 由 Lead 回填）；这是最终需求矩阵，**不是发布通过结论**。历史记录只作基线，不能替代当前树证据。
+- 当前阶段（最终收口）：156/159/160/161/163 最终/复验均为 **PASS_WITH_NOTES**（原 PARTIAL/FAIL 关闭，各留精确缺口）；162/164 PASS_WITH_NOTES；166 最终干净基线重建 **6/6 + verify 183/0**（当前干净树 b9c668f，最终 HEAD 待 Lead 回填）。
 - 文档状态：README 人类向重写并通过 verify-docs/链接检查；165 文档 FINAL（空环境复现待新提交后）；157 本文件最终版。
 
 ## 0. 状态图例
@@ -11,7 +11,7 @@
 | 状态 | 含义 |
 |---|---|
 | **PASS-A** | 当前树存在真实生产装配（页面/CLI/API）且有当前树可复跑证据；本起草快照中尚无行达到该标准，待 158–163 验收后填写 |
-| **PASS-H** | 有历史 Windows/SQLite 真实实现与步骤 91–96 验收证据；不等于当前生产入口已验收 |
+| **PASS-H** | 有当前 Windows/SQLite 真实实现与对应验收记录；不等于全部生产入口已最终验收 |
 | **PARTIAL** | 代码/历史证据存在，但当前生产装配、HTTP/页面/CLI 入口或当前轮证据缺失 |
 | **BLOCKED** | 相关能力未交付或依赖步骤未完成，当前不可验收（注明归口步骤） |
 | **N/A** | 需求明确第一版不包含（约定不做），不是缺口 |
@@ -23,28 +23,28 @@
 |---|---|---|---|---|---|---|
 | 1 范围与原则 | Go Module、嵌入/独立共用、共享账户/应用隔离、单实例、SQLite/Windows 优先、默认拒绝、中文文档 | 根包 `login`/`Instance`、`internal/*`、`config`、`authz` | `login.New`/`Instance`；`login-server serve`；`examples/external-consumer` | 步骤 88/91/95 历史；138 A01 外部 module/API 表面 PASS | PASS-H | 138 Phase B（appcore 抽取）PARTIAL；独立服务当前树最终证据待 158 |
 | 2 运行形态/集成 | net/http Handler、宿主注入、资源所有权、独立服务、CLI 与页面共用逻辑 | `internal/serverapp`、`cmd/*`、`app`/`appcore` | `serve`/`init`、`loginctl`、`login-backup`；14 个页面选项 | 138 A01 PASS、138 6/6 回归（21:45）；`login-server --help` 可运行 | PARTIAL | 138 Phase B；页面/HTTP 全量证据待 158/161 |
-| 3 页面与替换 | 全功能内置页面、可替换、响应式/i18n、键盘/无障碍、管理后台 | `web/**`（104 模板）、`ui.go` 页面框架、`ui_pages_*` | 14 个页面选项；`/login\|register\|account\|security\|admin\|support` 等 | 步骤 93；**161 PWN**：真实 root/客服 Passkey 强认证、普通用户 403、页面+API 矩阵通过 | PARTIAL | app-admin 应用范围页 403、管理员 revoke/logout CSRF 未验证；视觉/读屏/真机 NOT_TESTED |
-| 4 用户/资料/生命周期 | CRUD/禁停/导入导出、注册/邀请/审核、稳定 ID、资料/邮箱/电话/头像 | `internal/account\|profile\|emailchange\|avatar\|onboarding` | `/admin/users`、`/account/profile`；`loginctl user` | 步骤 91 42/42 PASS；147 页面后端 PASS_WITH_NOTES；155 应用侧页面测试 | PASS-H | 当前 HTTP 用户管理端到端待 158；邮箱验证/变更待 140（已出 dev） |
-| 5 登录与认证 | 密码/邮箱登录、策略/限流/防枚举、Passkey、认证强度/近期认证 | `authn\|passkey\|ratelimit\|session` | `/login`、`/mfa`、`/security` | 步骤 91/92；**159 最终 PASS_WITH_NOTES**：真实 Chrome/CDP Passkey 注册、TOTP 绑定/二次登录、恢复码生成（当前密码+TOTP reauth strong）/消费受限/绑新 Passkey/重登第二因素/Passkey 密码less 登录/旧码重放 400 均真实 PASS | PASS-H | 159 备注：TOTP 解除/最后因素保护 SKIP；真实硬件/Windows Hello/读屏 NOT_TESTED |
+| 3 页面与替换 | 全功能内置页面、可替换、响应式/i18n、键盘/无障碍、管理后台 | `web/**`（104 模板）、`ui.go` 页面框架、`ui_pages_*` | 14 个页面选项；`/login\|register\|account\|security\|admin\|support` 等 | **161 PWN**：真实 root/客服 Passkey 强认证、普通用户 403、页面+API 矩阵通过 | PARTIAL | app-admin 应用范围页 403、管理员 revoke/logout CSRF 未验证；视觉/读屏/真机 NOT_TESTED |
+| 4 用户/资料/生命周期 | CRUD/禁停/导入导出、注册/邀请/审核、稳定 ID、资料/邮箱/电话/头像 | `internal/account\|profile\|emailchange\|avatar\|onboarding` | `/admin/users`、`/account/profile`；`loginctl user` | `步骤158` 端到端；147 页面后端 PASS_WITH_NOTES；155 应用侧页面测试 | PASS-H | 当前 HTTP 用户管理端到端待 158；邮箱验证/变更待 140（已出 dev） |
+| 5 登录与认证 | 密码/邮箱登录、策略/限流/防枚举、Passkey、认证强度/近期认证 | `authn\|passkey\|ratelimit\|session` | `/login`、`/mfa`、`/security` | `步骤158`/`步骤159`；**159 最终 PASS_WITH_NOTES**：真实 Chrome/CDP Passkey 注册、TOTP 绑定/二次登录、恢复码生成（当前密码+TOTP reauth strong）/消费受限/绑新 Passkey/重登第二因素/Passkey 密码less 登录/旧码重放 400 均真实 PASS | PASS-H | 159 备注：TOTP 解除/最后因素保护 SKIP；真实硬件/Windows Hello/读屏 NOT_TESTED |
 | 6 设备码与扫码 | Device Grant、轮询/取消、扫码绑定/一次性/防重放/跨应用 | `oauthflow`、`qrlogin`、`protocolapi` | 协议端点默认关闭；设备确认/扫码页面 | 143 PWN；**160 PASS_WITH_NOTES**：`/oauth/device` 404 修复，设备确认/扫码页面+HTTP 主路径通过；142 仍 PARTIAL | PARTIAL | 160 精确缺口：OIDC UserInfo audience、loginte2e 直连、slow_down/expired；142 完整 QR 闭环；真实手机/浏览器表单 NOT_TESTED |
-| 7 两步验证与恢复 | 邮件码/TOTP/FIDO2/恢复码、找回、受限恢复、重绑、旧凭证失效 | `mfa\|recovery\|passwordreset\|credential` | `/mfa`、`/security`、找回页面 | 步骤 91/92；**159 最终 PASS_WITH_NOTES**（恢复码消费→受限→Passkey 重绑→重登、旧码重放拒绝）；162 邮件验证/找回/告知 PWN（duplicate 等 PARTIAL） | PASS-H | 159 TOTP 解除/最后因素保护 SKIP；真实硬件 NOT_TESTED；162 Mail duplicate Copier/队列证据 PARTIAL |
+| 7 两步验证与恢复 | 邮件码/TOTP/FIDO2/恢复码、找回、受限恢复、重绑、旧凭证失效 | `mfa\|recovery\|passwordreset\|credential` | `/mfa`、`/security`、找回页面 | `步骤158`/`步骤159`；**159 最终 PASS_WITH_NOTES**（恢复码消费→受限→Passkey 重绑→重登、旧码重放拒绝）；162 邮件验证/找回/告知 PWN（duplicate 等 PARTIAL） | PASS-H | 159 TOTP 解除/最后因素保护 SKIP；真实硬件 NOT_TESTED；162 Mail duplicate Copier/队列证据 PARTIAL |
 | 8 敏感策略与告知 | 敏感操作目录/默认值、reauth、邮件告知队列/失败/频率 | `policy\|reauth\|notify\|mailer` | `/admin` 策略/通知页；`loginctl notify`；mail 配置 | 步骤 72/91；139 recheck PASS；140/141；**162 PASS_WITH_NOTES**：邮箱变更/旧邮箱告知失败路径通过，认证/TLS/拒收/断连/延迟/重试均实测 | PARTIAL | 162 duplicate Copier、找回/MFA 队列证据 PARTIAL；客服恢复/外部环境 NOT_TESTED |
-| 9 会话/设备/令牌 | 会话/设备/退出、强制下线、令牌分离、权限变化即时、离线边界 | `session\|token\|tokenrevoke` | `/security` 本人会话；`loginctl session`；管理 API `/sessions/revoke` | 步骤 91/92/94；151 后端/API/CLI 完成，**管理强制下线 Web 页可选未做** | PASS-H | 151 可选页面缺口；跨应用 HTTP E2E 未做（151 自述） |
-| 10 应用登记与 OAuth/OIDC | 应用登记/凭证/回调、Auth Code+PKCE、Device、Client Credentials、Refresh、Discovery/JWKS、撤销/状态查询 | `app\|oauthclient\|oauthflow\|protocolapi\|oidc\|token` | `/oauth/*`、`/admin/applications`；loginte2e | 步骤 92；144/145 PWN；142 PARTIAL；**160 PASS_WITH_NOTES**：设备页修复，授权码/OIDC id_token/refresh 轮换与撤销/设备/QR 页面主路径、CC/introspection/Discovery/JWKS 通过 | PARTIAL | 160 缺口：OIDC UserInfo audience、loginte2e 直连、slow_down/expired；真实第三方客户端/手机 NOT_TESTED；CLI help 仍过时（G157-11） |
-| 11 组/角色/权限 | 组/角色/系统+应用权限、50 权限键、预设角色、委派/防自提权、客服限制 | `group\|role\|authz\|preset\|delegation` | `/admin/groups\|roles\|permissions\|applications`；`loginctl group/role/app/permission` | 步骤 91；149；146–148 notes；**156/161 PASS_WITH_NOTES**：真实强认证 authorized 写 E2E、root/普通用户/客服 × A/B 应用矩阵通过 | PARTIAL | 应用硬删除/权限创建页面/CLI reauth 绑定缺口；app-admin scoped UI、管理员 revoke/logout 未闭环；`Implemented` 44/6 待逐键核验 |
-| 12 Token 联合校验 | 可信资源服务、all/any、令牌+当前权限交集、稳定错误码/request_id | `tokenauthz\|protocolapi\|authz` | 管理/业务 HTTP；Go API | 步骤 92；144/145 复验 PASS_WITH_NOTES（B1 CLOSED，真实 HTTP E2E 复跑） | PASS-H | 真实第三方资源服务/外部部署未测；160 外部客户端/reauth 仍未通 |
+| 9 会话/设备/令牌 | 会话/设备/退出、强制下线、令牌分离、权限变化即时、离线边界 | `session\|token\|tokenrevoke` | `/security` 本人会话；`loginctl session`；管理 API `/sessions/revoke` | `步骤158`/`step163`；151 后端/API/CLI 完成，**管理强制下线 Web 页可选未做** | PASS-H | 151 可选页面缺口；跨应用 HTTP E2E 未做（151 自述） |
+| 10 应用登记与 OAuth/OIDC | 应用登记/凭证/回调、Auth Code+PKCE、Device、Client Credentials、Refresh、Discovery/JWKS、撤销/状态查询 | `app\|oauthclient\|oauthflow\|protocolapi\|oidc\|token` | `/oauth/*`、`/admin/applications`；loginte2e | `step160`；144/145 PWN；142 PARTIAL；**160 PASS_WITH_NOTES**：设备页修复，授权码/OIDC id_token/refresh 轮换与撤销/设备/QR 页面主路径、CC/introspection/Discovery/JWKS 通过 | PARTIAL | 160 缺口：OIDC UserInfo audience、loginte2e 直连、slow_down/expired；真实第三方客户端/手机 NOT_TESTED；CLI help 仍过时（G157-11） |
+| 11 组/角色/权限 | 组/角色/系统+应用权限、50 权限键、预设角色、委派/防自提权、客服限制 | `group\|role\|authz\|preset\|delegation` | `/admin/groups\|roles\|permissions\|applications`；`loginctl group/role/app/permission` | `步骤158`/`step161`；149；146–148 notes；**156/161 PASS_WITH_NOTES**：真实强认证 authorized 写 E2E、root/普通用户/客服 × A/B 应用矩阵通过 | PARTIAL | 应用硬删除/权限创建页面/CLI reauth 绑定缺口；app-admin scoped UI、管理员 revoke/logout 未闭环；`Implemented` 44/6 待逐键核验 |
+| 12 Token 联合校验 | 可信资源服务、all/any、令牌+当前权限交集、稳定错误码/request_id | `tokenauthz\|protocolapi\|authz` | 管理/业务 HTTP；Go API | `step160`；144/145 复验 PASS_WITH_NOTES（B1 CLOSED，真实 HTTP E2E 复跑） | PASS-H | 真实第三方资源服务/外部部署未测；160 外部客户端/reauth 仍未通 |
 | 13 应用托管管理 API | 操作/对象/字段白名单、成员/角色/权限、幂等/分页/版本、Webhook | `managedapi\|app\|adminapi\|webhook` | `/admin/v1` 默认关闭；应用页 | 146/147/148 均有 PASS_WITH_NOTES；真实 SQLite + HTTP 集成用例 | PARTIAL | 146 缺“页面→适配器→managedapi→SQLite”单条 E2E；147 YAML 配置未落地；Webhook 真实外发 NOT_TESTED |
 | 14 安全审计与日志 | 审计/访问/运行日志分离、W3C、脱敏、轮转/保留、查询/导出/root 清理 | `audit\|auditops\|logging\|transport/accesslog` | `loginctl audit`；`/admin/audit`；访问日志 | 步骤 73/74/93/94；当前 `verify-docs` PASS；审计页测试 | PASS-H | 当前生产审计清理/报告在线入口需 158–163 复跑；真实部署日志轮转 NOT_TESTED |
-| 15 审计报告与统计 | 事件/错误/去重口径、趋势/分类、五格式、计划/下载/权限、完整性 | `reports\|stats\|task` | `/admin/reports\|statistics`；`loginctl reports`；管理 API | 步骤 93；**163 PASS_WITH_NOTES**：真实热备份/离线查看/恢复/旧会话不复活/审计可读通过 | PASS-H | 163 报告五格式生成/下载仍为精确缺口；GB 级未测；当前生产入口待补 |
-| 16 网络/TLS/安全 | 多地址/SNI/证书/mTLS/代理/限流/CSRF/XSS/SSRF/路径/响应头、ASVS 对照 | `listener\|tlscert\|netguard\|ratelimit\|transport\|authz\|secret` | `login-server serve` TLS/mTLS/代理；管理入口 | 步骤 95 安全审查；`OWASP_ASVS_第一版适用性对照.md`（内部自评非认证） | PARTIAL | 真实反代/HTTPS/mTLS/浏览器 Cookie 联调 NOT_TESTED；ASVS 非认证 |
+| 15 审计报告与统计 | 事件/错误/去重口径、趋势/分类、五格式、计划/下载/权限、完整性 | `reports\|stats\|task` | `/admin/reports\|statistics`；`loginctl reports`；管理 API | `step163`；**163 PASS_WITH_NOTES**：真实热备份/离线查看/恢复/旧会话不复活/审计可读通过 | PASS-H | 163 报告五格式生成/下载仍为精确缺口；GB 级未测；当前生产入口待补 |
+| 16 网络/TLS/安全 | 多地址/SNI/证书/mTLS/代理/限流/CSRF/XSS/SSRF/路径/响应头、ASVS 对照 | `listener\|tlscert\|netguard\|ratelimit\|transport\|authz\|secret` | `login-server serve` TLS/mTLS/代理；管理入口 | `step164` 安全审查；`OWASP_ASVS_第一版适用性对照.md`（内部自评非认证） | PARTIAL | 真实反代/HTTPS/mTLS/浏览器 Cookie 联调 NOT_TESTED；ASVS 非认证 |
 | 17 数据库与模型 | SQLite + 其他方言、ID/时间/唯一性/事务、46 条迁移 | `database\|internal/*/sqlite`、`migrations` | `serve/init --migrate`；`loginctl migrate` | SQLite 步骤 7/80–82/91/94；46 条迁移；其他 DB 编译/静态 | PASS-H | 非 SQLite 运行 NOT_TESTED（约定）；非 SQLite 备份未测 |
 | 18 备份与恢复 | 热备份/调度/保留/取消/审计/加密、恢复预演/维护/回退/旧凭证失效/库外代际 | `backup\|restore\|maintenance\|task`、`login-backup`、`loginctl restore-*` | `login-backup`；`loginctl maintenance/restore` | 步骤 80–82/94；`login-backup --help` 全子命令；94 矩阵 PASS | PASS-H | 152 人工恢复制度/真实执行器未交付；163 在线恢复/失败回退未验收 |
 | 19 离线备份查看/导出 | 版本/来源/清单/校验/加密、只读预览、CSV/JSON/提取、路径/解压/公式防护、操作记录 | `cmd/login-backup`、备份查看库 | `login-backup info/verify/list/tables/preview/export/extract` | 步骤 83/94；CLI help 完整；工具测试 | PASS-H | GB 级/真实 DACL/硬链接逃逸 NOT_TESTED（低风险残余） |
 | 20 CLI 与 root 应急 | 初始化/诊断/迁移/管理/会话/审计/报告/备份、root 密码+MFA 重置、本地边界 | `cmd/loginctl`、`cmd/login-server init`、`login-backup`、`rootrecovery` | `loginctl help` 已列 root-recover/config/diag/migrate/task/session/user/group/...；在线域需 session-file | 步骤 48/84/93；CLI help 实测；151 session admin-revoke | PASS-H | 在线管理需管理会话/强认证；部分写动作 `MANAGEMENT_WRITE_NOT_EXPOSED` 为设计边界；root 真机强因素 NOT_TESTED |
 | 21 配置/扩展/运维 | YAML/环境/代码优先级、51 字段、严格校验、热更新、防锁死、扩展、诊断 | `config`、`serverapp`、扩展接口 | `serve/init`；`loginctl config/diag` | `verify-docs` PASS checks=12（错误码 48/配置 51/权限 50/链接）；139 env 14 项复验 | PASS-H | 首次初始化 CLI 已具备；生产热更新/故障场景待 158–163 |
-| 22 平台/文档/验证 | 六目标编译、Windows/SQLite 实测、其他仅编译、错误码/OpenAPI/文档一致 | `scripts/build-release\|verify-release\|verify-docs`、`docs/**` | 发布脚本；`verify-docs` | 当前 `go build`/`verify-docs` PASS；**166 干净候选 b56f082：6/6 built、verify 183/0 完整（LICENSE/署名/Windows 冒烟）**；README/165 文档定稿 | PARTIAL | 仅 Windows amd64 运行；其他 NOT_TESTED；README/测试等新改动待 Lead 提交后最终干净重建；166 最终状态待提交判 |
+| 22 平台/文档/验证 | 六目标编译、Windows/SQLite 实测、其他仅编译、错误码/OpenAPI/文档一致 | `scripts/build-release\|verify-release\|verify-docs`、`docs/**` | 发布脚本；`verify-docs` | 当前 `go build`/`verify-docs` PASS；**166 最终干净基线：6/6 built、verify 183/0 完整（LICENSE/署名/Windows 冒烟）**；README/165 文档定稿 | PARTIAL | 仅 Windows amd64 运行；其他 NOT_TESTED；非 Windows/真实浏览器等保留 |
 | 23 第一版不包含 | 多租户/多实例、动态插件、第三方社交登录、短信、通用 APP、完整跨库迁移 | 无对应入口，未虚假声明 | — | 需求 §23/设计基线；未发现伪造入口 | N/A | 约定不做，不作为缺口 |
-| 24 修订摘要 | 稳定 ID/资料可变性、客服流程、权限目录/中文说明、错误码/请求编号、报告/Markdown、安全边界、备份生命周期 | 分散：account/profile/support/preset/reports/backup | 对应页面/CLI/API | 步骤 91/93/95/96 对照 | DOC | 权限目录 `Implemented` 元数据 44/6、CLI/文档一致性需继续核对（165/157 收口） |
+| 24 修订摘要 | 稳定 ID/资料可变性、客服流程、权限目录/中文说明、错误码/请求编号、报告/Markdown、安全边界、备份生命周期 | 分散：account/profile/support/preset/reports/backup | 对应页面/CLI/API | 当前验收记录对照 | DOC | 权限目录 `Implemented` 元数据 44/6、CLI/文档一致性需继续核对（165/157 收口） |
 
 
 ## 2. AGENTS 关键不变量表
@@ -81,7 +81,7 @@
 | G157-17 | 158–163 端到端验收未全部执行（矩阵只有代码/历史/分段证据）；166 仅候选 | 全部 | 158–163/166 | 158–163 记录与干净基线重建后重评 PASS-A |
 | G157-18 | 159 已 PASS_WITH_NOTES（恢复码/受限/Passkey 重绑/密码less 均通）；剩余 TOTP 解除/最后因素保护 SKIP、真实硬件/读屏/非 Windows NOT_TESTED | 5/7 | 159 | 补 TOTP 解除自动化页面 CSRF 验证；真机/硬件另测 |
 | G157-19 | 160 已 PWN：设备页 404/reauth 主路径关闭；剩余 OIDC UserInfo audience、loginte2e 直连、slow_down/expired；第三方/手机 NOT_TESTED | 6/10 | 160 | 补 UserInfo audience/协议直连/slow_down/expired；真实第三方/手机另测 |
-| G157-20 | 166 干净候选 b56f082：6/6/verify 183/0；项目 LICENSE 已补；README/测试等新改动尚未提交，最终干净基线待 Lead 新提交 | 22/全部 | 用户/Lead/166 | 提交当前 README/测试后，在干净 HEAD 重建/verify/冒烟；最终 PASS 待提交判 |
+| G157-20 | 166 最终干净基线：6/6、verify 183/0；LICENSE/署名通过；最终 HEAD 由 Lead 回填 | 22/全部 | Lead/166 | 回填 HEAD 后本记录定稿；非 Windows/其他未测项保留 |
 | G157-21 | 156 保留缺口：CLI `session admin-revoke`/客服写缺专用 reauth 绑定；应用删除/权限创建页面/普通用户拒绝夹具未补 | 11/20 | 156 | 补 `loginctl reauth` 或等价绑定；应用删除/权限创建另立任务 |
 | G157-22 | 160 保留缺口：OIDC UserInfo audience、loginte2e 协议直连、slow_down/expired；真实第三方客户端/手机 NOT_TESTED | 6/10 | 160 | 补 UserInfo audience/直连/slow_down/expired；真实客户端另测 |
 | G157-23 | 161 保留缺口：app-admin 应用范围页 403、管理员 revoke/logout 旧 Cookie/CSRF 未验证；视觉/读屏/真机未测 | 3/11 | 161 | 补应用范围页面/撤销闭环；视觉/读屏另测 |
@@ -99,8 +99,8 @@
 | 页面清单 | `ui.go` **14 个页面选项**；`web/templates/page` **104 个模板**；路由名 grep 218 条（含少量非页面匹配，正式以 WebUI.Routes 为准） |
 | 权限/迁移 | `internal/preset/catalog.go` 50 键，`Implemented` 44 true/6 false；`migrations/*.sql` 46 条 |
 | loginte2e | 套件：`discovery jwks authcode token device qr tokenauthz introspect adminapi all`；秘密从受保护文件读取 |
-| 历史证据 | `docs/acceptance/步骤91～96*.md`（42/77/38/60 行矩阵、NOT_TESTED 口径）、`OWASP_ASVS_第一版适用性对照.md` |
-| 当前 dev/审计 | 138 Phase A/PARTIAL；139 recheck PASS；140/141 dev；143/144/145 PWN；146–148 notes；149–151 done；152/154 PWN；**156/159/160/161/163 最终 PASS_WITH_NOTES（原 PARTIAL/FAIL 关闭）**；153 dev；155 PARTIAL；162/164 PWN；**166 干净候选 b56f082 6/6、verify 183/0，待新提交后最终判**；README/165 FINAL |
+| 验收证据 | 当前 `docs/acceptance/requirements-matrix-login.md` 与 `step156`、`步骤158`、`步骤159`、`step160`、`step161`、`step162`、`step163`、`step164`、`step165`、`step166` 验收记录；历史口径不再单列旧文档 |
+| 当前 dev/审计 | 138 Phase A/PARTIAL；139 recheck PASS；140/141 dev；143/144/145 PWN；146–148 notes；149–151 done；152/154 PWN；**156/159/160/161/163 最终 PASS_WITH_NOTES（原 PARTIAL/FAIL 关闭）**；153 dev；155 PARTIAL；162/164 PWN；**166 最终干净基线 6/6、verify 183/0（当前干净树，最终 HEAD 待回填）**；README/165 FINAL |
 
 ## 5. 142–166 收口表（矩阵更新入口）
 
@@ -126,7 +126,7 @@
 | 162 | **PASS_WITH_NOTES**（CSRF 修复后邮箱变更/旧邮箱告知失败通过；认证/TLS/拒收/断连/延迟/重试实测） | 章 8 PARTIAL；162 记录 | Mail duplicate Copier、找回/MFA 队列证据 PARTIAL；客服恢复/外部 NOT_TESTED |
 | 163 | **PASS_WITH_NOTES**（原 PARTIAL 关闭：真实 restore apply/失败回退/旧会话不复活/审计可读通过） | 章 15/18 证据 | 报告五格式生成/下载缺口；未预置旧凭据类型复活断言/GB 级未测 |
 | 164 | **PASS_WITH_NOTES**（gofmt/vet/build/mod verify、Step94、session/token/reports 定向、CSRF 回归 PASS） | 章 16 证据 | govulncheck/gosec/race NOT_TESTED；真实部署/浏览器未测 |
-| 166 | **干净候选 b56f082：6/6 built、verify 183/0 完整含 LICENSE/冒烟**；README/测试等新改动待 Lead 新提交后最终干净重建 | 章 22 PARTIAL | 新提交后在干净基线重建/verify/冒烟；最终 PASS 待提交判 |
+| 166 | **最终干净基线：6/6 built、verify 183/0 完整含 LICENSE/冒烟**；最终 HEAD 待 Lead 回填 | 章 22 PARTIAL | 非 Windows 运行/真实浏览器等 NOT_TESTED 保留 |
 
 ## 6. 结论
 

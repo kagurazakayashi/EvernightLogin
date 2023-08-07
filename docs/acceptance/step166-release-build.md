@@ -1,50 +1,49 @@
-# 步骤 166 验收：构建/发布准备（脏树候选）
+# 最终发布验收记录（步骤 166）
 
-- 执行者：大肥鱼助手，2026-11-21 23:34–2026-11-22 00:12（Asia/Shanghai）。环境：Windows 11、Go 1.27.1、`CGO_ENABLED=0`、`GOMAXPROCS=2`（构建脚本内部）、`-trimpath`、版本注入。
-- **基线声明：dirty 候选**。`build-matrix.txt` 明确记录 `commit=200bfac worktree_dirty=yes`；本候选不是干净提交基线，干净基线待用户/Lead 提交后按同一脚本重建。未做 Git 写操作、未改 Mail 子模块。
-- 结论：**PASS（dirty 候选）**。六目标全部构建成功，`verify-release.ps1` 修复后真实运行 **full 183 checks / 0 failures** 与 **-SkipBinaryRun 171 checks / 0 failures**；LICENSE（Mulan PSL v2+署名）已随新候选打包并通过校验。
-- 候选目录：`P:/go/tmp/login-release/20261121-235557/`；证据复制在 `docs/acceptance/evidence/step166-*`。
+- 执行者：小肥鱼；环境：Windows 11 amd64、Go 1.27.1、`CGO_ENABLED=0`、`GOMAXPROCS=2`。
+- 基线：**干净基线**，源码树 **`b9c668f…`**（最终提交使用该树；发布产物由该树构建并 verify 183/0）；未含 dirty 工作树候选。
+- 结论：**发布构建与包校验 PASS**：六目标全部构建成功，`verify-release.ps1` 完整运行 **183 checks / 0 failures**；LICENSE/署名/包内容/Windows 冒烟通过。此结论不表示全部产品需求已验收，未测项见第 5 节。
 
-## 1. 构建矩阵
+## 1. 六目标构建
 
-目标：windows/amd64、windows/arm64、linux/amd64、linux/arm64、darwin/amd64、darwin/arm64；全部 `code=built`。每个 zip 内含 `bin/login-server|loginctl|login-backup`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、`README.txt`、`LICENSE`、`docs/licenses/THIRD_PARTY_NOTICES.md`、部署文档与示例配置。
+- 目标：`windows/amd64`、`windows/arm64`、`linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64`，全部 `code=built`，无失败/空占位。
+- 构建记录（`build-matrix.txt`）：`version=0.1.0-dev`、`worktree_dirty=no`、Go 1.27.1、CGO=0、GOMAXPROCS=2。
+- 每个发布包含：`bin/login-server`、`bin/loginctl`、`bin/login-backup`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、`README.txt`、`LICENSE`、`config/`、`deploy/`、`docs/deployment/`、`docs/licenses/`。
 
-- 版本注入：`login-server 0.1.0-dev (commit 200bfac, built 2026-11-21T15:55:59Z, go1.27.1)`（Windows 冒烟实测）。
-- 顶层 `SHA256SUMS.txt` 六条；`build-matrix.txt` 记录版本/commit/dirty/go/CGO/GOMAXPROCS。
-- 证据：`step166-build-matrix.txt`、`step166-SHA256SUMS.txt`、`step166-build-console.log`。
+## 2. 发布包校验
 
-## 2. verify-release.ps1 修复（审计复跑 FAIL → PASS）
+`verify-release.ps1` 完整执行（含 Windows amd64 冒烟）：
 
-审计发现独立复跑 `-SkipBinaryRun` FAIL（Expand-Archive 路径错误），且本机 PowerShell 5.1 进程环境存在大小写重复代理变量导致 `Start-Process` 环境字典异常。修复（仅 scripts/，不改产品代码）：
-1. 脚本边界清理重复 `http_proxy/HTTP_PROXY` 等大小写代理变量，避免 5.1 `Start-Process` 抛 "Item has already been added"；
-2. 用 `System.IO.Compression.ZipFile::ExtractToDirectory`（2 参数重载，PS5.1 兼容）替代 `Expand-Archive`，显式创建/清理目标目录，兼容空格/中文路径与长临时路径（短 `lv-XXXXXXXX` 临时根）；
-3. 移除重复 `$loginBackup` 赋值；保持所有既有检查（内容、排除策略、内层清单、私钥扫描、版本/帮助冒烟、示例配置校验）。
+- **Checks run: 183 / failures: 0 / VERIFY: PASS**。
+- 覆盖：6 包 SHA-256、包内容/禁止路径、内层清单、私钥块扫描、逐包 LICENSE 与 MulanPSL2/无年份署名检查、Windows amd64 三二进制 version/help/无参数退出码、示例配置真实加载与秘密扫描。
+- Windows 冒烟：`login-server`/`loginctl`/`login-backup` 版本与帮助正常；`login-server` 无参数返回 1 并给出诚实提示；示例配置加载通过。
+- 包内容复核（windows/amd64）：**118 文件**；根 `LICENSE` 首部为 `EvernightLogin`、`Copyright (c) KagurazakaYashi(KagurazakaMiyabi)`（不附年份）；无 AI 文件、数据库、私钥块。
 
-真实运行：
-- full：**Checks run: 183, failures: 0 → VERIFY: PASS**（含 Windows amd64 冒烟与示例配置真实 loader 校验）；
-- `-SkipBinaryRun`：**Checks run: 171, failures: 0 → VERIFY: PASS**。
-- 旧候选（LICENSE 加入前构建）在修复脚本下仅剩 12 个 LICENSE 检查失败，证明审计的 Expand-Archive 问题已消除；新候选（LICENSE 已存在）全部通过。
-- 证据：`step166-verify-full.log`、`step166-verify-skip-binrun.log`。
+## 3. 产物与 SHA256SUMS
 
-## 3. Windows 冒烟（解压真实 windows/amd64 包）
+产物目录：`P:/go/tmp/release-166-final-clean/`（仓库外）；顶层 `SHA256SUMS.txt` 六行：
 
-| 命令 | 结果 |
+| 目标 | SHA-256 |
 |---|---|
-| `login-server --version` | exit 0；输出含 `0.1.0-dev`/commit |
-| `login-server --help` | exit 0 |
-| `login-server init --help` | exit 0 |
-| `login-server serve --help` | exit 0 |
-| `loginctl --version` / `help` | exit 0 |
-| `login-backup version` / `help` | exit 0 |
-| `login-server serve --check` | exit 1：`unknown flag: --check`（当前 serve 未实现 --check；非发布阻断，记录为已知 CLI 能力缺口） |
-| LICENSE | 含 Mulan PSL v2、`Copyright (c) KagurazakaYashi(KagurazakaMiyabi)`、无年份；`docs/licenses/THIRD_PARTY_NOTICES.md`+deps 存在 |
+| windows/amd64 | `f7a42565a5d79489f7124d1c24941685cfdd79d627cdad514379cf07a59e181f` |
+| windows/arm64 | `96aea0b7faf3718f4a09225125e2e8bb2e7effa375d49387ae343b73858c4a63` |
+| linux/amd64 | `66f88ccb6fbfa827acd3b3c270ff651291aa16eb36aa4f47922d4458c686904d` |
+| linux/arm64 | `f25f2293d47011178fdc61ec948e4878409e1c2136515d1210c364b77659ae77` |
+| darwin/amd64 | `3d298ac953360fcf7729366baf6790ef5dac946b09e6ebf6c2200095db209969` |
+| darwin/arm64 | `a98d441f9d8305294ddbfd3506141961cfa6cd582f8fda22bbe01b873c54f83e` |
 
-证据：`step166-windows-smoke.log`。
+校验方法：在产物目录执行 `verify-release.ps1 -ReleaseDir P:/go/tmp/release-166-final-clean -ExpectedVersion 0.1.0-dev`；或逐文件核对 `SHA256SUMS.txt`。
 
-## 4. 未测/限制
+## 4. 许可与包内容
 
-1. **dirty 候选**：非干净提交基线；干净基线需用户提交后重建并重跑 verify。
-2. 仅 Windows amd64 做运行冒烟；linux/darwin 四目标仅交叉编译产物与包内容校验，未在对应 OS 运行（约定允许的静态/编译检查）。
-3. `serve --check` 未实现（unknown flag），未用其他命令冒充；建议后续步骤补齐 `--check` 或在发布说明中明确。
-4. 未做安装包/服务托管实机、未做真实反代/HTTPS 部署；未做第三方杀毒/签名验证。
-5. 116/156 的 authorized E2E 仍 PARTIAL，不在本步宣称为 PASS。
+- 项目许可证：MulanPSL2（木兰宽松许可证第 2 版）标准正文；项目署名 `Copyright (c) KagurazakaYashi(KagurazakaMiyabi)`，不附年份。
+- 6 个包均含根 `LICENSE`，逐包通过 MulanPSL2 与署名检查；第三方组件/字体许可在 `docs/licenses/THIRD_PARTY_NOTICES.md` 与 `docs/licenses/deps/`，保留原版权/年份。
+- 发布包不包含 `.ai/`、开发交接、测试数据库、运行日志、测试密钥或私钥。
+
+## 5. 未测/未覆盖
+
+1. 仅 Windows amd64 做运行冒烟；linux/darwin/Windows arm64 目标只做交叉编译与包内容校验，未在对应 OS 运行（项目约定）。
+2. 真实浏览器/读屏/硬件认证器、真实第三方 OAuth/OIDC 客户端、手机扫码未做完整互操作验收。
+3. 159 的 TOTP 解除/最后因素保护 SKIP；160 的 OIDC UserInfo audience、loginte2e 直接连接、slow_down/expired；161 的 app-admin 应用范围页/管理员 revoke/logout；163 的报告五格式生成/下载等精确缺口保留。
+4. `govulncheck`/`gosec`/`-race`、真实外部 SMTP/反向代理/mTLS、GB 级数据库/ENOSPC/跨机恢复未执行或未测。
+5. 本记录只证明**构建/发布包/许可/Windows 冒烟**通过，不签发“全部需求 PASS”；完整需求状态见 `requirements-matrix-login.md`。
