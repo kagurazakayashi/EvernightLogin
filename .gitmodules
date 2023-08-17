@@ -2,3 +2,7 @@
 	path = EvernightMail
 	url = git@github.com:kagurazakayashi/EvernightMail.git
 	branch = main
+[submodule "go-build-all"]
+	path = go-build-all
+	url = git@github.com:MasaeProject/go-build-all.git
+	branch = main
