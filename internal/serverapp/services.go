@@ -4,14 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/appcore"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
-	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	authnsqlite "github.com/kagurazakayashi/EvernightLogin/internal/authn/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/bootstrap"
@@ -53,35 +51,17 @@ type Deps struct {
 //
 // writeGuard 非 nil 时接入维护门闸：维护状态激活后所有经存储的写事务被拒绝
 // （错误原样返回）。数据库目录不存在时按 0700 创建；已有目录权限不被放宽。
+// 实现见 internal/appcore.OpenStore（与公开嵌入入口共用）。
 func OpenStore(ctx context.Context, cfg login.Config,
 	writeGuard func(context.Context) (func(), error)) (*storagesqlite.Store, error) {
-	options := storagesqlite.DefaultOptions(cfg.Database.Path)
-	options.WAL = cfg.Database.WAL
-	options.BusyTimeout = time.Duration(cfg.Database.BusyTimeoutMS) * time.Millisecond
-	options.WriteGuard = writeGuard
-	if err := ensureParentDir(cfg.Database.Path); err != nil {
-		return nil, err
-	}
-	store, err := storagesqlite.Open(ctx, options)
-	if err != nil {
-		return nil, fmt.Errorf("打开数据库失败: %w", err)
-	}
-	return store, nil
+	return appcore.OpenStore(ctx, cfg, writeGuard)
 }
 
 // NewAuditRecorder 构造安全审计写入器。审计不可用时装配失败（fail-closed），
-// 不存在"先跑起来、审计稍后补"的降级路径。
+// 不存在"先跑起来、审计稍后补"的降级路径。实现见 internal/appcore.NewAuditRecorder。
 func NewAuditRecorder(ctx context.Context, store *storagesqlite.Store,
 	logger *slog.Logger, now func() time.Time) (*audit.Recorder, error) {
-	auditStore, err := auditsqlite.New(store)
-	if err != nil {
-		return nil, fmt.Errorf("构造审计存储失败: %w", err)
-	}
-	recorder, err := audit.New(auditStore, audit.Options{Now: now, Logger: logger})
-	if err != nil {
-		return nil, fmt.Errorf("构造安全审计失败: %w", err)
-	}
-	return recorder, nil
+	return appcore.NewAuditRecorder(ctx, store, logger, now)
 }
 
 // Services 是内置页面当前可用的真实领域服务集合。
@@ -243,6 +223,10 @@ func BuildServicesWithHooks(deps Deps, hooks SecurityHooks) (*Services, error) {
 		RegistrationStore: registrationStore,
 		Onboarding:        onboardingService,
 		Delegation:        delegationService,
+		// 延迟授权器必须随服务集合一起交给装配层，否则管理强制下线会永久停留在
+		// fail-closed（未注入）状态；真实 AuthzAuthorizer 由共享装配在权限引擎
+		// 构造完成后原子注入。
+		SessionAuthorizer: sessionAuthorizer,
 	}, nil
 }
 
@@ -316,12 +300,4 @@ func newAuthnService(deps Deps, bootstrapStore *bootstrapsqlite.Store,
 // AccountLocalCaller 构造账户域的本地初始化操作者（用于 authn.SetRootPassword）。
 func AccountLocalCaller(operatorID string) (account.Caller, error) {
 	return account.LocalBootstrapCaller(operatorID)
-}
-
-// ensureParentDir 确保给定文件路径的父目录存在（0700，不修改已有目录权限）。
-func ensureParentDir(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("创建数据目录失败: %w", err)
-	}
-	return nil
 }

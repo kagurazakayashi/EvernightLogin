@@ -13,10 +13,8 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/logging"
-	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/maintenance"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
-	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
@@ -231,9 +229,13 @@ func maintenanceHandler(cfg login.Config) http.Handler {
 // 同一数据库本轮只允许一个 login-server 进程；第二个进程或同进程第二次 serve
 // 立即失败，不会出现两个进程各自调度任务/写审计的拆分状态。
 //
-// 关闭顺序：Instance（逆序停止后台任务与监听）-> SQLite 存储 -> 维护状态锁 ->
-// 访问日志文件 -> 单实例锁。任何一步关闭失败都会聚合返回，但仍继续释放后续
-// 资源，避免遗留端口、文件句柄或数据库连接。
+// 共用装配：数据库/迁移/审计/领域服务/敏感闸门/后台任务/管理域由 OpenBase 统一
+// 构造（与公开 app 入口同一实现）；本函数只追加独立服务特有的单实例锁、库外维护
+// 状态、访问日志、页面/协议挂载、HTTP 监听与优雅关闭。
+//
+// 关闭顺序：Instance（逆序停止后台任务与监听）-> 基础运行时（后台任务幂等停止、
+// SQLite 存储）-> 维护状态锁 -> 访问日志文件 -> 单实例锁。任何一步关闭失败都会
+// 聚合返回，但仍继续释放后续资源，避免遗留端口、文件句柄或数据库连接。
 func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	now := options.Now
 	if now == nil {
@@ -327,6 +329,10 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		}
 	}()
 	maintenanceMode := maintenanceController.Mode() == maintenance.ModeMaintenance
+	// 迁移会写数据库，维护状态下必须先退出维护再迁移，避免绕过维护/恢复门禁。
+	if maintenanceMode && options.Migrate {
+		return fmt.Errorf("维护状态下禁止执行数据库迁移：请先按运维流程退出维护并重启")
+	}
 
 	accessWriter, accessFile, err := accessLogTarget(options)
 	if err != nil {
@@ -340,63 +346,28 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		}()
 	}
 
-	store, err := OpenStore(ctx, cfg, maintenanceController.Gate().Guard)
+	sensitiveRelay := &sensitiveRelay{}
+	strongPresenceRelay := &strongFactorRelay{}
+	base, err := OpenBase(ctx, BaseOptions{
+		Config: cfg, Keyring: keyring, Migrate: options.Migrate,
+		WriteGuard: maintenanceController.Gate().Guard,
+		Logger:     logger, Now: now,
+		SecurityHooks: SecurityHooks{
+			Sensitive: sensitiveRelay, StrongPresence: strongPresenceRelay},
+		AllowLegacyWithoutSensitive: options.AllowLegacyWithoutSensitive,
+		MaintenanceOnly:             maintenanceMode,
+	})
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if closeErr := store.Close(); closeErr != nil {
-			exitErr = errors.Join(exitErr, fmt.Errorf("关闭数据库失败: %w", closeErr))
+		if closeErr := base.Close(context.Background()); closeErr != nil {
+			exitErr = errors.Join(exitErr, fmt.Errorf("关闭基础运行时失败: %w", closeErr))
 		}
 	}()
-
-	if options.Migrate {
-		if maintenanceMode {
-			return fmt.Errorf("维护状态下禁止执行数据库迁移：请先按运维流程退出维护并重启")
-		}
-		applied, migrateErr := ApplyMigrations(ctx, store)
-		if migrateErr != nil {
-			return migrateErr
-		}
-		logger.Info("数据库迁移已应用", "applied_count", applied)
-	} else {
-		pending, checkErr := CheckMigrated(ctx, store)
-		if checkErr != nil {
-			return checkErr
-		}
-		if len(pending) > 0 {
-			return fmt.Errorf("数据库尚未完成迁移（%d 个版本待应用，首个 %s）；"+
-				"请显式使用 --migrate=apply 执行迁移后再启动", len(pending), pending[0])
-		}
-	}
-
-	auditRecorder, err := NewAuditRecorder(ctx, store, logger, now)
-	if err != nil {
-		return err
-	}
-
-	mailRuntime, mailErr := BuildMailRuntime(cfg)
-	if mailErr != nil {
-		return fmt.Errorf("邮件运行时启动失败: %w", mailErr)
-	}
-	if cfg.Mail.Enabled {
-		if _, urlErr := buildMailURLs(cfg); urlErr != nil {
-			return urlErr
-		}
-	}
-	var taskRuntime *TaskRuntime
-	deps := Deps{Config: cfg, Store: store, Keyring: keyring, Mail: mailRuntime,
-		MailDeliveryProvider: func() *mailer.DeliveryService {
-			if taskRuntime == nil {
-				return nil
-			}
-			return taskRuntime.Mail()
-		},
-		Audit: auditRecorder, Logger: logger, Now: now,
-		AllowLegacyWithoutSensitive: options.AllowLegacyWithoutSensitive}
-	if mailRuntime.Enabled {
-		logger.Info("生产邮件发送已启用", "tls_mode", mailRuntime.TLSMode,
-			"from_domain", mailDomain(mailRuntime.From.Spec),
+	if base.Mail.Enabled {
+		logger.Info("生产邮件发送已启用", "tls_mode", base.Mail.TLSMode,
+			"from_domain", mailDomain(base.Mail.From.Spec),
 			"delivery_max_attempts", cfg.Mail.Delivery.MaxAttempts,
 			"delivery_timeout_seconds", cfg.Mail.Delivery.TimeoutSeconds)
 	} else {
@@ -415,14 +386,7 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		logger.Warn("实例处于维护状态：只提供健康检查与维护提示，不装配业务页面与后台任务")
 		handler = maintenanceHandler(cfg)
 	} else {
-		sensitiveRelay := &sensitiveRelay{}
-		strongPresenceRelay := &strongFactorRelay{}
-		services, buildErr := BuildServicesWithHooks(deps, SecurityHooks{
-			Sensitive: sensitiveRelay, StrongPresence: strongPresenceRelay})
-		if buildErr != nil {
-			return buildErr
-		}
-		uninitialized, initErr := IsUninitialized(ctx, services)
+		uninitialized, initErr := IsUninitialized(ctx, base.Services)
 		if initErr != nil {
 			return fmt.Errorf("读取首次初始化状态失败: %w", initErr)
 		}
@@ -434,64 +398,37 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 			logger.Warn("数据库尚未完成首次初始化：已按 --allow-uninitialized 显式放行，" +
 				"仅用于开发/测试，不要暴露到非回环网络")
 		}
-		// 敏感操作闸门：真实 policy + reauth（强认证可用性由 Passkey 配置决定，
-		// 未启用时声明为不可满足而不是降级为密码）。
-		gate, gateErr := BuildSecurityGate(deps, services.BootstrapStore,
-			services.Authn, cfg.Passkey.Enabled)
-		if gateErr != nil {
-			return gateErr
-		}
-		sensitiveRelay.Set(gate.Reauth)
-		// 两阶段任务运行时：先构造入队 relay 供域服务使用，注册完域处理器后再
-		// 创建执行器/调度器，避免循环依赖与重复调度器。
-		taskRuntime, err = NewTaskRuntime(deps, gate)
-		if err != nil {
-			return err
-		}
-		managed, managedErr := BuildManagedServices(deps, services, taskRuntime, gate)
-		if managedErr != nil {
-			return managedErr
-		}
-		// 步骤 151：会话服务先于 authz 构造，这里把真实 AuthzAuthorizer 原子注入
-		// 延迟授权器；注入前管理强制下线 fail-closed。
-		if services.SessionAuthorizer != nil {
-			sessionScopeAuthorizer, authzErr := session.NewAuthzAuthorizer(managed.Checker)
-			if authzErr != nil {
-				return fmt.Errorf("装配管理强制下线授权器失败: %w", authzErr)
-			}
-			services.SessionAuthorizer.Set(sessionScopeAuthorizer)
-		}
-		securityDomains, securityErr := BuildSecurityDomains(deps, services, managed, gate)
+		// 敏感操作闸门在 OpenBase 中已构造；这里把真实再次认证服务注入延迟 relay，
+		// 供认证/会话服务在请求期使用（装配期不需要、也不会触发敏感操作）。
+		sensitiveRelay.Set(base.Gate.Reauth)
+		securityDomains, securityErr := BuildSecurityDomains(base.Deps, base.Services,
+			base.Managed, base.Gate)
 		if securityErr != nil {
 			return securityErr
 		}
 		strongPresenceRelay.Set(securityDomains.StrongFactors)
-		managed.Support = securityDomains.Support
-		protocolDomains, protocolErr := BuildProtocolDomains(deps, services, managed, gate)
+		base.Managed.Support = securityDomains.Support
+		protocolDomains, protocolErr := BuildProtocolDomains(base.Deps, base.Services,
+			base.Managed, base.Gate)
 		if protocolErr != nil {
 			return protocolErr
 		}
-		pages, pageErr := BuildPages(deps, services, managed, securityDomains, gate,
-			protocolDomains)
+		pages, pageErr := BuildPages(base.Deps, base.Services, base.Managed,
+			securityDomains, base.Gate, protocolDomains)
 		if pageErr != nil {
 			return pageErr
 		}
-		if completeErr := taskRuntime.Complete(managed.TaskHandlers()); completeErr != nil {
-			return completeErr
-		}
-		// 报告计划服务在构造时无法拿到调度器（调度器需要报告任务处理器），
-		// 因此在执行器/调度器创建完成后绑定延迟 relay。
-		managed.AttachScheduler(taskRuntime.Scheduler())
 		mounts := append([]HandlerMount(nil), options.ExtraMounts...)
 		if protocolDomains != nil {
 			mounts = append(mounts, protocolDomains.protocolMounts()...)
 			logger.Info("已启用 OAuth/OIDC 协议端点",
-				"issuer", protocolIssuer(deps),
+				"issuer", protocolIssuer(base.Deps),
 				"paths", protocolDomains.Protocol.Paths())
 		}
 		if options.EnableAdminAPI {
 			adminHandler, adminPrefix, adminErr := BuildAdminAPIServer(
-				deps, services, managed, taskRuntime, pages, options.AdminAPIPrefix, gate)
+				base.Deps, base.Services, base.Managed, base.Tasks, pages,
+				options.AdminAPIPrefix, base.Gate)
 			if adminErr != nil {
 				return adminErr
 			}
@@ -505,7 +442,7 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		}
 		if options.EnableManagedAPI {
 			managedHandler, managedPrefix, managedErr := BuildManagedAPIHTTPHandler(
-				deps, services, managed, options.ManagedAPIPrefix)
+				base.Deps, base.Services, base.Managed, options.ManagedAPIPrefix)
 			if managedErr != nil {
 				return managedErr
 			}
@@ -522,7 +459,7 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 				return fmt.Errorf("启用应用客服 API 必须同时启用 OAuth 协议端点")
 			}
 			supportHandler, supportPrefix, supportErr := BuildAppSupportHandler(
-				deps, managed, protocolDomains, options.AppSupportAudience,
+				base.Deps, base.Managed, protocolDomains, options.AppSupportAudience,
 				options.AppSupportPrefix)
 			if supportErr != nil {
 				return supportErr
@@ -535,7 +472,7 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+supportPrefix,
 				"auth", "oauth-user-delegated-access-token")
 		}
-		httpOptions, httpErr := BuildHTTPOptions(deps, pages, logger, accessWriter)
+		httpOptions, httpErr := BuildHTTPOptions(base.Deps, pages, logger, accessWriter)
 		if httpErr != nil {
 			return httpErr
 		}
@@ -560,13 +497,13 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		return fmt.Errorf("构造监听服务失败: %w", err)
 	}
 	components := []login.BackgroundComponent{server}
-	if taskRuntime != nil {
-		components = append(components, taskRuntime)
+	if base.Tasks != nil {
+		components = append(components, base.Tasks)
 	}
 	instance, err = login.New(login.Options{
 		Config:     &cfg,
 		Logger:     logger,
-		Database:   databasePingAdapter{store: store},
+		Database:   databasePingAdapter{store: base.Store},
 		Components: components,
 	})
 	if err != nil {
@@ -582,15 +519,15 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	}
 	fmt.Fprintf(stdout, "监听地址: %v（前缀 %q，TLS=%v，维护模式=%v，任务调度=%v，额外挂载=%v）\n",
 		printed, cfg.Server.PathPrefix, server.TLSEnabled(), maintenanceMode,
-		taskRuntime != nil, mountPaths)
+		base.Tasks != nil, mountPaths)
 	logger.Info("独立服务已启动",
 		"addresses", printed, "path_prefix", cfg.Server.PathPrefix,
 		"maintenance", maintenanceMode, "tls", server.TLSEnabled(),
-		"task_runtime", taskRuntime != nil, "extra_mounts", mountPaths)
+		"task_runtime", base.Tasks != nil, "extra_mounts", mountPaths)
 	if options.OnStarted != nil {
 		options.OnStarted(StartResult{Addresses: printed,
 			TLS: server.TLSEnabled(), Maintenance: maintenanceMode,
-			Tasks: taskRuntime != nil, Mounts: mountPaths})
+			Tasks: base.Tasks != nil, Mounts: mountPaths})
 	}
 
 	<-ctx.Done()

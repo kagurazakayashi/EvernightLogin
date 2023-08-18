@@ -50,12 +50,13 @@ func LoadKeyring(ctx context.Context, cfg login.Config, masterKeyFile string,
 		}
 		return ring, "", nil
 	}
+	if strings.TrimSpace(masterKeyFile) == "" {
+		return nil, "", fmt.Errorf("缺少主密钥环：请在配置中设置 secrets.master_key，" +
+			"或用 --master-key-file 指定受保护密钥文件")
+	}
 	absolutePath, err := filepath.Abs(strings.TrimSpace(masterKeyFile))
 	if err != nil {
 		return nil, "", fmt.Errorf("主密钥文件路径无效: %w", err)
-	}
-	if strings.TrimSpace(masterKeyFile) == "" {
-		return nil, "", fmt.Errorf("缺少主密钥环：需要 MasterKeyFile 或 secrets.master_key")
 	}
 	provider, err := secrets.NewFileProvider(absolutePath)
 	if err != nil {

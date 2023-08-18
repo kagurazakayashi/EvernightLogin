@@ -160,6 +160,49 @@ func hostHome(http.ResponseWriter, *http.Request) {}
 - 页面替换：自定义 `login.WebUIOptions.HostTemplates`/`HostRenderer`；整体关闭
   内置页面用 `DisableBuiltinPages`，但服务端认证/权限/CSRF 不会因此放宽。
 
+### 3.1 嵌入式运行时装配（`app` 包，步骤 180 起）
+
+根包 `login.Instance` 负责生命周期与 HTTP/扩展契约；需要直接使用真实账户/认证/
+授权/后台任务装配时，宿主使用公开包 `github.com/kagurazakayashi/EvernightLogin/app`。
+它与独立服务 `login-server` 共用同一套基础装配（`internal/appcore` 基础设施 +
+`internal/serverapp.OpenBase`），不复制第二套业务逻辑：
+
+```go
+runtime, err := app.Open(ctx, app.Options{
+    Config: &config,                          // 或 ConfigPath: "login.yaml"
+    MasterKeyFile: "/data/login-master.key",  // 或配置 secrets.master_key
+    Migrate: true,
+    OperatorID: "my-service",                 // 本地受信操作者标识（审计）
+    Database: hostDB,                         // 宿主拥有的就绪检查依赖（可选）
+    Notifier: hostNotifier,                   // 宿主拥有的生命周期通知器（可选）
+})
+if err != nil { /* 失败已回滚已打开资源 */ }
+defer runtime.Close(context.Background())
+
+// 未 Start 前不运行任何后台任务：可以先用门面完成 root 初始化/建用户/登录判断。
+_ = runtime.Bootstrap().EnsureRoot(ctx, app.RootRequest{...})
+
+if err := runtime.Start(ctx); err != nil { /* 取消/失败 fail-closed */ }
+if err := runtime.Ready(ctx); err != nil { /* 未启动或宿主数据库不可用 */ }
+```
+
+生命周期与资源所有权：
+
+- `Open`：只加载配置/密钥环、打开 SQLite、执行迁移策略、构造审计、领域服务、
+  敏感操作闸门、后台任务运行时与管理域服务，并创建 `login.Instance`
+  （`StateNew`）；**不监听端口、不启动任务/调度器、不注册信号**。
+- `Start`：显式启动允许的后台任务（任务执行器 + 定时计划调度器）；重复调用返回
+  `login.ErrAlreadyStarted`，启动前取消/启动失败时实例进入 `StateClosed` 并回滚
+  已启动任务（之后只能 `Close`）。宿主不调用 `Start` 就不会有任何后台任务运行。
+- `State`/`Ready`：状态为 `new`/`running`/`closed`；`Ready` 要求已启动，并在
+  宿主注入 `Options.Database` 时执行 `Ping`。
+- `Close`：幂等；只关闭运行时自己打开的实例后台任务、任务运行时与数据库。宿主
+  注入的 `Logger`、`Database`、`Notifier` 不被关闭；宿主自己的 HTTP 服务不受影响。
+- `Migrate=false` 时未迁移库返回 `CONFIG_INVALID`（fail-closed）；
+  `CreateMasterKey=false` 时缺失主密钥失败；不会自动生成隐式默认密钥。
+- 安全域（MFA/Passkey/受限恢复）、受信管理门面与 HTTP/页面挂载在后续步骤
+  （181-183）于同一共享装配上补齐；当前不提供伪造 root、跳过认证或关闭鉴权的入口。
+
 ## 4. 生命周期、取消与资源所有权
 
 - 状态机：`StateNew → StateRunning → StateClosed`。`Start` 只能成功一次；失败或
@@ -256,16 +299,39 @@ go list -f '{{join .Imports "\n"}}' .   # 直接导入仅 stdlib + github.com/ka
 
 ## 7. 已知限制
 
-- 完整业务服务装配（账户/认证/授权/会话/审计/报告/备份等）仍主要在 `internal/`
-  内，对外公开的仓储与服务包装尚未提供；外部宿主当前可完成配置、生命周期、
-  HTTP/页面挂载、身份/错误/授权判定契约与扩展注册，但不能仅靠公开包装配完整
-  身份服务。`cmd/login-server` 仍为 CLI 入口，服务装配在后续步骤。
+- 公开 `app` 包已提供与独立服务共用的运行时基础装配（配置、SQLite、迁移策略、
+  主密钥环、审计、领域服务、敏感闸门、后台任务注册/显式启停、管理域服务）。安全域
+  （MFA/Passkey/受限恢复，181）、受信管理写入门面（182）与 HTTP/页面挂载（183）
+  仍在后续步骤补齐；在这些步骤完成前，宿主不能仅靠公开包获得完整身份服务。
 - 认证/MFA 扩展只落实注册与 fail-closed 生命周期契约，未提供生产认证适配器。
 - 没有集群/多实例共享状态实现；同一进程多实例隔离已测，跨进程协调未实现。
 - 真实浏览器页面交互、真实数据库驱动（外部宿主自带的 SQL 驱动）与通知外发
   未在本步验证；通知/邮件真实外发一律需宿主显式配置目标。
 
 ## 8. 变更记录
+
+### 步骤 180（2026-11，未发布 v1 前）
+
+把所有运行方式共用的基础装配抽取到内部共享层，并给公开 `app` 包补上显式生命周期
+（全部为兼容扩展；未调用新方法时行为与之前一致，`Open` 仍不启动后台任务）：
+
+- 新增 `internal/appcore` 配置共享实现：`LoadConfigFile`、`PrepareConfig`（严格
+  YAML 加载、SQLite 驱动约束、数据库路径绝对化、覆盖后整体校验）；密钥/存储/迁移/
+  审计实现同时被 `internal/serverapp` 与 `app.Open` 复用，不再维护两套规则。
+- 新增 `internal/serverapp.OpenBase`：两种运行方式共用的基础运行时（密钥环 ->
+  数据库 -> 迁移策略 -> 审计 -> 邮件运行时 -> 领域服务 -> 敏感闸门 -> 任务运行时 ->
+  管理域服务 -> 任务处理器注册/调度器绑定），构造失败按相反顺序回滚已打开资源；
+  `RunServe` 改为在其上追加独立服务特有的单实例锁、库外维护状态、HTTP/页面与关闭。
+- 公开 `app` 新增：`Runtime.Start`、`Runtime.State`、`Runtime.Ready`；`Runtime.Close`
+  幂等并明确不关闭宿主资源；`Options` 新增 `Database`（`login.Database`）与
+  `Notifier`（`login.Notifier`）两个宿主拥有资源的可选字段。
+- 修复：会话服务的延迟范围授权器此前未随服务集合返回，导致管理强制下线在生产装配
+  中永久 fail-closed；现在由共享装配在权限引擎构造完成后原子注入（未注入前仍
+  fail-closed）。
+- `examples/embedded-runtime` 更新为外部 module 真实验收：构造（new）→ 初始化/
+  建用户/登录/权限/撤销 → 显式 `Start` → 重复 `Start` 拒绝 → `Ready` → 幂等
+  `Close` → 宿主数据库/通知器不被关闭 → 启动前取消 fail-closed → 迁移未完成
+  fail-closed 且不遗留句柄。
 
 ### 步骤 88（2026-11，未发布 v1 前）
 

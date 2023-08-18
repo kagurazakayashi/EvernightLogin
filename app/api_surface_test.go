@@ -26,6 +26,15 @@ func TestPublicAPISurfaceHasNoInternalTypes(t *testing.T) {
 			checkType(t, "Runtime."+method.Name+" 返回值", method.Type.Out(result))
 		}
 	}
+	// Options 的导出字段同样属于公开表面：不得要求宿主提供 internal 类型。
+	optionsType := reflect.TypeOf(Options{})
+	for index := 0; index < optionsType.NumField(); index++ {
+		field := optionsType.Field(index)
+		if field.PkgPath != "" {
+			continue
+		}
+		checkType(t, "Options."+field.Name, field.Type)
+	}
 	facadeTypes := []reflect.Type{
 		reflect.TypeOf((*BootstrapService)(nil)).Elem(),
 		reflect.TypeOf((*UserService)(nil)).Elem(),
@@ -116,6 +125,34 @@ func TestRootPackageDoesNotImportApp(t *testing.T) {
 			if path == "github.com/kagurazakayashi/EvernightLogin/app" ||
 				strings.Contains(path, "/internal/appcore") {
 				t.Fatalf("根包 %s 不得反向导入 %s", file, path)
+			}
+		}
+	}
+}
+
+// TestAppPackageHasNoInitSideEffects 断言 app 包没有 init()：导入公开包本身不能
+// 启动后台任务、打开数据库或注册全局状态；所有资源只能来自显式 Open。
+func TestAppPackageHasNoInitSideEffects(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("未找到 app 包源码: %v", err)
+	}
+	fset := token.NewFileSet()
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("解析 %s 失败: %v", file, err)
+		}
+		for _, declaration := range parsed.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv != nil {
+				continue
+			}
+			if function.Name.Name == "init" {
+				t.Fatalf("%s 含 init()：导入公开包不得产生隐式启动副作用", file)
 			}
 		}
 	}

@@ -10,29 +10,25 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/appcore"
-	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
 	"github.com/kagurazakayashi/EvernightLogin/internal/bootstrap"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
-	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/serverapp"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
-	"github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
-// Runtime 是嵌入式装配结果。它只持有自己打开的资源；不监听端口、不启动后台任务。
+// Runtime 是嵌入式装配结果。它只持有自己打开的资源；不监听端口。
+//
+// Open 构造完成时状态为 login.StateNew，后台任务不会自行运行；宿主必须显式调用
+// Start 才会启动任务执行器与定时计划调度器。Close 幂等，只关闭本运行时自己打开
+// 的数据库与后台任务；宿主注入的 Logger/Database/Notifier 不被关闭。
 type Runtime struct {
 	opts       Options
 	config     login.Config
 	logger     *slog.Logger
 	nowFn      func() time.Time
-	store      *sqlite.Store
-	keyring    *secrets.Keyring
-	audit      *audit.Recorder
-	services   *serverapp.Services
-	managed    *serverapp.ManagedServices
-	tasks      *serverapp.TaskRuntime
+	base       *serverapp.Base
 	instance   *login.Instance
 	boot       *bootstrap.Service
 	bootCaller bootstrap.Caller
@@ -41,7 +37,16 @@ type Runtime struct {
 	closed     bool
 }
 
-// Open 打开数据库/密钥环并构造真实服务；不监听、不启动任务。
+// Open 构造真实服务运行时：配置/主密钥环/SQLite/迁移策略/审计/领域服务/敏感闸门/
+// 后台任务运行时/管理域服务与公开实例，全部走与独立服务相同的共享装配
+// （internal/serverapp.OpenBase），不复制第二套业务逻辑。
+//
+// 生命周期与安全边界：
+//   - 不监听端口、不启动后台任务/调度器、不注册信号；任务只能由 Start 显式启动。
+//   - Migrate=false 时未迁移库 fail-closed；CreateMasterKey=false 时缺失主密钥
+//     fail-closed；不会自动生成隐式默认密钥。
+//   - 构造失败时已打开的资源按相反顺序回滚关闭。
+//   - 不提供跳过认证/伪造 root/关闭鉴权的入口；业务拒绝统一返回 *login.AppError。
 func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -55,103 +60,75 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	logger := opts.Logger
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
+		logger = slog.New(slog.NewTextHandler(io.Discard,
+			&slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
-	keyring, _, err := appcore.LoadKeyring(ctx, cfg, opts.MasterKeyFile, opts.CreateMasterKey, now)
+	base, err := serverapp.OpenBase(ctx, serverapp.BaseOptions{
+		Config:          cfg,
+		MasterKeyFile:   opts.MasterKeyFile,
+		CreateMasterKey: opts.CreateMasterKey,
+		Migrate:         opts.Migrate,
+		Logger:          logger,
+		Now:             now,
+	})
 	if err != nil {
-		return nil, wrapInternal("加载主密钥环失败", err)
-	}
-	store, err := appcore.OpenStore(ctx, cfg, nil)
-	if err != nil {
-		return nil, wrapInternal("打开数据库失败", err)
-	}
-	cleanup := func() { _ = store.Close() }
-	pending, err := appcore.CheckMigrated(ctx, store)
-	if err != nil {
-		cleanup()
-		return nil, wrapInternal("检查数据库迁移失败", err)
-	}
-	if opts.Migrate {
-		if _, err := appcore.ApplyMigrations(ctx, store); err != nil {
-			cleanup()
-			return nil, wrapInternal("执行数据库迁移失败", err)
+		if errors.Is(err, serverapp.ErrMigrationPending) {
+			return nil, configError("数据库尚未迁移；请显式设置 Migrate=true 或先运行迁移")
 		}
-	} else if len(pending) > 0 {
-		cleanup()
-		return nil, configError("数据库尚未迁移；请显式设置 Migrate=true 或先运行迁移")
+		return nil, wrapInternal("打开嵌入式运行时失败", err)
 	}
-	auditRecorder, err := appcore.NewAuditRecorder(ctx, store, logger, now)
+	boot, bootCaller, err := serverapp.BuildBootstrapService(base.Deps, opts.OperatorID)
 	if err != nil {
-		cleanup()
-		return nil, wrapInternal("构造安全审计失败", err)
-	}
-	deps := serverapp.Deps{Config: cfg, Store: store, Keyring: keyring, Audit: auditRecorder, Logger: logger, Now: now}
-	services, err := serverapp.BuildServices(deps)
-	if err != nil {
-		cleanup()
-		return nil, wrapInternal("构造核心服务失败", err)
-	}
-	gate, err := serverapp.BuildSecurityGate(deps, services.BootstrapStore, services.Authn, cfg.Passkey.Enabled)
-	if err != nil {
-		cleanup()
-		return nil, wrapInternal("构造安全闸门失败", err)
-	}
-	tasks, err := serverapp.NewTaskRuntime(deps, gate)
-	if err != nil {
-		cleanup()
-		return nil, wrapInternal("构造任务运行时失败", err)
-	}
-	managed, err := serverapp.BuildManagedServices(deps, services, tasks, gate)
-	if err != nil {
-		_ = tasks.Close(context.Background())
-		cleanup()
-		return nil, wrapInternal("构造管理域服务失败", err)
-	}
-	instance, err := login.New(login.Options{Config: &cfg, Logger: logger})
-	if err != nil {
-		_ = tasks.Close(context.Background())
-		cleanup()
-		return nil, wrapInternal("构造实例失败", err)
-	}
-	boot, bootCaller, err := serverapp.BuildBootstrapService(deps, opts.OperatorID)
-	if err != nil {
-		_ = tasks.Close(context.Background())
-		cleanup()
+		_ = base.Close(context.Background())
 		return nil, wrapInternal("构造首次初始化服务失败", err)
 	}
-	return &Runtime{opts: opts, config: cfg, logger: logger, nowFn: now, store: store,
-		keyring: keyring, audit: auditRecorder, services: services, managed: managed,
-		tasks: tasks, instance: instance, boot: boot, bootCaller: bootCaller}, nil
+	// 后台任务运行时作为实例组件登记：只有显式 Start 才会启动，Close 时由实例
+	// 逆序停止；宿主注入的 Database/Notifier 只被使用、不被关闭。
+	components := make([]login.BackgroundComponent, 0, 1)
+	if base.Tasks != nil {
+		components = append(components, base.Tasks)
+	}
+	instance, err := login.New(login.Options{
+		Config:        &cfg,
+		Logger:        logger,
+		Database:      opts.Database,
+		Notifications: opts.Notifier,
+		Components:    components,
+	})
+	if err != nil {
+		_ = base.Close(context.Background())
+		return nil, wrapInternal("构造实例失败", err)
+	}
+	return &Runtime{opts: opts, config: cfg, logger: logger, nowFn: now,
+		base: base, instance: instance, boot: boot, bootCaller: bootCaller}, nil
 }
 
+// loadConfig 加载/规范化配置。配置规则与独立服务共用 internal/appcore：只支持
+// SQLite 驱动、数据库路径绝对化、覆盖后整体校验。
 func loadConfig(opts Options) (login.Config, error) {
-	var cfg login.Config
 	switch {
 	case opts.Config != nil:
-		cfg = *opts.Config
+		cfg, err := appcore.PrepareConfig(*opts.Config, opts.DatabasePath)
+		if err != nil {
+			return login.Config{}, configError("配置校验失败")
+		}
+		return cfg, nil
 	case opts.ConfigPath != "":
-		loaded, err := login.Load(login.LoadOptions{YAMLFile: opts.ConfigPath})
+		cfg, err := appcore.LoadConfigFile(opts.ConfigPath, opts.DatabasePath)
 		if err != nil {
 			return login.Config{}, wrapInternal("加载配置失败", err)
 		}
-		cfg = loaded
+		return cfg, nil
 	default:
 		return login.Config{}, configError("Config 或 ConfigPath 必须提供")
 	}
-	if opts.DatabasePath != "" {
-		cfg.Database.Path = opts.DatabasePath
-	}
-	if err := cfg.Validate(); err != nil {
-		return login.Config{}, configError("配置校验失败")
-	}
-	return cfg, nil
 }
 
-// Instance 返回构造完成但未启动的实例（State=StateNew）。
+// Instance 返回构造完成但未启动的实例（Open 后 State=StateNew）。
 func (r *Runtime) Instance() *login.Instance {
 	if r == nil {
 		return nil
@@ -167,7 +144,38 @@ func (r *Runtime) Config() login.Config {
 	return r.config
 }
 
-// Close 幂等关闭本 Runtime 打开的资源（实例/任务运行时/数据库）；不关闭宿主资源。
+// State 返回显式生命周期状态：new（已构造未启动）/running（任务已启动）/closed。
+func (r *Runtime) State() login.State {
+	if r == nil || r.instance == nil {
+		return login.StateClosed
+	}
+	return r.instance.State()
+}
+
+// Start 显式启动允许的后台任务（任务执行器与定时计划调度器）。
+//
+// Open 不启动任何后台任务；宿主决定何时启动。语义与 login.Instance 一致：
+// 重复 Start 返回 login.ErrAlreadyStarted；关闭后返回 login.ErrClosed；
+// ctx 在启动前结束或启动失败时实例进入 StateClosed 并回滚已启动任务（fail-closed），
+// 之后只能 Close。
+func (r *Runtime) Start(ctx context.Context) error {
+	if r == nil || r.instance == nil {
+		return configError("运行时未装配")
+	}
+	return r.instance.Start(ctx)
+}
+
+// Ready 检查运行时是否可以对外服务：必须已成功 Start；宿主注入的 Database 必须
+// Ping 成功。未启动返回 login.ErrNotRunning，数据库失败返回 DB_UNAVAILABLE。
+func (r *Runtime) Ready(ctx context.Context) error {
+	if r == nil || r.instance == nil {
+		return login.ErrNotRunning
+	}
+	return r.instance.Ready(ctx)
+}
+
+// Close 幂等关闭本 Runtime 打开的资源（实例后台任务、任务运行时、数据库）；
+// 不关闭宿主注入的 Logger/Database/Notifier，也不停止宿主自己的 HTTP 服务。
 func (r *Runtime) Close(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -189,13 +197,8 @@ func (r *Runtime) Close(ctx context.Context) error {
 			failures = append(failures, err)
 		}
 	}
-	if r.tasks != nil {
-		if err := r.tasks.Close(ctx); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	if r.store != nil {
-		if err := r.store.Close(); err != nil {
+	if r.base != nil {
+		if err := r.base.Close(ctx); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -231,7 +234,7 @@ type bootstrapFacade struct{ r *Runtime }
 // 创建 root 并设置正式密码，不签会话、不返回秘密；重复调用拒绝。
 func (f *bootstrapFacade) EnsureRoot(ctx context.Context, req RootRequest) (RootResult, error) {
 	r := f.r
-	if r == nil || r.boot == nil {
+	if r == nil || r.boot == nil || r.coreServices() == nil {
 		return RootResult{}, configError("首次初始化服务未装配")
 	}
 	status, err := r.boot.Status(ctx, r.bootCaller)
@@ -262,9 +265,10 @@ func (f *bootstrapFacade) EnsureRoot(ctx context.Context, req RootRequest) (Root
 	if requestID == "" {
 		requestID = login.NewRequestID()
 	}
-	passwordResult, err := r.services.Authn.SetRootPassword(ctx, adminCaller, authn.SetRootPasswordRequest{
-		RootUserID: grant.RootUserID, NewPassword: req.Password, RequestID: requestID,
-	})
+	passwordResult, err := r.coreServices().Authn.SetRootPassword(ctx, adminCaller,
+		authn.SetRootPasswordRequest{
+			RootUserID: grant.RootUserID, NewPassword: req.Password, RequestID: requestID,
+		})
 	if err != nil {
 		return RootResult{}, wrapInternal("写入 root 正式密码失败", err)
 	}
@@ -273,19 +277,36 @@ func (f *bootstrapFacade) EnsureRoot(ctx context.Context, req RootRequest) (Root
 		SecurityVersion:    passwordResult.SecurityVersion}, nil
 }
 
+// coreServices 返回共享装配的核心领域服务；运行时未装配或已进入维护模式时 nil。
+func (r *Runtime) coreServices() *serverapp.Services {
+	if r == nil || r.base == nil {
+		return nil
+	}
+	return r.base.Services
+}
+
+// managedServices 返回共享装配的管理域服务；未装配时 nil。
+func (r *Runtime) managedServices() *serverapp.ManagedServices {
+	if r == nil || r.base == nil {
+		return nil
+	}
+	return r.base.Managed
+}
+
 type userFacade struct{ r *Runtime }
 
 // Create 通过真实注册流程创建带密码账户（需要注册开关开启）。Phase A 不使用
 // 测试替身或直接写库；受信管理员创建（含敏感审批）在后续管理步骤提供。
 func (f *userFacade) Create(ctx context.Context, req CreateUserRequest) (User, error) {
 	r := f.r
-	if r == nil || r.services == nil {
+	services := r.coreServices()
+	if services == nil {
 		return User{}, configError("服务未装配")
 	}
 	if !r.config.Registration.Enabled {
 		return User{}, configError("创建用户需要启用 registration.enabled")
 	}
-	result, err := r.services.Registration.Register(ctx, registration.RegisterRequest{
+	result, err := services.Registration.Register(ctx, registration.RegisterRequest{
 		Username: req.Username, Password: req.Password, Email: req.Email,
 		Nickname: req.Nickname, Language: req.Language, Timezone: req.Timezone,
 		RequestID: req.RequestID,
@@ -301,17 +322,18 @@ type authFacade struct{ r *Runtime }
 
 func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
 	r := f.r
-	if r == nil || r.services == nil {
+	services := r.coreServices()
+	if services == nil {
 		return LoginResult{}, configError("服务未装配")
 	}
-	authResult, err := r.services.Authn.Authenticate(ctx, authn.AuthenticateRequest{
+	authResult, err := services.Authn.Authenticate(ctx, authn.AuthenticateRequest{
 		Identifier: req.Username, Password: req.Password, ClientIP: req.ClientIP,
 		RequestID: req.RequestID,
 	})
 	if err != nil {
 		return LoginResult{}, mapAuthError(err)
 	}
-	issued, err := r.services.Sessions.Login(ctx, session.LoginRequest{
+	issued, err := services.Sessions.Login(ctx, session.LoginRequest{
 		Result: authResult, AppID: req.AppID, RequestID: req.RequestID,
 	})
 	if err != nil {
@@ -335,7 +357,8 @@ type accessFacade struct{ r *Runtime }
 
 func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDecision, error) {
 	r := f.r
-	if r == nil || r.managed == nil || r.managed.Authz == nil {
+	managed := r.managedServices()
+	if managed == nil || managed.Authz == nil {
 		return AccessDecision{}, configError("权限服务未装配")
 	}
 	caller, err := authz.UserCaller(req.UserID)
@@ -350,7 +373,7 @@ func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDeci
 	if req.AppID != "" {
 		scope = req.AppID
 	}
-	result, err := r.managed.Authz.Check(ctx, caller, authz.CheckRequest{
+	result, err := managed.Authz.Check(ctx, caller, authz.CheckRequest{
 		SubjectUserID: req.UserID, ScopeID: scope, Permissions: []string{req.Permission}, Mode: mode,
 	})
 	if err != nil {
@@ -363,13 +386,14 @@ func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDeci
 type sessionFacade struct{ r *Runtime }
 
 func (f *sessionFacade) Revoke(ctx context.Context, sessionSecret []byte) error {
-	if f.r == nil || f.r.services == nil {
+	services := f.r.coreServices()
+	if services == nil {
 		return configError("服务未装配")
 	}
 	if len(sessionSecret) == 0 {
 		return configError("会话秘密为空")
 	}
-	if _, err := f.r.services.Sessions.RevokeAllOwnSessions(ctx, string(sessionSecret), false); err != nil {
+	if _, err := services.Sessions.RevokeAllOwnSessions(ctx, string(sessionSecret), false); err != nil {
 		return mapServiceError(err)
 	}
 	return nil
@@ -380,5 +404,5 @@ type adminFacade struct{}
 func (f *adminFacade) GrantApplicationRole(ctx context.Context, req GrantRoleRequest) error {
 	_ = ctx
 	_ = req
-	return configError("角色分配门面将在 146-149 提供；Phase A 不提供受信管理写入")
+	return configError("受信管理写入尚未装配：当前版本不提供角色分配门面")
 }
