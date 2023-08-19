@@ -168,6 +168,10 @@ type testEnv struct {
 	sensitive     *fakeSensitive
 	clientSecrets map[string]string
 	client        *http.Client
+	// tokenStore/sealer 暴露给验收测试：用于构造“签发方不同但签名密钥相同的真实
+	// 令牌”，验证 UserInfo 对错误签发方的拒绝不是靠签名错误冒充的。
+	tokenStore *tokensqlite.Store
+	sealer     *secrets.Sealer
 }
 
 // newTestEnv 装配真实服务与 HTTP 端点。测试失败会影响协议层行为，因此任何装配
@@ -255,6 +259,8 @@ func newTestEnv(t *testing.T, mutate func(*protocolapi.Options)) *testEnv {
 	if err != nil {
 		t.Fatalf("令牌存储失败: %v", err)
 	}
+	env.tokenStore = tokenStore
+	env.sealer = sealer
 	tokenClients, err := token.NewOAuthClientSource(clientStore)
 	if err != nil {
 		t.Fatalf("令牌客户端来源失败: %v", err)

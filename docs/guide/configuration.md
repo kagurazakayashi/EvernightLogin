@@ -141,7 +141,7 @@ secrets:
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `protocol.enabled` | `false` | 协议端点总开关；也可用 `--enable-protocol` 覆盖 |
-| `protocol.issuer` | 空 | 固定公开签发方；必须为 https（本地回环 http 例外）、无尾斜杠，路径必须与 `server.path_prefix` 一致 |
+| `protocol.issuer` | 空 | 固定公开签发方；必须为 https（本地回环 http 例外）、无尾斜杠，路径必须与 `server.path_prefix` 一致。OIDC 客户端须把该 issuer 登记为允许 audience 并请求 `resource=<issuer>` 才能调用 UserInfo（见 `docs/deployment/integration.md` 2.4） |
 | `protocol.device_code_enabled` | `false` | RFC 8628 设备码；需 `protocol.enabled=true` 且 `server.public_base_url` 可派生确认页；关闭时不声明 Discovery 能力 |
 | `protocol.enable_introspection` | `false` | RFC 7662 状态查询；启用前必须登记至少一个受信资源服务，否则拒绝启动 |
 | `protocol.resource_services` | 空列表 | 受信资源服务登记（`service_id/client_id/audience`，仅 YAML/代码选项）；客户端必须是 confidential、应用 active，audience 必须已在该客户端 Audiences 中登记 |
