@@ -172,6 +172,20 @@ func (r *Runner) pollDeviceTokens(ctx context.Context, deviceCode string,
 	}
 }
 
+// beginDeviceAuthorizationScoped 申请设备授权：先用配置 scope，若被 invalid_scope
+// 拒绝则退回最小 profile（设备客户端登记 scope 可能与 OIDC 客户端不同）。
+func (r *Runner) beginDeviceAuthorizationScoped(ctx context.Context) (*deviceAuthorization, error) {
+	authorization, err := r.client.beginDeviceAuthorization(ctx,
+		strings.Join(r.client.cfg.Scopes, " "))
+	if err == nil {
+		return authorization, nil
+	}
+	if deviceOAuthCode(err) != "invalid_scope" {
+		return nil, err
+	}
+	return r.client.beginDeviceAuthorization(ctx, "profile")
+}
+
 // deviceScopeCandidates 返回设备授权申请要尝试的 scope：先用户配置值，若被
 // invalid_scope 拒绝再退到最小集（设备客户端登记 scope 可能与 OIDC 客户端不同）。
 func (r *Runner) deviceScopeCandidates() []string {
@@ -295,6 +309,27 @@ func (r *Runner) runDeviceSuite(ctx context.Context) error {
 			return fmt.Errorf("已取消的设备授权仍能取得令牌")
 		}
 		return nil
+	})
+
+	r.run("device_poll_slow_down", func() error {
+		pending, err := r.beginDeviceAuthorizationScoped(ctx)
+		if err != nil {
+			return err
+		}
+		// 第一次轮询占用轮询槽位：用户尚未确认 → authorization_pending。
+		if _, _, pollErr := r.client.deviceTokenOnce(ctx, pending.DeviceCode); deviceOAuthCode(pollErr) != "authorization_pending" {
+			return fmt.Errorf("首次轮询期望 authorization_pending，实际 %v", pollErr)
+		}
+		// 紧接着再次轮询：服务端强制间隔生效 → slow_down，并提示客户端增大间隔。
+		_, retry, slowErr := r.client.deviceTokenOnce(ctx, pending.DeviceCode)
+		if deviceOAuthCode(slowErr) != "slow_down" {
+			return fmt.Errorf("过快轮询期望 slow_down，实际 %v", slowErr)
+		}
+		if retry <= 0 {
+			return fmt.Errorf("slow_down 响应缺少合法 Retry-After")
+		}
+		// 清理本次等待中的请求（取消只影响该请求，不影响其他授权）。
+		return r.client.cancelDeviceAuthorization(ctx, pending.DeviceCode)
 	})
 
 	r.run("device_begin_requires_client", func() error {
