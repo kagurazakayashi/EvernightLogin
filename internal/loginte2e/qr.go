@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -34,15 +35,16 @@ type qrStatus struct {
 
 // qrPrompt 是确认端只读上下文投影（不含任何秘密）。
 type qrPrompt struct {
-	RequestID   string   `json:"request_id"`
-	ClientID    string   `json:"client_id"`
-	Status      string   `json:"status"`
-	Scopes      []string `json:"scopes"`
-	Version     int64    `json:"version"`
-	CreatedAt   string   `json:"created_at"`
-	ExpiresAt   string   `json:"expires_at"`
-	RequesterUA string   `json:"requester_user_agent"`
-	Warning     string   `json:"warning"`
+	RequestID       string   `json:"request_id"`
+	ClientID        string   `json:"client_id"`
+	ApplicationName string   `json:"application_name"`
+	Status          string   `json:"status"`
+	Scopes          []string `json:"scopes"`
+	Version         int64    `json:"version"`
+	CreatedAt       string   `json:"created_at"`
+	ExpiresAt       string   `json:"expires_at"`
+	RequesterUA     string   `json:"requester_user_agent"`
+	Warning         string   `json:"warning"`
 }
 
 // qrClaimResult 是领取结果投影（只含会话标识，不含会话秘密或 Token）。
@@ -281,6 +283,22 @@ func (r *Runner) runQRSuite(ctx context.Context) error {
 		return nil
 	})
 
+	r.run("qr_claim_requires_binding", func() error {
+		if created == nil {
+			return skipf("前置用例未创建扫码请求")
+		}
+		// 只带 request_id（无领取绑定）的领取必须失败：不能凭公开二维码标识抢领。
+		result, err := r.client.do(ctx, "POST", pathQRClaim, requestOptions{
+			jsonBody: map[string]any{"request_id": created.RequestID}})
+		if err != nil {
+			return err
+		}
+		if result.isSuccess() {
+			return fmt.Errorf("缺少领取绑定的领取不应成功")
+		}
+		return nil
+	})
+
 	r.run("qr_status_pending", func() error {
 		if created == nil {
 			return skipf("前置用例未创建扫码请求")
@@ -340,6 +358,17 @@ func (r *Runner) runQRSuite(ctx context.Context) error {
 		}
 		if contextInfo.ClientID != r.client.cfg.ClientID {
 			return fmt.Errorf("确认上下文 client_id 与请求不一致")
+		}
+		if contextInfo.ApplicationName == "" {
+			return fmt.Errorf("确认上下文缺少应用展示名")
+		}
+		if strings.TrimSpace(contextInfo.Warning) == "" {
+			return fmt.Errorf("确认上下文缺少风险提示")
+		}
+		for _, scope := range contextInfo.Scopes {
+			if strings.TrimSpace(scope) == "" {
+				return fmt.Errorf("确认上下文 scope 含空值")
+			}
 		}
 		if contextInfo.Status != "pending" {
 			return fmt.Errorf("确认上下文状态应为 pending，实际 %q", contextInfo.Status)

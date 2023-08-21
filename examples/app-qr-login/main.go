@@ -12,6 +12,11 @@
 //     由会话中间件调用 reauth.WithSignals；这不是生产鉴权实现）。
 //   - 领取转换使用 internal/session 的受门控登录批准签发目标应用会话，不签发
 //     任何 OAuth Token。
+//
+// 与真实部署的关系（步骤 193）：本示例演示领域服务闭环。真实部署的 HTTP 端点、
+// 内置确认网页（/login/qr、/app/scan）与合法协议直连方式（Bearer 会话 + 同源
+// Origin；Cookie 会话另需 CSRF，不关闭校验）见 docs/deployment/integration.md
+// 第 6 节；对应的真实网页双会话验收记录见 docs/acceptance/step193-qr-login.md。
 package main
 
 import (

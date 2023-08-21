@@ -30,7 +30,7 @@ ID Token、UserInfo）。示例：`examples/oidc-login`。
 | `client_id` | 已登记、所属应用启用 |
 | `redirect_uri` | 必须与登记值精确匹配（公开客户端按登记规则匹配，见 `internal/oauthclient`） |
 | `scope` | 必须是客户端登记 scope 的子集；`openid` 是 OIDC 登录开关 |
-| `resource` | 可选的 audience 列表，必须属于客户端登记 audience；audience 是目标资源，不等于 client_id |
+| `resource` | 可选的 audience 列表，必须属于客户端登记 audience；audience 是目标资源，不等于 client_id。OIDC 客户端要用 UserInfo 时必须显式请求 `resource=<issuer>`（见 2.4） |
 | `state` | **必须回传并绑定本次请求**：服务器原样回显，客户端必须校验与发起值一致；缺失或串用视为失败 |
 | `nonce` | 使用 `openid` 时**必须传并在客户端校验 ID Token 的 `nonce`**；不一致视为重放/串用，拒绝该 ID Token |
 | `code_challenge` / `code_challenge_method` | **强制 PKCE S256**；`plain` 或缺失一律拒绝 |
@@ -51,10 +51,28 @@ ID Token、UserInfo）。示例：`examples/oidc-login`。
   不接受除已发布签名算法外的算法，不信任 `jku`/`x5u`/`x5c`/`jwk` 自述密钥。
 - Access Token：类型必须是 access token（ID Token/Refresh Token/会话秘密不能冒充），
   `aud` 必须是本业务资源；不解析未验证令牌中的权限。
-- UserInfo：Access Token 的 scope 必须包含 `openid` 且覆盖 `profile`/`email`；
-  返回资料按 scope 裁剪，邮箱只在已验证时出现。
+- UserInfo：Access Token 的 scope 必须包含 `openid` 且覆盖 `profile`/`email`，
+  `aud` 必须包含本服务 issuer（见 2.4）；返回资料按 scope 裁剪，邮箱只在已验证时出现。
 - JWKS 轮换：验证端应按 `kid` 缓存公钥；旧密钥在保留期内仍可验证既有令牌，保留期后
   验证拒绝。
+
+### 2.4 UserInfo 的 audience 语义（步骤 191）
+
+本服务把 **issuer 本身当作 UserInfo 的资源受众**：`/oauth/userinfo` 只接受 `aud` 包含
+issuer 的 Access Token。接入方必须：
+
+1. 在 OAuth 客户端登记时把 issuer（与 `protocol.issuer` 完全一致、不含尾斜杠）加入
+   `Audiences`；
+2. 授权请求显式带 `resource=<issuer>`。客户端只登记了一个 audience 时可省略
+   `resource` 并取该默认值；登记了多个 audience（例如同时登记业务资源 audience）却
+   省略时，授权端点按 `audience_required` 拒绝，避免隐式扩大受众；
+3. 只把**资源服务器 audience** 的令牌用于业务 API，不要用它调用 UserInfo：
+   `/oauth/userinfo` 会返回 `401 invalid_token`，这是受众隔离的设计结果，不是
+   audience 校验缺陷；不要通过删除 audience 校验或放松签发方校验绕过。
+
+ID Token 的 `aud` 恒等于客户端 `client_id`，与 UserInfo 的 Access Token 受众不是一回事；
+ID Token 不能当 Access Token 使用。可运行的外部客户端流程见
+`examples/oidc-login` 与 `docs/acceptance/step191-oidc-userinfo.md`。
 
 ## 3. 服务身份（client credentials / 服务主体）
 
@@ -96,36 +114,93 @@ ID Token、UserInfo）。示例：`examples/oidc-login`。
 
 ## 5. 设备码接入契约（RFC 8628）
 
-实现：`internal/oauthflow`（设备授权申请/确认/轮询/取消）。HTTP 端点**未暴露**；下面是
-协议契约，供页面/装配完成后对接，当前仅能通过受信 Go API 调用。
+实现：`internal/oauthflow`（申请/确认/轮询/取消）+ `internal/protocolapi`（HTTP 端点）+
+内置确认页（`/oauth/device`、`/oauth/device/confirm`）。协议端点默认关闭，必须同时满足
+`protocol.enabled=true` 与 `protocol.device_code_enabled=true`；只有启用时 Discovery 才
+声明 `device_authorization_endpoint` 与 `device_code` grant_type，未启用时端点 404。
+
+**HTTP 端点**：
+
+| 端点 | 用途 |
+|---|---|
+| `POST /oauth/device_authorization` | 设备授权申请（公开客户端只带 `client_id`；保密客户端必须完成客户端认证） |
+| `POST /oauth/device/cancel` | 发起端取消等待中的请求（本服务扩展；必须绑定申请时的同一客户端） |
+| `POST /oauth/token`（`grant_type=urn:ietf:params:oauth:grant-type:device_code`） | 设备端轮询领取令牌 |
+| `GET/POST /oauth/device` | 用户确认入口页（输入短码，需真实登录会话） |
+| `GET/POST /oauth/device/confirm` | 确认页展示应用/请求范围并批准或拒绝 |
+
+**协议流程与安全要求**：
 
 1. **设备授权申请**：设备端用 `client_id`（保密客户端另需认证）提交 `scope`/`resource`。
    成功返回 `device_code`（高熵，设备端保存，不展示）、`user_code`（短码，展示给用户）、
    `verification_uri`、`verification_uri_complete`（只含短码，可渲染二维码）、
-   `expires_in`、`interval`。
-2. **用户确认**：用户在已登录页面输入短码，服务端重新规范化定位请求；页面必须展示
-   **正确的应用与请求范围**，用户显式批准或拒绝；确认页需要真实用户会话与近期认证。
-3. **设备轮询**：设备端用 `device_code` 轮询；未确认返回 `authorization_pending`，
-   轮询过快返回 `slow_down`（并按协议增大间隔），过期/取消返回标准错误；只能由申请时
-   的同一客户端领取。
-4. **Token 签发**：批准后一次性兑换 Access/ID/Refresh Token（按客户端登记与 scope）；
+   `expires_in`、`interval`。公开客户端不得携带任何 secret。
+2. **用户确认**：用户在已登录页面输入短码，服务端重新规范化定位请求；页面向用户展示
+   **正确的应用名称/应用标识与请求范围**（scope 中文说明），用户显式批准或拒绝；确认页
+   需要真实用户会话与近期认证，失败 fail-closed。
+3. **设备轮询**：设备端用 `device_code` 轮询；未确认返回 `authorization_pending`；轮询过快
+   返回 `slow_down`（服务端强制间隔并递增，响应带 `Retry-After`）；用户拒绝/发起端取消
+   返回 `access_denied`；设备码过期返回 `expired_token`；设备码不存在、被其他客户端提交、
+   已领取/重放返回 `invalid_grant`（不泄露归属）。
+4. **Token 签发**：批准后**一次性**兑换，重复兑换返回 `invalid_grant`；同一设备码只能由
+   申请时的原客户端领取。默认签发 Access Token；仅当客户端登记 `refresh_token` 且授权含
+   `offline_access` 时签发 Refresh Token。设备码流程**不签发 ID Token**：`openid` scope 在
+   设备授权阶段被拒绝（本服务未定义设备流 ID Token 语义），需要 OIDC 登录请用授权码流程。
    令牌只返回给原设备端，二维码/短码中**不含**任何长期 Token。
 5. **安全要求**：短码低熵，服务端只保存带密钥的 HMAC 摘要（不存明文、不用无密钥摘要）；
-   短码尝试有频率限制；设备码与短码都限时；取消/过期后原码立即失效。
+   短码尝试有频率限制；设备码与短码都限时；取消/过期后原码立即失效；确认页不允许匿名
+   批准，也不允许别的客户端替用户完成确认。
+
+步骤 192 已用真实公开客户端与真实 HTTP 回环服务验证上述边界（pending、slow_down、
+确认页应用/范围展示、批准领取、重复兑换、错误客户端、用户拒绝、过期、取消、Discovery
+一致性），记录见 `docs/acceptance/step192-device-code.md`。
 
 ## 6. 扫码登录接入契约（业务 APP 扫网页二维码）
 
-实现：`internal/qrlogin`。示例：`examples/app-qr-login`（本模块内可运行）。
+实现：`internal/qrlogin`（领域服务）+ `internal/protocolapi`（HTTP 端点与页面）+ 内置
+页面。默认关闭：需 `app_qr_login.enabled=true` 且白名单应用存在并 active，否则页面与
+端点返回受控“未启用”。示例：`examples/app-qr-login`（本模块内可运行，进程内完整闭环）。
 
-1. **发起端（网页）**：调用 `Begin` 创建短时请求，拿到请求标识与**一次性领取绑定**
+**HTTP 端点**：
+
+| 端点 | 用途 |
+|---|---|
+| `POST /oauth/qr/request` | 匿名发起端创建短时请求；一次性返回 `request_id`、`qr_payload`、`claim_secret` |
+| `POST /oauth/qr/status` | 原发起端查询状态（`request_id` + `claim_secret`） |
+| `POST /oauth/qr/claim` | 原发起端领取（`request_id` + `claim_secret`），一次性 |
+| `POST /oauth/qr/cancel` / `POST /oauth/qr/regenerate` | 原发起端取消 / 重新生成（旧请求失效） |
+| `GET /oauth/qr/prompt?request_id=` | 已登录 APP 读取受控确认上下文（真实完整会话） |
+| `POST /oauth/qr/decision` | 已登录 APP 批准/拒绝（真实完整会话 + `expected_version`） |
+| 页面 `/login/qr`、`/app/scan` | 发起端网页与 APP 确认页（内置模板，可替换） |
+
+**合法调用方式与 403 排障（不关闭任何校验）**：
+
+- 确认端（APP）必须使用**真实完整会话**访问 `/oauth/qr/prompt` 与 `/oauth/qr/decision`。
+- 使用会话秘密作为 `Authorization: Bearer` 时属于非浏览器环境，服务器不要求 CSRF 头，
+  但状态修改请求**必须携带同源 `Origin`/`Referer`**；使用浏览器 Cookie 会话时必须额外
+  提交会话绑定的 CSRF 令牌（内置页面已由服务端渲染隐藏字段并绑定会话）。
+- 协议直连返回 403 的常见原因：缺同源 `Origin`/`Referer`、Cookie 会话缺 CSRF、会话
+  过期/不完整、APP 会话的应用范围与该扫码请求的目标应用不匹配。正确做法是补齐合法
+  凭证与同源头，**不是关闭 CSRF/同源/再认证校验**。
+- 领取必须使用创建响应中的 `claim_secret`；只凭二维码里的 `request_id` 不能领取，其他
+  网页/其他端即使知道 `request_id` 也无法抢领。
+- 页面 POST 的 CSRF/Origin 由宿主传输层统一校验；协议直连与页面路径共用同一服务语义。
+
+**流程与安全要求**：
+
+1. **发起端（网页）**：`Begin` 创建短时请求，拿到请求标识与**一次性领取绑定**
    （claim secret）。二维码只承载一次性请求标识，**绝不承载领取绑定或任何 Token**。
-2. **确认端（APP）**：用真实普通会话读取请求描述（应用、范围、发起端信息），展示给
-   用户核对后批准/拒绝；批准属于敏感操作，要求近期认证。
+2. **确认端（APP）**：用真实普通会话读取请求描述（应用名称/标识、请求范围、发起端
+   信息、风险提示），展示给用户核对后批准/拒绝；批准属于敏感操作，要求近期认证。
 3. **领取**：发起端用请求标识 + 领取绑定轮询/领取；批准后原子消费批准（并发单赢家），
    并通过受门控登录批准签发**目标应用会话**——**不签发 OAuth Token**。
 4. **安全要求**：二维码请求短时有效、限频；确认前必须显示正确应用与范围；确认后只允许
-   绑定原发起端领取；已领取/过期/取消后不可重放；不能把该流程变成任意应用换取用户
+   绑定原发起端领取；已领取/过期/取消/拒绝后不可重放；不能把该流程变成任意应用换取用户
    Token 的通道。钓鱼风险需在部署侧配合文案提醒，无法完全消除。
+
+步骤 193 已用两个独立会话（匿名发起端网页 + 已登录 APP 确认端）经真实内置网页与真实
+HTTP 服务验证确认展示、批准/拒绝、原网页领取、重复确认/领取、错误领取绑定、其他网页
+抢领、过期与取消语义，记录见 `docs/acceptance/step193-qr-login.md`。
 
 ## 7. 示例凭证与密钥生成方式
 
@@ -149,13 +224,16 @@ ID Token、UserInfo）。示例：`examples/oidc-login`。
 
 ```bash
 # 在仓库根目录
-go run ./examples/oidc-login        # OIDC 发现、授权请求契约、ID Token/UserInfo 校验与负例
+go run ./examples/oidc-login        # 真实回环 HTTP 服务的 OIDC 外部客户端：授权码+PKCE → Token → UserInfo + 拒绝用例
 go run ./examples/service-identity  # client credentials 服务身份 + 权限联合校验（含拒绝用例）
 go run ./examples/app-qr-login      # 已有：APP 扫网页二维码确认登录闭环
 ```
 
-每个示例都使用临时 SQLite（退出自动清理）、确定性时钟与真实服务，不监听端口、不联网、
-不写仓库；失败时以非零退出码结束并打印原因。
+每个示例都使用临时 SQLite（退出自动清理）与真实服务，不联网、不写仓库；失败时以非零
+退出码结束并打印原因。`examples/oidc-login` 为了演示完整协议流程，会在 `127.0.0.1` 的
+**随机端口**启动一个真实 HTTP 服务（退出即关闭并删除临时库）：服务端部分只是示例夹具，
+业务应用照它的客户端部分（Discovery、PKCE、令牌兑换、JWKS 验签、UserInfo）用标准库
+实现即可，不需要 import 本模块 `internal/` 包。其余示例不监听端口。
 
 ## 10. 未实现/未验证
 
