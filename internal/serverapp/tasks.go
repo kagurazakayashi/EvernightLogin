@@ -179,11 +179,11 @@ func (failClosedSensitiveRunner) NotifyOutcome(context.Context, reauth.Result,
 }
 
 // NewTaskRuntime 构造后台任务运行时的第一阶段：任务存储、加密器、邮件/Webhook
-// 投递服务与入队 relay。此阶段不创建执行器/调度器，也不启动协程、不访问网络。
-//
-// 两阶段构造用于解开“域服务需要任务入队器、执行器又需要域服务处理器”的循环：
-// 域服务（如 userbatch）用 Enqueuer/Canceller 构造完成后，调用 Complete 注册全部
-// 处理器并创建执行器/调度器。
+// 投递服务、入队 relay 与定时计划调度器。此阶段不创建任务执行器、不启动任何
+// 协程、不访问网络；唯一的数据访问是对本地 SQLite 的残留投递修复（Reconcile，
+// 只读写本机数据库）。两阶段构造用于解开“域服务需要任务入队器、执行器又需要
+// 域服务处理器”的循环：域服务（如 userbatch）用 Enqueuer/Canceller 构造完成后，
+// 调用 Complete 注册全部处理器并创建执行器。
 func NewTaskRuntime(deps Deps, gate *SecurityGate) (*TaskRuntime, error) {
 	if deps.Store == nil || deps.Audit == nil || deps.Keyring == nil {
 		return nil, fmt.Errorf("后台任务运行时缺少存储、审计或主密钥环依赖")

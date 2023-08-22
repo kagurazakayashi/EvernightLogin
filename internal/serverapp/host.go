@@ -346,18 +346,19 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		}()
 	}
 
-	sensitiveRelay := &sensitiveRelay{}
-	strongPresenceRelay := &strongFactorRelay{}
 	base, err := OpenBase(ctx, BaseOptions{
 		Config: cfg, Keyring: keyring, Migrate: options.Migrate,
 		WriteGuard: maintenanceController.Gate().Guard,
 		Logger:     logger, Now: now,
-		SecurityHooks: SecurityHooks{
-			Sensitive: sensitiveRelay, StrongPresence: strongPresenceRelay},
+		RequireInitialized:          !maintenanceMode && !options.AllowUninitialized,
 		AllowLegacyWithoutSensitive: options.AllowLegacyWithoutSensitive,
 		MaintenanceOnly:             maintenanceMode,
 	})
 	if err != nil {
+		if errors.Is(err, ErrUninitialized) {
+			return fmt.Errorf("数据库尚未完成首次初始化（没有 root）：请先运行 " +
+				"login-server init 创建 root；仅开发/测试可显式使用 --allow-uninitialized")
+		}
 		return err
 	}
 	defer func() {
@@ -386,35 +387,19 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		logger.Warn("实例处于维护状态：只提供健康检查与维护提示，不装配业务页面与后台任务")
 		handler = maintenanceHandler(cfg)
 	} else {
-		uninitialized, initErr := IsUninitialized(ctx, base.Services)
-		if initErr != nil {
-			return fmt.Errorf("读取首次初始化状态失败: %w", initErr)
-		}
-		if uninitialized && !options.AllowUninitialized {
-			return fmt.Errorf("数据库尚未完成首次初始化（没有 root）：请先运行 " +
-				"login-server init 创建 root；仅开发/测试可显式使用 --allow-uninitialized")
-		}
-		if uninitialized {
+		if base.Uninitialized {
 			logger.Warn("数据库尚未完成首次初始化：已按 --allow-uninitialized 显式放行，" +
 				"仅用于开发/测试，不要暴露到非回环网络")
 		}
-		// 敏感操作闸门在 OpenBase 中已构造；这里把真实再次认证服务注入延迟 relay，
-		// 供认证/会话服务在请求期使用（装配期不需要、也不会触发敏感操作）。
-		sensitiveRelay.Set(base.Gate.Reauth)
-		securityDomains, securityErr := BuildSecurityDomains(base.Deps, base.Services,
-			base.Managed, base.Gate)
-		if securityErr != nil {
-			return securityErr
-		}
-		strongPresenceRelay.Set(securityDomains.StrongFactors)
-		base.Managed.Support = securityDomains.Support
+		// 认证/安全域已由 OpenBase 与嵌入模式共用装配（含 TOTP/Passkey/MFA/恢复/
+		// 敏感操作闸门接线）；这里只继续装配协议域与页面。
 		protocolDomains, protocolErr := BuildProtocolDomains(base.Deps, base.Services,
 			base.Managed, base.Gate)
 		if protocolErr != nil {
 			return protocolErr
 		}
 		pages, pageErr := BuildPages(base.Deps, base.Services, base.Managed,
-			securityDomains, base.Gate, protocolDomains)
+			base.Security, base.Gate, protocolDomains)
 		if pageErr != nil {
 			return pageErr
 		}

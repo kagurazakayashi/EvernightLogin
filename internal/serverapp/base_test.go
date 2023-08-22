@@ -49,6 +49,13 @@ func TestOpenBaseBuildsSharedAssemblyWithoutStarting(t *testing.T) {
 		t.Fatalf("领域装配未完成: services=%v gate=%v tasks=%v managed=%v",
 			base.Services != nil, base.Gate != nil, base.Tasks != nil, base.Managed != nil)
 	}
+	if base.Security == nil || base.Security.TOTP == nil || base.Security.MFA == nil ||
+		base.Security.Recovery == nil || base.Security.StrongFactors == nil {
+		t.Fatalf("认证/安全域未装配（共享运行时必须与独立服务一致）: %+v", base.Security)
+	}
+	if !base.Uninitialized {
+		t.Fatal("全新临时数据库应报告未初始化")
+	}
 	if base.Services.SessionAuthorizer == nil {
 		t.Fatal("管理强制下线授权器未注入（应由共享装配统一完成）")
 	}
@@ -104,6 +111,25 @@ func TestOpenBaseMigrationPendingFailsAndReleases(t *testing.T) {
 	}
 	if !errors.Is(err, ErrMigrationPending) {
 		t.Fatalf("应返回 ErrMigrationPending，实际 %v", err)
+	}
+	if removeErr := os.RemoveAll(dir); removeErr != nil {
+		t.Fatalf("失败路径不应遗留数据库句柄: %v", removeErr)
+	}
+}
+
+// TestOpenBaseRequireInitializedFailsClosed 验证独立服务的初始化策略：未初始化库
+// 构造失败并返回 ErrUninitialized（嵌入模式默认不启用该检查）。
+func TestOpenBaseRequireInitializedFailsClosed(t *testing.T) {
+	dir := testutil.TempDir(t)
+	cfg := login.Default()
+	cfg.Database.Path = filepath.Join(dir, "login.db")
+	_, err := OpenBase(context.Background(), BaseOptions{
+		Config: cfg, Keyring: newTestKeyring(t), Migrate: true,
+		Logger: baseTestLogger(), Now: func() time.Time { return testNow },
+		RequireInitialized: true,
+	})
+	if !errors.Is(err, ErrUninitialized) {
+		t.Fatalf("未初始化库应返回 ErrUninitialized，实际 %v", err)
 	}
 	if removeErr := os.RemoveAll(dir); removeErr != nil {
 		t.Fatalf("失败路径不应遗留数据库句柄: %v", removeErr)

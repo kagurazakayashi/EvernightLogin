@@ -13,9 +13,9 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
 	"github.com/kagurazakayashi/EvernightLogin/internal/bootstrap"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	"github.com/kagurazakayashi/EvernightLogin/internal/serverapp"
-	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
 // Runtime 是嵌入式装配结果。它只持有自己打开的资源；不监听端口。
@@ -225,6 +225,9 @@ func (r *Runtime) Access() AccessService { return &accessFacade{r: r} }
 // Sessions 返回会话撤销门面。
 func (r *Runtime) Sessions() SessionService { return &sessionFacade{r: r} }
 
+// Security 返回认证/安全设置门面（TOTP 绑定、恢复代码、能力状态）。
+func (r *Runtime) Security() SecurityService { return &securityFacade{r: r} }
+
 // Admin 返回管理门面（Phase A 明确未实现角色分配）。
 func (r *Runtime) Admin() AdminService { return &adminFacade{} }
 
@@ -293,6 +296,31 @@ func (r *Runtime) managedServices() *serverapp.ManagedServices {
 	return r.base.Managed
 }
 
+// securityDomains 返回共享装配的认证/安全域服务；未装配时 nil。
+func (r *Runtime) securityDomains() *serverapp.SecurityDomains {
+	if r == nil || r.base == nil {
+		return nil
+	}
+	return r.base.Security
+}
+
+// securityGate 返回共享装配的敏感操作闸门；未装配时 nil。
+func (r *Runtime) securityGate() *serverapp.SecurityGate {
+	if r == nil || r.base == nil {
+		return nil
+	}
+	return r.base.Gate
+}
+
+// mfaService 返回共享装配的 MFA 状态机服务；未装配时 nil。
+func (r *Runtime) mfaService() *mfa.Service {
+	security := r.securityDomains()
+	if security == nil {
+		return nil
+	}
+	return security.MFA
+}
+
 type userFacade struct{ r *Runtime }
 
 // Create 通过真实注册流程创建带密码账户（需要注册开关开启）。Phase A 不使用
@@ -316,41 +344,6 @@ func (f *userFacade) Create(ctx context.Context, req CreateUserRequest) (User, e
 	}
 	return User{ID: result.UserID, Username: result.Username, Nickname: req.Nickname,
 		Email: result.Email, Status: string(result.Status), CreatedAt: result.CreatedAt}, nil
-}
-
-type authFacade struct{ r *Runtime }
-
-func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
-	r := f.r
-	services := r.coreServices()
-	if services == nil {
-		return LoginResult{}, configError("服务未装配")
-	}
-	authResult, err := services.Authn.Authenticate(ctx, authn.AuthenticateRequest{
-		Identifier: req.Username, Password: req.Password, ClientIP: req.ClientIP,
-		RequestID: req.RequestID,
-	})
-	if err != nil {
-		return LoginResult{}, mapAuthError(err)
-	}
-	issued, err := services.Sessions.Login(ctx, session.LoginRequest{
-		Result: authResult, AppID: req.AppID, RequestID: req.RequestID,
-	})
-	if err != nil {
-		return LoginResult{}, mapServiceError(err)
-	}
-	result := LoginResult{UserID: issued.Session.UserID, SessionID: issued.Session.ID,
-		ExpiresAt: issued.Session.AbsoluteExpiresAt, Restricted: issued.Session.IsRestricted()}
-	if secret := issued.Secret.Reveal(); secret != "" {
-		result.SessionSecret = []byte(secret)
-	}
-	if csrf := issued.CSRFSecret.Reveal(); csrf != "" {
-		result.CSRFSecret = []byte(csrf)
-	}
-	for _, step := range authResult.RequiredSteps {
-		result.RequiredSteps = append(result.RequiredSteps, string(step))
-	}
-	return result, nil
 }
 
 type accessFacade struct{ r *Runtime }

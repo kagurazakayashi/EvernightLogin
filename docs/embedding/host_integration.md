@@ -200,8 +200,67 @@ if err := runtime.Ready(ctx); err != nil { /* 未启动或宿主数据库不可�
   注入的 `Logger`、`Database`、`Notifier` 不被关闭；宿主自己的 HTTP 服务不受影响。
 - `Migrate=false` 时未迁移库返回 `CONFIG_INVALID`（fail-closed）；
   `CreateMasterKey=false` 时缺失主密钥失败；不会自动生成隐式默认密钥。
-- 安全域（MFA/Passkey/受限恢复）、受信管理门面与 HTTP/页面挂载在后续步骤
-  （181-183）于同一共享装配上补齐；当前不提供伪造 root、跳过认证或关闭鉴权的入口。
+- 认证/安全域（TOTP/Passkey/MFA/恢复代码/找回/客服）与敏感操作闸门在步骤 181 已
+  接入同一共享装配；受信管理写入门面（182）与 HTTP/页面挂载（183）仍在后续步骤补齐。
+  当前不提供伪造 root、跳过认证或关闭鉴权的入口。
+
+### 3.2 认证与安全验证流程（`app` 包，步骤 181 起）
+
+`Open` 已经装配真实认证/安全域（TOTP/Passkey/MFA/恢复代码/敏感操作闸门），宿主
+用公开门面完成密码登录、第二因素、受限恢复与敏感操作再次认证；所有正向结果都
+来自真实领域服务，本包不提供伪造强认证结果或跳过验证的入口。
+
+```go
+// 1) 密码第一步：启用 TOTP/Passkey 的账户返回受限会话与挑战。
+login, err := runtime.Auth().Login(ctx, app.LoginRequest{
+    Username: "alice", Password: password, ClientIP: "203.0.113.7",
+})
+if login.Restricted && login.SecondFactor != nil {
+    // 2) 第二因素：TOTP/邮件用 Code，Passkey 用 PasskeyCeremonyID/PasskeyResponse。
+    verified, err := runtime.Auth().VerifySecondFactor(ctx, app.VerifySecondFactorRequest{
+        SessionSecret: login.SessionSecret,
+        ChallengeID:   login.SecondFactor.ChallengeID,
+        AttemptToken:  login.SecondFactor.AttemptToken,
+        Code:          authenticatorCode, // 由用户验证器 App 生成，服务端绝不返回
+    })
+    // verified.SessionSecret 才是完整会话；login.SessionSecret 是受限会话。
+}
+
+// 3) 恢复代码只替代第二步：进入受限恢复会话，不能访问业务，只能完成新因素绑定。
+recovery, err := runtime.Auth().BeginRecovery(ctx, app.BeginRecoveryRequest{...})
+status, err := runtime.Auth().RecoveryStatus(ctx, app.RecoveryStatusRequest{
+    SessionSecret: recovery.SessionSecret})
+
+// 4) 敏感操作再次认证：TOTP 绑定（mfa.add）只需要近期密码；恢复代码轮换
+//    （recovery.codes.rotate）对已绑定强因素的账户要求密码 + TOTP。
+start, err := runtime.Security().BeginTOTPBinding(ctx, app.TOTPBindingBeginRequest{
+    SessionSecret: verified.SessionSecret, Password: password})
+runtime.Security().ConfirmTOTPBinding(ctx, app.TOTPBindingConfirmRequest{
+    SessionSecret: verified.SessionSecret, BindingID: start.BindingID, Code: code})
+codes, err := runtime.Security().GenerateRecoveryCodes(ctx, app.RecoveryCodesRequest{
+    SessionSecret: verified.SessionSecret, Password: password, TOTPCode: code})
+overview, err := runtime.Security().Status(ctx, app.SecurityStatusRequest{
+    SessionSecret: verified.SessionSecret})
+```
+
+安全语义：
+
+- `Login` 在账户启用因素或被策略要求强认证时只签发**受限会话**（`Restricted=true`），
+  宿主必须用 `VerifySecondFactor` 换取完整会话；待改密等其它受限状态 fail-closed，
+  不签发会话。
+- 一次性秘密只在结果中出现一次：受限/完整会话秘密、`AttemptToken`、TOTP 种子、
+  恢复代码。宿主应尽快展示给当前用户并丢弃，写入日志、URL 或普通存储属于误用。
+- 敏感操作（TOTP 绑定、恢复代码轮换）经真实 `internal/reauth` 挑战：错误密码/错误
+  动态码被拒绝；恢复代码轮换在账户已绑定强因素时要求 `strong`（密码 + TOTP），
+  仅凭会话中的密码不足以重新生成恢复代码。
+- 关闭 `passkey.enabled` 不会关闭 TOTP / 恢复代码等可用能力；启用 Passkey 但用户
+  尚未绑定凭证时不会阻塞密码登录。
+- 邮件保持配置驱动（`mail.enabled`）；未启用时发送器以明确错误失败、不访问网络，
+  启用后只按配置的 SMTP 目标发送（本地验收应指向本机 EvernightMail，不向真实邮箱
+  外发）。本步骤不提供邮件验证码输入入口（邮件第二因素与找回页面入口由后续步骤/
+  页面挂载提供）。
+- 受限恢复会话只能查询状态并完成新因素绑定，不能读取安全状态或执行业务操作；
+  强认证要求下的允许重绑方法只有 Passkey。
 
 ## 4. 生命周期、取消与资源所有权
 
@@ -300,15 +359,51 @@ go list -f '{{join .Imports "\n"}}' .   # 直接导入仅 stdlib + github.com/ka
 ## 7. 已知限制
 
 - 公开 `app` 包已提供与独立服务共用的运行时基础装配（配置、SQLite、迁移策略、
-  主密钥环、审计、领域服务、敏感闸门、后台任务注册/显式启停、管理域服务）。安全域
-  （MFA/Passkey/受限恢复，181）、受信管理写入门面（182）与 HTTP/页面挂载（183）
-  仍在后续步骤补齐；在这些步骤完成前，宿主不能仅靠公开包获得完整身份服务。
+  主密钥环、审计、领域服务、敏感闸门、认证/安全域、后台任务注册/显式启停、管理域
+  服务），并提供密码登录、TOTP/Passkey 第二因素、受限恢复与敏感操作再次认证门面
+  （步骤 180/181）。受信管理写入门面（182）与 HTTP/页面挂载（183）仍在后续步骤
+  补齐；在这些步骤完成前，宿主不能仅靠公开包获得完整身份服务。
+- 本步骤的公开认证门面不包含 Passkey 注册/登录 ceremony 的浏览器交互与邮件验证码
+  输入界面（需要 183 的 HTTP/页面挂载）；Passkey 正向流程由内部服务测试覆盖，外部
+  module 验收覆盖关闭 Passkey 时 TOTP 仍可用，未做真实浏览器/真实认证器互操作。
 - 认证/MFA 扩展只落实注册与 fail-closed 生命周期契约，未提供生产认证适配器。
 - 没有集群/多实例共享状态实现；同一进程多实例隔离已测，跨进程协调未实现。
 - 真实浏览器页面交互、真实数据库驱动（外部宿主自带的 SQL 驱动）与通知外发
   未在本步验证；通知/邮件真实外发一律需宿主显式配置目标。
 
 ## 8. 变更记录
+
+### 步骤 181（2026-11，未发布 v1 前）
+
+把真实认证/安全验证流程接入共享运行时，并给公开 `app` 包补上认证与安全门面（全部
+为兼容扩展；`Login` 在未启用因素时行为不变）：
+
+- `internal/serverapp.OpenBase` 现在总是装配认证/安全域（TOTP、Passkey、MFA、
+  恢复代码、找回密码、客服/人工恢复）与敏感操作闸门，并由内部延迟 relay 把真实
+  强因素存在性与再次认证服务接给核心服务——独立服务与嵌入模式共用同一装配，
+  `RunServe` 删除了自己的安全域装配分支。
+- 公开 `app` 新增：
+  - `AuthService.Login` 支持第二因素：返回受限会话 + `SecondFactorChallenge`
+    （TOTP/Passkey/邮件/强认证初始化），待改密等其它受限状态不签发会话；
+  - `AuthService.VerifySecondFactor`、`BeginRecovery`、`RecoveryStatus`；
+  - `SecurityService`（`Runtime.Security()`）：`Status`、`BeginTOTPBinding`、
+    `ConfirmTOTPBinding`、`GenerateRecoveryCodes`；敏感操作经真实 reauth 挑战，
+    恢复代码轮换对已绑定强因素的账户要求 `strong`（密码 + TOTP）。
+  - 新增公开类型：`SecondFactorChallenge`、`VerifiedSession`、`RecoverySession`、
+    `RecoveryStatus`、`TOTPBindingStart`、`TOTPBinding`、`RecoveryCodes`、
+    `SecurityStatus` 及对应请求类型；`LoginRequest` 增加可选 `RememberMe`/`UserAgent`。
+- 修复真实缺陷：`app` 的敏感操作再次认证此前未提高强度下限，恢复代码轮换在
+  `recovery.codes.rotate` 默认策略只要求密码、而恢复领域要求 strong 时会稳定返回
+  `MFA_REQUIRED`；现在按操作显式传 `MinimumStrength=strong`（密码 + TOTP）。
+- 修正 180 审计低风险笔记：`internal/serverapp/tasks.go` 的 `NewTaskRuntime` 注释
+  与实现一致（第一阶段会创建调度器、只读写本机数据库）；`app/errors.go`
+  `wrapInternal` 注释改为“不保留原始错误链”；`app/api_surface_test.go` 删除恒真的
+  `checkSignature` 辅助并把 `SecurityService` 纳入公开表面检查。
+- `examples/embedded-runtime` 扩展为外部 module 真实验收：密码登录 → TOTP 绑定
+  （敏感操作再次认证）→ 受限状态 → 错误因素拒绝 → 正确 TOTP 补充验证 → 能力状态
+  → 恢复代码强认证生成 → 恢复代码受限恢复 → 关闭自助注册仍有账户可登录 → 原
+  生命周期/资源所有权/失败清理场景。TOTP 由示例按 RFC 6238 从一次性种子计算
+  （等价验证器 App），不使用伪造强认证结果。
 
 ### 步骤 180（2026-11，未发布 v1 前）
 

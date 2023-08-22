@@ -12,8 +12,9 @@ func configError(message string) error {
 	return login.NewAppError(login.CodeConfigInvalid, message)
 }
 
-// wrapInternal 把内部错误包装为不泄露内部细节的公开错误；保留原始错误供调试
-// 时需要时由宿主通过 errors.Is/As 判断（不写日志内容）。
+// wrapInternal 把内部错误包装为不泄露内部细节的公开错误：只返回 INTERNAL_ERROR
+// 与固定摘要，不保留原始错误链（避免宿主通过 errors.Is/As 或 %v 看到内部路径、
+// SQL、密钥材料等信息）。内部错误需要诊断时由内部装配层按脱敏字段记录日志。
 func wrapInternal(message string, err error) error {
 	if err == nil {
 		return login.NewAppError(login.CodeInternalError, message)
@@ -46,6 +47,35 @@ func mapServiceError(err error) error {
 		return appErr
 	}
 	return login.NewAppError(login.CodeInternalError, "操作未完成")
+}
+
+// domainCodeToPublic 把各领域模块的稳定错误码投影到根包已登记错误码。领域码只
+// 复用根包注册表，不新增、不改语义；未知码回退为 INTERNAL_ERROR。
+var domainCodeToPublic = map[string]login.ErrorCode{
+	"REQ_INVALID":          login.CodeReqInvalid,
+	"AUTH_FAILED":          login.CodeAuthFailed,
+	"ACCESS_DENIED":        login.CodeAccessDenied,
+	"REAUTH_REQUIRED":      login.CodeReauthRequired,
+	"MFA_REQUIRED":         login.CodeMFARequired,
+	"MFA_REBIND_REQUIRED":  login.CodeMFARebindRequired,
+	"CHALLENGE_INVALID":    login.CodeChallengeInvalid,
+	"RATE_LIMITED":         login.CodeRateLimited,
+	"CONFLICT":             login.CodeConflict,
+	"AUTHZ_UNAVAILABLE":    login.CodeAuthzUnavailable,
+	"DB_UNAVAILABLE":       login.CodeDBUnavailable,
+	"AUDIT_WRITE_FAILED":   login.CodeAuditWriteFailed,
+	"MAIL_DELIVERY_FAILED": login.CodeMailDeliveryFailed,
+	"INTERNAL_ERROR":       login.CodeInternalError,
+	"USER_DISABLED":        login.CodeUserDisabled,
+}
+
+// mapDomainError 把领域错误码映射为稳定公开错误；message 是面向调用者的直白
+// 摘要，不包含内部细节、秘密或账户存在性信息。
+func mapDomainError(message string, code string) error {
+	if public, ok := domainCodeToPublic[code]; ok {
+		return login.NewAppError(public, message)
+	}
+	return login.NewAppError(login.CodeInternalError, message)
 }
 
 var _ = errors.Is

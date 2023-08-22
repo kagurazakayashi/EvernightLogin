@@ -18,7 +18,6 @@ func TestPublicAPISurfaceHasNoInternalTypes(t *testing.T) {
 		if !ast.IsExported(method.Name) {
 			continue
 		}
-		checkSignature(t, "Runtime."+method.Name, method.Func.Type())
 		for arg := 0; arg < method.Type.NumIn(); arg++ {
 			checkType(t, "Runtime."+method.Name+" 参数", method.Type.In(arg))
 		}
@@ -39,6 +38,7 @@ func TestPublicAPISurfaceHasNoInternalTypes(t *testing.T) {
 		reflect.TypeOf((*BootstrapService)(nil)).Elem(),
 		reflect.TypeOf((*UserService)(nil)).Elem(),
 		reflect.TypeOf((*AuthService)(nil)).Elem(),
+		reflect.TypeOf((*SecurityService)(nil)).Elem(),
 		reflect.TypeOf((*AccessService)(nil)).Elem(),
 		reflect.TypeOf((*SessionService)(nil)).Elem(),
 		reflect.TypeOf((*AdminService)(nil)).Elem(),
@@ -53,13 +53,6 @@ func TestPublicAPISurfaceHasNoInternalTypes(t *testing.T) {
 				checkType(t, facade.String()+"."+method.Name+" 返回值", method.Type.Out(result))
 			}
 		}
-	}
-}
-
-func checkSignature(t *testing.T, name string, typ reflect.Type) {
-	t.Helper()
-	if typ == nil {
-		t.Fatalf("%s 类型为空", name)
 	}
 }
 

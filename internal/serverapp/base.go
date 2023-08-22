@@ -41,6 +41,10 @@ import (
 // 公开入口据此返回稳定的 CONFIG_INVALID 错误，而不是把内部细节暴露给宿主。
 var ErrMigrationPending = errors.New("数据库尚未完成迁移")
 
+// ErrUninitialized 表示数据库尚未完成首次初始化（没有 root）。独立服务默认拒绝
+// 启动；嵌入模式允许先 Open 再调用首次初始化门面，因此不启用该检查。
+var ErrUninitialized = errors.New("数据库尚未完成首次初始化")
+
 // BaseOptions 是独立服务与公开 app 入口共用的基础装配参数。
 type BaseOptions struct {
 	// Config 是已通过最终校验的配置（数据库路径覆盖已应用）。
@@ -62,9 +66,10 @@ type BaseOptions struct {
 	Logger *slog.Logger
 	// Now 是可注入时钟；nil 使用 time.Now。
 	Now func() time.Time
-	// SecurityHooks 是核心服务需要的延迟安全依赖；nil 字段按各服务自身
-	// fail-closed 语义处理（由后续认证装配步骤补齐真实实现）。
-	SecurityHooks SecurityHooks
+	// RequireInitialized 为 true 时要求数据库已完成首次初始化（独立服务默认策略）；
+	// 未初始化时构造返回 ErrUninitialized。嵌入模式保持 false，允许先 Open 再由
+	// 宿主调用首次初始化门面。
+	RequireInitialized bool
 	// AllowLegacyWithoutSensitive 是会话服务的过渡开关，见 Deps 同名字段。
 	AllowLegacyWithoutSensitive bool
 	// MaintenanceOnly 为 true 时只装配密钥/数据库/迁移/审计/邮件运行时，不构造
@@ -83,6 +88,8 @@ type Base struct {
 	Store   *sqlite.Store
 	Audit   *audit.Recorder
 	Mail    *MailRuntime
+	// Uninitialized 表示构造时数据库还没有首次初始化记录（仅非维护模式有效）。
+	Uninitialized bool
 	// Deps 是领域服务装配使用的显式依赖快照；MaintenanceOnly 时为零值。
 	Deps Deps
 	// 以下字段仅在非 MaintenanceOnly 时非 nil。
@@ -90,6 +97,8 @@ type Base struct {
 	Gate     *SecurityGate
 	Tasks    *TaskRuntime
 	Managed  *ManagedServices
+	// Security 是认证/安全域真实服务集合（TOTP/Passkey/MFA/恢复代码/找回/客服等）。
+	Security *SecurityDomains
 
 	mu       sync.Mutex
 	closed   bool
@@ -121,9 +130,12 @@ func (c *resourceCloser) closeAll() error {
 }
 
 // OpenBase 构造基础运行时：密钥环（可选注入）-> 数据库 -> 迁移策略 -> 审计 ->
-// 邮件运行时 -> 领域服务 -> 敏感闸门 -> 后台任务运行时 -> 管理域服务 ->
-// 任务处理器注册与调度器绑定。
+// 邮件运行时 -> 核心领域服务 -> 初始化检查（可选）-> 敏感闸门 -> 后台任务运行时 ->
+// 管理域服务 -> 认证/安全域（TOTP/Passkey/MFA/恢复/客服）-> 任务处理器注册与调度器
+// 绑定。
 //
+// 安全依赖（敏感操作闸门、强因素存在性）由本函数内的延迟 relay 注入，两种运行
+// 方式因此共享同一套认证/安全装配；未注入真实实现前相关操作 fail-closed。
 // 构造阶段不监听端口、不创建协程、不启动任务调度；任何一步失败都会回滚关闭
 // 已创建的资源。MaintenanceOnly 时构造止于邮件运行时。
 func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) {
@@ -211,15 +223,29 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 		},
 		Audit: auditRecorder, Logger: logger, Now: now,
 		AllowLegacyWithoutSensitive: options.AllowLegacyWithoutSensitive}
-	services, err := BuildServicesWithHooks(deps, options.SecurityHooks)
+	// 安全依赖以延迟 relay 装配：核心服务先构造、敏感闸门稍后建立，两者通过同一
+	// relay 在请求期生效；未注入真实实现前相关操作仍 fail-closed。
+	sensitiveRelay := &sensitiveRelay{}
+	strongPresenceRelay := &strongFactorRelay{}
+	services, err := BuildServicesWithHooks(deps, SecurityHooks{
+		Sensitive: sensitiveRelay, StrongPresence: strongPresenceRelay})
 	if err != nil {
 		return nil, fmt.Errorf("构造核心服务失败: %w", err)
+	}
+	uninitialized, err := IsUninitialized(ctx, services)
+	if err != nil {
+		return nil, fmt.Errorf("读取首次初始化状态失败: %w", err)
+	}
+	base.Uninitialized = uninitialized
+	if uninitialized && options.RequireInitialized {
+		return nil, ErrUninitialized
 	}
 	gate, err := BuildSecurityGate(deps, services.BootstrapStore, services.Authn,
 		cfg.Passkey.Enabled)
 	if err != nil {
 		return nil, fmt.Errorf("构造安全闸门失败: %w", err)
 	}
+	sensitiveRelay.Set(gate.Reauth)
 	taskRuntime, err = NewTaskRuntime(deps, gate)
 	if err != nil {
 		return nil, fmt.Errorf("构造任务运行时失败: %w", err)
@@ -238,6 +264,14 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 		}
 		services.SessionAuthorizer.Set(sessionScopeAuthorizer)
 	}
+	// 认证/安全域（TOTP/Passkey/MFA/恢复代码/找回/客服/人工恢复）与独立服务共用
+	// 同一装配；它同时把恢复服务接到会话服务的受限恢复会话闸门。
+	securityDomains, err := BuildSecurityDomains(deps, services, managed, gate)
+	if err != nil {
+		return nil, err
+	}
+	strongPresenceRelay.Set(securityDomains.StrongFactors)
+	managed.Support = securityDomains.Support
 	// 任务处理器注册：缺少必需处理器时构造失败，不留下“能启动但不会执行”的
 	// 半配置运行时。
 	if err := taskRuntime.Complete(managed.TaskHandlers()); err != nil {
@@ -250,6 +284,7 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 	base.Gate = gate
 	base.Tasks = taskRuntime
 	base.Managed = managed
+	base.Security = securityDomains
 	return base, nil
 }
 
