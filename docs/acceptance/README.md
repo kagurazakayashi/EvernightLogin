@@ -20,6 +20,7 @@
 | `step191-oidc-userinfo.md` | 第 9 轮步骤 191：OIDC UserInfo 正向接入与 audience/签发方/重放/撤销/过期验收 |
 | `step192-device-code.md` | 第 9 轮步骤 192：设备码登录边界（pending/slow_down/确认页/重放/错误客户端/拒绝/过期）验收 |
 | `step193-qr-login.md` | 第 9 轮步骤 193：已登录 APP 扫码确认与网页领取闭环（双会话/确认页/重放/抢领/拒绝/过期）验收 |
+| `step194-mfa-removal.md` | 第 9 轮步骤 194：两步验证解除与最后因素保护（生产强制策略接线/多因素解除/恢复码单次消费/受限重绑）验收 |
 
 ## 使用约定
 

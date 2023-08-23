@@ -1226,6 +1226,33 @@ func TestAvailableSecondFactorMethodsOnlyReturnsEnabled(t *testing.T) {
 		"req-remove-2"); !errors.Is(err, mfa.ErrFactorRequired) {
 		t.Fatalf("强制 MFA 时移除最后可用因素应被拒绝: %v", err)
 	}
+	// 多因素账户：仍存在其他强因素（TOTP/Passkey）时允许解除邮件因素。
+	multiEnv := newTestEnv(t, func(options *mfa.Options) {
+		options.Policy = &fakeMFARequiredPolicy{forced: true}
+		options.StrongFactorSource = &fakeStrongFactorSource{has: true}
+	})
+	multiEnv.enableEmailFactor()
+	if err := multiEnv.service.RemoveEmailFactor(multiEnv.ctx, multiEnv.caller(),
+		"req-remove-3"); err != nil {
+		t.Fatalf("存在其他强因素时强制 MFA 账户应允许解除邮件因素: %v", err)
+	}
+	// 强因素查询故障必须 fail-closed 拒绝移除，不能把错误当成“有强因素”。
+	failingEnv := newTestEnv(t, func(options *mfa.Options) {
+		options.Policy = &fakeMFARequiredPolicy{forced: true}
+		options.StrongFactorSource = &failingStrongFactorSource{}
+	})
+	failingEnv.enableEmailFactor()
+	if err := failingEnv.service.RemoveEmailFactor(failingEnv.ctx, failingEnv.caller(),
+		"req-remove-4"); !errors.Is(err, mfa.ErrPolicyUnavailable) {
+		t.Fatalf("强因素查询故障应 fail-closed 拒绝: %v", err)
+	}
+}
+
+// failingStrongFactorSource 模拟强因素查询故障。
+type failingStrongFactorSource struct{}
+
+func (f *failingStrongFactorSource) HasStrongFactor(context.Context, string) (bool, error) {
+	return false, errors.New("store down")
 }
 
 // fakeMFARequiredPolicy 模拟宿主强制 MFA 策略。

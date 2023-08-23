@@ -1352,8 +1352,9 @@ func (s *Service) ConfirmEmailFactorEnrollment(ctx context.Context, caller Calle
 	return factor, nil
 }
 
-// RemoveEmailFactor 停用当前用户的邮件因素。被 Policy 强制要求 MFA 时，不能移除
-// 最后一个可用因素（当前只实现 email 类型）。
+// RemoveEmailFactor 停用当前用户的邮件因素。被 Policy 强制要求 MFA 时，只有当账户
+// 仍存在其他强因素（TOTP/Passkey，由 StrongFactorSource 报告）时才允许移除邮件
+// 因素；否则视为移除最后一个可用因素并拒绝（fail-closed，写失败审计）。
 func (s *Service) RemoveEmailFactor(ctx context.Context, caller Caller, requestID string) error {
 	ctx = normalizeContext(ctx)
 	if err := caller.actor.Validate(); err != nil || !caller.IsUser() {
@@ -1369,25 +1370,40 @@ func (s *Service) RemoveEmailFactor(ctx context.Context, caller Caller, requestI
 	if active == 0 {
 		return ErrFactorNotFound
 	}
+	remainingStrong := false
 	if !isNil(s.opts.Policy) {
 		forced, policyErr := s.opts.Policy.MFARequired(ctx, caller.actor.ID)
 		if policyErr != nil {
 			return ErrPolicyUnavailable
 		}
 		if forced {
-			// 当前只有 email 一种因素：强制 MFA 的用户移除它就是移除最后一个可用
-			// 因素，必须拒绝；后续因素类型接入后这里按“其他因素数量”判断。
-			s.recordFailure(ctx, caller.actor, "mfa.factor_remove_denied", "last_factor",
-				string(CodeConflict), requestID)
-			return ErrFactorRequired
+			// 步骤 194：多因素账户允许解除邮件因素（TOTP/Passkey 仍保留强认证能力）；
+			// 没有任何其他强因素时才是“最后一个可用因素”，必须拒绝。
+			if !isNil(s.opts.StrongFactorSource) {
+				remainingStrong, err = s.opts.StrongFactorSource.HasStrongFactor(ctx, caller.actor.ID)
+				if err != nil {
+					return ErrPolicyUnavailable
+				}
+			}
+			if !remainingStrong {
+				s.recordFailure(ctx, caller.actor, "mfa.factor_remove_denied", "last_factor",
+					string(CodeConflict), requestID)
+				return ErrFactorRequired
+			}
 		}
+	}
+	changes := []audit.FieldChange{{Field: "factor_type", Before: string(FactorEmail)}}
+	if remainingStrong {
+		// 邮件因素是弱因素：解除后其余强因素（TOTP/Passkey）仍保留，明确记录。
+		changes = append(changes, audit.FieldChange{
+			Field: "remaining_strong_factor", After: "true"})
 	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
 			Actor: caller.actor, Action: "mfa.factor_removed",
 			Target:    audit.Target{Type: "user", ID: caller.actor.ID},
 			RequestID: validRequestID(requestID),
-			Changes:   []audit.FieldChange{{Field: "factor_type", Before: string(FactorEmail)}},
+			Changes:   changes,
 		},
 		FailureReasonCode:   "mfa.factor_remove_failed",
 		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },

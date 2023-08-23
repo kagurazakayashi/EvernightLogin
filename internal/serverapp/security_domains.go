@@ -25,6 +25,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
+	authnsqlite "github.com/kagurazakayashi/EvernightLogin/internal/authn/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/avatar"
 	avatarsqlite "github.com/kagurazakayashi/EvernightLogin/internal/avatar/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/bootstrap"
@@ -42,6 +43,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	recoverysqlite "github.com/kagurazakayashi/EvernightLogin/internal/recovery/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/securitycenter"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 	supportsqlite "github.com/kagurazakayashi/EvernightLogin/internal/support/sqlite"
@@ -132,19 +134,21 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	if err != nil {
 		return nil, fmt.Errorf("构造安全域加密器失败: %w", err)
 	}
-	totpStore, err := totpsqlite.New(deps.Store)
+	// 步骤 194：把真实的“强制 MFA/强认证策略”与其他强因素存在性注入三个领域服务，
+	// 否则各领域的“最后可用因素不可移除”保护在生产装配中不会生效（nil 策略等于
+	// 从不强制）。策略来源是 authn 存储的真实强制要求（root 恒为 true；直接或经
+	// 角色被要求的账户也为 true），读取失败由领域服务 fail-closed 拒绝移除。
+	authnPolicyStore, err := authnsqlite.New(deps.Store)
 	if err != nil {
-		return nil, fmt.Errorf("构造 TOTP 存储失败: %w", err)
+		return nil, fmt.Errorf("构造强认证要求来源失败: %w", err)
 	}
-	totpService, err := totp.New(totp.Options{
-		Store: totpStore, Audit: deps.Audit, Sealer: sealer,
-		Reauth:     gate.Reauth,
-		IssuerName: "EvernightLogin",
-		Now:        now, Logger: deps.Logger,
-	})
+	mfaPolicy, err := securitycenter.NewMFAPolicy(authnPolicyStore)
 	if err != nil {
-		return nil, fmt.Errorf("构造 TOTP 服务失败: %w", err)
+		return nil, fmt.Errorf("构造强制 MFA 策略适配器失败: %w", err)
 	}
+	// Passkey 服务构造时需要“其他强因素（TOTP）”来源，而 TOTP 服务在本阶段稍后
+	// 构造：用可后接线的适配器避免构造循环，接线前如实报告“没有其他强因素”。
+	totpOtherForPasskey := securitycenter.NewTOTPOtherStrongFactor(nil)
 
 	var passkeyService *passkey.Service
 	if deps.Config.Passkey.Enabled {
@@ -177,12 +181,39 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		passkeyService, err = passkey.New(passkey.Options{
 			Store: passkeyStore, Audit: deps.Audit, Sessions: services.Sessions,
 			Reauth: gate.Reauth, Config: passkeyConfig,
-			Now: now, Logger: deps.Logger,
+			// 步骤 194：强制 MFA 且没有其他强因素（活动 TOTP）时拒绝删除最后一个
+			// 第二步凭证；删除后立即撤销既有会话。
+			MFAPolicy:          mfaPolicy,
+			OtherStrongFactors: totpOtherForPasskey,
+			SessionInvalidator: services.Sessions,
+			Now:                now, Logger: deps.Logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("构造 Passkey 服务失败: %w", err)
 		}
 	}
+
+	// 步骤 194：TOTP 服务注入真实强制策略与其他强因素（活动 Passkey），并在解除
+	// 后立即撤销既有会话（同事务仍会递增 security_version）。
+	totpStore, err := totpsqlite.New(deps.Store)
+	if err != nil {
+		return nil, fmt.Errorf("构造 TOTP 存储失败: %w", err)
+	}
+	totpService, err := totp.New(totp.Options{
+		Store: totpStore, Audit: deps.Audit, Sealer: sealer,
+		Reauth: gate.Reauth,
+		// 强制 MFA 且没有其他强因素（活动 Passkey）时拒绝移除最后强因素。
+		Policy: mfaPolicy, OtherFactors: securitycenter.NewPasskeyOtherStrongFactor(passkeyService),
+		// 解除强因素后立即撤销既有会话（同事务仍会递增 security_version）。
+		SessionInvalidator: services.Sessions,
+		IssuerName:         "EvernightLogin",
+		Now:                now, Logger: deps.Logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("构造 TOTP 服务失败: %w", err)
+	}
+	// 完成 Passkey 方向的“其他强因素”接线（此前为避免构造循环暂为 nil）。
+	totpOtherForPasskey.SetTOTP(totpService)
 
 	manualTargets := manualRecoveryTargets{store: deps.Store, keyring: deps.Keyring, roots: managed.Roots}
 	adminResetBackend := manualRecoveryMFAAdminBackend{store: deps.Store, targets: manualTargets}
@@ -218,7 +249,9 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		StrongSetupMethods:    []authfact.Method{authfact.MethodPasskey},
 		AdminResetBackend:     adminResetBackend,
 		AdminResetTargetGuard: adminResetBackend.CheckAdminResetTarget,
-		Now:                   now, Logger: deps.Logger,
+		// 步骤 194：真实强制 MFA 策略，用于“邮件因素移除是最后一个可用因素”保护。
+		Policy: mfaPolicy,
+		Now:    now, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造 MFA 服务失败: %w", err)
