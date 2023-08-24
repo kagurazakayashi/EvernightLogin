@@ -44,8 +44,12 @@ type AppOptions struct {
 	// “application.owner.change”能力标识用于负责人可编辑性（不是 policy 权限键）。
 	// nil 时依赖服务自身 Authorizer，负责人字段按只读处理（保守）。
 	Authorize func(ctx context.Context, adminUserID, action, applicationID string) error
-	Now       func() time.Time
-	Logger    *slog.Logger
+	// AuthorizeAnyApp 是“没有单一目标应用”的列表读取复核（可选，步骤 184）：
+	// 宿主按“系统范围或任一应用范围持有 action 权限”判定；实际返回范围仍由
+	// app.Service.ApplicationScope 过滤。nil 时退回旧的空范围复核路径。
+	AuthorizeAnyApp func(ctx context.Context, adminUserID, action string) error
+	Now             func() time.Time
+	Logger          *slog.Logger
 }
 
 // ManagedPolicyService 是托管 API 策略服务的只读契约（生产 *managedapi.Service）。
@@ -265,10 +269,24 @@ func (a *AppsAdapter) toApplicationView(ctx context.Context, adminUserID string,
 }
 
 // ListApplications 列出当前管理员获准管理的应用（状态筛选/白名单排序/分页）。
+//
+// 权限语义（步骤 184）：列表没有单一目标应用，先用列表读取复核（系统范围或任一
+// 应用范围持有 applications.read），再由 app.Service.ApplicationScope 返回真实可读
+// 应用集合过滤；分页/NextOffset/HasMore 只基于过滤后的集合，不泄露范围外应用。
 func (a *AppsAdapter) ListApplications(ctx context.Context, adminUserID string,
 	query login.UIAppQuery) (login.UIAppPage, error) {
-	if err := a.check(ctx, adminUserID, "applications.update", ""); err != nil {
-		return login.UIAppPage{}, err
+	if adminUserID == "" || !account.ValidUserID(adminUserID) {
+		return login.UIAppPage{}, appsErr("ACCESS_DENIED")
+	}
+	if a.opts.AuthorizeAnyApp != nil {
+		if err := a.opts.AuthorizeAnyApp(ctx, adminUserID, "applications.read"); err != nil {
+			return login.UIAppPage{}, appsErr("ACCESS_DENIED")
+		}
+	} else if a.opts.Authorize != nil {
+		// 兼容未注入列表复核的宿主：保留既有空范围复核路径（fail-closed）。
+		if err := a.opts.Authorize(ctx, adminUserID, "applications.update", ""); err != nil {
+			return login.UIAppPage{}, appsErr("ACCESS_DENIED")
+		}
 	}
 	caller, err := a.appCaller(adminUserID, "")
 	if err != nil {
@@ -313,7 +331,7 @@ func (a *AppsAdapter) ListApplications(ctx context.Context, adminUserID string,
 // GetApplication 读取单个应用资料（服务端重新判定管理范围）。
 func (a *AppsAdapter) GetApplication(ctx context.Context, adminUserID,
 	applicationID string) (login.UIApplicationView, error) {
-	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+	if err := a.check(ctx, adminUserID, "applications.read", applicationID); err != nil {
 		return login.UIApplicationView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, "")
@@ -425,7 +443,7 @@ func toMemberView(record app.Membership) login.UIAppMemberView {
 // ListMembers 列出当前应用成员（只影响当前应用范围）。
 func (a *AppsAdapter) ListMembers(ctx context.Context, adminUserID, applicationID string,
 	query login.UIAppMemberQuery) (login.UIAppMemberPage, error) {
-	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
 		return login.UIAppMemberPage{}, err
 	}
 	caller, err := a.appCaller(adminUserID, "")
@@ -471,7 +489,7 @@ func (a *AppsAdapter) ListMembers(ctx context.Context, adminUserID, applicationI
 // AddMember 建立当前应用成员关系（目标必须是既有可用账户，不能是 root）。
 func (a *AppsAdapter) AddMember(ctx context.Context, adminUserID, applicationID, userID string,
 	profile login.UIAppMemberProfile, requestID string) (login.UIAppMemberView, error) {
-	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
 		return login.UIAppMemberView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
@@ -492,7 +510,7 @@ func (a *AppsAdapter) AddMember(ctx context.Context, adminUserID, applicationID,
 func (a *AppsAdapter) UpdateMemberProfile(ctx context.Context, adminUserID, applicationID,
 	userID string, profile login.UIAppMemberProfile, expectedRowVersion int64,
 	requestID string) (login.UIAppMemberView, error) {
-	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
 		return login.UIAppMemberView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
@@ -513,7 +531,7 @@ func (a *AppsAdapter) UpdateMemberProfile(ctx context.Context, adminUserID, appl
 // SetMemberState 启用/停用当前应用成员关系（不改变全局账户与其他应用）。
 func (a *AppsAdapter) SetMemberState(ctx context.Context, adminUserID, applicationID, userID string,
 	enable bool, expectedRowVersion int64, requestID string) (login.UIAppMemberView, bool, error) {
-	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
 		return login.UIAppMemberView{}, false, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
@@ -537,7 +555,7 @@ func (a *AppsAdapter) SetMemberState(ctx context.Context, adminUserID, applicati
 // RemoveMember 移除当前应用成员关系（不删除全局账户或其他应用成员）。
 func (a *AppsAdapter) RemoveMember(ctx context.Context, adminUserID, applicationID, userID string,
 	expectedRowVersion int64, requestID string) error {
-	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
 		return err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)

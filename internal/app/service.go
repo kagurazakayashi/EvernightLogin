@@ -94,6 +94,19 @@ type Store interface {
 	ListMemberEffectivePermissionIDs(ctx context.Context, tx audit.Tx, applicationID, userID string) ([]string, error)
 }
 
+// MaxManageableApplicationScopes 是可管理应用候选枚举的硬上限（分页泄漏与查询
+// 资源保护）：超过上限时返回错误而不是静默截断，避免“看不到但存在”的越权误判。
+const MaxManageableApplicationScopes = 256
+
+// ScopeCandidateLister 是应用存储的可选能力：枚举用户在应用范围内拥有**启用角色**
+// 的候选应用 ID。它只用于缩小候选集合，最终授权仍必须由权限引擎逐应用判定；
+// 不得把候选列表直接当作已授权应用返回给调用方。
+type ScopeCandidateLister interface {
+	// ListUserApplicationScopes 返回去重排序后的应用 ID（稳定顺序）；
+	// 数量超过 MaxManageableApplicationScopes 时返回错误（fail-closed）。
+	ListUserApplicationScopes(ctx context.Context, userID string) ([]string, error)
+}
+
 // Options 是构造应用服务的显式依赖。
 type Options struct {
 	Store      Store

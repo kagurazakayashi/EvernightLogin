@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
@@ -97,12 +98,26 @@ type permissionChecker struct {
 	access  *authz.Service
 	roots   *hostRootChecker
 	enabled bool
+	// appScopes 是可选的应用范围候选枚举能力（步骤 184）：只缩小候选范围，
+	// 最终权限仍由 access.Check 逐应用判定。为 nil 时应用管理员范围无法枚举，
+	// 所有应用范围判定 fail-closed。
+	appScopes app.ScopeCandidateLister
 }
 
 // newPermissionChecker 构造权限判定器；缺少权限引擎时 enabled=false，所有判定拒绝。
 func newPermissionChecker(access *authz.Service, roots *hostRootChecker) *permissionChecker {
 	return &permissionChecker{access: access, roots: roots,
 		enabled: access != nil && roots != nil}
+}
+
+// SetApplicationScopeLister 注入应用范围候选枚举能力（步骤 184）。必须在校验开始
+// 前由装配层调用；nil 时保持 fail-closed（不猜测范围）。该能力只列候选应用 ID，
+// 不能替代权限引擎判定。
+func (p *permissionChecker) SetApplicationScopeLister(lister app.ScopeCandidateLister) {
+	if p == nil {
+		return
+	}
+	p.appScopes = lister
 }
 
 // Check 实现 session.PermissionChecker：委托真实 authz 引擎；root 在管理强制
@@ -209,8 +224,9 @@ func (p *permissionChecker) evaluate(ctx context.Context,
 	return result.Allowed, nil
 }
 
-// manageableScopes 返回可管理范围；root/受信主体返回 all=true，普通用户只返回
-// 其在 system 范围确有的读取权限，其他应用范围无法枚举时 fail-closed 拒绝。
+// manageableScopes 返回可管理范围；root/受信主体返回 all=true，普通用户返回其
+// 真实持有读取权限的范围（步骤 184：system 或已获应用范围，逐应用由权限引擎判定）。
+// 无法枚举应用范围或没有任何可读范围时 fail-closed 拒绝，不返回空列表成功。
 func (p *permissionChecker) manageableScopes(ctx context.Context,
 	actor audit.Actor, readPermission string) (bool, []string, error) {
 	if p == nil || !p.enabled {
@@ -223,10 +239,56 @@ func (p *permissionChecker) manageableScopes(ctx context.Context,
 	if trusted {
 		return true, nil, nil
 	}
-	if err := p.check(ctx, actor.ID, readPermission, "system"); err != nil {
+	// 系统范围读取权限优先（例如系统管理员/系统角色）。
+	if err := p.check(ctx, actor.ID, readPermission, "system"); err == nil {
+		return false, []string{"system"}, nil
+	}
+	scopes, err := p.manageableApplicationScopes(ctx, actor.ID, readPermission)
+	if err != nil {
 		return false, nil, err
 	}
-	return false, []string{"system"}, nil
+	if len(scopes) == 0 {
+		return false, nil, fmt.Errorf("没有可读取范围的应用管理权限：拒绝")
+	}
+	return false, scopes, nil
+}
+
+// manageableApplicationScopes 返回用户通过应用范围角色真实持有 permissionKey 的
+// 应用 ID 列表（步骤 184）。
+//
+// 流程：先用应用存储的可选候选枚举缩小范围（只读 user_roles/group_roles + 启用角色），
+// 再逐应用调用权限引擎 Check（应用状态、成员关系、权限启用与 root_only 过滤都在引擎
+// 内）。任一候选依赖失败即整体失败，绝不把候选列表直接当成已授权。
+func (p *permissionChecker) manageableApplicationScopes(ctx context.Context,
+	userID, permissionKey string) ([]string, error) {
+	if p == nil || !p.enabled {
+		return nil, errAuthorizerNotConfigured
+	}
+	if p.appScopes == nil {
+		return nil, fmt.Errorf("应用范围候选枚举未装配：拒绝枚举应用管理范围")
+	}
+	if !account.ValidUserID(userID) {
+		return nil, fmt.Errorf("用户 ID 格式无效")
+	}
+	key := strings.TrimSpace(permissionKey)
+	if key == "" {
+		return nil, fmt.Errorf("缺少权限键")
+	}
+	candidates, err := p.appScopes.ListUserApplicationScopes(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("枚举应用管理候选范围失败: %w", err)
+	}
+	managed := make([]string, 0, len(candidates))
+	for _, applicationID := range candidates {
+		if strings.TrimSpace(applicationID) == "" {
+			continue
+		}
+		if checkErr := p.check(ctx, userID, key, applicationID); checkErr == nil {
+			managed = append(managed, applicationID)
+		}
+	}
+	sort.Strings(managed)
+	return managed, nil
 }
 
 // normalizeAuthzScope 规范化作用范围：空值表示系统范围。
@@ -268,48 +330,85 @@ func (selfQueryAuthorizer) AuthorizeQuery(_ context.Context, caller authz.Caller
 // 页面适配器已在代码注释中约定动作名；未登记的动作一律拒绝，避免拼写错误导致
 // “看起来检查了”实际放行的安全漏洞。
 var pageActionPermissions = map[string]string{
-	"users.read":             "users.read",
-	"users.create":           "users.create",
-	"users.update":           "users.update",
-	"users.delete":           "users.delete",
-	"users.review":           "users.update",
-	"users.import":           "users.create",
-	"users.export":           "users.export",
-	"groups.read":            "groups.read",
-	"groups.update":          "groups.manage",
-	"roles.read":             "roles.read",
-	"roles.manage":           "roles.manage",
-	"roles.assign":           "roles.assign",
-	"permissions.read":       "permissions.read",
-	"permissions.manage":     "permissions.manage",
-	"applications.read":      "applications.read",
-	"applications.create":    "applications.create",
-	"applications.update":    "applications.update",
-	"applications.members":   "applications.members.manage",
-	"applications.secret":    "applications.credentials.manage",
-	"support.read":           "support.cases.read",
-	"support.update":         "support.cases.update",
-	"recovery.approve":       "recovery.approve",
-	"audit.read":             "audit.read",
-	"audit.export":           "audit.export",
-	"audit.purge":            "audit.purge",
-	"stats.read":             "reports.read",
-	"reports.read":           "reports.read",
-	"reports.manage":         "reports.schedule.manage",
-	"backups.read":           "backups.read",
-	"backups.manage":         "backups.create",
-	"security.policy":        "security.policy.manage",
-	"security.policy.manage": "security.policy.manage",
+	"users.read":           "users.read",
+	"users.create":         "users.create",
+	"users.update":         "users.update",
+	"users.delete":         "users.delete",
+	"users.review":         "users.update",
+	"users.import":         "users.create",
+	"users.export":         "users.export",
+	"groups.read":          "groups.read",
+	"groups.update":        "groups.manage",
+	"roles.read":           "roles.read",
+	"roles.manage":         "roles.manage",
+	"roles.assign":         "roles.assign",
+	"permissions.read":     "permissions.read",
+	"permissions.manage":   "permissions.manage",
+	"applications.read":    "applications.read",
+	"applications.create":  "applications.create",
+	"applications.update":  "applications.update",
+	"applications.members": "applications.members.manage",
+	"applications.secret":  "applications.credentials.manage",
+	// 页面适配器直接使用完整权限键名（凭证管理）；与 applications.secret 同义，
+	// 保留别名避免不同调用点因拼写差异被误判为“未登记动作”而一律拒绝。
+	"applications.credentials.manage": "applications.credentials.manage",
+	"support.read":                    "support.cases.read",
+	"support.update":                  "support.cases.update",
+	"recovery.approve":                "recovery.approve",
+	"audit.read":                      "audit.read",
+	"audit.export":                    "audit.export",
+	"audit.purge":                     "audit.purge",
+	"stats.read":                      "reports.read",
+	"reports.read":                    "reports.read",
+	"reports.manage":                  "reports.schedule.manage",
+	"backups.read":                    "backups.read",
+	"backups.manage":                  "backups.create",
+	"security.policy":                 "security.policy.manage",
+	"security.policy.manage":          "security.policy.manage",
+}
+
+// appScopablePagePermissions 是允许以“任一应用范围持有”判定的页面动作权限键
+// （步骤 184）。这些权限的应用范围由领域服务在目标应用上再次判定；不能让应用
+// 管理员以系统范围权限进入。未列出的权限（账户/审计/备份等）仍要求系统范围。
+var appScopablePagePermissions = map[string]bool{
+	"applications.read":               true,
+	"applications.update":             true,
+	"applications.members.manage":     true,
+	"applications.credentials.manage": true,
+	"roles.read":                      true,
+	"roles.manage":                    true,
+	"roles.assign":                    true,
+	"permissions.read":                true,
+	"permissions.manage":              true,
+	"groups.read":                     true,
+	"groups.manage":                   true,
 }
 
 // authorizePageAction 是 uiadminadapter 各页面 Options.Authorize 的实现。
+//
+// 判定顺序（默认拒绝）：root/受信主体 → 系统范围权限 → （仅限应用可作用域权限）
+// 任一应用范围持有该权限。列表类读取随后仍由领域服务按 ApplicationScope 过滤；
+// 应用写入仍由领域服务以目标应用范围重新判定；“任一应用持有”不等于可写未授权应用。
 func (p *permissionChecker) authorizePageAction(ctx context.Context,
 	adminUserID, action string) error {
 	key, ok := pageActionPermissions[strings.TrimSpace(action)]
 	if !ok {
 		return fmt.Errorf("未登记的页面管理动作 %q：拒绝", action)
 	}
-	return p.check(ctx, adminUserID, key, "system")
+	if err := p.check(ctx, adminUserID, key, "system"); err == nil {
+		return nil
+	}
+	if !appScopablePagePermissions[key] {
+		return fmt.Errorf("缺少系统范围权限 %s：拒绝", key)
+	}
+	scopes, err := p.manageableApplicationScopes(ctx, adminUserID, key)
+	if err != nil {
+		return err
+	}
+	if len(scopes) == 0 {
+		return fmt.Errorf("缺少权限 %s（系统或应用范围）：拒绝", key)
+	}
+	return nil
 }
 
 // pageManageableScopes 是 RBAC 页面适配器的范围展示钩子：root/受信主体可管理
@@ -577,7 +676,7 @@ func groupActionPermission(action group.Action) (string, bool) {
 	}
 }
 
-// appAuthorizer 实现 app.Authorizer（当前仅用于未来应用页装配；保留真实判定）。
+// appAuthorizer 实现 app.Authorizer（步骤 184 接入真实应用范围判定）。
 type appAuthorizer struct {
 	checker *permissionChecker
 }
@@ -593,15 +692,24 @@ func (a appAuthorizer) Authorize(ctx context.Context, caller app.Caller,
 	if trusted {
 		return nil
 	}
+	// 列表动作不针对单一应用：范围由 ApplicationScope 过滤；这里不能用空范围
+	// 退化为 system 权限，否则持有应用范围读取权限的合法管理员会被阻断（R06）。
+	if action == app.ActionListApplications && strings.TrimSpace(applicationID) == "" {
+		return nil
+	}
 	key, ok := appActionPermission(action)
 	if !ok {
 		return fmt.Errorf("未登记的应用动作 %q：拒绝", action)
 	}
+	if strings.TrimSpace(applicationID) == "" {
+		return fmt.Errorf("应用动作 %q 缺少目标应用：拒绝", action)
+	}
 	return a.checker.check(ctx, actor.ID, key, applicationID)
 }
 
-// ApplicationScope 实现 app.Authorizer：root/受信主体可管理全部应用；普通用户需要
-// 逐应用授权，应用列表无法安全枚举时 fail-closed 返回错误。
+// ApplicationScope 实现 app.Authorizer：root/受信主体可管理全部应用；普通用户返回
+// 其真实持有 applications.read 的应用范围（步骤 184：候选枚举 + 权限引擎逐应用判定）。
+// 无法枚举或没有任何可读应用时返回错误，绝不返回空成功或范围外应用。
 func (a appAuthorizer) ApplicationScope(ctx context.Context,
 	caller app.Caller) (bool, []string, error) {
 	actor := caller.Actor()
@@ -612,7 +720,14 @@ func (a appAuthorizer) ApplicationScope(ctx context.Context,
 	if trusted {
 		return true, nil, nil
 	}
-	return false, nil, fmt.Errorf("普通用户的应用管理范围策略未装配：拒绝")
+	applicationIDs, err := a.checker.manageableApplicationScopes(ctx, actor.ID, "applications.read")
+	if err != nil {
+		return false, nil, err
+	}
+	if len(applicationIDs) == 0 {
+		return false, nil, fmt.Errorf("普通用户没有可读取的应用管理范围：拒绝")
+	}
+	return false, applicationIDs, nil
 }
 
 // appActionPermission 把应用服务动作映射到权限键。

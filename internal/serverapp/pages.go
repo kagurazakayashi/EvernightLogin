@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/pagecsrf"
 	"github.com/kagurazakayashi/EvernightLogin/internal/pagestate"
@@ -154,6 +155,16 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 	now := deps.Now
 	if now == nil {
 		now = time.Now
+	}
+	// 步骤 184：为生产授权层注入“应用范围候选枚举”能力。它只读取用户角色分配得到
+	// 候选应用 ID，最终权限仍由真实权限引擎逐应用判定；存储不可用时构造失败，不能
+	// 静默退化为“可管理全部应用”。
+	if deps.Store != nil {
+		appScopeStore, scopeErr := appsqlite.New(deps.Store)
+		if scopeErr != nil {
+			return nil, fmt.Errorf("构造应用范围枚举存储失败: %w", scopeErr)
+		}
+		managed.Checker.SetApplicationScopeLister(appScopeStore)
 	}
 	pageState, err := pagestate.New(pagestate.Options{
 		Keyring: deps.Keyring, TTL: 15 * time.Minute, Now: now})
@@ -362,7 +373,10 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 			return managed.Checker.authorizePageActionScoped(ctx, adminUserID,
 				action, applicationID)
 		},
-		Now: now, Logger: logger,
+		// 列表类读取没有单一目标应用：按“系统范围或任一应用范围持有读取权限”判定，
+		// 实际返回范围由 app.Service.ApplicationScope 过滤（步骤 184）。
+		AuthorizeAnyApp: managed.Checker.authorizePageAction,
+		Now:             now, Logger: logger,
 	})
 	if appsErr != nil {
 		return nil, fmt.Errorf("构造应用管理页适配器失败: %w", appsErr)
