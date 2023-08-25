@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
@@ -263,6 +264,16 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 			return nil, fmt.Errorf("装配管理强制下线授权器失败: %w", authzErr)
 		}
 		services.SessionAuthorizer.Set(sessionScopeAuthorizer)
+	}
+	// 应用范围候选枚举（步骤 184）：应用管理员在应用内管理成员/角色前需要按应用
+	// 范围判定可管理范围。两种运行方式在这里共用同一 SQLite 候选实现（页面装配
+	// 不再重复注入），缺少时权限层保持 fail-closed 而不是猜测范围。
+	if managed.Checker != nil {
+		appScopeStore, scopeErr := appsqlite.New(deps.Store)
+		if scopeErr != nil {
+			return nil, fmt.Errorf("构造应用范围枚举存储失败: %w", scopeErr)
+		}
+		managed.Checker.SetApplicationScopeLister(appScopeStore)
 	}
 	// 认证/安全域（TOTP/Passkey/MFA/恢复代码/找回/客服/人工恢复）与独立服务共用
 	// 同一装配；它同时把恢复服务接到会话服务的受限恢复会话闸门。

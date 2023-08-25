@@ -262,6 +262,64 @@ overview, err := runtime.Security().Status(ctx, app.SecurityStatusRequest{
 - 受限恢复会话只能查询状态并完成新因素绑定，不能读取安全状态或执行业务操作；
   强认证要求下的允许重绑方法只有 Passkey。
 
+### 3.3 受信管理门面（`app` 包，步骤 182 起）
+
+`Runtime.Admin()` 提供用户/资料/应用/角色/权限的受控管理；调用者必须由可信边界
+建立，普通请求参数或零值调用者一律拒绝：
+
+```go
+local := runtime.LocalAdmin()          // 本机受信操作者（宿主进程/部署管理员）
+admin := runtime.AdminSession(secret)  // 真实管理用户会话（完整会话）
+
+// 自举（本机受信通道）：登记应用/权限/角色并分配首个管理员
+appA, _ := runtime.Admin().CreateApplication(ctx, app.AdminCreateApplicationRequest{
+    Caller: local, Name: "应用 A"})
+appA, _ = runtime.Admin().SetApplicationEnabled(ctx, app.AdminSetApplicationEnabledRequest{
+    Caller: local, ApplicationID: appA.ID, Enabled: true, ExpectedRowVersion: appA.RowVersion})
+perm, _ := runtime.Admin().CreatePermission(ctx, app.AdminCreatePermissionRequest{
+    Caller: local, ScopeID: appA.ID, Key: "roles.assign", Name: "分配应用角色"})
+role, _ := runtime.Admin().CreateRole(ctx, app.AdminCreateRoleRequest{
+    Caller: local, ScopeID: appA.ID, Key: "app-admin", Name: "应用管理员"})
+_ = runtime.Admin().AddRolePermission(ctx, app.AdminRolePermissionRequest{
+    Caller: local, RoleID: role.ID, PermissionID: perm.ID})
+_ = runtime.Admin().GrantApplicationRole(ctx, app.GrantRoleRequest{
+    Caller: local, UserID: adminUserID, RoleID: role.ID})
+_ = runtime.Admin().GrantDelegation(ctx, app.AdminDelegationGrantRequest{
+    Caller: local, DelegatorUserID: adminUserID, ScopeID: appA.ID,
+    PermissionKey: "roles.assign"})
+
+// 真实管理用户：关闭自主注册时仍可建用户；敏感操作需要密码 + 强因素动态码
+created, _ := runtime.Admin().CreateUser(ctx, app.AdminCreateUserRequest{
+    Caller: admin, Username: "staff-1", ApplicationIDs: []string{appA.ID}})
+profile, _ := runtime.Admin().GetUserProfile(ctx, app.AdminUserRequest{
+    Caller: admin, UserID: created.ID})
+_ = runtime.Admin().GrantApplicationRole(ctx, app.GrantRoleRequest{
+    Caller: admin, UserID: created.ID, RoleID: userRoleID,
+    Password: currentPassword, TOTPCode: authenticatorCode})
+effective, _ := runtime.Admin().EffectivePermissions(ctx, app.AdminPermissionQuery{
+    Caller: local, UserID: created.ID, ScopeID: appA.ID})
+_ = runtime.Admin().RevokeApplicationRole(ctx, app.RevokeRoleRequest{
+    Caller: admin, UserID: created.ID, RoleID: userRoleID})
+```
+
+安全语义：
+
+- 管理调用者只能由 `Runtime.LocalAdmin()`（本机受信操作者，审计主体为本地管理员，
+  不是 is_root、不改变 root 保护，仅用于宿主自举）或 `Runtime.AdminSession()`
+  （真实完整用户会话）建立；两者都不能由请求参数自称。
+- 用户主体的一切操作按当前有效权限判定；角色权限组合与角色分配是敏感操作，需要
+  真实近期再次认证（密码 + 强因素动态码），并由真实委派引擎在事务内校验
+  「可转授资格 + 当前持有 + 自我提权 + 目标白名单 + 数据范围」——越权转授、
+  自我提权和跨应用写入都会以稳定错误码拒绝。
+- 管理员建用户直接走账户服务，与 `registration.enabled` 无关；全局账户资格与应用
+  内成员/角色分离：全局操作要求系统范围权限，应用内操作只作用于目标应用。
+- 不提供传入 `is_root`、系统资格或已验证状态等特权字段；root 账户由既有服务保护，
+  不能被普通角色分配或资料修改。
+- 撤销角色分配立即影响后续权限判定（权限引擎读取当前授权，不缓存）；关键操作写
+  真实审计（操作者、目标、请求编号），本机受信通道的敏感引导另写独立审计事件。
+- 应用范围候选枚举由共享装配注入（步骤 184），嵌入模式与独立服务使用同一候选实现；
+  缺少该能力时权限层按 fail-closed 拒绝，不猜测可管理范围。
+
 ## 4. 生命周期、取消与资源所有权
 
 - 状态机：`StateNew → StateRunning → StateClosed`。`Start` 只能成功一次；失败或
@@ -360,9 +418,12 @@ go list -f '{{join .Imports "\n"}}' .   # 直接导入仅 stdlib + github.com/ka
 
 - 公开 `app` 包已提供与独立服务共用的运行时基础装配（配置、SQLite、迁移策略、
   主密钥环、审计、领域服务、敏感闸门、认证/安全域、后台任务注册/显式启停、管理域
-  服务），并提供密码登录、TOTP/Passkey 第二因素、受限恢复与敏感操作再次认证门面
-  （步骤 180/181）。受信管理写入门面（182）与 HTTP/页面挂载（183）仍在后续步骤
-  补齐；在这些步骤完成前，宿主不能仅靠公开包获得完整身份服务。
+  服务），并提供密码登录、TOTP/Passkey 第二因素、受限恢复、敏感操作再次认证与
+  受信管理门面（步骤 180/181/182）。HTTP/页面挂载（183）仍在后续步骤补齐；在该
+  步骤完成前，宿主不能仅靠公开包获得完整身份服务（但可用 Go API 完成账户、认证、
+  安全、管理与权限流程）。
+- 受信管理门面只覆盖用户/资料/应用/角色/权限；应用删除、会话管理、客服恢复等
+  其余管理能力仍走后续步骤/页面的受控入口。
 - 本步骤的公开认证门面不包含 Passkey 注册/登录 ceremony 的浏览器交互与邮件验证码
   输入界面（需要 183 的 HTTP/页面挂载）；Passkey 正向流程由内部服务测试覆盖，外部
   module 验收覆盖关闭 Passkey 时 TOTP 仍可用，未做真实浏览器/真实认证器互操作。
@@ -372,6 +433,31 @@ go list -f '{{join .Imports "\n"}}' .   # 直接导入仅 stdlib + github.com/ka
   未在本步验证；通知/邮件真实外发一律需宿主显式配置目标。
 
 ## 8. 变更记录
+
+### 步骤 182（2026-11，未发布 v1 前）
+
+完成公开受信管理门面，替换此前 `GrantApplicationRole` 的固定报错占位（全部为兼容
+扩展；新增方法与类型，未调用时行为不变）：
+
+- `Runtime.Admin()` 的 `AdminService` 扩展为完整管理门面：`CreateUser`（与
+  `registration.enabled` 无关）、`GetUserProfile`/`UpdateUserProfile`、
+  `AddApplicationMember`、`CreateApplication`/`SetApplicationEnabled`、
+  `CreateRole`/`CreatePermission`/`AddRolePermission`、`GrantApplicationRole`/
+  `RevokeApplicationRole`、`GrantDelegation`（仅本机受信通道可签发）、
+  `ListRolePermissions`、`EffectivePermissions`、`CheckPermission`。
+- 新增 `AdminCaller` 可信调用者：`Runtime.LocalAdmin()`（宿主本机受信操作者，
+  自举通道，审计主体为本地管理员）与 `Runtime.AdminSession()`（真实完整用户会话）；
+  零值/其他 Runtime 的调用者一律拒绝，普通请求参数不能自称管理员。
+- 用户主体操作复用真实领域服务与既有授权/委派/审计：角色权限组合与角色分配为敏感
+  操作，需要真实近期再次认证（密码 + 强因素动态码），委派引擎在事务内校验可转授
+  资格、当前持有、自我提权、目标白名单与数据范围；越权转授、自我提权、跨应用写入
+  与普通用户伪造管理员均以稳定错误码拒绝。撤销分配立即影响后续权限判定。
+- 共享装配注入应用范围候选枚举（步骤 184 能力），嵌入模式与独立服务使用同一候选
+  实现；缺少该能力时权限层 fail-closed。
+- `examples/embedded-runtime` 扩展：外部 module 用真实临时 SQLite 完成本机受信
+  自举（应用/权限/角色/委派资格/首次管理员）→ 管理员登录（TOTP）→ 关闭自主注册
+  时建用户/改资料/分配与撤回应用角色/权限查询 → 跨应用/越权转授/普通用户伪造
+  拒绝 → 撤销即时生效。
 
 ### 步骤 181（2026-11，未发布 v1 前）
 

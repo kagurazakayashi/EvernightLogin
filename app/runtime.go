@@ -228,8 +228,9 @@ func (r *Runtime) Sessions() SessionService { return &sessionFacade{r: r} }
 // Security 返回认证/安全设置门面（TOTP 绑定、恢复代码、能力状态）。
 func (r *Runtime) Security() SecurityService { return &securityFacade{r: r} }
 
-// Admin 返回管理门面（Phase A 明确未实现角色分配）。
-func (r *Runtime) Admin() AdminService { return &adminFacade{} }
+// Admin 返回受信管理门面；调用者必须先由 Runtime.LocalAdmin() 或
+// Runtime.AdminSession() 建立可信上下文，普通请求参数不能自称管理员。
+func (r *Runtime) Admin() AdminService { return &adminFacade{r: r} }
 
 type bootstrapFacade struct{ r *Runtime }
 
@@ -390,12 +391,4 @@ func (f *sessionFacade) Revoke(ctx context.Context, sessionSecret []byte) error 
 		return mapServiceError(err)
 	}
 	return nil
-}
-
-type adminFacade struct{}
-
-func (f *adminFacade) GrantApplicationRole(ctx context.Context, req GrantRoleRequest) error {
-	_ = ctx
-	_ = req
-	return configError("受信管理写入尚未装配：当前版本不提供角色分配门面")
 }

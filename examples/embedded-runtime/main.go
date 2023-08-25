@@ -12,6 +12,9 @@
 //     补充验证 -> 完整会话；敏感操作再次认证（错误密码拒绝）；恢复代码需近期强
 //     认证，使用后只进入受限恢复会话（不能访问业务）；Passkey 关闭时 TOTP 仍可用；
 //     关闭自助注册只影响注册入口，已有账户仍可登录；
+//   - 步骤 182：本机受信操作者自举应用/权限/角色/委派资格与首个应用管理员；
+//     真实管理员关闭自主注册时建用户、读写资料、分配/撤回应用角色、查询权限；
+//     跨应用写入/越权转授/普通用户伪造管理员被拒绝；撤销后权限立即失效。
 //   - 显式 Start 启动允许的后台任务；重复 Start 返回 ErrAlreadyStarted；
 //   - Close 幂等；宿主注入的数据库/通知器不被运行时关闭；
 //   - 启动前取消 fail-closed（实例进入 closed），之后只能 Close；
@@ -88,7 +91,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "embedded-runtime 验收失败:", err)
 		os.Exit(1)
 	}
-	fmt.Println("embedded-runtime 验收通过：公开 app 包完成 TOTP 第二因素/敏感操作再次认证/受限恢复/显式启动/取消/重复关闭/宿主资源所有权/失败清理")
+	fmt.Println("embedded-runtime 验收通过：公开 app 包完成 TOTP 第二因素/敏感操作再次认证/受限恢复/受信管理（建用户/资料/应用角色分配/权限查询/越权拒绝）/显式启动/取消/重复关闭/宿主资源所有权/失败清理")
 }
 
 func run() error {
@@ -307,6 +310,12 @@ func run() error {
 		return fmt.Errorf("Sessions.Revoke: %w", err)
 	}
 
+	// ===== 步骤 182：受信管理门面（用户/资料/应用/角色/权限） =====
+	if err := runAdminScenario(ctx, runtime, clock, start.Secret, user.ID,
+		alicePassword); err != nil {
+		return err
+	}
+
 	// 显式启动允许的后台任务；重复启动返回 ErrAlreadyStarted。
 	if err := runtime.Start(ctx); err != nil {
 		return fmt.Errorf("Start: %w", err)
@@ -351,6 +360,11 @@ func run() error {
 		RequestID: login.NewRequestID(),
 	}); !login.IsErrorCode(err, login.CodeConfigInvalid) {
 		return fmt.Errorf("关闭注册后创建入口应返回 CONFIG_INVALID，实际 %v", err)
+	}
+	// 关闭自主注册后，真实管理员会话仍可建用户（管理员建用户与注册开关分离）。
+	if err := adminCreateUserWhileRegistrationDisabled(ctx, closedRuntime, clock,
+		start.Secret, alicePassword); err != nil {
+		return err
 	}
 	if _, err := closedRuntime.Auth().Login(ctx, app.LoginRequest{
 		Username: "alice", Password: alicePassword, ClientIP: "127.0.0.1",

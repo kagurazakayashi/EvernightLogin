@@ -235,11 +235,286 @@ type AccessDecision struct {
 	Application string
 }
 
-// GrantRoleRequest 是宿主受信角色分配请求（Phase A 暂未开放，返回明确错误）。
-type GrantRoleRequest struct {
+// ===== 受信管理门面（步骤 182） =====
+
+// AdminCaller 是可信管理调用者，只能由 Runtime 构造：
+//   - Runtime.LocalAdmin()：本机受信操作者（app.Options.OperatorID），代表宿主进程
+//     自己——部署管理员；审计主体为本地管理员，用于初始化/受控引导；
+//   - Runtime.AdminSession(secret)：真实管理用户会话；一切操作按当前有效权限与
+//     委派资格判定，敏感操作还需要近期再次认证。
+//
+// 零值或无主 AdminCaller 一律拒绝。它不是 is_root：不能把任意用户/请求标记成
+// root，也不能跳过权限与委派检查（本机受信通道除外，其审计主体仍为本地管理员）。
+type AdminCaller struct {
+	runtime       *Runtime
+	sessionSecret []byte
+	local         bool
+}
+
+// AdminUser 是管理视图的脱敏用户记录。
+type AdminUser struct {
+	ID        string
+	Username  string
+	Nickname  string
+	Status    string
+	CreatedAt time.Time
+}
+
+// AdminUserProfile 是允许管理员读写的用户资料视图（不含密码、密钥、安全版本）。
+type AdminUserProfile struct {
+	UserID     string
+	Username   string
+	Nickname   string
+	Biography  string
+	Language   string
+	Timezone   string
+	IsRoot     bool
+	RowVersion int64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// AdminCreateUserRequest 由管理门面创建全局账户（与 registration.enabled 无关）。
+// ApplicationIDs 非空时同时建立这些应用的成员关系（需要各应用的成员管理权限）。
+type AdminCreateUserRequest struct {
+	Caller         AdminCaller
+	Username       string
+	Nickname       string
+	Biography      string
+	ApplicationIDs []string
+	RequestID      string
+}
+
+// AdminUserRequest 读取用户资料。
+type AdminUserRequest struct {
+	Caller AdminCaller
 	UserID string
-	AppID  string
+}
+
+// AdminUpdateProfileRequest 修改允许管理员改写的资料字段；nil 表示不修改。
+type AdminUpdateProfileRequest struct {
+	Caller             AdminCaller
+	UserID             string
+	Nickname           *string
+	Biography          *string
+	Language           *string
+	Timezone           *string
+	ExpectedRowVersion int64
+	RequestID          string
+}
+
+// AdminApplication 是应用登记信息（不含客户端秘密）。
+type AdminApplication struct {
+	ID          string
+	Name        string
+	Description string
+	OwnerUserID string
+	Status      string
+	RowVersion  int64
+	CreatedAt   time.Time
+}
+
+// AdminCreateApplicationRequest 登记应用（应用范围容器）。本机受信操作者可引导
+// 创建；用户主体需要系统范围 applications.create。ClientType 为空时使用
+// confidential；创建后的应用默认停用，需要显式启用。
+type AdminCreateApplicationRequest struct {
+	Caller      AdminCaller
+	Name        string
+	Description string
+	OwnerUserID string
+	// ClientType 是 "public"（公开客户端，不保存密钥）或 "confidential"（服务端）。
+	ClientType string
+	RequestID  string
+}
+
+// AdminApplicationRequest 读取/操作单个应用。
+type AdminApplicationRequest struct {
+	Caller        AdminCaller
+	ApplicationID string
+	RequestID     string
+}
+
+// AdminSetApplicationEnabledRequest 启用或停用应用（启用会恢复其范围权限，由应用
+// 服务按真实委派资格复核）。
+type AdminSetApplicationEnabledRequest struct {
+	Caller             AdminCaller
+	ApplicationID      string
+	Enabled            bool
+	ExpectedRowVersion int64
+	RequestID          string
+}
+
+// AdminRole 是角色登记信息。
+type AdminRole struct {
+	ID            string
+	ScopeID       string
+	ApplicationID string
+	Key           string
+	Name          string
+	Enabled       bool
+}
+
+// AdminCreateRoleRequest 在系统或应用范围登记角色（创建不授予任何权限）。
+// Limits 为空时使用直白的默认边界说明（领域服务要求限制说明非空）。
+type AdminCreateRoleRequest struct {
+	Caller      AdminCaller
+	ScopeID     string
+	Key         string
+	Name        string
+	Description string
+	Limits      string
+	RequestID   string
+}
+
+// AdminPermission 是权限目录条目视图。
+type AdminPermission struct {
+	ID       string
+	ScopeID  string
+	Key      string
+	Name     string
+	Enabled  bool
+	RootOnly bool
+}
+
+// AdminCreatePermissionRequest 在系统或应用范围登记自定义权限。
+// Limits 为空时使用直白的默认边界说明（领域服务要求限制说明非空）。
+type AdminCreatePermissionRequest struct {
+	Caller      AdminCaller
+	ScopeID     string
+	Key         string
+	Name        string
+	Description string
+	Limits      string
+	RequestID   string
+}
+
+// AdminRoleRequest 读取角色权限组合。
+type AdminRoleRequest struct {
+	Caller AdminCaller
 	RoleID string
+}
+
+// AdminRolePermissionRequest 向角色添加权限（敏感操作：真实再次认证或本机受信
+// 操作者确认；委派资格在服务事务内复核）。
+type AdminRolePermissionRequest struct {
+	Caller       AdminCaller
+	RoleID       string
+	PermissionID string
+	// Password/TOTPCode 只用于用户主体的近期再次认证；不会被保存或记录。
+	Password  string
+	TOTPCode  string
+	RequestID string
+}
+
+// GrantRoleRequest 把角色分配给用户（敏感操作；应用角色要求目标用户是该应用
+// active 成员，且操作者当前持有被转授的全部权限）。
+type GrantRoleRequest struct {
+	Caller AdminCaller
+	UserID string
+	RoleID string
+	// Password/TOTPCode 只用于用户主体的近期再次认证；不会被保存或记录。
+	Password  string
+	TOTPCode  string
+	RequestID string
+}
+
+// RevokeRoleRequest 撤回用户的角色分配（安全清理，允许对已停用角色/账户执行）。
+type RevokeRoleRequest struct {
+	Caller    AdminCaller
+	UserID    string
+	RoleID    string
+	RequestID string
+}
+
+// AdminAddMemberRequest 把已有用户加入应用（应用成员关系，不授予角色权限）。
+type AdminAddMemberRequest struct {
+	Caller        AdminCaller
+	ApplicationID string
+	UserID        string
+	RequestID     string
+}
+
+// AdminPermissionQuery 查询某用户在指定范围（"system" 或应用 ID）的有效权限。
+type AdminPermissionQuery struct {
+	Caller  AdminCaller
+	UserID  string
+	ScopeID string
+	Limit   int
+	Offset  int
+}
+
+// AdminEffectivePermissions 是有效权限查询结果；DeniedCode 非空表示查询被状态
+// 或授权拒绝。
+type AdminEffectivePermissions struct {
+	UserID      string
+	ScopeID     string
+	Permissions []AdminPermission
+	DeniedCode  string
+}
+
+// AdminPermissionCheck 对某用户执行一次联合权限检查（权限键 + 范围 + all/any）。
+type AdminPermissionCheck struct {
+	Caller     AdminCaller
+	UserID     string
+	ScopeID    string
+	Permission string
+	Mode       string
+}
+
+// AdminPermissionDecision 是联合权限检查结果；拒绝时给出稳定码与原因。
+type AdminPermissionDecision struct {
+	Allowed bool
+	Code    string
+	Reason  string
+}
+
+// AdminDelegationGrantRequest 为本机受信操作者签发“可转授资格”：只有受信本地/
+// 系统通道能签发；用户主体不能给自己或他人签发委派资格。签发只代表“可转授能力
+// 上限”，实际转授仍要求操作者当前持有该权限并经委派引擎事务内复核。
+type AdminDelegationGrantRequest struct {
+	Caller          AdminCaller
+	DelegatorUserID string
+	ScopeID         string
+	PermissionKey   string
+	// MaxDataScope 是允许转授的数据范围上限（JSON，空表示 all）。
+	MaxDataScope string
+	RequestID    string
+}
+
+// AdminDelegation 是已签发的委派资格视图。
+type AdminDelegation struct {
+	ID              string
+	DelegatorUserID string
+	ScopeID         string
+	PermissionKey   string
+	GrantedBy       string
+}
+
+// AdminService 是受信管理门面：用户/资料/应用/角色/权限的受控管理操作。
+//
+// 安全语义：
+//   - 调用者必须由 Runtime.LocalAdmin() 或 Runtime.AdminSession() 建立，普通请求
+//     参数无法自称管理员；
+//   - 用户主体的一切操作按当前有效权限与委派资格判定，敏感操作需要近期再次认证；
+//   - 管理员建用户与 registration.enabled 无关；全局账户资格与应用内角色分离；
+//   - 应用作用域操作只影响目标应用，跨应用写入按缺失权限拒绝；
+//   - 不接受 is_root、系统资格或已验证状态等特权字段；root 账户受既有服务保护。
+type AdminService interface {
+	CreateUser(ctx context.Context, req AdminCreateUserRequest) (AdminUser, error)
+	GetUserProfile(ctx context.Context, req AdminUserRequest) (AdminUserProfile, error)
+	UpdateUserProfile(ctx context.Context, req AdminUpdateProfileRequest) (AdminUserProfile, error)
+	AddApplicationMember(ctx context.Context, req AdminAddMemberRequest) error
+	CreateApplication(ctx context.Context, req AdminCreateApplicationRequest) (AdminApplication, error)
+	SetApplicationEnabled(ctx context.Context, req AdminSetApplicationEnabledRequest) (AdminApplication, error)
+	CreateRole(ctx context.Context, req AdminCreateRoleRequest) (AdminRole, error)
+	CreatePermission(ctx context.Context, req AdminCreatePermissionRequest) (AdminPermission, error)
+	AddRolePermission(ctx context.Context, req AdminRolePermissionRequest) error
+	GrantApplicationRole(ctx context.Context, req GrantRoleRequest) error
+	RevokeApplicationRole(ctx context.Context, req RevokeRoleRequest) error
+	GrantDelegation(ctx context.Context, req AdminDelegationGrantRequest) (AdminDelegation, error)
+	ListRolePermissions(ctx context.Context, req AdminRoleRequest) ([]AdminPermission, error)
+	EffectivePermissions(ctx context.Context, req AdminPermissionQuery) (AdminEffectivePermissions, error)
+	CheckPermission(ctx context.Context, req AdminPermissionCheck) (AdminPermissionDecision, error)
 }
 
 // BootstrapService 是首次初始化门面。
@@ -285,11 +560,6 @@ type AccessService interface {
 // SessionService 会话语义有限：撤销当前会话。
 type SessionService interface {
 	Revoke(ctx context.Context, sessionSecret []byte) error
-}
-
-// AdminService 是受信管理门面；Phase A 不提供角色分配（留 146-149）。
-type AdminService interface {
-	GrantApplicationRole(ctx context.Context, req GrantRoleRequest) error
 }
 
 var _ = net.IP{}

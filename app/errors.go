@@ -67,6 +67,12 @@ var domainCodeToPublic = map[string]login.ErrorCode{
 	"MAIL_DELIVERY_FAILED": login.CodeMailDeliveryFailed,
 	"INTERNAL_ERROR":       login.CodeInternalError,
 	"USER_DISABLED":        login.CodeUserDisabled,
+	// 委派/权限引擎的稳定码（只复用根包已登记错误码）：
+	"PERMISSION_REQUIRED":     login.CodePermissionRequired,
+	"APP_SCOPE_MISMATCH":      login.CodeAppScopeMismatch,
+	"CLIENT_DISABLED":         login.CodeClientDisabled,
+	"RESOURCE_FORBIDDEN":      login.CodeResourceForbidden,
+	"APP_MEMBERSHIP_REQUIRED": login.CodeAppMembershipRequired,
 }
 
 // mapDomainError 把领域错误码映射为稳定公开错误；message 是面向调用者的直白
