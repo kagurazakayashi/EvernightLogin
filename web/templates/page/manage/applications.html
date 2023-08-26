@@ -1,0 +1,28 @@
+{{define "page-title"}}{{t "page.manage.apps.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.manage.apps.intro"}}</p>
+{{with .Data.status}}<div class="ln-banner ln-banner--success" role="status">{{t "page.manage.status.generic"}}</div>{{end}}
+{{with .Data.apps}}
+{{if .Applications}}
+<table class="ln-table">
+  <caption>{{t "page.manage.apps.title"}}</caption>
+  <thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.manage.apps.app_id"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.manage.apps.actions"}}</th></tr></thead>
+  <tbody>{{range .Applications}}<tr>
+    <td>{{.Name}}</td>
+    <td><code>{{.ID}}</code></td>
+    <td>{{if eq .Status "active"}}{{t "common.state.enabled"}}{{else}}{{t "common.state.disabled"}}{{end}}</td>
+    <td>
+      <a href="{{route "manage.members"}}?app_id={{.ID}}">{{t "page.manage.apps.members"}}</a>
+      <a href="{{route "manage.roles"}}?app_id={{.ID}}">{{t "page.manage.apps.roles"}}</a>
+      <a href="{{route "manage.permissions"}}?app_id={{.ID}}">{{t "page.manage.apps.permissions"}}</a>
+    </td>
+  </tr>{{end}}</tbody>
+</table>
+{{if .HasMore}}<nav class="ln-pagination"><a href="{{route "manage.apps"}}?offset={{.NextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
+{{else}}
+<div class="ln-state"><p class="ln-state__title">{{t "page.manage.apps.empty"}}</p>
+<p class="ln-meta">{{t "page.manage.apps.empty_hint"}}</p></div>
+{{end}}
+{{end}}
+{{end}}

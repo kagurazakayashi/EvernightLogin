@@ -1,0 +1,27 @@
+{{define "page-title"}}{{t "page.manage.roles.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.app}}<p>{{t "page.manage.app.header"}}: <strong>{{.Name}}</strong> <code>{{.ID}}</code></p>{{end}}
+{{with .Data.status}}<div class="ln-banner ln-banner--success" role="status">{{t "page.manage.status.generic"}}</div>{{end}}
+<p class="ln-meta">{{t "page.manage.roles.scope_hint"}}</p>
+{{with .Data.roles}}{{if .Roles}}
+<table class="ln-table"><caption>{{t "page.manage.roles.title"}}</caption>
+<thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.manage.roles.key"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.manage.roles.assignments"}}</th><th scope="col">{{t "page.manage.roles.actions"}}</th></tr></thead>
+<tbody>{{range .Roles}}<tr>
+  <td>{{.Name}}</td><td><code>{{.Key}}</code></td>
+  <td>{{if .Enabled}}{{t "common.state.enabled"}}{{else}}{{t "common.state.disabled"}}{{end}}</td>
+  <td>{{t_fmt "page.manage.roles.assignment_count" "users" (format_number .UserAssignments) "groups" (format_number .GroupAssignments)}}</td>
+  <td>
+    <a href="{{route "manage.role_detail"}}?app_id={{$.Data.app.ID}}&role_id={{.ID}}">{{t "page.manage.roles.open"}}</a>
+    <a href="{{route "manage.role_assignments"}}?app_id={{$.Data.app.ID}}&role_id={{.ID}}">{{t "page.manage.roles.assign"}}</a>
+    <form method="post" action="{{route "manage.role_state"}}" novalidate>
+      {{csrf_field}}<input type="hidden" name="app_id" value="{{$.Data.app.ID}}"><input type="hidden" name="role_id" value="{{.ID}}">
+      {{if .Enabled}}<input type="hidden" name="enable" value="false">{{template "component.button" (dict "label" (t "page.manage.roles.disable") "variant" "danger" "type" "submit")}}
+      {{else}}<input type="hidden" name="enable" value="true">{{template "component.button" (dict "label" (t "page.manage.roles.enable") "variant" "secondary" "type" "submit")}}{{end}}
+      <label><input type="checkbox" name="confirm" value="yes" required> {{t "page.manage.roles.confirm"}}</label>
+    </form>
+  </td>
+</tr>{{end}}</tbody></table>
+{{if .HasMore}}<nav class="ln-pagination"><a href="{{route "manage.roles"}}?app_id={{$.Data.app.ID}}&offset={{.NextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
+{{else}}<div class="ln-state"><p class="ln-state__title">{{t "page.manage.roles.empty"}}</p></div>{{end}}{{end}}
+{{end}}

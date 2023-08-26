@@ -397,6 +397,11 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 			return managed.ManagedPolicyApprovals.Register(userID, binding)
 		},
 	}
+	// 步骤 185：业务应用管理员页面（/manage/**，UIAccessUser）复用同一应用范围
+	// 判定与真实领域服务；/admin/** 的强认证访问级别保持不变。
+	webOptions.PageManage = &login.UIPageManageOptions{
+		Apps: appsAdapter, RBAC: rbacAdapter,
+	}
 	// 客服/人工恢复页：真实 support/manualrecovery 服务；人工恢复制度默认关闭，
 	// 页面显示真实关闭状态与受控申请结果，不伪造审批或执行成功。
 	supportAdapter, supportErr := uiadminadapter.NewSupport(uiadminadapter.SupportOptions{

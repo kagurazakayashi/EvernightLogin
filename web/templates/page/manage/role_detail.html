@@ -1,0 +1,32 @@
+{{define "page-title"}}{{t "page.manage.role_detail.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.app}}<p>{{t "page.manage.app.header"}}: <strong>{{.Name}}</strong> <code>{{.ID}}</code> <a href="{{route "manage.roles"}}?app_id={{.ID}}">{{t "common.action.back"}}</a></p>{{end}}
+{{with .Data.status}}<div class="ln-banner ln-banner--success" role="status">{{t "page.manage.status.generic"}}</div>{{end}}
+{{with .Data.detail}}
+{{$role := .Role}}{{$app := $.Data.app}}
+<h2>{{$role.Name}} <code>{{$role.Key}}</code></h2>
+<p>{{t "page.manage.role_detail.status"}}: {{if $role.Enabled}}{{t "common.state.enabled"}}{{else}}{{t "common.state.disabled"}}{{end}} · {{t "page.manage.role_detail.builtin"}}: {{if $role.Builtin}}{{t "page.manage.role_detail.builtin_yes"}}{{else}}{{t "page.manage.role_detail.builtin_no"}}{{end}}</p>
+{{if $role.Description}}<p class="ln-meta">{{$role.Description}}</p>{{end}}
+<h3>{{t "page.manage.role_detail.current_permissions"}}</h3>
+<ul class="ln-list">{{range $role.CurrentPermissions}}<li><strong>{{.Name}}</strong> <code>{{.Key}}</code> {{if .Description}}— {{.Description}}{{end}}</li>{{else}}<li class="ln-meta">{{t "page.manage.role_detail.no_permission"}}</li>{{end}}</ul>
+{{if .PermissionCatalogUnavailable}}
+<div class="ln-state"><p>{{t "page.manage.role_detail.catalog_unavailable"}}</p></div>
+{{else}}
+<h3>{{t "page.manage.role_detail.compose_title"}}</h3>
+<p class="ln-meta">{{t "page.manage.role_detail.compose_hint"}}</p>
+<form method="post" action="{{route "manage.role_permissions"}}" novalidate>
+  {{csrf_field}}<input type="hidden" name="app_id" value="{{$app.ID}}"><input type="hidden" name="role_id" value="{{$role.ID}}">
+  <label class="ln-field__label" for="manage-role-perm">{{t "page.manage.role_detail.permission"}}</label>
+  <select class="ln-input" id="manage-role-perm" name="permission_id" required>
+    {{range .Available}}<option value="{{.PermissionID}}">{{.Name}} ({{.Key}})</option>{{end}}
+  </select>
+  <label class="ln-field__label" for="manage-role-perm-add"><input type="radio" id="manage-role-perm-add" name="enable" value="true" checked> {{t "page.manage.role_detail.add_permission"}}</label>
+  <label class="ln-field__label" for="manage-role-perm-remove"><input type="radio" id="manage-role-perm-remove" name="enable" value="false"> {{t "page.manage.role_detail.remove_permission"}}</label>
+  <label><input type="checkbox" name="confirm" value="yes" required> {{t "page.manage.role_detail.compose_confirm"}}</label>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.manage.role_detail.compose_submit") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}
+<p><a href="{{route "manage.role_assignments"}}?app_id={{$app.ID}}&role_id={{$role.ID}}">{{t "page.manage.roles.assign"}}</a></p>
+{{end}}
+{{end}}

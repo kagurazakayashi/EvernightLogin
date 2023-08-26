@@ -314,6 +314,9 @@ type WebUIOptions struct {
 	PageSecurity *UIPageSecurityOptions
 	// PageRBAC 非 nil 时注册步骤 69 角色/权限/委派/有效权限页面。
 	PageRBAC *UIPageRBACOptions
+	// PageManage 非 nil 时注册步骤 185 业务应用管理员页面（我可管理的应用/成员/
+	// 应用内角色与权限关联），全部 UIAccessUser，供应用范围管理员在普通业务会话使用。
+	PageManage *UIPageManageOptions
 	// PageApps 非 nil 时注册步骤 70 应用资料/成员/安全接入/凭证/许可/状态页面。
 	PageApps *UIPageAppsOptions
 	// PageSupport 非 nil 时注册步骤 71 客服求助/人工恢复申请/独立审批页面。
@@ -372,6 +375,7 @@ type WebUI struct {
 	pageOAuth           *pageOAuthPages
 	pageSecurity        *pageSecurityPages
 	pageRBAC            *pageRBACPages
+	pageManage          *pageManagePages
 	pageApps            *pageAppsPages
 	pageSupport         *pageSupportPages
 	pageSecurityPolicy  *pageSecurityPolicyPages
@@ -467,6 +471,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageRBAC = pages
+	}
+	if options.PageManage != nil {
+		pages, pageErr := newPageManagePages(*options.PageManage)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageManage = pages
 	}
 	if options.PageApps != nil {
 		pages, pageErr := newPageAppsPages(*options.PageApps)
@@ -702,6 +713,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageRBAC != nil {
 		routes = append(routes, ui.pageRBAC.routes...)
 	}
+	if ui.pageManage != nil {
+		routes = append(routes, ui.pageManage.routes...)
+	}
 	if ui.pageApps != nil {
 		routes = append(routes, ui.pageApps.routes...)
 	}
@@ -791,6 +805,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageRBAC != nil {
 		for name := range ui.pageRBAC.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageManage != nil {
+		for name := range ui.pageManage.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -1130,6 +1151,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageRBAC != nil {
 		handler = ui.pageRBAC.handlers[route.Name]
+	}
+	if handler == nil && ui.pageManage != nil {
+		handler = ui.pageManage.handlers[route.Name]
 	}
 	if handler == nil && ui.pageApps != nil {
 		handler = ui.pageApps.handlers[route.Name]

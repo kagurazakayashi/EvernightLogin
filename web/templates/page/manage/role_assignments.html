@@ -1,0 +1,39 @@
+{{define "page-title"}}{{t "page.manage.assign.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.app}}<p>{{t "page.manage.app.header"}}: <strong>{{.Name}}</strong> <code>{{.ID}}</code> <a href="{{route "manage.roles"}}?app_id={{.ID}}">{{t "common.action.back"}}</a></p>{{end}}
+{{with .Data.status}}<div class="ln-banner ln-banner--success" role="status">{{t "page.manage.assign.done"}}</div>{{end}}
+{{with .Data.role}}
+<h2>{{t "page.manage.assign.for_role"}}: {{.Name}} <code>{{.Key}}</code></h2>
+{{end}}
+<p class="ln-meta">{{t "page.manage.assign.hint"}}</p>
+<p class="ln-meta">{{t "page.manage.assign.group_hint"}}</p>
+{{with .Data.assignments}}
+<h3>{{t "page.manage.assign.direct_users"}}</h3>
+<table class="ln-table"><thead><tr><th scope="col">{{t "page.manage.assign.target_id"}}</th><th scope="col">{{t "page.manage.assign.data_scope"}}</th><th scope="col">{{t "page.manage.assign.assigned_by"}}</th></tr></thead>
+<tbody>{{range .Users}}<tr><td><code>{{.UserID}}</code></td><td>{{.DataScopeText}}</td><td><code>{{.AssignedBy}}</code></td></tr>{{else}}<tr><td colspan="3" class="ln-meta">{{t "page.manage.assign.no_users"}}</td></tr>{{end}}</tbody></table>
+<h3>{{t "page.manage.assign.indirect_groups"}}</h3>
+<table class="ln-table"><thead><tr><th scope="col">{{t "page.manage.assign.target_id"}}</th><th scope="col">{{t "page.manage.assign.scope"}}</th></tr></thead>
+<tbody>{{range .Groups}}<tr><td><code>{{.GroupID}}</code></td><td><code>{{.ScopeID}}</code></td></tr>{{else}}<tr><td colspan="2" class="ln-meta">{{t "page.manage.assign.no_groups"}}</td></tr>{{end}}</tbody></table>
+{{end}}
+{{with .Data.role}}
+<h3>{{t "page.manage.assign.form_title"}}</h3>
+<form method="post" action="{{route "manage.role_assign"}}" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="app_id" value="{{$.Data.app.ID}}"><input type="hidden" name="role_id" value="{{.ID}}">
+  <label class="ln-field__label" for="manage-assign-kind">{{t "page.manage.assign.target_kind"}}</label>
+  <select class="ln-input" id="manage-assign-kind" name="target_kind">
+    <option value="user">{{t "page.manage.assign.user"}}</option>
+    <option value="group">{{t "page.manage.assign.group"}}</option>
+  </select>
+  {{template "component.field" (dict "id" "manage-assign-target" "name" "target_id" "label" (t "page.manage.assign.target_id") "value" "" "required" true "help" (t "page.manage.assign.target_help"))}}
+  <label class="ln-field__label" for="manage-assign-action">{{t "page.manage.assign.action"}}</label>
+  <select class="ln-input" id="manage-assign-action" name="action">
+    <option value="assign">{{t "page.manage.assign.assign"}}</option>
+    <option value="revoke">{{t "page.manage.assign.revoke"}}</option>
+  </select>
+  <label><input type="checkbox" name="confirm" value="yes" required> {{t "page.manage.assign.confirm"}}</label>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.manage.assign.submit") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}
+{{end}}

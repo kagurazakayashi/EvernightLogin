@@ -1,0 +1,26 @@
+{{define "page-title"}}{{t "page.manage.permissions.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.app}}<p>{{t "page.manage.app.header"}}: <strong>{{.Name}}</strong> <code>{{.ID}}</code></p>{{end}}
+{{with .Data.status}}<div class="ln-banner ln-banner--success" role="status">{{t "page.manage.status.generic"}}</div>{{end}}
+<p class="ln-meta">{{t "page.manage.permissions.scope_hint"}}</p>
+<p class="ln-meta">{{t "page.manage.permissions.builtin_hint"}}</p>
+{{with .Data.permissions}}{{if .Permissions}}
+<table class="ln-table"><caption>{{t "page.manage.permissions.title"}}</caption>
+<thead><tr><th scope="col">{{t "common.label.name"}}</th><th scope="col">{{t "page.manage.permissions.key"}}</th><th scope="col">{{t "page.manage.permissions.kind"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.manage.permissions.explain"}}</th><th scope="col">{{t "page.manage.permissions.actions"}}</th></tr></thead>
+<tbody>{{range .Permissions}}<tr>
+  <td>{{.Name}}</td><td><code>{{.Key}}</code></td>
+  <td>{{if .Builtin}}{{t "page.manage.permissions.builtin"}}{{else}}{{t "page.manage.permissions.custom"}}{{end}}</td>
+  <td>{{if .Enabled}}{{t "common.state.enabled"}}{{else}}{{t "common.state.disabled"}}{{end}}</td>
+  <td>{{if .Description}}{{.Description}}{{else}}{{t "common.state.missing_value"}}{{end}}</td>
+  <td>{{if .Builtin}}{{t "page.manage.permissions.builtin_readonly"}}{{else}}
+    <form method="post" action="{{route "manage.permission_state"}}" novalidate>
+      {{csrf_field}}<input type="hidden" name="app_id" value="{{$.Data.app.ID}}"><input type="hidden" name="permission_id" value="{{.PermissionID}}">
+      {{if .Enabled}}<input type="hidden" name="enable" value="false">{{template "component.button" (dict "label" (t "page.manage.permissions.disable") "variant" "danger" "type" "submit")}}
+      {{else}}<input type="hidden" name="enable" value="true">{{template "component.button" (dict "label" (t "page.manage.permissions.enable") "variant" "secondary" "type" "submit")}}{{end}}
+      <label><input type="checkbox" name="confirm" value="yes" required> {{t "page.manage.permissions.confirm"}}</label>
+    </form>{{end}}</td>
+</tr>{{end}}</tbody></table>
+{{if .HasMore}}<nav class="ln-pagination"><a href="{{route "manage.permissions"}}?app_id={{$.Data.app.ID}}&offset={{.NextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
+{{else}}<div class="ln-state"><p class="ln-state__title">{{t "page.manage.permissions.empty"}}</p></div>{{end}}{{end}}
+{{end}}

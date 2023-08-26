@@ -1,0 +1,50 @@
+{{define "page-title"}}{{t "page.manage.members.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.app}}<p>{{t "page.manage.app.header"}}: <strong>{{.Name}}</strong> <code>{{.ID}}</code></p>{{end}}
+{{with .Data.status}}
+<div class="ln-banner ln-banner--success" role="status">
+{{if eq .Code "member_added"}}{{t "page.manage.members.added"}}{{else if eq .Code "member_removed"}}{{t "page.manage.members.removed"}}{{else if eq .Code "member_enabled"}}{{t "page.manage.members.enabled"}}{{else if eq .Code "member_disabled"}}{{t "page.manage.members.disabled"}}{{else}}{{t "page.manage.status.generic"}}{{end}}
+</div>{{end}}
+<p class="ln-meta">{{t "page.manage.members.scope_hint"}}</p>
+<p class="ln-meta">{{t "page.manage.members.member_vs_user"}}</p>
+{{with .Data.app}}
+<h2>{{t "page.manage.members.add_title"}}</h2>
+<form method="post" action="{{route "manage.members_submit"}}" novalidate autocomplete="off">
+  {{csrf_field}}
+  <input type="hidden" name="app_id" value="{{.ID}}"><input type="hidden" name="action" value="add">
+  {{template "component.field" (dict "id" "manage-member-user" "name" "user_id" "label" (t "page.manage.members.user_id") "value" "" "required" true "help" (t "page.manage.members.user_id_help"))}}
+  {{template "component.field" (dict "id" "manage-member-name" "name" "display_name" "label" (t "page.manage.members.display_name") "value" "")}}
+  {{template "component.field" (dict "id" "manage-member-title" "name" "title" "label" (t "page.manage.members.title_field") "value" "")}}
+  {{template "component.field" (dict "id" "manage-member-note" "name" "note" "label" (t "page.manage.members.note") "value" "" "textarea" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.manage.members.add") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{end}}
+{{with .Data.members}}{{if .Members}}
+<table class="ln-table"><caption>{{t "page.manage.members.title"}}</caption>
+<thead><tr><th scope="col">{{t "page.manage.members.user_id"}}</th><th scope="col">{{t "page.manage.members.display_name"}}</th><th scope="col">{{t "common.label.status"}}</th><th scope="col">{{t "page.manage.members.row_version"}}</th><th scope="col">{{t "page.manage.members.actions"}}</th></tr></thead>
+<tbody>{{range .Members}}<tr>
+  <td><code>{{.UserID}}</code></td>
+  <td>{{if .DisplayName}}{{.DisplayName}}{{else}}{{t "common.state.missing_value"}}{{end}}</td>
+  <td>{{if eq .Status "active"}}{{t "common.state.enabled"}}{{else}}{{t "common.state.disabled"}}{{end}}</td>
+  <td>{{.RowVersion}}</td>
+  <td>
+    <form method="post" action="{{route "manage.members_submit"}}" novalidate>
+      {{csrf_field}}
+      <input type="hidden" name="app_id" value="{{$.Data.app.ID}}"><input type="hidden" name="user_id" value="{{.UserID}}">
+      <input type="hidden" name="row_version" value="{{.RowVersion}}">
+      {{if eq .Status "active"}}<input type="hidden" name="action" value="disable"><label><input type="checkbox" name="confirm" value="yes" required> {{t "page.manage.members.confirm_disable"}}</label>{{template "component.button" (dict "label" (t "page.manage.members.disable") "variant" "danger" "type" "submit")}}
+      {{else}}<input type="hidden" name="action" value="enable">{{template "component.button" (dict "label" (t "page.manage.members.enable") "variant" "secondary" "type" "submit")}}{{end}}
+    </form>
+    <form method="post" action="{{route "manage.members_submit"}}" novalidate>
+      {{csrf_field}}
+      <input type="hidden" name="app_id" value="{{$.Data.app.ID}}"><input type="hidden" name="user_id" value="{{.UserID}}">
+      <input type="hidden" name="row_version" value="{{.RowVersion}}"><input type="hidden" name="action" value="remove">
+      <label><input type="checkbox" name="confirm" value="yes" required> {{t "page.manage.members.confirm_remove"}}</label>
+      {{template "component.button" (dict "label" (t "page.manage.members.remove") "variant" "danger" "type" "submit")}}
+    </form>
+  </td>
+</tr>{{end}}</tbody></table>
+{{if .HasMore}}<nav class="ln-pagination"><a href="{{route "manage.members"}}?app_id={{$.Data.app.ID}}&offset={{.NextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
+{{else}}<div class="ln-state"><p class="ln-state__title">{{t "page.manage.members.empty"}}</p></div>{{end}}{{end}}
+{{end}}
