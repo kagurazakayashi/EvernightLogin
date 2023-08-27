@@ -65,7 +65,7 @@ task_id；精确内部原因码（reason_code）只保存在受限审计中，�
 | CSV | 已实现：逐列语义 + 防公式注入（`= + - @` 等前缀加单引号）；数值列保持数字 |
 | JSON | 已实现：纯数据编码，RFC3339 时间；零值时间输出 null |
 | Markdown | 已实现（可选格式之一）；给智能体阅读，含明确“内容不可信”边界 |
-| PDF | 已实现生成路径，但**中文字体需要宿主提供**：仓库不随包附带 PDF 字体，未做真实 PDF 渲染实测；缺少字体时 PDF 输出会失败并明确报错，不会静默降级 |
+| PDF | 已实现，并已用真实渲染与独立文本抽取完成实测（2026-11-23 步骤195，预审 Noto Sans SC 字体可用时）；**中文字体需要宿主提供**，仓库不随包附带 PDF 字体；缺少字体时 PDF 输出会 fail-closed 并明确报错，不会静默降级 |
 
 报告语义：
 
@@ -89,7 +89,8 @@ task_id；精确内部原因码（reason_code）只保存在受限审计中，�
 | 审计写入、查询、详情、导出、保留策略、root 清理 | 已实现（领域服务 + SQLite 仓储） |
 | 统计聚合、趋势、错误分类 | 已实现（真实 SQLite 聚合） |
 | 报告 HTML/CSV/JSON/Markdown、定期报告、历史与下载权限 | 已实现 |
-| PDF | 生成路径已实现；字体需宿主提供，未做真实 PDF 渲染实测 |
+| 报告五格式真实生成/独立解析/权限撤销/定时失败隔离 | 已验收（步骤195，见 [step195-report-formats.md](../acceptance/step195-report-formats.md)） |
+| PDF | 已实现并完成真实渲染实测（步骤195，预审字体可用时）；字体仍需宿主提供，缺字体 fail-closed |
 | 管理页面 | 已实现，需宿主注入真实后端 |
 | 审计/报告的 HTTP 业务 API 与页面 | 已装配：内置页面 + 管理 JSON API（审计查询/导出/清理、报告历史/下载/清理，`--enable-admin-api` 默认关闭；写操作仍要求近期再次认证） |
 | HTTP 访问日志 | 已实现：W3C 扩展格式、请求编号与安全响应头；`login-server serve --access-log <path>` 写文件时默认按单文件上限与历史数量上限轮转（`--access-log-max-bytes` 默认 64 MiB、`--access-log-max-files` 默认 5，见 `docs/deployment/standalone-service.md` 第 3.5 节）；不记录 Cookie/Authorization/密码/一次性凭证 |
