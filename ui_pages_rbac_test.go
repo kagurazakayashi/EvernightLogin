@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,10 +30,13 @@ type fakeRBACBackend struct {
 	effective   login.UIRBACEffectiveView
 	diff        login.UIRBACPresetDiff
 	delegation  login.UIRBACDelegationView
-	failCode    string
-	lastAction  string
-	lastTarget  string
-	empty       bool
+	// 步骤 189：删除/停用影响预览与权限登记动作的受控结果。
+	impact     login.UIRBACPermissionImpact
+	lastCreate login.UIRBACCreatePermission
+	failCode   string
+	lastAction string
+	lastTarget string
+	empty      bool
 }
 
 func (f *fakeRBACBackend) fail() error {
@@ -213,6 +217,53 @@ func (f *fakeRBACBackend) SetPermissionState(_ context.Context, _, permissionID 
 	return permission, true, nil
 }
 
+// CreatePermission 实现步骤 189 的权限登记扩展契约（测试替身只验证页面状态机，
+// 真实授权/审计由集成测试与生产适配器覆盖）。
+func (f *fakeRBACBackend) CreatePermission(_ context.Context, _ string,
+	create login.UIRBACCreatePermission, _ string) (login.UIRBACPermissionView, error) {
+	if err := f.fail(); err != nil {
+		return login.UIRBACPermissionView{}, err
+	}
+	f.lastCreate = create
+	if create.ScopeID == "" || create.Key == "" || create.Name == "" ||
+		!strings.Contains(create.Key, ".") || strings.ContainsAny(create.Key, " \t") {
+		return login.UIRBACPermissionView{}, &login.UIRBACError{Code: "REQ_INVALID"}
+	}
+	view := login.UIRBACPermissionView{PermissionID: "perm_new", ScopeID: create.ScopeID,
+		ScopeKind: "system", Key: create.Key, Name: create.Name,
+		Description: create.Description, Limits: create.Limits,
+		Enabled: true, UpdatedAt: time.UnixMilli(f.permission.UpdatedAt.UnixMilli() + 1)}
+	f.permissions = append(f.permissions, view)
+	return view, nil
+}
+
+// DeletePermission 实现步骤 189 的删除契约（内置权限返回稳定拒绝码）。
+func (f *fakeRBACBackend) DeletePermission(_ context.Context, _, _ string, _ string) error {
+	if err := f.fail(); err != nil {
+		return err
+	}
+	if f.permission.Builtin {
+		return &login.UIRBACError{Code: "ACCESS_DENIED"}
+	}
+	return nil
+}
+
+// PermissionImpact 实现步骤 189 的影响预览契约；未显式配置时按当前权限给出默认值。
+func (f *fakeRBACBackend) PermissionImpact(_ context.Context, _ string,
+	_ string) (login.UIRBACPermissionImpact, error) {
+	if err := f.fail(); err != nil {
+		return login.UIRBACPermissionImpact{}, err
+	}
+	impact := f.impact
+	impact.Permission = f.permission
+	if !impact.RolesAvailable && impact.RolesUnavailableReason == "" &&
+		len(impact.ReferencingRoles) == 0 {
+		impact.RolesAvailable = true
+		impact.CanDelete = !f.permission.Builtin
+	}
+	return impact, nil
+}
+
 func (f *fakeRBACBackend) DelegationView(_ context.Context, _, scopeID string,
 	includeRevoked bool, limit, offset int) (login.UIRBACDelegationView, error) {
 	if err := f.fail(); err != nil {
@@ -301,7 +352,7 @@ func newRBACPageEnv(t *testing.T) *rbacPageEnv {
 			Builtin: true, Enabled: true, DefaultName: "读取用户",
 			DefaultSummary: "读取普通用户", DefaultScope: "全部普通用户",
 			DefaultLimits: "不能修改用户", DefaultEnabled: true, Implemented: true,
-			DefaultRoles: []string{"system_admin"}},
+			DefaultRoles: []string{"system_admin"}, CreatedAt: now, UpdatedAt: now},
 		available: []login.UIRBACPermissionView{{PermissionID: "perm_roles",
 			Key: "roles.read", Name: "读取角色", Description: "读取角色组合",
 			Limits: "不能分配角色", Enabled: true}},
@@ -420,6 +471,11 @@ func (e *rbacPageEnv) postForm(values url.Values) url.Values {
 	}
 	values.Set("csrf_token", "admin-csrf-token")
 	return values
+}
+
+// expectedVersion 返回当前权限夹具的页面层行版本（UpdatedAt 毫秒值文本）。
+func (e *rbacPageEnv) expectedVersion() string {
+	return strconv.FormatInt(e.backend.permission.UpdatedAt.UnixMilli(), 10)
 }
 
 // TestRBACRolesListAndCreate 覆盖角色列表（中文说明/范围/默认与当前/root 提示）与创建。
@@ -584,7 +640,8 @@ func TestRBACPermissions(t *testing.T) {
 	}
 	update := env.post("/admin/permissions/update", env.postForm(url.Values{
 		"permission_id": {"perm_users"}, "name": {"读取用户2"},
-		"description": {"说明"}, "limits": {"限制"}}))
+		"description": {"说明"}, "limits": {"限制"},
+		"expected_updated_at": {env.expectedVersion()}}))
 	if update.Code != http.StatusOK ||
 		!strings.Contains(update.Body.String(), "已保存并重新读取真实结果") {
 		t.Fatalf("修改权限说明 = %d", update.Code)
@@ -595,8 +652,10 @@ func TestRBACPermissions(t *testing.T) {
 		t.Fatalf("停用权限缺少确认 = %d", missingConfirm.Code)
 	}
 	disabled := env.post("/admin/permissions/state", env.postForm(url.Values{
-		"permission_id": {"perm_users"}, "action": {"disable"}, "confirm": {"yes"}}))
-	if disabled.Code != http.StatusOK {
+		"permission_id": {"perm_users"}, "action": {"disable"}, "confirm": {"yes"},
+		"expected_updated_at": {env.expectedVersion()}}))
+	if disabled.Code != http.StatusOK ||
+		!strings.Contains(disabled.Body.String(), "权限已停用") {
 		t.Fatalf("停用权限 = %d", disabled.Code)
 	}
 }
@@ -773,5 +832,200 @@ func TestRBACErrorsFailClosed(t *testing.T) {
 	if unknown.Code != http.StatusOK {
 		// 空目标由测试替身返回零值角色，真实后端会拒绝；此处只确认不 panic。
 		t.Fatalf("空目标页面 = %d", unknown.Code)
+	}
+}
+
+// customPermissionFixture 返回用于步骤 189 页面测试的自定义权限夹具。
+func customPermissionFixture(updatedAt time.Time) login.UIRBACPermissionView {
+	return login.UIRBACPermissionView{PermissionID: "perm_custom", ScopeID: "system",
+		ScopeKind: "system", Key: "report.approve", Name: "审批报告",
+		Description: "审批本系统报告", Limits: "仅限本系统报告", Enabled: true,
+		CreatedAt: updatedAt, UpdatedAt: updatedAt}
+}
+
+// TestRBACPermissionCreatePage 覆盖创建自定义权限页面：入口/术语说明/字段白名单/
+// 校验错误/成功重定向；同时确认页面不能提交内置或 root_only 标记。
+func TestRBACPermissionCreatePage(t *testing.T) {
+	env := newRBACPageEnv(t)
+	list := env.get("/admin/permissions?scope_id=system")
+	listBody := list.Body.String()
+	for _, want := range []string{"术语说明", "内置权限", "/admin/permissions/create"} {
+		if !strings.Contains(listBody, want) {
+			t.Fatalf("权限目录缺少 %q", want)
+		}
+	}
+	page := env.get("/admin/permissions/create?scope_id=system")
+	if page.Code != http.StatusOK {
+		t.Fatalf("创建权限页 = %d", page.Code)
+	}
+	body := page.Body.String()
+	for _, want := range []string{"创建自定义权限", "机器标识", "内置权限", "作用范围",
+		"确认创建"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("创建权限页缺少 %q", want)
+		}
+	}
+	for _, forbidden := range []string{`name="is_builtin"`, `name="root_only"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("创建页不得提交 %s", forbidden)
+		}
+	}
+	missingConfirm := env.post("/admin/permissions/create", env.postForm(url.Values{
+		"scope_id": {"system"}, "permission_key": {"report.approve"},
+		"name": {"审批报告"}, "description": {"说明"}, "limits": {"限制"}}))
+	if missingConfirm.Code != http.StatusBadRequest {
+		t.Fatalf("创建缺少确认 = %d", missingConfirm.Code)
+	}
+	missingName := env.post("/admin/permissions/create", env.postForm(url.Values{
+		"scope_id": {"system"}, "permission_key": {"report.approve"},
+		"confirm": {"yes"}}))
+	if missingName.Code != http.StatusBadRequest {
+		t.Fatalf("创建缺少名称 = %d", missingName.Code)
+	}
+	invalidKey := env.post("/admin/permissions/create", env.postForm(url.Values{
+		"scope_id": {"system"}, "permission_key": {"Bad Key"}, "name": {"非法标识"},
+		"description": {"说明"}, "limits": {"限制"}, "confirm": {"yes"}}))
+	if invalidKey.Code != http.StatusBadRequest ||
+		!strings.Contains(invalidKey.Body.String(), "机器标识") {
+		t.Fatalf("非法机器标识 = %d", invalidKey.Code)
+	}
+	created := env.post("/admin/permissions/create", env.postForm(url.Values{
+		"scope_id": {"system"}, "permission_key": {"report.approve"},
+		"name": {"审批报告"}, "description": {"审批本系统报告"},
+		"limits": {"仅限本系统报告"}, "confirm": {"yes"}}))
+	if created.Code != http.StatusSeeOther ||
+		!strings.Contains(created.Header().Get("Location"), "permission_id=perm_new") {
+		t.Fatalf("创建权限 = %d %q", created.Code, created.Header().Get("Location"))
+	}
+	if env.backend.lastCreate.Key != "report.approve" ||
+		env.backend.lastCreate.ScopeID != "system" {
+		t.Fatalf("创建请求白名单 = %+v", env.backend.lastCreate)
+	}
+}
+
+// TestRBACPermissionImpactAndDelete 覆盖影响预览、内置不可删除、使用中删除冲突、
+// 行版本冲突与删除成功/确认要求。
+func TestRBACPermissionImpactAndDelete(t *testing.T) {
+	env := newRBACPageEnv(t)
+	now := env.backend.permission.UpdatedAt
+	env.backend.permission = customPermissionFixture(now)
+	env.backend.impact = login.UIRBACPermissionImpact{RolesAvailable: true,
+		ReferencingRoles: []login.UIRBACImpactRole{{RoleID: "role_admin",
+			RoleKey: "system_admin", RoleName: "系统管理员", ScopeID: "system",
+			Builtin: true, Enabled: true}},
+		ReferencedRoleCount: 1, CanDelete: false,
+		DeleteBlockedReason: "仍被 1 个角色引用；请先在角色页解除组合后再删除"}
+	detail := env.get("/admin/permissions/detail?permission_id=perm_custom")
+	if detail.Code != http.StatusOK {
+		t.Fatalf("权限详情 = %d", detail.Code)
+	}
+	body := detail.Body.String()
+	for _, want := range []string{"删除 / 停用影响预览", "系统管理员", "仍被 1 个角色引用",
+		"停用权限会立即影响"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("影响预览缺少 %q", want)
+		}
+	}
+	if strings.Contains(body, `action="/admin/permissions/delete"`) {
+		t.Fatal("仍被引用时不得显示删除提交表单")
+	}
+	// 内置权限不可删除（页面提示 + 直接提交也拒绝）。
+	builtin := env.backend.permission
+	builtin.Builtin = true
+	builtin.PermissionID = "perm_users"
+	env.backend.permission = builtin
+	builtinDetail := env.get("/admin/permissions/detail?permission_id=perm_users")
+	if builtinDetail.Code != http.StatusOK ||
+		!strings.Contains(builtinDetail.Body.String(), "内置权限不可删除") {
+		t.Fatalf("内置权限详情 = %d", builtinDetail.Code)
+	}
+	deleteBuiltin := env.post("/admin/permissions/delete", env.postForm(url.Values{
+		"permission_id":       {"perm_users"},
+		"expected_updated_at": {env.expectedVersion()}, "confirm": {"yes"}}))
+	if deleteBuiltin.Code != http.StatusForbidden {
+		t.Fatalf("删除内置权限 = %d", deleteBuiltin.Code)
+	}
+	// 使用中删除：领域冲突 → 409。
+	env.backend.permission = customPermissionFixture(now)
+	env.backend.impact = login.UIRBACPermissionImpact{}
+	env.backend.failCode = "CONFLICT"
+	inUse := env.post("/admin/permissions/delete", env.postForm(url.Values{
+		"permission_id":       {"perm_custom"},
+		"expected_updated_at": {env.expectedVersion()}, "confirm": {"yes"}}))
+	if inUse.Code != http.StatusConflict ||
+		!strings.Contains(inUse.Body.String(), "数据已被其他操作修改") {
+		t.Fatalf("使用中删除 = %d", inUse.Code)
+	}
+	env.backend.failCode = ""
+	// 行版本冲突 → 409 并重新读取当前状态。
+	stale := env.post("/admin/permissions/delete", env.postForm(url.Values{
+		"permission_id": {"perm_custom"}, "expected_updated_at": {"1"},
+		"confirm": {"yes"}}))
+	if stale.Code != http.StatusConflict ||
+		!strings.Contains(stale.Body.String(), "行版本冲突") {
+		t.Fatalf("删除行版本冲突 = %d", stale.Code)
+	}
+	// 缺少确认 → 400，且不调用后端删除。
+	missingConfirm := env.post("/admin/permissions/delete", env.postForm(url.Values{
+		"permission_id":       {"perm_custom"},
+		"expected_updated_at": {env.expectedVersion()}}))
+	if missingConfirm.Code != http.StatusBadRequest {
+		t.Fatalf("删除缺少确认 = %d", missingConfirm.Code)
+	}
+	deleted := env.post("/admin/permissions/delete", env.postForm(url.Values{
+		"permission_id":       {"perm_custom"},
+		"expected_updated_at": {env.expectedVersion()}, "confirm": {"yes"}}))
+	if deleted.Code != http.StatusSeeOther ||
+		!strings.Contains(deleted.Header().Get("Location"), "/admin/permissions") {
+		t.Fatalf("删除自定义权限 = %d %q", deleted.Code, deleted.Header().Get("Location"))
+	}
+	// 删除后列表页显示成功横幅。
+	env.backend.empty = false
+	after := env.get("/admin/permissions?scope_id=system&status=deleted")
+	if after.Code != http.StatusOK ||
+		!strings.Contains(after.Body.String(), "自定义权限已删除") {
+		t.Fatalf("删除成功状态页 = %d", after.Code)
+	}
+}
+
+// TestRBACPermissionStateConfirmAndReauth 覆盖启停确认、行版本冲突与再次认证失败关闭。
+func TestRBACPermissionStateConfirmAndReauth(t *testing.T) {
+	env := newRBACPageEnv(t)
+	env.backend.permission = customPermissionFixture(env.backend.permission.UpdatedAt)
+	missingConfirm := env.post("/admin/permissions/state", env.postForm(url.Values{
+		"permission_id": {"perm_custom"}, "action": {"disable"},
+		"expected_updated_at": {env.expectedVersion()}}))
+	if missingConfirm.Code != http.StatusBadRequest {
+		t.Fatalf("启停缺少确认 = %d", missingConfirm.Code)
+	}
+	stale := env.post("/admin/permissions/state", env.postForm(url.Values{
+		"permission_id": {"perm_custom"}, "action": {"disable"},
+		"expected_updated_at": {"1"}, "confirm": {"yes"}}))
+	if stale.Code != http.StatusConflict ||
+		!strings.Contains(stale.Body.String(), "行版本冲突") {
+		t.Fatalf("启停行版本冲突 = %d", stale.Code)
+	}
+	env.backend.failCode = "REAUTH_REQUIRED"
+	reauth := env.post("/admin/permissions/state", env.postForm(url.Values{
+		"permission_id": {"perm_custom"}, "action": {"disable"},
+		"expected_updated_at": {env.expectedVersion()}, "confirm": {"yes"}}))
+	if reauth.Code != http.StatusForbidden ||
+		!strings.Contains(reauth.Body.String(), "重新完成强认证") {
+		t.Fatalf("再次认证失败关闭 = %d", reauth.Code)
+	}
+	env.backend.failCode = ""
+	disabled := env.post("/admin/permissions/state", env.postForm(url.Values{
+		"permission_id": {"perm_custom"}, "action": {"disable"},
+		"expected_updated_at": {env.expectedVersion()}, "confirm": {"yes"}}))
+	if disabled.Code != http.StatusOK ||
+		!strings.Contains(disabled.Body.String(), "权限已停用") {
+		t.Fatalf("停用权限 = %d", disabled.Code)
+	}
+	enabled := env.post("/admin/permissions/state", env.postForm(url.Values{
+		"permission_id": {"perm_custom"}, "action": {"enable"},
+		"expected_updated_at": {env.expectedVersion()}, "confirm": {"yes"}}))
+	if enabled.Code != http.StatusOK ||
+		!strings.Contains(enabled.Body.String(), "权限已启用") {
+		t.Fatalf("启用权限 = %d", enabled.Code)
 	}
 }

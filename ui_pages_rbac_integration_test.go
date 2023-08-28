@@ -12,7 +12,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +116,40 @@ type rbacIntegrationEnv struct {
 	user2ID      string
 	groupID      string
 	storage      *storagesqlite.Store
+	// 步骤 189：可变时钟用于制造行版本（UpdatedAt）变化与并发冲突。
+	clock *rbacTestClock
+	// reauth 是宿主再次认证回调的受控测试替身（生产由 serverapp.SecurityGate 注入）。
+	reauth *rbacTestReauth
+}
+
+// rbacTestClock 是可推进的测试时钟。
+type rbacTestClock struct {
+	now time.Time
+}
+
+// Now 返回当前测试时间。
+func (c *rbacTestClock) Now() time.Time { return c.now }
+
+// Advance 推进测试时钟（用于制造可区分的 UpdatedAt 行版本）。
+func (c *rbacTestClock) Advance(duration time.Duration) {
+	c.now = c.now.Add(duration)
+}
+
+// rbacTestReauth 是宿主再次认证回调的测试替身：只记录动作并可显式拒绝；真实
+// policy/reauth 链由 serverapp 内部测试覆盖，本替身不充当生产鉴权。
+type rbacTestReauth struct {
+	actions []string
+	deny    bool
+}
+
+// Callback 实现 uiadminadapter.RBACOptions.Reauth。
+func (r *rbacTestReauth) Callback(_ context.Context, _ string, action, target,
+	_ string) error {
+	r.actions = append(r.actions, action+"|"+target)
+	if r.deny {
+		return errors.New("denied-by-host-reauth")
+	}
+	return nil
 }
 
 // newRBACIntegrationEnv 构造真实服务环境并初始化系统预设。
@@ -133,8 +169,8 @@ func newRBACIntegrationEnv(t *testing.T) *rbacIntegrationEnv {
 	if _, err := storage.Migrate(ctx, list); err != nil {
 		t.Fatalf("执行迁移: %v", err)
 	}
-	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
-	nowFunc := func() time.Time { return now }
+	clock := &rbacTestClock{now: time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)}
+	nowFunc := clock.Now
 	auditStore, err := auditsqlite.New(storage)
 	if err != nil {
 		t.Fatalf("审计存储: %v", err)
@@ -241,7 +277,7 @@ func newRBACIntegrationEnv(t *testing.T) *rbacIntegrationEnv {
 		t.Fatalf("拒绝式有效权限引擎: %v", err)
 	}
 	// 应用范围 fixture：真实 applications/scopes 行，用于跨应用同名权限测试。
-	nowMs := now.UTC().UnixMilli()
+	nowMs := clock.Now().UTC().UnixMilli()
 	if _, err := storage.DB().ExecContext(ctx, `INSERT INTO applications(
 id,name,description,status,client_type,row_version,created_at_ms,updated_at_ms)
 VALUES(?,?,?,?,?,?,?,?)`, appIDFixture, "示例应用", "夹具应用", "active",
@@ -301,6 +337,7 @@ VALUES(?,?,?)`, appIDFixture, "application", appIDFixture); err != nil {
 		GroupID: createdGroup.ID, UserIDs: []string{user1.ID}}); err != nil {
 		t.Fatalf("加入组成员: %v", err)
 	}
+	reauth := &rbacTestReauth{}
 	adapter, err := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
 		Roles: roleService, Permissions: permissionService, Access: accessService,
 		Delegations: delegationService, Catalog: preset.DefaultCatalog(),
@@ -310,6 +347,7 @@ VALUES(?,?,?)`, appIDFixture, "application", appIDFixture); err != nil {
 		ApplicationNames: func(context.Context, string) (map[string]string, error) {
 			return map[string]string{appIDFixture: "示例应用"}, nil
 		},
+		Reauth: reauth.Callback,
 	})
 	if err != nil {
 		t.Fatalf("RBAC 适配器: %v", err)
@@ -319,7 +357,7 @@ VALUES(?,?,?)`, appIDFixture, "application", appIDFixture); err != nil {
 		delegations: delegationService, access: accessService,
 		deniedAccess: deniedAccess, presets: presetService,
 		adminID: admin.ID, user1ID: user1.ID, user2ID: user2.ID,
-		groupID: createdGroup.ID, storage: storage}
+		groupID: createdGroup.ID, storage: storage, clock: clock, reauth: reauth}
 }
 
 // findPresetRole 按机器键查找预设角色 ID。
@@ -1167,5 +1205,363 @@ func TestRBACIntegrationRoleDegradesWithoutPermissionRead(t *testing.T) {
 	if _, err := adapter.ListPermissions(ctx, env.adminID,
 		login.UIRBACPermissionQuery{Limit: 20}); !rbacErrCode(err, "ACCESS_DENIED") {
 		t.Fatalf("权限目录读取仍应按 permissions.read 拒绝: %v", err)
+	}
+}
+
+// newRBACFormRequest 构造带会话 CSRF 隐藏字段的页面表单 POST 请求。
+func newRBACFormRequest(target string, values url.Values) *http.Request {
+	values.Set("csrf_token", "rbac-csrf-token")
+	request := httptest.NewRequest(http.MethodPost, "http://example.test"+target,
+		strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return request
+}
+
+// hasRBACPermissionKey 检查有效权限结果是否包含指定机器标识。
+func hasRBACPermissionKey(view login.UIRBACEffectiveView, key string) bool {
+	for _, item := range view.Permissions {
+		if item.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// systemOnlyPermissionAuthorizer 是只允许系统作用范围的权限授权器（步骤 189 跨范围
+// 访问测试用）：允许读取/管理 system，拒绝任何应用范围写入。
+type systemOnlyPermissionAuthorizer struct{}
+
+func (systemOnlyPermissionAuthorizer) Authorize(_ context.Context, _ permission.Caller,
+	_ permission.Action, scopeID string) error {
+	if scopeID == "system" {
+		return nil
+	}
+	return errors.New("denied-by-scope-authorizer")
+}
+
+func (systemOnlyPermissionAuthorizer) ManageableScopes(context.Context,
+	permission.Caller) (bool, []string, error) {
+	return false, []string{"system"}, nil
+}
+
+// TestRBACIntegrationPermissionCreateDeleteAndImpact 覆盖真实临时 SQLite 下的自定义
+// 权限创建/删除、内置保护、使用中删除、影响预览与再次认证 fail-closed。
+func TestRBACIntegrationPermissionCreateDeleteAndImpact(t *testing.T) {
+	env := newRBACIntegrationEnv(t)
+	ctx := context.Background()
+	created, err := env.adapter.CreatePermission(ctx, env.adminID,
+		login.UIRBACCreatePermission{ScopeID: "system", Key: "reports.approve",
+			Name: "审批报告", Description: "审批本系统报告", Limits: "仅限本系统报告"},
+		"req_create")
+	if err != nil {
+		t.Fatalf("创建自定义权限: %v", err)
+	}
+	if created.PermissionID == "" || created.Builtin || created.RootOnly ||
+		!created.Enabled || created.ScopeID != "system" || created.UpdatedAt.IsZero() {
+		t.Fatalf("创建结果未强制非内置/非 root_only 或缺少行版本: %+v", created)
+	}
+	if len(env.reauth.actions) == 0 ||
+		env.reauth.actions[len(env.reauth.actions)-1] != "permission.create|system" {
+		t.Fatalf("创建未经过宿主再次认证: %v", env.reauth.actions)
+	}
+	// 同一范围重复机器标识 → CONFLICT。
+	if _, err := env.adapter.CreatePermission(ctx, env.adminID,
+		login.UIRBACCreatePermission{ScopeID: "system", Key: "reports.approve",
+			Name: "重复权限", Description: "重复", Limits: "重复"},
+		"req_dup"); !rbacErrCode(err, "CONFLICT") {
+		t.Fatalf("重复机器标识错误码 = %v", err)
+	}
+	// 非法机器标识 → REQ_INVALID（领域校验，不是页面自报）。
+	if _, err := env.adapter.CreatePermission(ctx, env.adminID,
+		login.UIRBACCreatePermission{ScopeID: "system", Key: "Bad Key",
+			Name: "非法", Description: "非法", Limits: "非法"},
+		"req_invalid"); !rbacErrCode(err, "REQ_INVALID") {
+		t.Fatalf("非法机器标识错误码 = %v", err)
+	}
+	// 应用范围创建同样强制非内置/非 root_only。
+	appPermission, err := env.adapter.CreatePermission(ctx, env.adminID,
+		login.UIRBACCreatePermission{ScopeID: appIDFixture, Key: "app.custom.approve",
+			Name: "应用审批", Description: "应用内审批", Limits: "仅限当前应用"},
+		"req_app")
+	if err != nil || appPermission.Builtin || appPermission.RootOnly ||
+		appPermission.ScopeID != appIDFixture {
+		t.Fatalf("应用范围创建 = %+v err=%v", appPermission, err)
+	}
+	// 影响预览：未被引用时可删除。
+	impact, err := env.adapter.PermissionImpact(ctx, env.adminID, created.PermissionID)
+	if err != nil || !impact.CanDelete || !impact.RolesAvailable ||
+		impact.ReferencedRoleCount != 0 {
+		t.Fatalf("影响预览（未引用） = %+v err=%v", impact, err)
+	}
+	// 组合进真实角色后影响预览出现引用且不可删除。
+	roleCaller, err := role.SystemCaller("test-seed")
+	if err != nil {
+		t.Fatalf("角色系统 Caller: %v", err)
+	}
+	impactRole, err := env.roles.CreateRole(ctx, roleCaller, role.CreateRequest{
+		ScopeID: "system", Key: "perm-impact-role", Name: "影响测试角色",
+		Description: "测试引用", Limits: "仅测试"})
+	if err != nil {
+		t.Fatalf("创建引用角色: %v", err)
+	}
+	if _, err := env.roles.AddRolePermission(ctx, roleCaller, impactRole.ID,
+		created.PermissionID); err != nil {
+		t.Fatalf("组合权限: %v", err)
+	}
+	impact, err = env.adapter.PermissionImpact(ctx, env.adminID, created.PermissionID)
+	if err != nil || impact.CanDelete || impact.ReferencedRoleCount != 1 ||
+		len(impact.ReferencingRoles) != 1 ||
+		impact.ReferencingRoles[0].RoleKey != "perm-impact-role" ||
+		impact.DeleteBlockedReason == "" {
+		t.Fatalf("影响预览（使用中） = %+v err=%v", impact, err)
+	}
+	// 使用中删除 → CONFLICT（不隐式级联破坏授权）。
+	if err := env.adapter.DeletePermission(ctx, env.adminID, created.PermissionID,
+		"req_delete_in_use"); !rbacErrCode(err, "CONFLICT") {
+		t.Fatalf("使用中删除错误码 = %v", err)
+	}
+	if _, err := env.roles.RemoveRolePermission(ctx, roleCaller, impactRole.ID,
+		created.PermissionID); err != nil {
+		t.Fatalf("解除组合: %v", err)
+	}
+	if err := env.adapter.DeletePermission(ctx, env.adminID, created.PermissionID,
+		"req_delete"); err != nil {
+		t.Fatalf("解除组合后删除: %v", err)
+	}
+	if _, err := env.adapter.GetPermission(ctx, env.adminID,
+		created.PermissionID); !rbacErrCode(err, "CHALLENGE_INVALID") {
+		t.Fatalf("删除后权限应不可读取: %v", err)
+	}
+	// 内置权限不可删除。
+	builtinID := env.findPermission(t, "system", "users.read")
+	if err := env.adapter.DeletePermission(ctx, env.adminID, builtinID,
+		"req_delete_builtin"); !rbacErrCode(err, "ACCESS_DENIED") {
+		t.Fatalf("删除内置权限错误码 = %v", err)
+	}
+	// 再次认证 fail-closed：未装配回调与宿主拒绝都必须拒绝。
+	noReauth, err := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
+		Roles: env.roles, Permissions: env.permissions, Access: env.access,
+		Delegations: env.delegations})
+	if err != nil {
+		t.Fatalf("无再认证适配器: %v", err)
+	}
+	if _, err := noReauth.CreatePermission(ctx, env.adminID,
+		login.UIRBACCreatePermission{ScopeID: "system", Key: "no.reauth",
+			Name: "无再认证", Description: "无", Limits: "无"},
+		"req_no_reauth"); !rbacErrCode(err, "REAUTH_REQUIRED") {
+		t.Fatalf("未装配再认证应为 REAUTH_REQUIRED: %v", err)
+	}
+	deniedReauth := &rbacTestReauth{deny: true}
+	deniedAdapter, err := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
+		Roles: env.roles, Permissions: env.permissions, Access: env.access,
+		Delegations: env.delegations, Reauth: deniedReauth.Callback})
+	if err != nil {
+		t.Fatalf("拒绝再认证适配器: %v", err)
+	}
+	if _, err := deniedAdapter.CreatePermission(ctx, env.adminID,
+		login.UIRBACCreatePermission{ScopeID: "system", Key: "denied.reauth",
+			Name: "拒绝再认证", Description: "拒绝", Limits: "拒绝"},
+		"req_denied"); !rbacErrCode(err, "REAUTH_REQUIRED") {
+		t.Fatalf("宿主拒绝再认证应为 REAUTH_REQUIRED: %v", err)
+	}
+	// 内置权限启停同样 fail-closed，且未实际变更。
+	if _, _, err := noReauth.SetPermissionState(ctx, env.adminID, builtinID, false,
+		"req_state_no_reauth"); !rbacErrCode(err, "REAUTH_REQUIRED") {
+		t.Fatalf("内置启停未装配再认证应为 REAUTH_REQUIRED: %v", err)
+	}
+	if _, _, err := deniedAdapter.SetPermissionState(ctx, env.adminID, builtinID, false,
+		"req_state_denied"); !rbacErrCode(err, "REAUTH_REQUIRED") {
+		t.Fatalf("内置启停拒绝再认证应为 REAUTH_REQUIRED: %v", err)
+	}
+	detail, err := env.adapter.GetPermission(ctx, env.adminID, builtinID)
+	if err != nil || !detail.Permission.Enabled {
+		t.Fatalf("再认证拒绝后内置权限不应被停用: %+v err=%v", detail, err)
+	}
+	// 跨范围访问：仅系统范围授权的管理员不能创建应用范围权限（服务端复核拒绝）。
+	scopedStore, err := permissionsqlite.New(env.storage)
+	if err != nil {
+		t.Fatalf("范围测试权限存储: %v", err)
+	}
+	scopedAuditStore, err := auditsqlite.New(env.storage)
+	if err != nil {
+		t.Fatalf("范围测试审计存储: %v", err)
+	}
+	scopedAudit, err := audit.New(scopedAuditStore, audit.Options{Now: env.clock.Now,
+		Logger: testDiscardLogger()})
+	if err != nil {
+		t.Fatalf("范围测试审计: %v", err)
+	}
+	scopedPermissions, err := permission.New(permission.Options{Store: scopedStore,
+		Audit: scopedAudit, Authorizer: systemOnlyPermissionAuthorizer{},
+		Transfers: env.delegations, Now: env.clock.Now, Logger: testDiscardLogger()})
+	if err != nil {
+		t.Fatalf("范围测试权限服务: %v", err)
+	}
+	scopedAdapter, err := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
+		Roles: env.roles, Permissions: scopedPermissions, Access: env.access,
+		Delegations: env.delegations, Reauth: env.reauth.Callback})
+	if err != nil {
+		t.Fatalf("范围测试适配器: %v", err)
+	}
+	if _, err := scopedAdapter.CreatePermission(ctx, env.adminID,
+		login.UIRBACCreatePermission{ScopeID: appIDFixture, Key: "app.cross.scope",
+			Name: "越界权限", Description: "越界", Limits: "越界"},
+		"req_cross_scope"); !rbacErrCode(err, "ACCESS_DENIED") {
+		t.Fatalf("跨范围创建权限应被拒绝: %v", err)
+	}
+}
+
+// TestRBACIntegrationPermissionPageFlow 覆盖真实服务页面流程：网页创建自定义权限、
+// 组合角色、页面停用后有效权限立即失效、行版本冲突 409、解除引用后删除、内置权限
+// 启停的再认证失败关闭。
+func TestRBACIntegrationPermissionPageFlow(t *testing.T) {
+	env := newRBACIntegrationEnv(t)
+	ctx := context.Background()
+	ui, err := login.NewWebUI(login.WebUIOptions{
+		Session:  rbacIntegrationSessions{userID: env.adminID, management: true},
+		PageRBAC: &login.UIPageRBACOptions{Backend: env.adapter}})
+	if err != nil {
+		t.Fatalf("页面框架: %v", err)
+	}
+	list := serveRBACPage(ui, newRBACRequest("/admin/permissions?scope_id=system"))
+	if list.Code != http.StatusOK ||
+		!strings.Contains(list.Body.String(), "创建自定义权限") ||
+		!strings.Contains(list.Body.String(), "术语说明") {
+		t.Fatalf("权限目录页 = %d", list.Code)
+	}
+	createPage := serveRBACPage(ui, newRBACRequest(
+		"/admin/permissions/create?scope_id=system"))
+	if createPage.Code != http.StatusOK ||
+		!strings.Contains(createPage.Body.String(), "机器标识") {
+		t.Fatalf("创建权限页 = %d", createPage.Code)
+	}
+	created := serveRBACPage(ui, newRBACFormRequest("/admin/permissions/create",
+		url.Values{"scope_id": {"system"}, "permission_key": {"reports.publish"},
+			"name": {"发布报告"}, "description": {"发布本系统报告"},
+			"limits": {"仅限本系统"}, "confirm": {"yes"}}))
+	if created.Code != http.StatusSeeOther {
+		t.Fatalf("网页创建自定义权限 = %d", created.Code)
+	}
+	location, parseErr := url.Parse(created.Header().Get("Location"))
+	if parseErr != nil {
+		t.Fatalf("创建重定向: %v", parseErr)
+	}
+	permissionID := location.Query().Get("permission_id")
+	if permissionID == "" {
+		t.Fatalf("创建重定向缺少权限 ID: %q", created.Header().Get("Location"))
+	}
+	detailPage := serveRBACPage(ui, newRBACRequest(
+		"/admin/permissions/detail?permission_id="+permissionID+"&status=created"))
+	if detailPage.Code != http.StatusOK ||
+		!strings.Contains(detailPage.Body.String(), "自定义权限已创建") {
+		t.Fatalf("创建后详情页 = %d", detailPage.Code)
+	}
+	record, err := env.adapter.GetPermission(ctx, env.adminID, permissionID)
+	if err != nil {
+		t.Fatalf("读取新建权限: %v", err)
+	}
+	version := strconv.FormatInt(record.Permission.UpdatedAt.UnixMilli(), 10)
+	// 组合到真实角色并分配给用户2，停用前该权限应真实生效。
+	roleCaller, err := role.SystemCaller("test-seed")
+	if err != nil {
+		t.Fatalf("角色系统 Caller: %v", err)
+	}
+	flowRole, err := env.roles.CreateRole(ctx, roleCaller, role.CreateRequest{
+		ScopeID: "system", Key: "perm-page-role", Name: "页面流程角色",
+		Description: "页面流程", Limits: "仅测试"})
+	if err != nil {
+		t.Fatalf("创建角色: %v", err)
+	}
+	if _, err := env.roles.AddRolePermission(ctx, roleCaller, flowRole.ID,
+		permissionID); err != nil {
+		t.Fatalf("组合权限: %v", err)
+	}
+	if _, err := env.roles.AssignUserRole(ctx, roleCaller, flowRole.ID,
+		env.user2ID); err != nil {
+		t.Fatalf("分配角色: %v", err)
+	}
+	before, err := env.adapter.EffectivePermissions(ctx, env.adminID, env.user2ID,
+		"system", 20, 0)
+	if err != nil || !hasRBACPermissionKey(before, "reports.publish") {
+		t.Fatalf("停用前有效权限应包含 reports.publish: %+v err=%v", before, err)
+	}
+	disabled := serveRBACPage(ui, newRBACFormRequest("/admin/permissions/state",
+		url.Values{"permission_id": {permissionID}, "action": {"disable"},
+			"expected_updated_at": {version}, "confirm": {"yes"}}))
+	if disabled.Code != http.StatusOK ||
+		!strings.Contains(disabled.Body.String(), "权限已停用") {
+		t.Fatalf("网页停用权限 = %d", disabled.Code)
+	}
+	after, err := env.adapter.EffectivePermissions(ctx, env.adminID, env.user2ID,
+		"system", 20, 0)
+	if err != nil {
+		t.Fatalf("停用后查询有效权限: %v", err)
+	}
+	if hasRBACPermissionKey(after, "reports.publish") {
+		t.Fatal("停用权限后持有角色仍能获得该权限（应立即失效）")
+	}
+	// 行版本冲突：先由另一路径修改名称，再用旧版本表单提交 → 409。
+	env.clock.Advance(2 * time.Second)
+	if _, err := env.adapter.UpdatePermission(ctx, env.adminID, permissionID,
+		login.UIRBACTextChange{Name: "发布报告（并发修改）",
+			Description: "发布本系统报告", Limits: "仅限本系统"},
+		"req_concurrent"); err != nil {
+		t.Fatalf("并发修改: %v", err)
+	}
+	stale := serveRBACPage(ui, newRBACFormRequest("/admin/permissions/update",
+		url.Values{"permission_id": {permissionID}, "name": {"旧页面覆盖"},
+			"description": {"旧页面"}, "limits": {"旧页面"},
+			"expected_updated_at": {version}}))
+	if stale.Code != http.StatusConflict ||
+		!strings.Contains(stale.Body.String(), "行版本冲突") {
+		t.Fatalf("页面行版本冲突 = %d", stale.Code)
+	}
+	// 解除组合后网页删除自定义权限。
+	if _, err := env.roles.RemoveRolePermission(ctx, roleCaller, flowRole.ID,
+		permissionID); err != nil {
+		t.Fatalf("解除组合: %v", err)
+	}
+	current, err := env.adapter.GetPermission(ctx, env.adminID, permissionID)
+	if err != nil {
+		t.Fatalf("删除前读取权限: %v", err)
+	}
+	deleted := serveRBACPage(ui, newRBACFormRequest("/admin/permissions/delete",
+		url.Values{"permission_id": {permissionID},
+			"expected_updated_at": {strconv.FormatInt(
+				current.Permission.UpdatedAt.UnixMilli(), 10)},
+			"confirm": {"yes"}}))
+	if deleted.Code != http.StatusSeeOther {
+		t.Fatalf("网页删除自定义权限 = %d", deleted.Code)
+	}
+	// 内置权限启停：宿主再次认证拒绝时页面 403 且不产生变更。
+	deniedAdapter, err := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
+		Roles: env.roles, Permissions: env.permissions, Access: env.access,
+		Delegations: env.delegations,
+		Reauth:      (&rbacTestReauth{deny: true}).Callback})
+	if err != nil {
+		t.Fatalf("拒绝再认证适配器: %v", err)
+	}
+	deniedUI, err := login.NewWebUI(login.WebUIOptions{
+		Session:  rbacIntegrationSessions{userID: env.adminID, management: true},
+		PageRBAC: &login.UIPageRBACOptions{Backend: deniedAdapter}})
+	if err != nil {
+		t.Fatalf("拒绝再认证页面框架: %v", err)
+	}
+	builtinID := env.findPermission(t, "system", "users.read")
+	builtinDetail, err := env.adapter.GetPermission(ctx, env.adminID, builtinID)
+	if err != nil {
+		t.Fatalf("读取内置权限: %v", err)
+	}
+	deniedState := serveRBACPage(deniedUI, newRBACFormRequest("/admin/permissions/state",
+		url.Values{"permission_id": {builtinID}, "action": {"disable"},
+			"expected_updated_at": {strconv.FormatInt(
+				builtinDetail.Permission.UpdatedAt.UnixMilli(), 10)},
+			"confirm": {"yes"}}))
+	if deniedState.Code != http.StatusForbidden {
+		t.Fatalf("再认证拒绝的内置启停页面 = %d", deniedState.Code)
+	}
+	stillEnabled, err := env.adapter.GetPermission(ctx, env.adminID, builtinID)
+	if err != nil || !stillEnabled.Permission.Enabled {
+		t.Fatalf("再认证拒绝后内置权限不应被停用: %+v err=%v", stillEnabled, err)
 	}
 }

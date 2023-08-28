@@ -62,7 +62,11 @@ func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices
 		})
 	}
 	server, err := adminapi.New(adminapi.Options{
-		BasePath: normalized, Session: services.Sessions, ErrorCodes: codes,
+		BasePath: normalized,
+		// 会话校验仍走真实 session.Service；包装器额外登记本次请求的管理强认证
+		// 事实，供同一请求内的高风险权限目录动作再次认证使用（步骤 189）。
+		Session:        managementSessionRecorder{Service: services.Sessions, gate: gate},
+		ErrorCodes:     codes,
 		Tasks:          runtime.Executor(),
 		TaskAuthorizer: hostTaskAuthorizer{checker: managed.Checker},
 		// 已装配的真实领域服务：审计查询/导出/清理、报告与计划、备份管理。

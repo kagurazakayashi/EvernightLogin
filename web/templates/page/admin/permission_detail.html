@@ -1,6 +1,10 @@
 {{define "page-title"}}{{t "page.admin.rbac.permission_detail_title"}}{{end}}
 {{define "content"}}
 {{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if eq .Data.status "created"}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.permission_created"}}</p></div>{{end}}
+{{if eq .Data.status "updated"}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.saved"}}</p></div>{{end}}
+{{if eq .Data.status "enable"}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.state_enabled"}}</p></div>{{end}}
+{{if eq .Data.status "disable"}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.state_disabled"}}</p></div>{{end}}
 <p><a href="{{route "admin.permissions"}}?scope_id={{.Data.permission.ScopeID}}">{{t "common.action.back"}}</a></p>
 <dl>
   <dt>{{t "common.label.name"}}</dt><dd>{{.Data.permission.Name}}</dd>
@@ -20,26 +24,101 @@
 </dl>
 <p class="ln-meta">{{t "page.admin.rbac.stop_effect_hint"}}</p>
 
-{{if .Data.updated}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.saved"}}</p></div>{{end}}
+<h2>{{t "page.admin.rbac.impact_title"}}</h2>
+<p>{{t "page.admin.rbac.impact_intro"}}</p>
+{{if .Data.impact}}
+  <p>{{if .Data.impact.CanDelete}}{{t "page.admin.rbac.impact_delete_allowed"}}{{else}}{{t "page.admin.rbac.impact_delete_blocked"}}{{end}}</p>
+  {{if .Data.impact.DeleteBlockedReason}}<p class="ln-meta">{{.Data.impact.DeleteBlockedReason}}</p>{{end}}
+  {{if .Data.impact.RolesAvailable}}
+    {{if .Data.impact.ReferencingRoles}}
+    <table class="ln-table">
+      <caption>{{t "page.admin.rbac.impact_referencing_roles"}}</caption>
+      <thead><tr>
+        <th scope="col">{{t "page.admin.rbac.impact_role_name"}}</th>
+        <th scope="col">{{t "page.admin.rbac.machine_key"}}</th>
+        <th scope="col">{{t "page.admin.rbac.impact_scope"}}</th>
+        <th scope="col">{{t "common.label.status"}}</th>
+      </tr></thead>
+      <tbody>
+      {{range .Data.impact.ReferencingRoles}}
+      <tr>
+        <td>{{.RoleName}}</td>
+        <td><code>{{.RoleKey}}</code></td>
+        <td><code>{{.ScopeID}}</code></td>
+        <td>{{if .Enabled}}{{t "page.admin.rbac.enabled"}}{{else}}{{t "page.admin.rbac.disabled"}}{{end}}{{if .Builtin}} · {{t "page.admin.rbac.builtin"}}{{end}}</td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>
+    <p class="ln-meta">{{t "page.admin.rbac.impact_disable_note"}}</p>
+    {{else}}<p class="ln-meta">{{t "page.admin.rbac.impact_no_roles"}}</p>{{end}}
+  {{else}}<p class="ln-meta">{{.Data.impact.RolesUnavailableReason}}</p>{{end}}
+{{else if .Data.impactUnavailable}}<p class="ln-meta">{{.Data.impactUnavailable}}</p>{{end}}
 
+{{if .Data.permission.Builtin}}
 <h2>{{t "page.admin.rbac.permission_edit"}}</h2>
 <p class="ln-meta">{{t "page.admin.rbac.builtin_text_hint"}}</p>
+{{else}}
+<h2>{{t "page.admin.rbac.permission_edit"}}</h2>
+<p class="ln-meta">{{t "page.admin.rbac.custom_text_hint"}}</p>
 <form method="post" action="{{route "admin.permission_update"}}" novalidate>
   {{csrf_field}}<input type="hidden" name="permission_id" value="{{.Data.permission.PermissionID}}">
+  <input type="hidden" name="expected_updated_at" value="{{.Data.updatedAtMS}}">
   {{template "component.field" (dict "id" "permission-name" "name" "name" "label" (t "common.label.name") "value" .Data.permission.Name "required" true)}}
   {{template "component.field" (dict "id" "permission-description" "name" "description" "label" (t "page.admin.rbac.explain_what") "value" .Data.permission.Description "textarea" true)}}
   {{template "component.field" (dict "id" "permission-limits" "name" "limits" "label" (t "page.admin.rbac.explain_limits") "value" .Data.permission.Limits "textarea" true)}}
   <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.save") "variant" "primary" "type" "submit")}}</div>
 </form>
+{{end}}
 
 <h2>{{t "page.admin.rbac.permission_state_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.rbac.permission_state_confirm_hint"}}</p>
+{{if .Data.permission.RootOnly}}
+<p class="ln-meta">{{t "page.admin.rbac.root_only_state_hint"}}</p>
+{{else}}
 <form method="post" action="{{route "admin.permission_state"}}">
   {{csrf_field}}<input type="hidden" name="permission_id" value="{{.Data.permission.PermissionID}}">
+  <input type="hidden" name="expected_updated_at" value="{{.Data.updatedAtMS}}">
   {{if .Data.permission.Enabled}}<input type="hidden" name="action" value="disable">
-  <label class="ln-field__label" for="permission-disable-confirm">{{t "page.admin.rbac.confirm_disable_permission"}}</label>
-  <input id="permission-disable-confirm" type="checkbox" name="confirm" value="yes" required>
+  <label class="ln-field__label" for="permission-state-confirm">{{t "page.admin.rbac.confirm_disable_permission"}}</label>
+  <input id="permission-state-confirm" type="checkbox" name="confirm" value="yes" required>
   <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.disable_permission") "variant" "danger" "type" "submit")}}</div>
   {{else}}<input type="hidden" name="action" value="enable">
-  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.enable_permission") "variant" "primary" "type" "submit")}}</div>{{end}}
+  <label class="ln-field__label" for="permission-state-confirm">{{t "page.admin.rbac.confirm_enable_permission"}}</label>
+  <input id="permission-state-confirm" type="checkbox" name="confirm" value="yes" required>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.enable_permission") "variant" "primary" "type" "submit")}}</div>
+  {{end}}
 </form>
+{{end}}
+
+{{if .Data.canManage}}
+<h2>{{t "page.admin.rbac.permission_delete_title"}}</h2>
+{{if .Data.permission.Builtin}}
+<p class="ln-meta">{{t "page.admin.rbac.permission_delete_builtin"}}</p>
+{{else}}
+{{if .Data.impact}}
+{{if .Data.impact.CanDelete}}
+<p class="ln-meta">{{t "page.admin.rbac.permission_delete_intro"}}</p>
+<form method="post" action="{{route "admin.permission_delete"}}">
+  {{csrf_field}}<input type="hidden" name="permission_id" value="{{.Data.permission.PermissionID}}">
+  <input type="hidden" name="expected_updated_at" value="{{.Data.updatedAtMS}}">
+  <label class="ln-field__label" for="permission-delete-confirm">{{t "page.admin.rbac.confirm_delete_permission"}}</label>
+  <input id="permission-delete-confirm" type="checkbox" name="confirm" value="yes" required>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.permission_delete") "variant" "danger" "type" "submit")}}</div>
+</form>
+{{else}}
+<p class="ln-meta">{{t "page.admin.rbac.permission_delete_blocked"}}</p>
+{{end}}
+{{else}}
+<p class="ln-meta">{{t "page.admin.rbac.permission_delete_intro"}}</p>
+<form method="post" action="{{route "admin.permission_delete"}}">
+  {{csrf_field}}<input type="hidden" name="permission_id" value="{{.Data.permission.PermissionID}}">
+  <input type="hidden" name="expected_updated_at" value="{{.Data.updatedAtMS}}">
+  <label class="ln-field__label" for="permission-delete-confirm">{{t "page.admin.rbac.confirm_delete_permission"}}</label>
+  <input id="permission-delete-confirm" type="checkbox" name="confirm" value="yes" required>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.permission_delete") "variant" "danger" "type" "submit")}}</div>
+</form>
+{{end}}
+{{end}}
+{{end}}
 {{end}}

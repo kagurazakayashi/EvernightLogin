@@ -1,0 +1,27 @@
+{{define "page-title"}}{{t "page.admin.rbac.permission_create"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<p>{{t "page.admin.rbac.permission_create_intro"}}</p>
+<p class="ln-meta">{{t "page.admin.rbac.permission_create_builtin_note"}}</p>
+<p class="ln-meta">{{t "page.admin.rbac.permission_create_effect_note"}}</p>
+<form method="post" action="{{route "admin.permission_create.submit"}}" novalidate>
+  {{csrf_field}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="permission-scope">{{t "common.label.scope"}}</label>
+    <p class="ln-field__help" id="permission-scope-help">{{t "page.admin.rbac.permission_create_scope_help"}}</p>
+    <select class="ln-input" id="permission-scope" name="scope_id" aria-describedby="permission-scope-help">
+      {{range .Data.scopes}}<option value="{{.ScopeID}}"{{if eq .ScopeID $.Data.scopeID}} selected{{end}}>{{if .ApplicationName}}{{.ApplicationName}} ({{.ScopeID}}){{else}}{{.ScopeID}}{{end}}</option>{{end}}
+    </select>
+  </div>
+  {{template "component.field" (dict "id" "permission-key" "name" "permission_key" "label" (t "page.admin.rbac.machine_key") "value" .Data.key "help" (t "page.admin.rbac.permission_key_help") "required" true)}}
+  {{template "component.field" (dict "id" "permission-name" "name" "name" "label" (t "common.label.name") "value" .Data.name "required" true)}}
+  {{template "component.field" (dict "id" "permission-description" "name" "description" "label" (t "page.admin.rbac.explain_what") "value" .Data.description "textarea" true "help" (t "page.admin.rbac.explain_what_help"))}}
+  {{template "component.field" (dict "id" "permission-limits" "name" "limits" "label" (t "page.admin.rbac.explain_limits") "value" .Data.limits "textarea" true "help" (t "page.admin.rbac.explain_limits_help"))}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="permission-create-confirm">{{t "page.admin.rbac.confirm_create_permission"}}</label>
+    <input id="permission-create-confirm" type="checkbox" name="confirm" value="yes" required>
+  </div>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.rbac.permission_create_submit") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p><a href="{{route "admin.permissions"}}?scope_id={{.Data.scopeID}}">{{t "common.action.back"}}</a></p>
+{{end}}

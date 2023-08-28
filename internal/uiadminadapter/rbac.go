@@ -23,6 +23,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/permission"
 	"github.com/kagurazakayashi/EvernightLogin/internal/preset"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
 )
 
@@ -43,7 +44,13 @@ type RBACOptions struct {
 	ManageableScopes func(ctx context.Context, adminUserID string) ([]string, error)
 	// ApplicationNames 返回应用显示名（可选；仅展示，不参与授权）。
 	ApplicationNames func(ctx context.Context, adminUserID string) (map[string]string, error)
-	Logger           *slog.Logger
+	// Reauth 是步骤 189 高风险权限目录动作（创建自定义权限、删除自定义权限、内置
+	// 权限启停）的宿主再次认证回调。action 为 permission.create /
+	// permission.delete / permission.state.builtin；target 为作用范围 ID（创建）或
+	// 权限 ID；requestID 来自页面/管理 API。为 nil 时上述动作 fail-closed 拒绝，
+	// 不会因为宿主漏配而放行；只读页面与自定义权限启停不受影响。
+	Reauth func(ctx context.Context, adminUserID, action, target, requestID string) error
+	Logger *slog.Logger
 }
 
 // RBACAdapter 实现 login.UIRBACBackend。
@@ -81,6 +88,48 @@ const (
 	rbacActionPermissionsRead   = "permissions.read"
 	rbacActionPermissionsManage = "permissions.manage"
 )
+
+// 步骤 189：高风险权限目录动作的再次认证动作名（由页面/管理 API 适配器传给宿主
+// Reauth 回调；宿主实现必须按同一名称绑定操作参数，不得使用页面自造的短名）。
+const (
+	rbacReauthActionPermissionCreate       = "permission.create"
+	rbacReauthActionPermissionDelete       = "permission.delete"
+	rbacReauthActionPermissionStateBuiltin = "permission.state.builtin"
+)
+
+// verifyReauth 调用宿主再次认证（步骤 189）。未装配即 fail-closed：高风险目录动作
+// 不能因为宿主漏配回调而被当作已授权；只读页面与自定义权限启停不经过这里。
+func (a *RBACAdapter) verifyReauth(ctx context.Context, adminUserID, action, target,
+	requestID string) error {
+	if a.opts.Reauth == nil {
+		return rbacErr("REAUTH_REQUIRED")
+	}
+	if err := a.opts.Reauth(ctx, adminUserID, action, target, requestID); err != nil {
+		return mapReauthError(err)
+	}
+	return nil
+}
+
+// mapReauthError 把宿主的再次认证/敏感策略错误映射为稳定公开错误码；未知错误一律
+// 按需要再次认证处理（fail-closed），不泄露内部原因。
+func mapReauthError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, reauth.ErrAccessDenied):
+		return rbacErr("ACCESS_DENIED")
+	case errors.Is(err, reauth.ErrMFARequired):
+		return rbacErr("MFA_REQUIRED")
+	case errors.Is(err, reauth.ErrRateLimited):
+		return rbacErr("RATE_LIMITED")
+	case errors.Is(err, reauth.ErrStoreUnavailable):
+		return rbacErr("DB_UNAVAILABLE")
+	case errors.Is(err, reauth.ErrAuditUnavailable):
+		return rbacErr("AUDIT_WRITE_FAILED")
+	default:
+		return rbacErr("REAUTH_REQUIRED")
+	}
+}
 
 // check 执行可选的页面层管理动作复核（失败即拒绝）。
 func (a *RBACAdapter) check(ctx context.Context, adminUserID, action string) error {
@@ -538,6 +587,11 @@ func (a *RBACAdapter) UpdatePermission(ctx context.Context, adminUserID, permiss
 }
 
 // SetPermissionState 启用/停用权限并返回是否实际变化（停用即拒绝，不级联删除组合）。
+//
+// 步骤 189：内置权限（含 root_only）的启停属于高风险目录变更，必须先调用宿主
+// 再次认证（fail-closed）；自定义权限启停不要求额外再次认证，但仍由领域服务做
+// 委派资格、作用范围与审计判定。启用会让已组合该权限的角色重新生效，服务端在
+// 事务内继续复核可转授范围与目标。
 func (a *RBACAdapter) SetPermissionState(ctx context.Context, adminUserID, permissionID string,
 	enable bool, requestID string) (login.UIRBACPermissionView, bool, error) {
 	if err := a.check(ctx, adminUserID, rbacActionPermissionsManage); err != nil {
@@ -547,19 +601,177 @@ func (a *RBACAdapter) SetPermissionState(ctx context.Context, adminUserID, permi
 	if err != nil {
 		return login.UIRBACPermissionView{}, false, rbacErr("ACCESS_DENIED")
 	}
+	id := strings.TrimSpace(permissionID)
+	if !permission.ValidPermissionID(id) {
+		return login.UIRBACPermissionView{}, false, rbacErr("REQ_INVALID")
+	}
+	// 先读取真实记录：内置/root_only 语义不能由页面自报；读取同时写真实读取审计。
+	current, err := a.opts.Permissions.GetPermission(ctx, caller, id)
+	if err != nil {
+		return login.UIRBACPermissionView{}, false, mapRBACError(err)
+	}
+	if current.IsBuiltin {
+		if err := a.verifyReauth(ctx, adminUserID,
+			rbacReauthActionPermissionStateBuiltin, id, requestID); err != nil {
+			return login.UIRBACPermissionView{}, false, err
+		}
+	}
 	var updated permission.Permission
 	var changed bool
 	if enable {
-		updated, changed, err = a.opts.Permissions.EnablePermission(ctx, caller,
-			strings.TrimSpace(permissionID))
+		updated, changed, err = a.opts.Permissions.EnablePermission(ctx, caller, id)
 	} else {
-		updated, changed, err = a.opts.Permissions.DisablePermission(ctx, caller,
-			strings.TrimSpace(permissionID))
+		updated, changed, err = a.opts.Permissions.DisablePermission(ctx, caller, id)
 	}
 	if err != nil {
 		return login.UIRBACPermissionView{}, false, mapRBACError(err)
 	}
 	return a.permissionView(updated, a.appNames(ctx, adminUserID)), changed, nil
+}
+
+// CreatePermission 登记系统/应用自定义权限（步骤 189）。
+//
+// 安全边界：IsBuiltin/RootOnly 恒为 false（页面表单不是这两个字段的来源），创建
+// 属于高风险目录变更，必须先通过宿主再次认证；最终作用范围、调用者资格、机器标识
+// 与文本校验由真实 permission 服务判定并写关键审计。
+func (a *RBACAdapter) CreatePermission(ctx context.Context, adminUserID string,
+	create login.UIRBACCreatePermission, requestID string) (login.UIRBACPermissionView, error) {
+	if err := a.check(ctx, adminUserID, rbacActionPermissionsManage); err != nil {
+		return login.UIRBACPermissionView{}, err
+	}
+	caller, err := permission.UserCaller(adminUserID)
+	if err != nil {
+		return login.UIRBACPermissionView{}, rbacErr("ACCESS_DENIED")
+	}
+	scopeID := strings.TrimSpace(create.ScopeID)
+	if err := a.verifyReauth(ctx, adminUserID, rbacReauthActionPermissionCreate, scopeID,
+		requestID); err != nil {
+		return login.UIRBACPermissionView{}, err
+	}
+	record, err := a.opts.Permissions.CreatePermission(ctx, caller, permission.CreateRequest{
+		ScopeID: scopeID, Key: strings.TrimSpace(create.Key),
+		Name:        strings.TrimSpace(create.Name),
+		Description: strings.TrimSpace(create.Description),
+		Limits:      strings.TrimSpace(create.Limits),
+		// 页面/接口不得创建内置权限或 root_only 权限：这两项不是表单/请求字段。
+		IsBuiltin: false, RootOnly: false,
+	})
+	if err != nil {
+		return login.UIRBACPermissionView{}, mapRBACError(err)
+	}
+	return a.permissionView(record, a.appNames(ctx, adminUserID)), nil
+}
+
+// DeletePermission 删除自定义权限（步骤 189）。
+//
+// 内置权限永远拒绝；仍被 role_permissions 引用时由领域服务在同一事务条件删除中返回
+// 冲突（不隐式级联破坏授权）；删除前必须通过宿主再次认证。读取记录仅为确定内置
+// 语义与再次认证目标，最终删除仍由真实服务重新鉴权并写关键审计。
+func (a *RBACAdapter) DeletePermission(ctx context.Context, adminUserID, permissionID,
+	requestID string) error {
+	if err := a.check(ctx, adminUserID, rbacActionPermissionsManage); err != nil {
+		return err
+	}
+	caller, err := permission.UserCaller(adminUserID)
+	if err != nil {
+		return rbacErr("ACCESS_DENIED")
+	}
+	id := strings.TrimSpace(permissionID)
+	if !permission.ValidPermissionID(id) {
+		return rbacErr("REQ_INVALID")
+	}
+	current, err := a.opts.Permissions.GetPermission(ctx, caller, id)
+	if err != nil {
+		return mapRBACError(err)
+	}
+	if current.IsBuiltin {
+		return rbacErr("ACCESS_DENIED")
+	}
+	if err := a.verifyReauth(ctx, adminUserID, rbacReauthActionPermissionDelete, id,
+		requestID); err != nil {
+		return err
+	}
+	if err := a.opts.Permissions.DeletePermission(ctx, caller, id); err != nil {
+		return mapRBACError(err)
+	}
+	return nil
+}
+
+// PermissionImpact 返回删除/停用影响预览（步骤 189）：引用该权限的真实角色、角色
+// 启停状态与删除阻塞原因。角色列表依赖 roles.read；缺少该权限时只降级隐藏列表，不
+// 影响 permissions.read 详情读取，也不改变任何写操作的授权判定。
+func (a *RBACAdapter) PermissionImpact(ctx context.Context, adminUserID,
+	permissionID string) (login.UIRBACPermissionImpact, error) {
+	if err := a.check(ctx, adminUserID, rbacActionPermissionsRead); err != nil {
+		return login.UIRBACPermissionImpact{}, err
+	}
+	caller, err := permission.UserCaller(adminUserID)
+	if err != nil {
+		return login.UIRBACPermissionImpact{}, rbacErr("ACCESS_DENIED")
+	}
+	id := strings.TrimSpace(permissionID)
+	if !permission.ValidPermissionID(id) {
+		return login.UIRBACPermissionImpact{}, rbacErr("REQ_INVALID")
+	}
+	record, err := a.opts.Permissions.GetPermission(ctx, caller, id)
+	if err != nil {
+		return login.UIRBACPermissionImpact{}, mapRBACError(err)
+	}
+	names := a.appNames(ctx, adminUserID)
+	impact := login.UIRBACPermissionImpact{Permission: a.permissionView(record, names)}
+	if record.IsBuiltin {
+		impact.DeleteBlockedReason = "内置权限不可删除；只能按规则启用或停用"
+	} else {
+		impact.CanDelete = true
+	}
+	roleCaller, err := role.UserCaller(adminUserID)
+	if err != nil {
+		impact.RolesUnavailableReason = "无法构造角色调用者：降级隐藏引用角色列表"
+		return impact, nil
+	}
+	roles, err := a.allRoles(ctx, roleCaller, record.ScopeID)
+	if err != nil {
+		mapped := mapRBACError(err)
+		var publicErr *login.UIRBACError
+		if errors.As(mapped, &publicErr) && publicErr.Code == "ACCESS_DENIED" {
+			impact.RolesUnavailableReason = "缺少读取角色的权限，无法列出引用该权限的角色"
+			return impact, nil
+		}
+		return login.UIRBACPermissionImpact{}, mapped
+	}
+	impact.RolesAvailable = true
+	referencing := make([]login.UIRBACImpactRole, 0, len(roles))
+	for _, item := range roles {
+		current, listErr := a.opts.Roles.ListRolePermissions(ctx, roleCaller, item.ID)
+		if listErr != nil {
+			mapped := mapRBACError(listErr)
+			var publicErr *login.UIRBACError
+			if errors.As(mapped, &publicErr) && publicErr.Code == "ACCESS_DENIED" {
+				impact.RolesAvailable = false
+				impact.RolesUnavailableReason = "缺少读取角色权限组合的资格，无法列出引用该权限的角色"
+				return impact, nil
+			}
+			return login.UIRBACPermissionImpact{}, mapped
+		}
+		for _, summary := range current {
+			if summary.PermissionID != id {
+				continue
+			}
+			referencing = append(referencing, login.UIRBACImpactRole{
+				RoleID: item.ID, RoleKey: item.Key, RoleName: item.Name,
+				ScopeID: item.ScopeID, Builtin: item.IsBuiltin, Enabled: item.Enabled})
+			break
+		}
+	}
+	sortRBACImpactRoles(referencing)
+	impact.ReferencingRoles = referencing
+	impact.ReferencedRoleCount = len(referencing)
+	if !record.IsBuiltin && len(referencing) > 0 {
+		impact.CanDelete = false
+		impact.DeleteBlockedReason = fmt.Sprintf("仍被 %d 个角色引用；请先在角色页解除组合后再删除",
+			len(referencing))
+	}
+	return impact, nil
 }
 
 // DelegationView 读取当前管理员的委派资格与“当前实际可转授”的权限。
@@ -991,7 +1203,8 @@ func (a *RBACAdapter) permissionView(record permission.Permission,
 		Key: record.Key, Group: record.Group, Name: record.Name,
 		Description: record.Description, Limits: record.Limits,
 		Builtin: record.IsBuiltin, RootOnly: record.RootOnly, Enabled: record.Enabled,
-		Implemented: true, DefaultEnabled: true}
+		Implemented: true, DefaultEnabled: true,
+		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 	if record.ScopeKind == permission.ScopeKindApplication {
 		view.AppContext = names[record.ApplicationID]
 	}
@@ -1252,6 +1465,16 @@ func mapRBACError(err error) error {
 		return rbacErr("AUDIT_WRITE_FAILED")
 	default:
 		return rbacErr("INTERNAL_ERROR")
+	}
+}
+
+// sortRBACImpactRoles 按角色机器键稳定排序影响预览中的引用角色。
+func sortRBACImpactRoles(roles []login.UIRBACImpactRole) {
+	for index := 1; index < len(roles); index++ {
+		for position := index; position > 0 &&
+			roles[position].RoleKey < roles[position-1].RoleKey; position-- {
+			roles[position], roles[position-1] = roles[position-1], roles[position]
+		}
 	}
 }
 

@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/pagecsrf"
 	"github.com/kagurazakayashi/EvernightLogin/internal/pagestate"
+	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiaccountadapter"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
@@ -301,7 +304,13 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		Access: managed.Authz, Delegations: managed.Delegation,
 		Authorize:        managed.Checker.authorizePageAction,
 		ManageableScopes: managed.Checker.pageManageableScopes,
-		Logger:           logger,
+		// 步骤 189：创建/删除自定义权限与内置权限启停属于高风险目录变更，接真实
+		// 敏感策略/再次认证闸门；缺任依赖时回调 fail-closed 拒绝，不静默放行。
+		Reauth: func(ctx context.Context, adminUserID, action, target,
+			requestID string) error {
+			return rbacPageReauth(ctx, gate, adminUserID, action, target, requestID)
+		},
+		Logger: logger,
 	})
 	if rbacErr != nil {
 		return nil, fmt.Errorf("构造角色权限页适配器失败: %w", rbacErr)
@@ -441,6 +450,96 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		PublicForm: publicFormPaths(deps.Config.Server.PathPrefix),
 		Admin:      adminAdapter, RBAC: rbacAdapter, Apps: appsAdapter, Support: supportAdapter,
 	}, nil
+}
+
+// managementSessionRecorder 把管理 JSON API 的真实管理会话校验结果登记为短时管理
+// 强认证事实（步骤 189）：同一请求内的高风险权限目录动作（创建/删除/内置权限启停）
+// 的再次认证回调需要一个可信的新鲜强认证来源。它不改变认证语义——会话校验仍由
+// 真实 session.Service.AuthorizeManagement 完成，这里只登记本次请求的事实。
+type managementSessionRecorder struct {
+	*session.Service
+	gate *SecurityGate
+}
+
+// AuthorizeManagement 校验管理会话并在成功后登记短时强认证事实；失败不登记。
+func (r managementSessionRecorder) AuthorizeManagement(ctx context.Context,
+	secret string) (session.Session, error) {
+	record, err := r.Service.AuthorizeManagement(ctx, secret)
+	if err != nil {
+		return record, err
+	}
+	if r.gate != nil {
+		r.gate.recordManagementFact(record.UserID, sessionManagementFact(record))
+	}
+	return record, nil
+}
+
+// rbacPageReauthOperationID 是权限目录变更对应的敏感操作目录稳定标识。
+const rbacPageReauthOperationID = "permission.catalog.change"
+
+// rbacPageReauth 是系统权限管理页（创建/删除自定义权限、内置权限启停）的宿主再次
+// 认证回调（步骤 189）。
+//
+// 绑定关系：页面会话解析时登记的“当前请求持有新鲜管理强认证”短时事实 → 本次动作
+// 的策略评估信号（强度 strong、完成完整认证、已显式确认）；再交给真实
+// reauth/policy 链按 permission.catalog.change 的目录默认策略复核新鲜度与强度。
+// 管理事实缺失/过期、动作名不在白名单或策略拒绝都会 fail-closed 返回错误，页面
+// 适配器据此拒绝写入，不存在“跳过策略”的降级路径。
+func rbacPageReauth(ctx context.Context, gate *SecurityGate, userID, action, target,
+	requestID string) error {
+	if gate == nil || gate.Reauth == nil || gate.Policy == nil {
+		return reauth.ErrReauthRequired
+	}
+	if !account.ValidUserID(userID) {
+		return reauth.ErrAccessDenied
+	}
+	if !validRBACPageReauthAction(action) {
+		return reauth.ErrAccessDenied
+	}
+	fact, ok := gate.takeManagementFact(userID)
+	if !ok || fact.verifiedAt.IsZero() {
+		return reauth.ErrReauthRequired
+	}
+	caller, err := reauth.UserCaller(userID)
+	if err != nil {
+		return reauth.ErrAccessDenied
+	}
+	safeRequestID := ""
+	if account.ValidateRequestID(requestID) == nil {
+		safeRequestID = requestID
+	}
+	request := reauth.Request{
+		ScopeID: "system", OperationID: rbacPageReauthOperationID,
+		TargetType: "permission", TargetID: target,
+		Params: map[string]string{"action": action, "target": target,
+			"request_id": safeRequestID},
+		Description: "变更系统权限目录（创建/删除/内置权限启停）",
+		RequestID:   safeRequestID,
+	}
+	// 敏感确认由页面处理器在调用适配器前校验（checkbox），因此 Confirmed=true；
+	// 策略仍会按目录默认要求复核认证强度与新鲜度，不能被页面确认替代。
+	signals := reauth.Signals{VerifiedAt: fact.verifiedAt, Strength: policy.StrengthStrong,
+		Complete: true, Confirmed: true}
+	approved, err := gate.Reauth.Authorize(reauth.WithSignals(ctx, signals), caller, request)
+	if err != nil {
+		return err
+	}
+	// 告知失败不改变已成立的授权与写入语义（与敏感策略页一致：失败只留痕）。
+	if notifyErr := gate.Reauth.NotifyOutcome(ctx, approved, reauth.OutcomeSuccess); notifyErr != nil {
+		_ = notifyErr
+	}
+	return nil
+}
+
+// validRBACPageReauthAction 白名单限制可绑定到权限目录敏感操作的页面/API 动作名，
+// 防止适配器把任意字符串透传进再次认证参数绑定。
+func validRBACPageReauthAction(action string) bool {
+	switch action {
+	case "permission.create", "permission.delete", "permission.state.builtin":
+		return true
+	default:
+		return false
+	}
 }
 
 // publicFormPaths 合并认证页与 MFA/找回页的匿名公开表单路径用途；

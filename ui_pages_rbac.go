@@ -137,6 +137,10 @@ type UIRBACPermissionView struct {
 	DefaultLimits  string
 	DefaultEnabled bool
 	DefaultRoles   []string
+	// CreatedAt/UpdatedAt 是权限目录记录的真实时间；UpdatedAt 同时作为页面层
+	// 乐观锁的“行版本”（permissions 表没有独立 row_version 列）。
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // UIRBACRoleView 是角色视图（含默认值与当前实际权限）。
@@ -235,6 +239,64 @@ type UIRBACPermissionPage struct {
 type UIRBACPermissionDetail struct {
 	Permission   UIRBACPermissionView
 	DefaultRoles []string
+}
+
+// UIRBACCreatePermission 是“创建自定义权限”的表单白名单。IsBuiltin 与 RootOnly
+// 刻意不在结构中：页面与适配器都不得创建内置权限或 root_only 权限，领域服务按
+// IsBuiltin=false、RootOnly=false 构造请求。
+type UIRBACCreatePermission struct {
+	ScopeID     string
+	Key         string
+	Name        string
+	Description string
+	Limits      string
+}
+
+// UIRBACImpactRole 是“当前组合了该权限”的角色摘要（删除/停用影响预览）。
+type UIRBACImpactRole struct {
+	RoleID        string
+	RoleKey       string
+	RoleName      string
+	ScopeID       string
+	Builtin       bool
+	Enabled       bool
+	DataScopeText string
+}
+
+// UIRBACPermissionImpact 是权限删除/启停的真实影响预览。
+//
+// RolesAvailable=false 时（例如操作者缺少 roles.read）只降级隐藏引用角色列表，
+// 权限本身仍按 permissions.read 正常展示；CanDelete/DeleteBlockedReason 来自真实
+// 目录状态，页面按钮只是交互提示，删除仍由领域服务在同一事务内复核引用。
+type UIRBACPermissionImpact struct {
+	Permission UIRBACPermissionView
+	// RolesAvailable 表示是否成功读取了引用该权限的角色列表。
+	RolesAvailable bool
+	// RolesUnavailableReason 是降级原因（直白中文，可为空）。
+	RolesUnavailableReason string
+	// ReferencingRoles 是当前组合了该权限的角色（按应用/系统范围真实读取）。
+	ReferencingRoles []UIRBACImpactRole
+	// ReferencedRoleCount 是引用角色数量（= len(ReferencingRoles)）。
+	ReferencedRoleCount int
+	// CanDelete 表示目录层允许删除（非内置且无角色引用）。
+	CanDelete bool
+	// DeleteBlockedReason 是不可删除的直白原因（为空表示可删除）。
+	DeleteBlockedReason string
+}
+
+// UIRBACPermissionAdminBackend 是系统自定义权限创建/删除与影响预览的可选扩展
+// 契约（步骤 189）。与 UIRBACBackend 分开定义，避免破坏既有嵌入实现；宿主生产
+// 适配器（internal/uiadminadapter.RBACAdapter）实现它。页面在缺少该能力时不注册
+// 创建/删除路由，也不显示入口，绝不用固定成功或测试替身冒充。
+type UIRBACPermissionAdminBackend interface {
+	// CreatePermission 登记自定义权限（IsBuiltin/RootOnly 恒为 false）。
+	CreatePermission(ctx context.Context, adminID string,
+		create UIRBACCreatePermission, requestID string) (UIRBACPermissionView, error)
+	// DeletePermission 删除自定义权限；内置、仍被引用或缺少再次认证时拒绝。
+	DeletePermission(ctx context.Context, adminID, permissionID, requestID string) error
+	// PermissionImpact 返回删除/停用影响预览（真实角色引用与阻塞原因）。
+	PermissionImpact(ctx context.Context, adminID,
+		permissionID string) (UIRBACPermissionImpact, error)
 }
 
 // UIRBACDelegatable 是当前实际可转授的权限。
@@ -425,6 +487,21 @@ func newPageRBACPages(options UIPageRBACOptions) (*pageRBACPages, error) {
 			Access: UIAccessManagement, Layout: "layout/base",
 			Template: "page/admin/preset_diff"},
 	}
+	// 步骤 189：只有后端实现可选权限登记扩展契约时才注册创建/删除路由；缺失时
+	// 保持 404 且列表页不显示入口（fail-closed，不放行到固定成功）。
+	if _, ok := options.Backend.(UIRBACPermissionAdminBackend); ok {
+		routes = append(routes,
+			UIRoute{Name: "admin.permission_create", Method: http.MethodGet,
+				Path: "/admin/permissions/create", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/permission_create"},
+			UIRoute{Name: "admin.permission_create.submit", Method: http.MethodPost,
+				Path: "/admin/permissions/create", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/permission_create"},
+			UIRoute{Name: "admin.permission_delete", Method: http.MethodPost,
+				Path: "/admin/permissions/delete", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/permission_detail"},
+		)
+	}
 	for _, route := range routes {
 		pages.routes = append(pages.routes, route)
 		pages.handlers[route.Name] = handler
@@ -466,12 +543,16 @@ func (h *rbacPageHandlers) HandlePage(ctx context.Context, request *http.Request
 		return h.roleAssign(ctx, request, page)
 	case "admin.permissions":
 		return h.permissions(ctx, request, page)
+	case "admin.permission_create", "admin.permission_create.submit":
+		return h.permissionCreate(ctx, request, page)
 	case "admin.permission_detail":
 		return h.permissionDetail(ctx, request, page)
 	case "admin.permission_update":
 		return h.permissionUpdate(ctx, request, page)
 	case "admin.permission_state":
 		return h.permissionState(ctx, request, page)
+	case "admin.permission_delete":
+		return h.permissionDelete(ctx, request, page)
 	case "admin.delegations":
 		return h.delegations(ctx, request, page)
 	case "admin.access_effective":
@@ -761,7 +842,26 @@ func (h *rbacPageHandlers) permissions(ctx context.Context, request *http.Reques
 	return UIPageOutcome{Data: map[string]any{"permissions": result.Permissions,
 		"hasMore": result.HasMore, "nextOffset": result.NextOffset,
 		"scopeID": query.ScopeID, "enabled": request.URL.Query().Get("enabled"),
-		"scopes": scopes}}, nil
+		// 步骤 189：只有后端实现可选权限登记扩展契约时才显示“创建自定义权限”入口。
+		"canCreate": h.permissionAdminAvailable(),
+		"status":    request.URL.Query().Get("status"),
+		"scopes":    scopes}}, nil
+}
+
+// permissionAdminAvailable 报告后端是否实现权限登记扩展契约。
+func (h *rbacPageHandlers) permissionAdminAvailable() bool {
+	_, ok := h.pages.options.Backend.(UIRBACPermissionAdminBackend)
+	return ok
+}
+
+// permissionAdminBackend 返回权限登记扩展契约；缺失时页面 fail-closed（不注册
+// 创建/删除路由，也不提供入口）。
+func (h *rbacPageHandlers) permissionAdminBackend() (UIRBACPermissionAdminBackend, bool) {
+	backend, ok := h.pages.options.Backend.(UIRBACPermissionAdminBackend)
+	if !ok || isNilUIValue(backend) {
+		return nil, false
+	}
+	return backend, true
 }
 
 // permissionDetail 渲染权限详情（说明、生效范围、不能做什么、默认/当前值）。
@@ -784,7 +884,23 @@ func (h *rbacPageHandlers) renderPermissionDetail(ctx context.Context,
 	}
 	data := map[string]any{"permission": detail.Permission,
 		"defaultRoles": detail.DefaultRoles,
-		"status":       request.URL.Query().Get("status")}
+		// updatedAtMS 是页面层乐观锁的“行版本”（UpdatedAt 毫秒值）；表单回传后由
+		// 处理器重新读取并比较，冲突返回 409，写入仍由领域服务与再次认证兜底。
+		"updatedAtMS": detail.Permission.UpdatedAt.UnixMilli(),
+		"canManage":   h.permissionAdminAvailable(),
+		"status":      request.URL.Query().Get("status")}
+	if adminBackend, ok := h.permissionAdminBackend(); ok {
+		impact, impactErr := adminBackend.PermissionImpact(ctx, page.Session.UserID,
+			permissionID)
+		if impactErr != nil {
+			// 影响预览是辅助信息：读取失败不阻断已成功的权限详情读取，明确降级说明。
+			data["impactUnavailable"] = text("page.admin.rbac.impact_unavailable")
+		} else {
+			data["impact"] = impact
+		}
+	} else {
+		data["impactUnavailable"] = text("page.admin.rbac.impact_unavailable")
+	}
 	if status != nil {
 		if value := status.Get("status"); value != "" {
 			data["status"] = value
@@ -802,10 +918,14 @@ func (h *rbacPageHandlers) renderPermissionDetail(ctx context.Context,
 }
 
 // permissionUpdate 修改自定义权限的直白名称/说明/明确限制（内置权限由后端拒绝）。
+//
+// 行版本冲突：permissions 表没有独立 row_version，页面用记录 UpdatedAt 毫秒值作为
+// 乐观锁；表单回传打开页面时的 UpdatedAt，服务端先读后比较，不一致返回 409，避免
+// 覆盖他人刚保存的修改（写入仍由领域服务与再次认证兜底 TOCTOU）。
 func (h *rbacPageHandlers) permissionUpdate(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	form, formErr := readPageForm(request, page.CSRFField, []string{"permission_id", "name",
-		"description", "limits"})
+		"description", "limits", "expected_updated_at"})
 	if formErr != nil {
 		return UIPageOutcome{StatusCode: http.StatusBadRequest,
 			Data:         emptyPermissionDetailData(),
@@ -816,6 +936,15 @@ func (h *rbacPageHandlers) permissionUpdate(ctx context.Context, request *http.R
 		return UIPageOutcome{StatusCode: http.StatusBadRequest,
 			Data:         emptyPermissionDetailData(),
 			ErrorSummary: text("page.admin.rbac.invalid")}, nil
+	}
+	current, err := h.pages.options.Backend.GetPermission(ctx, page.Session.UserID,
+		permissionID)
+	if err != nil {
+		return rbacErrorOutcome(err, emptyPermissionDetailData(),
+			"page.admin.rbac.permission_load_failed"), nil
+	}
+	if permissionVersionConflict(current.Permission, form.Get("expected_updated_at")) {
+		return h.permissionConflictOutcome(ctx, request, page)
 	}
 	change := UIRBACTextChange{Name: strings.TrimSpace(form.Get("name")),
 		Description: strings.TrimSpace(form.Get("description")),
@@ -830,11 +959,14 @@ func (h *rbacPageHandlers) permissionUpdate(ctx context.Context, request *http.R
 		url.Values{"status": {"updated"}})
 }
 
-// permissionState 启用/停用权限（停用需确认；停用后角色组合不再生效）。
+// permissionState 启用/停用权限（启停都需确认；停用后角色组合立即不再生效）。
+//
+// 内置权限的启停由适配器要求宿主再次认证（fail-closed）；root_only 内置权限只能由
+// 受限本地操作者启停，页面不提供绕行入口。行版本校验与修改一致。
 func (h *rbacPageHandlers) permissionState(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	form, formErr := readPageForm(request, page.CSRFField, []string{"permission_id",
-		"action", "confirm"})
+		"action", "confirm", "expected_updated_at"})
 	if formErr != nil {
 		return UIPageOutcome{StatusCode: http.StatusBadRequest,
 			Data:         emptyPermissionDetailData(),
@@ -847,10 +979,19 @@ func (h *rbacPageHandlers) permissionState(ctx context.Context, request *http.Re
 			Data:         emptyPermissionDetailData(),
 			ErrorSummary: text("page.admin.rbac.invalid")}, nil
 	}
-	if action == "disable" && form.Get("confirm") != "yes" {
+	if form.Get("confirm") != "yes" {
 		return UIPageOutcome{StatusCode: http.StatusBadRequest,
 			Data:         emptyPermissionDetailData(),
-			ErrorSummary: text("page.admin.rbac.permission_disable_confirm_required")}, nil
+			ErrorSummary: text("page.admin.rbac.permission_state_confirm_required")}, nil
+	}
+	current, err := h.pages.options.Backend.GetPermission(ctx, page.Session.UserID,
+		permissionID)
+	if err != nil {
+		return rbacErrorOutcome(err, emptyPermissionDetailData(),
+			"page.admin.rbac.permission_load_failed"), nil
+	}
+	if permissionVersionConflict(current.Permission, form.Get("expected_updated_at")) {
+		return h.permissionConflictOutcome(ctx, request, page)
 	}
 	updated, changed, err := h.pages.options.Backend.SetPermissionState(ctx,
 		page.Session.UserID, permissionID, action == "enable", page.RequestID)
@@ -860,6 +1001,190 @@ func (h *rbacPageHandlers) permissionState(ctx context.Context, request *http.Re
 	}
 	return h.renderPermissionDetail(ctx, request, page, map[string]any{"updated": updated,
 		"stateChanged": changed}, url.Values{"status": {action}})
+}
+
+// permissionCreate 渲染/提交“创建自定义权限”。
+//
+// 创建是高风险目录变更：必须显式确认，并要求宿主再次认证（由适配器 fail-closed
+// 判定）。IsBuiltin/RootOnly 不在表单中，适配器固定以 false 构造请求，页面无法创建
+// 内置或 root_only 权限。
+func (h *rbacPageHandlers) permissionCreate(ctx context.Context, request *http.Request,
+	page UIPageContext) (UIPageOutcome, error) {
+	adminBackend, ok := h.permissionAdminBackend()
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusServiceUnavailable,
+			ErrorSummary: text("page.admin.rbac.permission_admin_unavailable")}, nil
+	}
+	if request.Method != http.MethodPost {
+		scopes, err := h.pages.options.Backend.ListScopes(ctx, page.Session.UserID)
+		if err != nil {
+			return rbacErrorOutcome(err, map[string]any{"scopes": []UIRBACScope{}},
+				"page.admin.rbac.scopes_load_failed"), nil
+		}
+		return UIPageOutcome{Data: map[string]any{"scopes": scopes,
+			"scopeID": strings.TrimSpace(request.URL.Query().Get("scope_id")),
+			"key":     "", "name": "", "description": "", "limits": ""}}, nil
+	}
+	form, formErr := readPageForm(request, page.CSRFField, []string{"scope_id",
+		"permission_key", "name", "description", "limits", "confirm"})
+	if formErr != nil {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         createPermissionFormData(url.Values{}),
+			ErrorSummary: text("page.admin.rbac.invalid")}, nil
+	}
+	if form.Get("confirm") != "yes" {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         h.attachPermissionScopes(ctx, page, createPermissionFormData(form)),
+			ErrorSummary: text("page.admin.rbac.permission_create_confirm_required")}, nil
+	}
+	create := UIRBACCreatePermission{ScopeID: strings.TrimSpace(form.Get("scope_id")),
+		Key:         strings.TrimSpace(form.Get("permission_key")),
+		Name:        strings.TrimSpace(form.Get("name")),
+		Description: strings.TrimSpace(form.Get("description")),
+		Limits:      strings.TrimSpace(form.Get("limits"))}
+	if create.ScopeID == "" || create.Key == "" || create.Name == "" {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         h.attachPermissionScopes(ctx, page, createPermissionFormData(form)),
+			ErrorSummary: text("page.admin.rbac.permission_create_required")}, nil
+	}
+	created, err := adminBackend.CreatePermission(ctx, page.Session.UserID, create,
+		page.RequestID)
+	if err != nil {
+		outcome := permissionCreateErrorOutcome(err, form)
+		if data, ok := outcome.Data.(map[string]any); ok {
+			data = h.attachPermissionScopes(ctx, page, data)
+			outcome.Data = data
+		}
+		return outcome, nil
+	}
+	return UIPageOutcome{Data: map[string]any{"permission": created},
+		RedirectPath: "/admin/permissions/detail", RedirectQuery: url.Values{
+			"permission_id": {created.PermissionID}, "status": {"created"}}}, nil
+}
+
+// permissionDelete 删除自定义权限（内置、仍被引用、行版本冲突或再认证失败均拒绝）。
+func (h *rbacPageHandlers) permissionDelete(ctx context.Context, request *http.Request,
+	page UIPageContext) (UIPageOutcome, error) {
+	adminBackend, ok := h.permissionAdminBackend()
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusServiceUnavailable,
+			ErrorSummary: text("page.admin.rbac.permission_admin_unavailable")}, nil
+	}
+	form, formErr := readPageForm(request, page.CSRFField, []string{"permission_id",
+		"expected_updated_at", "confirm"})
+	if formErr != nil {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         emptyPermissionDetailData(),
+			ErrorSummary: text("page.admin.rbac.invalid")}, nil
+	}
+	permissionID := strings.TrimSpace(form.Get("permission_id"))
+	if permissionID == "" {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         emptyPermissionDetailData(),
+			ErrorSummary: text("page.admin.rbac.invalid")}, nil
+	}
+	if form.Get("confirm") != "yes" {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         emptyPermissionDetailData(),
+			ErrorSummary: text("page.admin.rbac.permission_delete_confirm_required")}, nil
+	}
+	current, err := h.pages.options.Backend.GetPermission(ctx, page.Session.UserID,
+		permissionID)
+	if err != nil {
+		return rbacErrorOutcome(err, emptyPermissionDetailData(),
+			"page.admin.rbac.permission_load_failed"), nil
+	}
+	if permissionVersionConflict(current.Permission, form.Get("expected_updated_at")) {
+		return h.permissionConflictOutcome(ctx, request, page)
+	}
+	if current.Permission.Builtin {
+		// 内置权限永远不可删除（领域服务同样拒绝）；页面不依赖服务端唯一兜底。
+		return UIPageOutcome{StatusCode: http.StatusForbidden,
+			Data:         emptyPermissionDetailData(),
+			ErrorCode:    "ACCESS_DENIED",
+			ErrorSummary: text("page.admin.rbac.permission_delete_builtin")}, nil
+	}
+	scopeID := current.Permission.ScopeID
+	if err := adminBackend.DeletePermission(ctx, page.Session.UserID, permissionID,
+		page.RequestID); err != nil {
+		outcome := rbacErrorOutcome(err, emptyPermissionDetailData(),
+			"page.admin.rbac.permission_delete_failed")
+		return outcome, nil
+	}
+	return UIPageOutcome{RedirectPath: "/admin/permissions", RedirectQuery: url.Values{
+		"scope_id": {scopeID}, "status": {"deleted"}}}, nil
+}
+
+// permissionVersionConflict 判断表单回传的行版本是否与当前记录一致。缺少或非法
+// 版本视为冲突（表单来自旧页面），避免静默覆盖。
+func permissionVersionConflict(current UIRBACPermissionView, rawExpected string) bool {
+	rawExpected = strings.TrimSpace(rawExpected)
+	if rawExpected == "" {
+		return true
+	}
+	expected, err := strconv.ParseInt(rawExpected, 10, 64)
+	if err != nil || expected < 0 {
+		return true
+	}
+	return current.UpdatedAt.UnixMilli() != expected
+}
+
+// permissionConflictOutcome 返回 409 并重新读取真实当前状态（错误页不伪造旧值）。
+func (h *rbacPageHandlers) permissionConflictOutcome(ctx context.Context,
+	request *http.Request, page UIPageContext) (UIPageOutcome, error) {
+	outcome, err := h.renderPermissionDetail(ctx, request, page, nil, nil)
+	if err != nil {
+		return UIPageOutcome{StatusCode: http.StatusConflict, ErrorCode: "CONFLICT",
+			Data:         emptyPermissionDetailData(),
+			ErrorSummary: text("page.admin.rbac.version_conflict")}, nil
+	}
+	outcome.StatusCode = http.StatusConflict
+	outcome.ErrorCode = "CONFLICT"
+	outcome.ErrorSummary = text("page.admin.rbac.version_conflict")
+	return outcome, nil
+}
+
+// attachPermissionScopes 在创建失败页回填可选作用范围（读取失败不改变原始错误）。
+func (h *rbacPageHandlers) attachPermissionScopes(ctx context.Context, page UIPageContext,
+	data map[string]any) map[string]any {
+	scopes, err := h.pages.options.Backend.ListScopes(ctx, page.Session.UserID)
+	if err == nil {
+		data["scopes"] = scopes
+	}
+	return data
+}
+
+// createPermissionFormData 在创建失败时回填已填写的字段（不回填任何身份/权限标记）。
+func createPermissionFormData(form url.Values) map[string]any {
+	return map[string]any{
+		"scopeID":     strings.TrimSpace(form.Get("scope_id")),
+		"key":         strings.TrimSpace(form.Get("permission_key")),
+		"name":        strings.TrimSpace(form.Get("name")),
+		"description": strings.TrimSpace(form.Get("description")),
+		"limits":      strings.TrimSpace(form.Get("limits")),
+		"scopes":      []UIRBACScope{},
+	}
+}
+
+// permissionCreateErrorOutcome 把创建失败映射为页面状态与可纠正提示。
+func permissionCreateErrorOutcome(err error, form url.Values) UIPageOutcome {
+	outcome := rbacErrorOutcome(err, createPermissionFormData(form),
+		"page.admin.rbac.permission_create_failed")
+	var publicErr *UIRBACError
+	if errors.As(err, &publicErr) {
+		switch publicErr.Code {
+		case "REQ_INVALID":
+			outcome.StatusCode = http.StatusBadRequest
+			outcome.ErrorSummary = text("page.admin.rbac.permission_create_invalid")
+		case "CONFLICT":
+			outcome.StatusCode = http.StatusConflict
+			outcome.ErrorSummary = text("page.admin.rbac.permission_key_conflict")
+		case "ACCESS_DENIED":
+			outcome.StatusCode = http.StatusForbidden
+			outcome.ErrorSummary = text("page.admin.rbac.common.forbidden")
+		}
+	}
+	return outcome
 }
 
 // ===== 委派 =====
@@ -979,7 +1304,8 @@ func emptyAssignmentData() map[string]any {
 // emptyPermissionDetailData 返回错误页可安全渲染的权限详情空数据。
 func emptyPermissionDetailData() map[string]any {
 	return map[string]any{"permission": UIRBACPermissionView{}, "defaultRoles": []string{},
-		"scopes": []UIRBACScope{}}
+		"scopes": []UIRBACScope{}, "updatedAtMS": int64(0), "canManage": false,
+		"status": ""}
 }
 
 // rbacErrorOutcome 把适配器错误映射为稳定状态/已翻译文案（只披露允许公开的原因）。
@@ -1000,6 +1326,9 @@ func rbacErrorOutcome(err error, data any, fallbackKey string) UIPageOutcome {
 			outcome.StatusCode = http.StatusForbidden
 			outcome.ErrorSummary = text("page.admin.rbac.common.reauth_required")
 		case "CONFLICT":
+			// permissions 表无独立 row_version：页面层用 UpdatedAt 毫秒值做乐观锁，
+			// 冲突统一 409（与错误码手册 CONFLICT→409 一致）。
+			outcome.StatusCode = http.StatusConflict
 			outcome.ErrorSummary = text("page.admin.rbac.common.conflict")
 		case "RATE_LIMITED":
 			outcome.StatusCode = http.StatusTooManyRequests
@@ -1049,6 +1378,18 @@ var builtinRBACMessages = map[string]string{
 	"page.admin.rbac.permission_update_failed":            "保存权限说明未完成（内置权限不可修改）",
 	"page.admin.rbac.permission_disable_confirm_required": "停用权限会使其角色组合不再生效，请先确认影响",
 	"page.admin.rbac.permission_state_failed":             "权限状态操作未完成",
+	"page.admin.rbac.permission_state_confirm_required":   "启用或停用权限会改变当前实际生效结果，请先确认影响",
+	"page.admin.rbac.permission_admin_unavailable":        "当前页面后端未提供权限登记能力；未注册创建/删除入口，不会伪造成功",
+	"page.admin.rbac.permission_create_required":          "请填写作用范围、机器标识与中文名称",
+	"page.admin.rbac.permission_create_invalid":           "权限机器标识或名称不符合规则：机器标识需为小写字母/数字/下划线组成的 2～4 段点号标识（如 report.approve）",
+	"page.admin.rbac.permission_create_confirm_required":  "创建权限会改变权限目录，请先确认作用范围与影响",
+	"page.admin.rbac.permission_create_failed":            "创建自定义权限未完成，请检查输入",
+	"page.admin.rbac.permission_key_conflict":             "同一作用范围内已有相同机器标识的权限；不能重复登记",
+	"page.admin.rbac.permission_delete_confirm_required":  "删除自定义权限不可撤销，请先确认目标与影响",
+	"page.admin.rbac.permission_delete_builtin":           "内置权限不可删除；只能按规则启用或停用",
+	"page.admin.rbac.permission_delete_failed":            "删除自定义权限未完成；仍被角色引用、行版本冲突或缺少再次认证都会被拒绝",
+	"page.admin.rbac.version_conflict":                    "数据已被其他操作修改（行版本冲突），已重新读取当前状态，请核对后再次提交",
+	"page.admin.rbac.impact_unavailable":                  "当前无法读取删除/停用影响预览（缺少角色读取权限或依赖暂不可用）；实际操作仍由服务端重新校验",
 	"page.admin.rbac.delegations_load_failed":             "无法读取委派资格与可转授权限",
 	"page.admin.rbac.effective_failed":                    "无法查询该主体的有效权限；目标不存在或未获准查询",
 	"page.admin.rbac.preset_load_failed":                  "无法读取预设差异",

@@ -1,10 +1,19 @@
 {{define "page-title"}}{{t "page.admin.rbac.permissions.title"}}{{end}}
 {{define "content"}}
 {{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.status}}{{if eq . "deleted"}}<div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.rbac.permission_deleted"}}</p></div>{{end}}{{end}}
 <p>{{t "page.admin.rbac.permissions.intro"}}</p>
 <p class="ln-meta">{{t "page.admin.rbac.permissions.context_hint"}}</p>
 <p class="ln-meta">{{t "page.admin.rbac.root_hint"}}</p>
 <p class="ln-meta">{{t "page.admin.rbac.default_hint"}}</p>
+{{if .Data.canCreate}}
+<nav class="ln-actions" aria-label="{{t "page.admin.rbac.permission_create"}}">
+  <a class="ln-button ln-button--primary" href="{{route "admin.permission_create"}}?scope_id={{.Data.scopeID}}">{{t "page.admin.rbac.permission_create"}}</a>
+</nav>
+<p class="ln-meta">{{t "page.admin.rbac.permission_create_entry_hint"}}</p>
+{{else}}
+<p class="ln-meta">{{t "page.admin.rbac.permission_admin_unavailable"}}</p>
+{{end}}
 <nav class="ln-actions" aria-label="{{t "page.admin.rbac.scope_switch"}}">
   {{range .Data.scopes}}<a class="ln-button ln-button--secondary" href="{{route "admin.permissions"}}?scope_id={{.ScopeID}}"{{if eq .ScopeID $.Data.scopeID}} aria-current="true"{{end}}>{{if .ApplicationName}}{{.ApplicationName}} ({{.ScopeID}}){{else}}{{.ScopeID}}{{end}}</a>{{end}}
 </nav>
@@ -44,4 +53,18 @@
   </tbody>
 </table>
 {{if .Data.hasMore}}<p><a class="ln-button ln-button--secondary" rel="next" href="{{route "admin.permissions"}}?scope_id={{.Data.scopeID}}&enabled={{.Data.enabled}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+<section>
+  <h2>{{t "page.admin.rbac.terms_title"}}</h2>
+  <p>{{t "page.admin.rbac.terms_intro"}}</p>
+  <dl>
+    <dt>{{t "page.admin.rbac.term_scope"}}</dt><dd>{{t "page.admin.rbac.term_scope_body"}}</dd>
+    <dt>{{t "page.admin.rbac.term_builtin"}}</dt><dd>{{t "page.admin.rbac.term_builtin_body"}}</dd>
+    <dt>{{t "page.admin.rbac.term_custom"}}</dt><dd>{{t "page.admin.rbac.term_custom_body"}}</dd>
+    <dt>{{t "page.admin.rbac.term_root_only"}}</dt><dd>{{t "page.admin.rbac.term_root_only_body"}}</dd>
+    <dt>{{t "page.admin.rbac.term_machine_key"}}</dt><dd>{{t "page.admin.rbac.term_machine_key_body"}}</dd>
+    <dt>{{t "page.admin.rbac.term_effective"}}</dt><dd>{{t "page.admin.rbac.term_effective_body"}}</dd>
+    <dt>{{t "page.admin.rbac.term_delegation"}}</dt><dd>{{t "page.admin.rbac.term_delegation_body"}}</dd>
+    <dt>{{t "page.admin.rbac.term_row_version"}}</dt><dd>{{t "page.admin.rbac.term_row_version_body"}}</dd>
+  </dl>
+</section>
 {{end}}
