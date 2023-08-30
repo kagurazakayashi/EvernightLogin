@@ -263,6 +263,7 @@ func (a *AppsAdapter) toApplicationView(ctx context.Context, adminUserID string,
 		ContactInfo: record.ContactInfo, Status: string(record.Status),
 		ClientType: string(record.ClientType), RowVersion: record.RowVersion,
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+		DeletedAt: record.DeletedAt,
 	}
 	view.Capabilities = a.caps(ctx, adminUserID, record.ID)
 	return view
@@ -425,6 +426,62 @@ func (a *AppsAdapter) SetApplicationState(ctx context.Context, adminUserID, appl
 	} else {
 		result, err = a.opts.Apps.DisableApplication(ctx, caller, request)
 	}
+	if err != nil {
+		return login.UIApplicationView{}, false, mapAppsError(err)
+	}
+	return a.toApplicationView(ctx, adminUserID, result.Application), result.Changed, nil
+}
+
+// GetApplicationDeleteImpact 返回应用删除前影响预览（步骤 190）：真实统计将被
+// 立即失效/继续保留的数据范围，并给出当前是否可逻辑删除。预览只读；删除的最终
+// 判定由 app.Service 按当前状态重新执行。页面层先复核 applications.update。
+func (a *AppsAdapter) GetApplicationDeleteImpact(ctx context.Context, adminUserID,
+	applicationID string) (login.UIApplicationDeleteImpact, error) {
+	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+		return login.UIApplicationDeleteImpact{}, err
+	}
+	caller, err := a.appCaller(adminUserID, "")
+	if err != nil {
+		return login.UIApplicationDeleteImpact{}, err
+	}
+	impact, err := a.opts.Apps.PreviewDeletion(ctx, caller, applicationID)
+	if err != nil {
+		return login.UIApplicationDeleteImpact{}, mapAppsError(err)
+	}
+	return login.UIApplicationDeleteImpact{
+		Application:               a.toApplicationView(ctx, adminUserID, impact.Application),
+		CanDelete:                 impact.CanDelete,
+		BlockReason:               impact.BlockReason,
+		MemberCount:               impact.MemberCount,
+		ActiveMemberCount:         impact.ActiveMemberCount,
+		RoleCount:                 impact.RoleCount,
+		PermissionCount:           impact.PermissionCount,
+		GroupCount:                impact.GroupCount,
+		ActiveSessionCount:        impact.ActiveSessionCount,
+		OAuthClientCount:          impact.OAuthClientCount,
+		RefreshTokenFamilyCount:   impact.RefreshTokenFamilyCount,
+		AuthorizationRequestCount: impact.AuthorizationRequestCount,
+		CredentialCount:           impact.CredentialCount,
+		InvitationCount:           impact.InvitationCount,
+		WebhookEndpointCount:      impact.WebhookEndpointCount,
+		AuditEventCount:           impact.AuditEventCount,
+	}, nil
+}
+
+// DeleteApplication 对已停用应用执行逻辑删除（Changed=false 表示已删除，幂等成功）。
+// 再次认证与显式确认由页面传输层在调用本方法前完成；本方法仍由领域服务重新鉴权
+// （管理范围、状态机、行版本）并写关键审计。
+func (a *AppsAdapter) DeleteApplication(ctx context.Context, adminUserID, applicationID string,
+	expectedRowVersion int64, requestID string) (login.UIApplicationView, bool, error) {
+	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
+		return login.UIApplicationView{}, false, err
+	}
+	caller, err := a.appCaller(adminUserID, requestID)
+	if err != nil {
+		return login.UIApplicationView{}, false, err
+	}
+	result, err := a.opts.Apps.DeleteApplication(ctx, caller, app.DeletionRequest{
+		ApplicationID: applicationID, ExpectedRowVersion: expectedRowVersion})
 	if err != nil {
 		return login.UIApplicationView{}, false, mapAppsError(err)
 	}

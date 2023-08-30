@@ -55,6 +55,15 @@ type ListQuery struct {
 	Descending      bool
 	AllApplications bool
 	ApplicationIDs  []string
+	// IncludeDeleted 为 true 时包含已逻辑删除的应用（默认只返回未删除应用）。
+	IncludeDeleted bool
+}
+
+// DeletionChange 是已通过状态机与行版本校验的逻辑删除条件更新。
+type DeletionChange struct {
+	ApplicationID      string
+	ExpectedRowVersion int64
+	Now                time.Time
 }
 
 // Store 是应用持久化契约，由 internal/app/sqlite 提供生产实现。
@@ -67,6 +76,16 @@ type Store interface {
 	ListApplications(ctx context.Context, query ListQuery) ([]Application, bool, error)
 	UpdateApplication(ctx context.Context, tx audit.Tx, update UpdateRecord) error
 	ApplyStatus(ctx context.Context, tx audit.Tx, change StatusChange) error
+	// MarkApplicationDeleted 以行版本为条件标记逻辑删除（deleted_at_ms 非空），
+	// 同一 UPDATE 内不物理删除任何关联数据。
+	MarkApplicationDeleted(ctx context.Context, tx audit.Tx, change DeletionChange) error
+	// DeletionImpact 读取删除前影响预览的真实计数（成员/角色/权限/会话/客户端/
+	// 授权/凭证/邀请/Webhook/审计），用于页面预览与审计记录。
+	DeletionImpact(ctx context.Context, applicationID string) (DeletionImpact, error)
+	// PurgeApplication 在调用方审计事务中物理清理已逻辑删除的应用及其外键级联数据
+	// （作用范围/成员/角色/权限/组/会话/客户端/授权/凭证/邀请/Webhook 配置/托管策略），
+	// 并显式清理无外键的刷新令牌族；共享账户与安全审计记录不在清理范围。
+	PurgeApplication(ctx context.Context, tx audit.Tx, applicationID string) error
 	// UserEligibleAsOwner 报告用户是否存在且处于 active 状态；负责人变更只允许
 	// 指向仍可用账户，不做任何权限转移。
 	UserEligibleAsOwner(ctx context.Context, userID string) (bool, error)
@@ -116,22 +135,29 @@ type Options struct {
 	// Events 是可选的安全事件通知契约（步骤 59 Webhook）；nil 表示未启用通知，
 	// 不影响成员关系变更。事件在审计事务提交后发出，失败只记日志。
 	Events securityevent.Emitter
-	Now    func() time.Time
-	Random io.Reader
-	Logger *slog.Logger
+	// PurgeRetention 是逻辑删除后允许物理清理的最小保留期；0 使用
+	// DefaultPurgeRetention（30 天），负数拒绝构造。保留期内只能逻辑删除，不能清理。
+	PurgeRetention time.Duration
+	Now            func() time.Time
+	Random         io.Reader
+	Logger         *slog.Logger
 }
+
+// DefaultPurgeRetention 是逻辑删除到物理清理的默认保留期。
+const DefaultPurgeRetention = 30 * 24 * time.Hour
 
 // Service 是应用领域服务。构造后不可变，可被多个 goroutine 并发使用；不启动
 // 后台协程、不提供 HTTP 端点。
 type Service struct {
-	events     securityevent.Emitter
-	store      Store
-	audit      AuditRecorder
-	authorizer Authorizer
-	transfers  delegation.Guard
-	now        func() time.Time
-	random     io.Reader
-	logger     *slog.Logger
+	events         securityevent.Emitter
+	store          Store
+	audit          AuditRecorder
+	authorizer     Authorizer
+	transfers      delegation.Guard
+	now            func() time.Time
+	random         io.Reader
+	logger         *slog.Logger
+	purgeRetention time.Duration
 }
 
 // New 校验依赖并构造应用服务；缺少 Store/Audit/Authorizer 返回 ErrOptionsInvalid。
@@ -152,6 +178,13 @@ func New(options Options) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
+	purgeRetention := options.PurgeRetention
+	if purgeRetention < 0 {
+		return nil, fmt.Errorf("%w: 物理清理保留期不能为负数", ErrOptionsInvalid)
+	}
+	if purgeRetention == 0 {
+		purgeRetention = DefaultPurgeRetention
+	}
 	random := options.Random
 	if random == nil {
 		random = rand.Reader
@@ -162,7 +195,7 @@ func New(options Options) (*Service, error) {
 	}
 	return &Service{store: options.Store, audit: options.Audit, authorizer: options.Authorizer,
 		transfers: options.Transfers, events: options.Events, now: now, random: random,
-		logger: logger}, nil
+		logger: logger, purgeRetention: purgeRetention}, nil
 }
 
 // CreateApplication 登记应用，并在同一审计事务中创建唯一对应的应用作用范围。
@@ -314,6 +347,7 @@ func (s *Service) ListApplications(ctx context.Context, caller Caller, request L
 	}
 	query.AllApplications = all
 	query.ApplicationIDs = applicationIDs
+	query.IncludeDeleted = request.IncludeDeleted
 	if !all && len(applicationIDs) == 0 {
 		// 应用管理员没有任何分配时不查询数据库，也不泄露其他应用存在性。
 		if err := s.recordRead(ctx, caller, ActionListApplications, ""); err != nil {
@@ -351,6 +385,10 @@ func (s *Service) UpdateApplication(ctx context.Context, caller Caller, id strin
 	current, err := s.store.GetApplication(ctx, id)
 	if err != nil {
 		return Application{}, err
+	}
+	if current.Deleted() {
+		// 逻辑删除是终态：不允许再改资料/启用（防“复活已删除应用”）。
+		return Application{}, fmt.Errorf("%w: 应用已逻辑删除", ErrInvalidTransition)
 	}
 	updated, changes, err := s.buildUpdatedApplication(ctx, caller, current, request)
 	if err != nil {
@@ -501,6 +539,10 @@ func (s *Service) applyStatus(ctx context.Context, caller Caller, request Status
 	if err != nil {
 		return StatusResult{}, err
 	}
+	if current.Deleted() {
+		// 已逻辑删除的应用不能再启用/停用：它只会被物理清理，不能被“复活”。
+		return StatusResult{}, fmt.Errorf("%w: 应用已逻辑删除，不能再启停", ErrInvalidTransition)
+	}
 	if current.Status == target {
 		event := audit.Event{
 			Actor:     caller.actor,
@@ -563,6 +605,222 @@ func (s *Service) applyStatus(ctx context.Context, caller Caller, request Status
 	}
 	s.logger.Info("应用状态已变更", "application_id", current.ID, "status", string(target))
 	return StatusResult{Application: updated, Changed: true}, nil
+}
+
+// PreviewDeletion 返回逻辑删除前影响预览：真实统计将要失效/保留的数据范围，并给出
+// 是否可删除与阻塞原因。预览只读，不改变任何状态；删除的最终判定在
+// DeleteApplication 中按当前状态重新执行。
+func (s *Service) PreviewDeletion(ctx context.Context, caller Caller,
+	applicationID string) (DeletionImpact, error) {
+	if err := s.authorize(ctx, caller, ActionPreviewApplicationDeletion, applicationID); err != nil {
+		return DeletionImpact{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return DeletionImpact{}, err
+	}
+	if !ValidApplicationID(applicationID) {
+		return DeletionImpact{}, fmt.Errorf("%w: 应用 ID 格式无效", ErrInvalidRequest)
+	}
+	current, err := s.store.GetApplication(ctx, applicationID)
+	if err != nil {
+		return DeletionImpact{}, err
+	}
+	impact, err := s.store.DeletionImpact(ctx, applicationID)
+	if err != nil {
+		return DeletionImpact{}, err
+	}
+	impact.Application = current
+	switch {
+	case current.Deleted():
+		impact.CanDelete = false
+		impact.BlockReason = "应用已处于逻辑删除状态；后续只允许受控本地/系统通道在保留期后物理清理"
+	case current.Status != StatusDisabled:
+		impact.CanDelete = false
+		impact.BlockReason = "必须先停用应用才能逻辑删除（停用可恢复，删除是终态）"
+	default:
+		impact.CanDelete = true
+	}
+	if err := s.recordRead(ctx, caller, ActionPreviewApplicationDeletion, applicationID); err != nil {
+		return DeletionImpact{}, err
+	}
+	return impact, nil
+}
+
+// DeleteApplication 对已停用的应用执行逻辑删除（deleted_at_ms 非空）。
+//
+// 语义：立即让该应用的全部客户端凭证/旧令牌/会话/权限判定按不可用拒绝，但保留成员/
+// 角色/权限/客户端/授权记录与审计供追溯；它不是停用（停用仍可恢复），也不是物理
+// 清理（后者只允许受控本地/系统通道在保留期后执行）。重复删除按幂等成功返回。
+func (s *Service) DeleteApplication(ctx context.Context, caller Caller,
+	request DeletionRequest) (DeletionResult, error) {
+	if err := s.authorize(ctx, caller, ActionDeleteApplication, request.ApplicationID); err != nil {
+		return DeletionResult{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return DeletionResult{}, err
+	}
+	if !ValidApplicationID(request.ApplicationID) {
+		return DeletionResult{}, fmt.Errorf("%w: 应用 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.ExpectedRowVersion <= 0 {
+		return DeletionResult{}, fmt.Errorf("%w: 期望行版本必须大于 0", ErrInvalidRequest)
+	}
+	current, err := s.store.GetApplication(ctx, request.ApplicationID)
+	if err != nil {
+		return DeletionResult{}, err
+	}
+	if current.Deleted() {
+		// 幂等成功：不重复写状态变更，只记录一次“已删除”结果审计。
+		event := audit.Event{
+			Actor:     caller.actor,
+			AppID:     current.ID,
+			Action:    string(ActionDeleteApplication),
+			Target:    audit.Target{Type: "application", ID: current.ID},
+			Outcome:   audit.OutcomeSuccess,
+			RequestID: caller.requestID,
+			Changes:   []audit.FieldChange{{Field: "result", After: "already_deleted"}},
+		}
+		if err := s.audit.Record(ctx, event); err != nil {
+			return DeletionResult{}, fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
+		}
+		return DeletionResult{Application: current, Changed: false}, nil
+	}
+	if current.Status != StatusDisabled {
+		return DeletionResult{}, fmt.Errorf("%w: 只有已停用的应用可以逻辑删除", ErrInvalidTransition)
+	}
+	if request.ExpectedRowVersion != current.RowVersion {
+		return DeletionResult{}, ErrStateConflict
+	}
+	now := s.now().UTC().Truncate(time.Millisecond)
+	updated := current
+	updated.DeletedAt = now
+	updated.RowVersion = current.RowVersion + 1
+	updated.UpdatedAt = now
+	event := audit.Event{
+		Actor:     caller.actor,
+		AppID:     current.ID,
+		Action:    string(ActionDeleteApplication),
+		Target:    audit.Target{Type: "application", ID: current.ID},
+		RequestID: caller.requestID,
+		Changes: []audit.FieldChange{
+			{Field: "lifecycle", Before: string(current.Status), After: "deleted"},
+			{Field: "deleted_at", After: now.Format(time.RFC3339Nano)},
+			{Field: "row_version", Before: formatInt64(current.RowVersion),
+				After: formatInt64(updated.RowVersion)},
+			{Field: "retention", After: "保留审计与关联数据，物理清理需受控通道与保留期"},
+		},
+	}
+	critical := audit.CriticalRequest{
+		Event:             event,
+		FailureReasonCode: "application.delete_failed",
+		FailureErrorCodeFor: func(err error) string {
+			return string(CodeOf(mapCriticalError(err)))
+		},
+	}
+	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		return s.store.MarkApplicationDeleted(txCtx, tx, DeletionChange{
+			ApplicationID:      current.ID,
+			ExpectedRowVersion: current.RowVersion,
+			Now:                now,
+		})
+	})
+	if err != nil {
+		return DeletionResult{}, mapCriticalError(err)
+	}
+	s.logger.Info("应用已逻辑删除", "application_id", current.ID)
+	return DeletionResult{Application: updated, Changed: true}, nil
+}
+
+// PurgeApplication 物理清理已逻辑删除且超过保留期的应用。
+//
+// 只允许受控本地/系统操作者（页面/普通用户/应用管理员一律拒绝）；清理在审计事务中
+// 完成：外键级联删除作用范围/成员/角色/权限/组/会话/客户端/授权/凭证/邀请/Webhook
+// 配置/托管策略并显式清理刷新令牌族，但共享账户与安全审计记录（app_id_snapshot 无
+// 外键）保留。目标已不存在时按幂等成功返回；失败整体回滚。
+func (s *Service) PurgeApplication(ctx context.Context, caller Caller,
+	request PurgeRequest) (PurgeResult, error) {
+	if caller.actor.Type != audit.ActorLocalAdmin && caller.actor.Type != audit.ActorSystem {
+		return PurgeResult{}, fmt.Errorf("%w: 只有受控本地/系统通道可以物理清理应用", ErrAccessDenied)
+	}
+	if err := s.authorize(ctx, caller, ActionPurgeApplication, request.ApplicationID); err != nil {
+		return PurgeResult{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return PurgeResult{}, err
+	}
+	if !ValidApplicationID(request.ApplicationID) {
+		return PurgeResult{}, fmt.Errorf("%w: 应用 ID 格式无效", ErrInvalidRequest)
+	}
+	current, err := s.store.GetApplication(ctx, request.ApplicationID)
+	if err != nil {
+		if errors.Is(err, ErrApplicationNotFound) {
+			event := audit.Event{
+				Actor:     caller.actor,
+				Action:    string(ActionPurgeApplication),
+				Target:    audit.Target{Type: "application", ID: request.ApplicationID},
+				Outcome:   audit.OutcomeSuccess,
+				RequestID: caller.requestID,
+				Changes:   []audit.FieldChange{{Field: "result", After: "not_found"}},
+			}
+			if recordErr := s.audit.Record(ctx, event); recordErr != nil {
+				return PurgeResult{}, fmt.Errorf("%w: %w", ErrAuditUnavailable, recordErr)
+			}
+			return PurgeResult{ApplicationID: request.ApplicationID, Changed: false}, nil
+		}
+		return PurgeResult{}, err
+	}
+	if !current.Deleted() {
+		return PurgeResult{}, fmt.Errorf("%w: 只有逻辑删除后的应用可以物理清理", ErrInvalidTransition)
+	}
+	now := s.now().UTC()
+	retention := s.purgeRetention
+	if retention > 0 {
+		age := now.Sub(current.DeletedAt)
+		if age < retention {
+			return PurgeResult{}, fmt.Errorf("%w: 逻辑删除后需满 %s 保留期才能物理清理",
+				ErrInvalidTransition, retention)
+		}
+	}
+	impact, err := s.store.DeletionImpact(ctx, current.ID)
+	if err != nil {
+		return PurgeResult{}, err
+	}
+	impact.Application = current
+	event := audit.Event{
+		Actor:     caller.actor,
+		AppID:     current.ID,
+		Action:    string(ActionPurgeApplication),
+		Target:    audit.Target{Type: "application", ID: current.ID},
+		RequestID: caller.requestID,
+		Changes: []audit.FieldChange{
+			{Field: "lifecycle", Before: "deleted", After: "purged"},
+			{Field: "members", Before: formatInt64(int64(impact.MemberCount))},
+			{Field: "roles", Before: formatInt64(int64(impact.RoleCount))},
+			{Field: "permissions", Before: formatInt64(int64(impact.PermissionCount))},
+			{Field: "sessions", Before: formatInt64(int64(impact.ActiveSessionCount))},
+			{Field: "oauth_clients", Before: formatInt64(int64(impact.OAuthClientCount))},
+			{Field: "refresh_token_families", Before: formatInt64(int64(impact.RefreshTokenFamilyCount))},
+			{Field: "retained", After: "accounts + audit_events + history snapshots"},
+		},
+	}
+	critical := audit.CriticalRequest{
+		Event:             event,
+		FailureReasonCode: "application.purge_failed",
+		FailureErrorCodeFor: func(err error) string {
+			return string(CodeOf(mapCriticalError(err)))
+		},
+	}
+	err = s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		return s.store.PurgeApplication(txCtx, tx, current.ID)
+	})
+	if err != nil {
+		return PurgeResult{}, mapCriticalError(err)
+	}
+	s.logger.Info("应用已物理清理", "application_id", current.ID)
+	return PurgeResult{ApplicationID: current.ID, Changed: true, Counts: impact}, nil
 }
 
 // authorize 校验可信调用者与授权器结果；缺失身份一律 ErrAccessDenied。

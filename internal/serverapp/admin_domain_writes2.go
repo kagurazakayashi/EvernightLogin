@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	login "github.com/kagurazakayashi/EvernightLogin"
@@ -224,6 +225,46 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			return nil, adminUIError(err)
 		}
 		return map[string]any{"id": view.ID, "name": view.Name, "status": view.Status,
+			"row_version": view.RowVersion}, nil
+	})
+	// 步骤 190：应用逻辑删除（管理 API）。必须显式确认 + 真实再次认证，绑定目标
+	// 应用与行版本；物理清理不在在线 API 暴露（只允许受控本地/系统通道）。
+	add(http.MethodPost, "applications/{application_id}/delete", func(ctx context.Context,
+		caller account.Caller, request *http.Request) (any, error) {
+		if pages.Apps == nil {
+			return nil, &adminapi.DomainError{Code: "INTERNAL_ERROR", Message: "应用适配器未装配"}
+		}
+		deleteBackend, ok := any(pages.Apps).(login.UIAppsDeleteBackend)
+		if !ok {
+			return nil, &adminapi.DomainError{Code: "INTERNAL_ERROR",
+				Message: "应用删除能力未装配"}
+		}
+		body, err := adminWriteBody(request)
+		if err != nil {
+			return nil, err
+		}
+		if !adminBool(body, "confirm") {
+			return nil, &adminapi.DomainError{Code: "REQ_INVALID",
+				Message: "缺少删除确认"}
+		}
+		applicationID := adminLastPathPartPrevious(request)
+		rowVersion, parseErr := strconv.ParseInt(adminString(body, "row_version"), 10, 64)
+		if parseErr != nil || rowVersion <= 0 {
+			return nil, &adminapi.DomainError{Code: "REQ_INVALID",
+				Message: "row_version 必须是正整数"}
+		}
+		binding := login.UIAppDeleteBinding{ApplicationID: applicationID,
+			ExpectedRowVersion: rowVersion, RequestID: adminRequestID(body, request)}
+		if reauthErr := applicationDeleteReauth(ctx, gate, caller.Actor().ID, binding); reauthErr != nil {
+			return nil, &adminapi.DomainError{Code: "REAUTH_REQUIRED", Cause: reauthErr}
+		}
+		view, changed, err := deleteBackend.DeleteApplication(ctx, caller.Actor().ID,
+			applicationID, rowVersion, binding.RequestID)
+		if err != nil {
+			return nil, adminUIError(err)
+		}
+		return map[string]any{"id": view.ID, "status": view.Status,
+			"deleted": view.Deleted(), "changed": changed,
 			"row_version": view.RowVersion}, nil
 	})
 	add(http.MethodPost, "applications/{application_id}/members", func(ctx context.Context,

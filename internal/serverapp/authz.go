@@ -738,7 +738,8 @@ func appActionPermission(action app.Action) (string, bool) {
 	case app.ActionCreateApplication:
 		return "applications.create", true
 	case app.ActionUpdateApplication, app.ActionEnableApplication,
-		app.ActionDisableApplication:
+		app.ActionDisableApplication, app.ActionPreviewApplicationDeletion,
+		app.ActionDeleteApplication, app.ActionPurgeApplication:
 		return "applications.update", true
 	case app.ActionAddApplicationMember, app.ActionGetApplicationMember,
 		app.ActionListApplicationMembers, app.ActionUpdateApplicationMemberProfile,

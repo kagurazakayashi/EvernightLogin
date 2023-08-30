@@ -44,6 +44,8 @@ const domainCommandUsage = `用法：
   loginctl app list --operator <id> [--status active|disabled|pending] [--limit N] [--json]
   loginctl app get <application_id> --operator <id> [--json]
   loginctl app members <application_id> --operator <id> [--limit N] [--json]
+  loginctl app delete <application_id> --operator <id> --expected-version <n> --confirm DELETE [--json]
+  loginctl app purge <application_id> --operator <id> --confirm PURGE [--json]（仅限已逻辑删除且超过保留期）
   loginctl permission list [--scope system|application] [--json]（只读预设目录）
   loginctl notify status [--json] / loginctl notify test（禁止真实外发，明确拒绝）
 
@@ -260,13 +262,19 @@ type appOutput struct {
 	RowVersion  int64  `json:"row_version"`
 	CreatedAt   string `json:"created_at,omitempty"`
 	UpdatedAt   string `json:"updated_at,omitempty"`
+	// DeletedAt 非空表示应用已逻辑删除（步骤 190）。
+	DeletedAt string `json:"deleted_at,omitempty"`
 }
 
 func newAppOutput(item app.Application) appOutput {
-	return appOutput{ID: item.ID, Name: item.Name, Description: item.Description,
+	output := appOutput{ID: item.ID, Name: item.Name, Description: item.Description,
 		Status: string(item.Status), ClientType: string(item.ClientType),
 		ScopeID: item.ScopeID, RowVersion: item.RowVersion,
 		CreatedAt: formatTime(item.CreatedAt), UpdatedAt: formatTime(item.UpdatedAt)}
+	if !item.DeletedAt.IsZero() {
+		output.DeletedAt = formatTime(item.DeletedAt)
+	}
+	return output
 }
 
 // runDomain 分派 group/role/app/permission/notify。
@@ -700,12 +708,16 @@ func (r *runner) runApp(subcommand string, args []string) int {
 		return r.runAppGet(args)
 	case "members":
 		return r.runAppMembers(args)
+	case "delete":
+		return r.runAppDelete(args)
+	case "purge":
+		return r.runAppPurge(args)
 	case "create", "update", "enable", "disable", "add-member", "remove-member",
 		"credentials":
 		return r.managementWriteNotExposed("应用", subcommand,
 			"应用变更/成员/凭证需要委派转授、敏感策略与 OAuth 凭证装配，CLI 不提供放宽替身")
 	default:
-		return r.usage("未知的 app 子命令 %q（可用：list/get/members）", subcommand)
+		return r.usage("未知的 app 子命令 %q（可用：list/get/members/delete/purge）", subcommand)
 	}
 }
 
@@ -856,6 +868,99 @@ func (r *runner) runAppMembers(args []string) int {
 			item["row_version"])
 	}
 	return ExitOK
+}
+
+// app delete：对已停用应用执行逻辑删除（步骤 190；本地受信管理员边界）。
+func (r *runner) runAppDelete(args []string) int {
+	values, positional, err := parseFlags(args, domainFlags(
+		flagDef{name: "expected-version", value: true},
+		flagDef{name: "confirm", value: true}))
+	if err != nil {
+		return r.flagError(err)
+	}
+	if len(positional) != 1 {
+		return r.usage("用法：loginctl app delete <application_id> --operator <id> " +
+			"--expected-version <n> --confirm DELETE [--json]")
+	}
+	r.json = boolFlag(values, "json")
+	operator, exit := r.requireOperator(values)
+	if exit != ExitOK {
+		return exit
+	}
+	version, versionErr := parseIntFlag(values, "expected-version", 0)
+	if versionErr != nil || version <= 0 {
+		return r.usage("--expected-version 必须是正整数（打开页面/读取时的真实行版本）")
+	}
+	if strings.TrimSpace(stringFlag(values, "confirm")) != "DELETE" {
+		return r.usage("应用删除是终态逻辑删除，必须显式 --confirm DELETE（停用≠删除）")
+	}
+	base, service, exit := r.openAppService(values, operator)
+	if exit != ExitOK {
+		return exit
+	}
+	defer base.close()
+	caller, err := app.LocalBootstrapCaller(operator)
+	if err != nil {
+		return r.usage("--operator 本地管理员标识无效")
+	}
+	result, err := service.DeleteApplication(r.ctx, caller, app.DeletionRequest{
+		ApplicationID: strings.TrimSpace(positional[0]), ExpectedRowVersion: int64(version)})
+	if err != nil {
+		return r.domainFailure("删除应用", app.CodeOf(err), err)
+	}
+	output := map[string]any{"application": newAppOutput(result.Application),
+		"changed": result.Changed,
+		"note":    "逻辑删除：立即拒绝令牌/会话/客户端/权限判定，关联数据与审计保留；物理清理需保留期与受控通道"}
+	return r.succeedWithText(output,
+		"应用已逻辑删除（changed=%v）：%s\n  客户端凭证/旧令牌/会话/权限判定现在会被拒绝；"+
+			"关联数据与安全审计保留，物理清理需受控通道与保留期。\n",
+		result.Changed, result.Application.ID)
+}
+
+// app purge：物理清理已逻辑删除且超过保留期的应用（受控本地通道；步骤 190）。
+func (r *runner) runAppPurge(args []string) int {
+	values, positional, err := parseFlags(args, domainFlags(
+		flagDef{name: "confirm", value: true}))
+	if err != nil {
+		return r.flagError(err)
+	}
+	if len(positional) != 1 {
+		return r.usage("用法：loginctl app purge <application_id> --operator <id> " +
+			"--confirm PURGE [--json]")
+	}
+	r.json = boolFlag(values, "json")
+	operator, exit := r.requireOperator(values)
+	if exit != ExitOK {
+		return exit
+	}
+	if strings.TrimSpace(stringFlag(values, "confirm")) != "PURGE" {
+		return r.usage("物理清理不可撤销，必须显式 --confirm PURGE")
+	}
+	base, service, exit := r.openAppService(values, operator)
+	if exit != ExitOK {
+		return exit
+	}
+	defer base.close()
+	caller, err := app.LocalBootstrapCaller(operator)
+	if err != nil {
+		return r.usage("--operator 本地管理员标识无效")
+	}
+	result, err := service.PurgeApplication(r.ctx, caller,
+		app.PurgeRequest{ApplicationID: strings.TrimSpace(positional[0])})
+	if err != nil {
+		return r.domainFailure("物理清理应用", app.CodeOf(err), err)
+	}
+	output := map[string]any{"application_id": result.ApplicationID,
+		"changed": result.Changed,
+		"counts": map[string]any{"members": result.Counts.MemberCount,
+			"roles": result.Counts.RoleCount, "permissions": result.Counts.PermissionCount,
+			"sessions":               result.Counts.ActiveSessionCount,
+			"oauth_clients":          result.Counts.OAuthClientCount,
+			"refresh_token_families": result.Counts.RefreshTokenFamilyCount},
+		"retained": "accounts + audit_events + history snapshots"}
+	return r.succeedWithText(output,
+		"应用物理清理完成（changed=%v）：%s\n  保留：共享账户、安全审计与历史快照。\n",
+		result.Changed, result.ApplicationID)
 }
 
 // permission list：只读预设权限目录（不访问数据库）。

@@ -20,8 +20,14 @@
 //   - 成员添加/资料更新/启停在审计事务中与成功审计一致提交；成员移除写可靠审计
 //     事件。未来令牌/会话模块必须消费成员移除/停用与应用停用事件，并在每次授权
 //     时读取当前成员状态；本包没有会话/令牌表，不声称撤销全链路已完成。
-//   - 本步不提供应用删除：删除会级联应用 scope、角色/权限关系与成员关系，必须在
-//     后续步骤先定义审计保留、数据移交与受保护应用策略；停用不等于删除。
+//   - 应用生命周期分三种明确语义：停用（status=disabled，可恢复）、逻辑删除
+//     （deleted_at_ms 非空：立即拒绝该应用全部令牌/会话/客户端/权限判定，数据保留
+//     供审计与追溯，不可再启用/改资料）、物理清理（仅受控本地/系统通道在保留期后
+//     执行，删除应用及外键级联数据但保留共享账户与安全审计）。停用不等于删除。
+//   - 删除前提供影响预览（成员/角色/权限/会话/客户端/授权/保留的历史记录统计），
+//     删除与清理使用审计事务；失败整体回滚，重复删除/清理按幂等成功处理。
+//   - 本包不提供 HTTP 端点：页面/CLI/管理 API 只是传输层，敏感确认与再次认证由
+//     宿主传输层绑定实际目标并调用本包；本包负责最终授权、状态机与审计。
 package app
 
 import (
@@ -133,6 +139,66 @@ type Application struct {
 	RowVersion  int64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// DeletedAt 非零表示应用已“逻辑删除”。逻辑删除是独立生命周期状态：所有令牌/
+	// 会话/客户端/权限判定按应用不可用拒绝，数据保留供审计与追溯；停用不等于删除，
+	// 物理清理只允许受控本地/系统通道在保留期后执行。
+	DeletedAt time.Time
+}
+
+// Deleted 报告应用是否已逻辑删除。
+func (a Application) Deleted() bool { return !a.DeletedAt.IsZero() }
+
+// DeletionRequest 是应用逻辑删除请求。ExpectedRowVersion 是打开页面时读取的行版本，
+// 用于阻止覆盖并发修改；应用必须已停用。
+type DeletionRequest struct {
+	ApplicationID      string
+	ExpectedRowVersion int64
+}
+
+// DeletionResult 是应用逻辑删除结果。Changed=false 表示已处于逻辑删除状态（幂等成功）。
+type DeletionResult struct {
+	Application Application
+	Changed     bool
+}
+
+// DeletionImpact 是删除前影响预览：真实统计将被拒绝/保留的数据范围。计数只用于
+// 展示，不改变授权判定；敏感信息（秘密、令牌）不出现在预览中。
+type DeletionImpact struct {
+	Application Application
+	// CanDelete 表示当前是否可执行逻辑删除（必须已停用且未删除）。
+	CanDelete bool
+	// BlockReason 是不可删除的直白原因（为空表示可删除）。
+	BlockReason string
+	// 成员与权限关系。
+	MemberCount       int
+	ActiveMemberCount int
+	RoleCount         int
+	PermissionCount   int
+	GroupCount        int
+	// 认证与会话。
+	ActiveSessionCount        int
+	OAuthClientCount          int
+	RefreshTokenFamilyCount   int
+	AuthorizationRequestCount int
+	CredentialCount           int
+	InvitationCount           int
+	// 接入与历史记录（删除后保留的范围）。
+	WebhookEndpointCount int
+	AuditEventCount      int
+}
+
+// PurgeRequest 是应用物理清理请求。仅受控本地/系统通道可执行，且必须已逻辑删除
+// 并超过保留期；清理不删除共享账户与安全审计记录。
+type PurgeRequest struct {
+	ApplicationID string
+}
+
+// PurgeResult 是物理清理结果。Changed=false 表示目标已不存在（幂等重试成功）。
+type PurgeResult struct {
+	ApplicationID string
+	Changed       bool
+	// Counts 是清理前统计的受影响数据范围（用于审计）。
+	Counts DeletionImpact
 }
 
 // CreateRequest 是应用登记白名单。应用 ID、状态与 row_version 由服务生成/默认值
@@ -172,13 +238,15 @@ type StatusResult struct {
 	Changed     bool
 }
 
-// ListRequest 是应用列表请求；Status 为空表示不过滤。
+// ListRequest 是应用列表请求；Status 为空表示不过滤；IncludeDeleted 为 true 时
+// 同时返回已逻辑删除的应用（管理/审计查看），默认不返回。
 type ListRequest struct {
-	Limit      int
-	Offset     int
-	Status     Status
-	Sort       SortField
-	Descending bool
+	Limit          int
+	Offset         int
+	Status         Status
+	Sort           SortField
+	Descending     bool
+	IncludeDeleted bool
 }
 
 // ListResult 是应用列表结果。
@@ -390,6 +458,11 @@ const (
 	ActionUpdateApplication  Action = "application.update"
 	ActionEnableApplication  Action = "application.enable"
 	ActionDisableApplication Action = "application.disable"
+	// 应用删除生命周期动作（步骤 190）：预览与逻辑删除面向获准管理者，物理清理
+	// 只允许受控本地/系统操作者（服务层额外强制 trusted 身份）。
+	ActionPreviewApplicationDeletion Action = "application.delete.preview"
+	ActionDeleteApplication          Action = "application.delete"
+	ActionPurgeApplication           Action = "application.purge"
 	// 应用成员动作；全部要求显式 ApplicationID，授权器按应用分配判权。
 	ActionAddApplicationMember           Action = "application.member.add"
 	ActionGetApplicationMember           Action = "application.member.get"
@@ -405,6 +478,7 @@ func (a Action) Valid() bool {
 	switch a {
 	case ActionCreateApplication, ActionGetApplication, ActionListApplications,
 		ActionUpdateApplication, ActionEnableApplication, ActionDisableApplication,
+		ActionPreviewApplicationDeletion, ActionDeleteApplication, ActionPurgeApplication,
 		ActionAddApplicationMember, ActionGetApplicationMember, ActionListApplicationMembers,
 		ActionUpdateApplicationMemberProfile, ActionEnableApplicationMember,
 		ActionDisableApplicationMember, ActionRemoveApplicationMember:

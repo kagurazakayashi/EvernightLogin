@@ -228,6 +228,50 @@ func TestGroupCommands(t *testing.T) {
 	}
 }
 
+// TestAppDeleteAndPurgeCommands 验证步骤 190 的本地应用逻辑删除/物理清理命令：
+// 显式确认、行版本、幂等结果、删除后仍可追溯读取、保留期内拒绝物理清理。
+func TestAppDeleteAndPurgeCommands(t *testing.T) {
+	fixture := newDomainFixture(t)
+	// 缺确认：拒绝（退出码 2），无副作用。
+	if _, _, exit := runCLI(t, "app", "delete", fixture.appID, "--operator",
+		"local-admin", "--expected-version", "1", "--config",
+		fixture.configPath, "--json"); exit != ExitUsage {
+		t.Fatalf("缺确认删除退出码 = %d，期望 %d", exit, ExitUsage)
+	}
+	// 缺行版本：拒绝。
+	if _, _, exit := runCLI(t, "app", "delete", fixture.appID, "--operator",
+		"local-admin", "--confirm", "DELETE", "--config",
+		fixture.configPath, "--json"); exit != ExitUsage {
+		t.Fatalf("缺行版本删除退出码 = %d，期望 %d", exit, ExitUsage)
+	}
+	// 正常逻辑删除：应用创建默认停用，行版本 1。
+	stdout, stderr, exit := runCLI(t, "app", "delete", fixture.appID, "--operator",
+		"local-admin", "--expected-version", "1", "--confirm", "DELETE",
+		"--config", fixture.configPath, "--json")
+	if exit != ExitOK {
+		t.Fatalf("app delete 退出码 = %d，stderr=%s", exit, stderr)
+	}
+	data := decodeEnvelope(t, stdout)["data"].(map[string]any)
+	application := data["application"].(map[string]any)
+	if application["deleted_at"] == "" || application["deleted_at"] == nil {
+		t.Fatalf("逻辑删除输出缺少 deleted_at: %v", application)
+	}
+	// 删除后仍可按 ID 读取用于追溯。
+	if _, _, exit := runCLI(t, "app", "get", fixture.appID, "--operator",
+		"local-admin", "--config", fixture.configPath, "--json"); exit != ExitOK {
+		t.Fatalf("已删除应用追溯读取退出码 = %d", exit)
+	}
+	// 保留期内物理清理拒绝（默认 30 天保留期）。
+	stdout, _, exit = runCLI(t, "app", "purge", fixture.appID, "--operator",
+		"local-admin", "--confirm", "PURGE", "--config", fixture.configPath, "--json")
+	if exit == ExitOK {
+		t.Fatalf("保留期内物理清理不应成功: %s", stdout)
+	}
+	if code := envelopeErrorCode(t, decodeEnvelope(t, stdout)); code != "CONFLICT" {
+		t.Fatalf("保留期内物理清理错误码 = %s", code)
+	}
+}
+
 // TestRoleAndAppReadCommands 验证角色/应用只读命令与写拒绝。
 func TestRoleAndAppReadCommands(t *testing.T) {
 	fixture := newDomainFixture(t)

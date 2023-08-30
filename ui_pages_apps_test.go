@@ -33,6 +33,9 @@ type fakeAppsBackend struct {
 	canCreate     bool
 	memberState   bool
 	stateChanged  bool
+	// 步骤 190：删除预览/逻辑删除。
+	deleteImpact login.UIApplicationDeleteImpact
+	deleteCalled bool
 }
 
 func (f *fakeAppsBackend) fail(method string) error {
@@ -116,6 +119,29 @@ func (f *fakeAppsBackend) ListMembers(context.Context, string,
 	return login.UIAppMemberPage{Members: f.members}, nil
 }
 
+// GetApplicationDeleteImpact 实现步骤 190 的删除预览扩展契约。
+func (f *fakeAppsBackend) GetApplicationDeleteImpact(_ context.Context, _,
+	_ string) (login.UIApplicationDeleteImpact, error) {
+	if err := f.fail("delete_impact"); err != nil {
+		return login.UIApplicationDeleteImpact{}, err
+	}
+	impact := f.deleteImpact
+	impact.Application = f.app
+	return impact, nil
+}
+
+// DeleteApplication 实现步骤 190 的逻辑删除扩展契约（记录调用并返回已删除视图）。
+func (f *fakeAppsBackend) DeleteApplication(_ context.Context, _, _ string,
+	_ int64, _ string) (login.UIApplicationView, bool, error) {
+	if err := f.fail("delete"); err != nil {
+		return login.UIApplicationView{}, false, err
+	}
+	f.deleteCalled = true
+	updated := f.app
+	updated.DeletedAt = time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	updated.RowVersion++
+	return updated, true, nil
+}
 func (f *fakeAppsBackend) AddMember(context.Context, string, string, string,
 	login.UIAppMemberProfile, string) (login.UIAppMemberView, error) {
 	if err := f.fail("member_add"); err != nil {
@@ -286,7 +312,95 @@ func newAppsTestUI(t *testing.T, backend login.UIAppsBackend, management bool) *
 	return ui
 }
 
-// serveAppsPage 执行页面请求并返回响应记录。
+// newAppsTestUIWithDeleteReauth 构造带删除再次认证回调的页面框架。
+func newAppsTestUIWithDeleteReauth(t *testing.T, backend login.UIAppsBackend,
+	management bool, reauth func(context.Context, string, login.UIAppDeleteBinding) error) *login.WebUI {
+	t.Helper()
+	ui, err := login.NewWebUI(login.WebUIOptions{
+		Session:  appsTestSessions{userID: "usr_admin", management: management},
+		PageApps: &login.UIPageAppsOptions{Backend: backend, DeleteReauth: reauth}})
+	if err != nil {
+		t.Fatalf("页面框架: %v", err)
+	}
+	return ui
+}
+
+// TestUIPageAppsDeletionPreviewAndReauth 覆盖步骤 190 页面删除：影响预览、显式确认、
+// 目标/行版本绑定、再次认证失败关闭、未装配再认证 fail-closed 与成功状态。
+func TestUIPageAppsDeletionPreviewAndReauth(t *testing.T) {
+	backend := newAppsFakeBackend()
+	backend.app.Status = "disabled"
+	backend.app.RowVersion = 4
+	backend.deleteImpact = login.UIApplicationDeleteImpact{CanDelete: true,
+		MemberCount: 2, ActiveMemberCount: 1, RoleCount: 1, PermissionCount: 3,
+		GroupCount: 1, ActiveSessionCount: 2, OAuthClientCount: 1,
+		RefreshTokenFamilyCount: 1, AuthorizationRequestCount: 1,
+		CredentialCount: 1, InvitationCount: 0, WebhookEndpointCount: 1,
+		AuditEventCount: 5}
+	reauthCalls := 0
+	var seenBinding login.UIAppDeleteBinding
+	ui := newAppsTestUIWithDeleteReauth(t, backend, true,
+		func(_ context.Context, _ string, binding login.UIAppDeleteBinding) error {
+			reauthCalls++
+			seenBinding = binding
+			if binding.ApplicationID != appsTestAppID || binding.ExpectedRowVersion != 4 {
+				return &login.UIAppsError{Code: "REQ_INVALID"}
+			}
+			return nil
+		})
+	page := serveAppsPage(ui, http.MethodGet,
+		"/admin/applications/status?app_id="+appsTestAppID, nil)
+	if page.Code != http.StatusOK {
+		t.Fatalf("删除预览页 = %d", page.Code)
+	}
+	for _, want := range []string{"删除应用（逻辑删除）", "成员关系", "刷新令牌族",
+		"安全审计事件", "逻辑删除是终态"} {
+		if !strings.Contains(page.Body.String(), want) {
+			t.Fatalf("删除预览缺少 %q", want)
+		}
+	}
+	// 缺少确认：400 且不调用再认证/后端删除。
+	noConfirm := serveAppsPage(ui, http.MethodPost, "/admin/applications/status/delete",
+		url.Values{"csrf_token": {"token"}, "app_id": {appsTestAppID},
+			"row_version": {"4"}})
+	if noConfirm.Code != http.StatusBadRequest || reauthCalls != 0 || backend.deleteCalled {
+		t.Fatalf("缺少确认删除 = %d reauth=%d called=%v", noConfirm.Code,
+			reauthCalls, backend.deleteCalled)
+	}
+	// 再认证拒绝：403 且不执行删除。
+	denied := newAppsTestUIWithDeleteReauth(t, backend, true,
+		func(context.Context, string, login.UIAppDeleteBinding) error {
+			return &login.UIAppsError{Code: "ACCESS_DENIED"}
+		})
+	deniedResp := serveAppsPage(denied, http.MethodPost, "/admin/applications/status/delete",
+		url.Values{"csrf_token": {"token"}, "app_id": {appsTestAppID},
+			"row_version": {"4"}, "confirm": {"yes"}})
+	if deniedResp.Code != http.StatusForbidden || backend.deleteCalled {
+		t.Fatalf("再认证拒绝的删除 = %d called=%v", deniedResp.Code, backend.deleteCalled)
+	}
+	// 未装配再认证回调：503 fail-closed。
+	noReauthBackend := newAppsFakeBackend()
+	noReauthUI := newAppsTestUI(t, noReauthBackend, true)
+	noReauth := serveAppsPage(noReauthUI, http.MethodPost,
+		"/admin/applications/status/delete",
+		url.Values{"csrf_token": {"token"}, "app_id": {appsTestAppID},
+			"row_version": {"3"}, "confirm": {"yes"}})
+	if noReauth.Code != http.StatusServiceUnavailable || noReauthBackend.deleteCalled {
+		t.Fatalf("未装配再认证的删除 = %d called=%v", noReauth.Code,
+			noReauthBackend.deleteCalled)
+	}
+	// 成功：再认证绑定实际目标与行版本，后端执行逻辑删除。
+	done := serveAppsPage(ui, http.MethodPost, "/admin/applications/status/delete",
+		url.Values{"csrf_token": {"token"}, "app_id": {appsTestAppID},
+			"row_version": {"4"}, "confirm": {"yes"}})
+	if done.Code != http.StatusOK || !backend.deleteCalled ||
+		!strings.Contains(done.Body.String(), "应用已逻辑删除") {
+		t.Fatalf("逻辑删除成功页 = %d called=%v", done.Code, backend.deleteCalled)
+	}
+	if seenBinding.ApplicationID != appsTestAppID || seenBinding.ExpectedRowVersion != 4 {
+		t.Fatalf("再次认证绑定 = %+v", seenBinding)
+	}
+}
 func serveAppsPage(ui http.Handler, method, target string, form url.Values) *httptest.ResponseRecorder {
 	var body *bytes.Reader
 	request := httptest.NewRequest(method, "http://example.test"+target, bytes.NewReader(nil))

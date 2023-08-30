@@ -536,6 +536,13 @@ func defaultOperations() []Operation {
 			Implemented:   true,
 		},
 		{
+			ID: "application.delete", Domain: DomainApplication, Name: "删除应用（逻辑删除）",
+			Description:   "对已停用应用执行逻辑删除：立即拒绝该应用全部客户端凭证/旧令牌/会话与权限判定，成员/角色/权限/客户端/授权记录与审计保留供追溯；停用可恢复、删除是终态，物理清理只允许受控本地/系统通道在保留期后执行。必须强认证与确认，不能删除共享账户或安全审计记录。",
+			Default:       strongReauth,
+			PermissionKey: "applications.update",
+			Implemented:   true,
+		},
+		{
 			ID: "oauth.client.settings.change", Domain: DomainApplication, Name: "修改 OAuth 客户端安全设置",
 			Description:   "修改已登记客户端的授权类型、回调、Scope、允许目标资源与 PKCE 要求；必须强认证与确认并告知，回调精确匹配、禁止通配与开放重定向，不能借修改安全设置转移应用权限。",
 			Default:       strongReauth,

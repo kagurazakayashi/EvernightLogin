@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	applicationColumns = `a.id,a.name,a.description,a.icon_ref,a.homepage,a.owner_user_id,a.contact_info,a.status,a.client_type,a.row_version,a.created_at_ms,a.updated_at_ms,s.id`
+	applicationColumns = `a.id,a.name,a.description,a.icon_ref,a.homepage,a.owner_user_id,a.contact_info,a.status,a.client_type,a.row_version,a.created_at_ms,a.updated_at_ms,a.deleted_at_ms,s.id`
 
 	selectApplicationByIDSQL = `SELECT ` + applicationColumns + `
 FROM applications a LEFT JOIN scopes s ON s.app_id=a.id AND s.kind='application' WHERE a.id=?`
@@ -36,6 +36,28 @@ WHERE id=? AND row_version=?`
 
 	applyApplicationStatusSQL = `UPDATE applications SET status=?,row_version=row_version+1,updated_at_ms=?
 WHERE id=? AND status=? AND row_version=?`
+
+	markApplicationDeletedSQL = `UPDATE applications SET deleted_at_ms=?,row_version=row_version+1,updated_at_ms=?
+WHERE id=? AND row_version=? AND status='disabled' AND deleted_at_ms IS NULL`
+
+	deleteApplicationPurgeSQL = `DELETE FROM applications WHERE id=? AND deleted_at_ms IS NOT NULL`
+
+	purgeRefreshTokenFamiliesSQL = `DELETE FROM refresh_token_families WHERE client_id=?`
+
+	deletionImpactSQL = `SELECT
+ (SELECT COUNT(*) FROM app_memberships WHERE app_id=?),
+ (SELECT COUNT(*) FROM app_memberships WHERE app_id=? AND status='active'),
+ (SELECT COUNT(*) FROM roles r JOIN scopes s ON s.id=r.scope_id WHERE s.app_id=?),
+ (SELECT COUNT(*) FROM permissions p JOIN scopes s ON s.id=p.scope_id WHERE s.app_id=?),
+ (SELECT COUNT(*) FROM user_groups g JOIN scopes s ON s.id=g.scope_id WHERE s.app_id=?),
+ (SELECT COUNT(*) FROM sessions WHERE app_id=? AND revoked_at_ms IS NULL),
+ (SELECT COUNT(*) FROM oauth_clients WHERE client_id=?),
+ (SELECT COUNT(*) FROM refresh_token_families WHERE client_id=?),
+ (SELECT COUNT(*) FROM oauth_authorization_requests WHERE client_id=?),
+ (SELECT COUNT(*) FROM one_time_credentials WHERE app_id=?),
+ (SELECT COUNT(*) FROM invitations WHERE app_id=?),
+ (SELECT COUNT(*) FROM webhook_endpoints WHERE application_id=?),
+ (SELECT COUNT(*) FROM audit_events WHERE app_id_snapshot=?)`
 
 	selectUserEligibleSQL = `SELECT 1 FROM users WHERE id=? AND status='active'`
 )
@@ -125,6 +147,9 @@ FROM applications a LEFT JOIN scopes s ON s.app_id=a.id AND s.kind='application'
 	if query.Status != "" {
 		conditions = append(conditions, "a.status=?")
 		args = append(args, string(query.Status))
+	}
+	if !query.IncludeDeleted {
+		conditions = append(conditions, "a.deleted_at_ms IS NULL")
 	}
 	if !query.AllApplications {
 		if len(query.ApplicationIDs) == 0 {
@@ -223,6 +248,85 @@ func (s *Store) UserEligibleAsOwner(ctx context.Context, userID string) (bool, e
 	return true, rows.Err()
 }
 
+// MarkApplicationDeleted 以行版本与“当前未删除且已停用”为条件标记逻辑删除；只写
+// deleted_at_ms 与行版本，不物理删除任何关联数据（保留审计与追溯）。
+func (s *Store) MarkApplicationDeleted(ctx context.Context, tx audit.Tx,
+	change app.DeletionChange) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", app.ErrOptionsInvalid)
+	}
+	result, err := tx.ExecContext(ctx, markApplicationDeletedSQL,
+		change.Now.UTC().UnixMilli(),
+		change.Now.UTC().UnixMilli(),
+		change.ApplicationID,
+		change.ExpectedRowVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	return checkAffected(result)
+}
+
+// DeletionImpact 读取删除前影响预览；计数只用于展示与审计，不改变授权判定。
+func (s *Store) DeletionImpact(ctx context.Context, applicationID string) (app.DeletionImpact, error) {
+	rows, err := s.store.QueryContext(ctx, deletionImpactSQL,
+		applicationID, applicationID, applicationID, applicationID, applicationID,
+		applicationID, applicationID, applicationID, applicationID, applicationID,
+		applicationID, applicationID, applicationID)
+	if err != nil {
+		return app.DeletionImpact{}, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return app.DeletionImpact{}, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+		}
+		return app.DeletionImpact{}, app.ErrApplicationNotFound
+	}
+	var impact app.DeletionImpact
+	if err := rows.Scan(&impact.MemberCount, &impact.ActiveMemberCount, &impact.RoleCount,
+		&impact.PermissionCount, &impact.GroupCount, &impact.ActiveSessionCount,
+		&impact.OAuthClientCount, &impact.RefreshTokenFamilyCount,
+		&impact.AuthorizationRequestCount, &impact.CredentialCount,
+		&impact.InvitationCount, &impact.WebhookEndpointCount,
+		&impact.AuditEventCount); err != nil {
+		return app.DeletionImpact{}, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	if err := rows.Err(); err != nil {
+		return app.DeletionImpact{}, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	return impact, nil
+}
+
+// PurgeApplication 在调用方审计事务中物理清理已逻辑删除的应用：先显式删除没有外键
+// 约束的刷新令牌族，再删除 applications 行（其外键以 ON DELETE CASCADE 清理作用范围/
+// 成员/角色/权限/组/会话/客户端/授权/凭证/邀请/Webhook 配置/托管策略）。共享账户与
+// audit_events（app_id_snapshot 无外键）保留。
+func (s *Store) PurgeApplication(ctx context.Context, tx audit.Tx, applicationID string) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", app.ErrOptionsInvalid)
+	}
+	if _, err := tx.ExecContext(ctx, purgeRefreshTokenFamiliesSQL, applicationID); err != nil {
+		return fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	result, err := tx.ExecContext(ctx, deleteApplicationPurgeSQL, applicationID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	switch affected {
+	case 1:
+		return nil
+	case 0:
+		return app.ErrApplicationNotFound
+	default:
+		return fmt.Errorf("%w: 物理清理影响行数异常", app.ErrStoreUnavailable)
+	}
+}
+
 // checkAffected 把条件更新结果转换为领域错误。
 func checkAffected(result sql.Result) error {
 	affected, err := result.RowsAffected()
@@ -251,6 +355,7 @@ func scanApplication(rows *sql.Rows) (app.Application, error) {
 		clientType  string
 		createdAtMS int64
 		updatedAtMS int64
+		deletedAtMS sql.NullInt64
 		scopeID     sql.NullString
 	)
 	if err := rows.Scan(
@@ -266,9 +371,13 @@ func scanApplication(rows *sql.Rows) (app.Application, error) {
 		&application.RowVersion,
 		&createdAtMS,
 		&updatedAtMS,
+		&deletedAtMS,
 		&scopeID,
 	); err != nil {
 		return app.Application{}, fmt.Errorf("%w: %w", app.ErrStoreUnavailable, err)
+	}
+	if deletedAtMS.Valid {
+		application.DeletedAt = time.UnixMilli(deletedAtMS.Int64).UTC()
 	}
 	application.IconRef = iconRef.String
 	application.Homepage = homepage.String

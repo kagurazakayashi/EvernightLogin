@@ -45,6 +45,53 @@ type UIPageAppsOptions struct {
 	// 再次认证通过后调用，并把同一 app/version/policy-digest/request-id 绑定交给
 	// 策略后端；页面表单本身不是授权。
 	PolicyReauth func(ctx context.Context, userID string, binding UIAppPolicyActionBinding) error
+	// DeleteReauth 是应用逻辑删除前置的再次认证回调（步骤 190）。它必须由宿主用
+	// 真实 reauth/policy 链复核并把同一 app/row-version/request-id 绑定交给回调；
+	// 未注入时删除入口 fail-closed 拒绝（不渲染可提交表单、不伪造成功）。
+	DeleteReauth func(ctx context.Context, userID string, binding UIAppDeleteBinding) error
+}
+
+// UIAppDeleteBinding 是应用逻辑删除的再次认证参数绑定：目标应用、行版本与请求编号
+// 必须与页面表单一致，确认不是授权，宿主仍要按真实敏感策略判定。
+type UIAppDeleteBinding struct {
+	ApplicationID      string
+	ExpectedRowVersion int64
+	RequestID          string
+}
+
+// UIApplicationDeleteImpact 是应用删除前影响预览的公开视图。
+type UIApplicationDeleteImpact struct {
+	Application UIApplicationView
+	// CanDelete 表示当前是否可逻辑删除（必须已停用且未删除）；只是交互辅助，
+	// 最终判定由领域服务按当前状态重新执行。
+	CanDelete   bool
+	BlockReason string
+	// 以下计数是真实统计，用于展示“执行后失效/保留”的范围，不含秘密或令牌。
+	MemberCount               int
+	ActiveMemberCount         int
+	RoleCount                 int
+	PermissionCount           int
+	GroupCount                int
+	ActiveSessionCount        int
+	OAuthClientCount          int
+	RefreshTokenFamilyCount   int
+	AuthorizationRequestCount int
+	CredentialCount           int
+	InvitationCount           int
+	WebhookEndpointCount      int
+	AuditEventCount           int
+}
+
+// UIAppsDeleteBackend 是应用删除预览/逻辑删除的可选扩展契约（步骤 190）。与
+// UIAppsBackend 分开定义，避免要求既有实现同时新增方法；页面仅在实现该接口时
+// 显示删除预览与删除表单，不渲染无法完成操作的静态按钮。
+type UIAppsDeleteBackend interface {
+	// GetApplicationDeleteImpact 返回删除前影响预览（真实统计 + 是否可删除）。
+	GetApplicationDeleteImpact(ctx context.Context, adminID,
+		applicationID string) (UIApplicationDeleteImpact, error)
+	// DeleteApplication 对已停用应用执行逻辑删除（Changed=false 表示已删除）。
+	DeleteApplication(ctx context.Context, adminID, applicationID string,
+		expectedRowVersion int64, requestID string) (UIApplicationView, bool, error)
 }
 
 // UIAppsBackend 是应用管理页面调用真实 app/oauthclient 服务的最小契约；适配器负责
@@ -151,9 +198,14 @@ type UIApplicationView struct {
 	RowVersion  int64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// DeletedAt 非零表示应用已逻辑删除（立即拒绝令牌/会话/客户端/权限判定）。
+	DeletedAt time.Time
 	// Capabilities 由适配器按当前操作者判定；页面只据此禁用交互，不替代服务端授权。
 	Capabilities UIApplicationCapabilities
 }
+
+// Deleted 报告视图中的应用是否已逻辑删除。
+func (v UIApplicationView) Deleted() bool { return !v.DeletedAt.IsZero() }
 
 // UIAppQuery 是应用列表筛选/分页（排序字段白名单由适配器与服务端校验）。
 type UIAppQuery struct {
@@ -531,6 +583,15 @@ func newPageAppsPages(options UIPageAppsOptions) (*pageAppsPages, error) {
 				Layout: "layout/base", Template: "page/admin/application_create"},
 		)
 	}
+	// 应用逻辑删除是步骤 190 的可选能力：只有真实后端实现 UIAppsDeleteBackend
+	// 时才注册删除路由（预览随状态页展示），避免静态按钮。
+	if _, ok := options.Backend.(UIAppsDeleteBackend); ok {
+		routes = append(routes,
+			UIRoute{Name: "admin.application_delete", Method: http.MethodPost,
+				Path: "/admin/applications/status/delete", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/application_status"},
+		)
+	}
 	for _, route := range routes {
 		pages.routes = append(pages.routes, route)
 		pages.handlers[route.Name] = handler
@@ -690,6 +751,14 @@ var builtinAppsMessages = map[string]string{
 	"page.admin.applications.status.invalid":               "应用状态请求未通过校验",
 	"page.admin.applications.status.change_failed":         "应用状态变更未完成；服务端会重新校验权限与可转授范围",
 	"page.admin.applications.status.confirm_required":      "请先确认停用/启用的实际目标、作用范围与后果",
+	"page.admin.applications.delete.invalid":               "应用删除请求未通过校验（缺少目标、行版本或确认）",
+	"page.admin.applications.delete.confirm_required":      "请先确认目标应用、行版本与不可恢复的影响",
+	"page.admin.applications.delete.reauth_required":       "应用删除需要重新完成强认证；确认框本身不是授权",
+	"page.admin.applications.delete.forbidden":             "你没有删除该应用的权限，或管理强认证/再认证未通过；服务端已拒绝",
+	"page.admin.applications.delete.unavailable":           "当前页面后端未提供应用删除能力；未注册删除入口，不会伪造成功",
+	"page.admin.applications.delete.reauth_unavailable":    "当前部署未装配应用删除的再次认证通道，删除入口已关闭（fail-closed）",
+	"page.admin.applications.delete.impact_unavailable":    "当前无法读取删除影响预览；实际删除仍由服务端按当前状态重新校验，不会伪造成功",
+	"page.admin.applications.delete.failed":                "应用删除未完成；必须已停用、行版本未变化且再认证通过，服务端已重新校验",
 	"page.admin.applications.grants.load_failed":           "无法读取该应用上下文，因此不能展示资源许可状态",
 	"page.admin.applications.invalid_app":                  "应用 ID 缺失或格式无效；请从应用列表重新进入",
 }

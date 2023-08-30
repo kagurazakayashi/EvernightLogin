@@ -393,6 +393,12 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 	webOptions.PageApps = &login.UIPageAppsOptions{
 		Backend:       appsAdapter,
 		PolicyBackend: appsAdapter,
+		// 步骤 190：应用逻辑删除属于高风险生命周期操作，接真实再次认证/敏感策略
+		// 闸门；未装配时页面删除入口 fail-closed 拒绝，不静默放行。
+		DeleteReauth: func(ctx context.Context, userID string,
+			binding login.UIAppDeleteBinding) error {
+			return applicationDeleteReauth(ctx, gate, userID, binding)
+		},
 		// 策略写先经过真实管理强认证（root/管理会话近期事实），再登记一次性
 		// app/version/policy-digest/request-id 批准；managedapi.SetPolicy 只消费该批准。
 		PolicyReauth: func(ctx context.Context, userID string,

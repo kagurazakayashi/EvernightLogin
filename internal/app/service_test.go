@@ -78,6 +78,12 @@ func allowAllTransfers() delegation.GuardFuncs {
 
 func prepareEnv(t *testing.T) *testEnv {
 	t.Helper()
+	return prepareEnvWithRetention(t, 0)
+}
+
+// prepareEnvWithRetention 允许测试指定物理清理保留期（0 使用默认 30 天）。
+func prepareEnvWithRetention(t *testing.T, purgeRetention time.Duration) *testEnv {
+	t.Helper()
 	ctx := context.Background()
 	// 用 internal/testutil.TempDir（带重试清理）替代 t.TempDir：Windows 上目录删除可能被安全
 	// 软件/文件过滤驱动瞬时延迟，标准库清理不重试 ERROR_DIR_NOT_EMPTY。
@@ -116,7 +122,8 @@ func prepareEnv(t *testing.T) *testEnv {
 	service, err := app.New(app.Options{
 		Store: store, Audit: recorder, Authorizer: authorizer,
 		Transfers: allowAllTransfers(), Now: clock.Now,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PurgeRetention: purgeRetention,
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("构造应用服务失败: %v", err)

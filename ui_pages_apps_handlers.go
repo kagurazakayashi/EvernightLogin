@@ -5,6 +5,7 @@ package login
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,6 +53,8 @@ func (h *appsPageHandlers) HandlePage(ctx context.Context, request *http.Request
 		return h.status(ctx, request, page)
 	case "admin.application_status.submit":
 		return h.statusSubmit(ctx, request, page)
+	case "admin.application_delete":
+		return h.statusDelete(ctx, request, page)
 	default:
 		return UIPageOutcome{}, nil
 	}
@@ -1083,7 +1086,8 @@ func appsParsePolicyFields(value string) ([]UIAppPolicyFields, error) {
 
 // ===== 应用状态（停用/启用确认） =====
 
-// status 渲染启停确认页（只读当前状态与真实影响说明）。
+// status 渲染启停确认页（只读当前状态与真实影响说明），并在后端实现删除扩展
+// 契约时附带逻辑删除影响预览（步骤 190）。
 func (h *appsPageHandlers) status(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	appID, ok := appsQueryAppID(request)
@@ -1095,8 +1099,69 @@ func (h *appsPageHandlers) status(ctx context.Context, request *http.Request,
 	if err != nil {
 		return appsErrorOutcome(err, nil, "page.admin.applications.status.load_failed"), nil
 	}
-	return UIPageOutcome{Data: map[string]any{"app": application,
-		"status": strings.TrimSpace(request.URL.Query().Get("status"))}}, nil
+	data := map[string]any{"app": application,
+		"status": strings.TrimSpace(request.URL.Query().Get("status"))}
+	if deleteBackend, ok := h.pages.options.Backend.(UIAppsDeleteBackend); ok {
+		impact, impactErr := deleteBackend.GetApplicationDeleteImpact(ctx,
+			page.Session.UserID, appID)
+		if impactErr != nil {
+			data["deleteImpactUnavailable"] = text(
+				"page.admin.applications.delete.impact_unavailable")
+		} else {
+			data["deleteImpact"] = impact
+		}
+	}
+	return UIPageOutcome{Data: data}, nil
+}
+
+// statusDelete 执行应用逻辑删除（步骤 190）：必须显式确认、目标与行版本绑定，并
+// 经宿主真实再次认证回调复核；未注入再认证或后端未提供删除能力时 fail-closed。
+func (h *appsPageHandlers) statusDelete(ctx context.Context, request *http.Request,
+	page UIPageContext) (UIPageOutcome, error) {
+	deleteBackend, ok := h.pages.options.Backend.(UIAppsDeleteBackend)
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusServiceUnavailable,
+			ErrorSummary: text("page.admin.applications.delete.unavailable")}, nil
+	}
+	form, formErr := readPageForm(request, page.CSRFField,
+		[]string{"app_id", "row_version", "confirm"})
+	if formErr != nil {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.applications.delete.invalid")}, nil
+	}
+	appID := strings.TrimSpace(form.Get("app_id"))
+	rowVersion, versionOK := appsParseRowVersion(form.Get("row_version"))
+	if appID == "" || !versionOK {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.applications.delete.invalid")}, nil
+	}
+	if form.Get("confirm") != "yes" {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.applications.delete.confirm_required")}, nil
+	}
+	if h.pages.options.DeleteReauth == nil {
+		// 宿主未装配再次认证：高风险删除 fail-closed，不能用页面确认替代授权。
+		return UIPageOutcome{StatusCode: http.StatusServiceUnavailable,
+			ErrorSummary: text("page.admin.applications.delete.reauth_unavailable")}, nil
+	}
+	binding := UIAppDeleteBinding{ApplicationID: appID,
+		ExpectedRowVersion: rowVersion, RequestID: page.RequestID}
+	if err := h.pages.options.DeleteReauth(ctx, page.Session.UserID, binding); err != nil {
+		var publicErr *UIAppsError
+		if errors.As(err, &publicErr) && publicErr.Code == "ACCESS_DENIED" {
+			return UIPageOutcome{StatusCode: http.StatusForbidden,
+				ErrorSummary: text("page.admin.applications.delete.forbidden")}, nil
+		}
+		return UIPageOutcome{StatusCode: http.StatusForbidden,
+			ErrorSummary: text("page.admin.applications.delete.reauth_required")}, nil
+	}
+	updated, changed, err := deleteBackend.DeleteApplication(ctx, page.Session.UserID,
+		appID, rowVersion, page.RequestID)
+	if err != nil {
+		return appsErrorOutcome(err, nil, "page.admin.applications.delete.failed"), nil
+	}
+	return UIPageOutcome{Data: map[string]any{"app": updated, "deleted": true,
+		"changed": changed}}, nil
 }
 
 // statusSubmit 执行停用/启用并显示服务端 Changed 语义（不伪造第二次变更）。
