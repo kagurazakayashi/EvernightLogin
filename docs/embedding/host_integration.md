@@ -320,6 +320,94 @@ _ = runtime.Admin().RevokeApplicationRole(ctx, app.RevokeRoleRequest{
 - 应用范围候选枚举由共享装配注入（步骤 184），嵌入模式与独立服务使用同一候选实现；
   缺少该能力时权限层按 fail-closed 拒绝，不猜测可管理范围。
 
+### 3.4 嵌入模式 HTTP 与页面挂载（`app` 包，步骤 183 起）
+
+`Options.HTTP` 让宿主把已装配的完整 HTTP 与内置页面挂到自己拥有的 `http.Server`：
+复用独立服务的同一装配链（协议域、内置页面、管理/托管/客服 API 挂载、限流、
+CSRF、安全响应头、固定前缀），不复制第二套实现，也不由运行时替宿主监听端口。
+
+```go
+runtime, err := app.Open(ctx, app.Options{
+    Config:          &cfg,
+    DatabasePath:    databasePath,
+    MasterKeyFile:   masterKeyPath,
+    CreateMasterKey: true,
+    Migrate:         true,
+    OperatorID:      "host-operator",
+    HTTP: &app.HTTPOptions{
+        Prefix:         "/idp",      // 站内前缀；空使用配置的 server.path_prefix
+        AccessLog:      io.Discard,  // 可选 W3C 访问日志输出
+        EnableAdminAPI: true,        // 可选：管理 JSON API
+        AdminAPIPrefix: "/api/admin",
+        // EnableProtocol: true,      // OAuth2/OIDC 端点（需配置合法 issuer）
+        // EnableManagedAPI / EnableAppSupport 同理，按需开启
+    },
+})
+if err != nil {
+    return err // 缺依赖/非法配置在 Open 阶段失败
+}
+
+mux := http.NewServeMux()
+mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+})
+if err := runtime.Mount(mux); err != nil {
+    return err
+}
+server := &http.Server{Addr: "127.0.0.1:8080", Handler: mux,
+    ReadHeaderTimeout: 5 * time.Second}
+go func() { _ = server.ListenAndServe() }()
+// 关闭顺序：先 server.Shutdown(ctx)，再 runtime.Close(ctx)
+```
+
+语义与约束：
+
+- `Runtime.Handler()` 返回与独立服务共用安全链的处理器，`Runtime.HTTPPrefix()` 返回
+  规范化前缀；未配置 `Options.HTTP` 时二者为空。`Runtime.HTTPMounts()` 返回已挂载的
+  协议/管理 API 站内路径，便于诊断。
+- `Handler` 可在 `Start` 之前挂载（与生命周期解耦）；监听器与 `http.Server` 归宿主
+  所有，运行时只装配 handler，不监听端口、不替宿主关闭监听器。
+- 固定前缀不做重写：前缀不匹配的路径一律 404；`Mount` 按前缀注册子树（根路径注册
+  `"/"`），重复/冲突 pattern 返回 `CONFIG_INVALID` 而不向宿主抛 panic。
+- 安全链完全复用：会话校验、管理页/API 权限、CSRF（缺 token、跨来源 Origin 均
+  403）、限流、安全响应头、请求编号与访问日志语义与独立服务一致；页面替换不等于
+  跳过这些检查。
+- **缺依赖启动失败**：页面适配器/安全域/敏感闸门缺失、协议端点已启用但配置非法
+  （如 issuer）、前缀非法、CSRF 来源无法从 `server.public_base_url`/监听地址推导、
+  挂载点冲突等都会使 `Open` 直接失败，不会退化为“只有健康页”。
+- 宿主页面/资源替换（`PageOverrides`）可用且不影响安全链：
+  - `HostTemplates`（模板来源 + `Overrides` 按命名路由替换）、`HostRenderer`（最高
+    优先级单页渲染器）、`Brand`、`AssetOverlays`（同逻辑路径覆盖内置静态资源）、
+    `Translations`（翻译目录）直接生效；
+  - `DisableBuiltinPages` 只关闭内置**系统页**（`/403`、`/404`、`/401`、`/500` 等），
+    账号/资料/管理页仍由对应页面选项装配，按真实会话/权限工作；
+  - 替换只改变页面内容与资源，不改变路由访问级别、会话/权限判定与 CSRF 校验；
+    模板覆盖必须保留 `{{csrf_field}}` 等框架契约，否则表单会被服务端拒绝。
+- 管理 API/托管 API/客服 API 与页面共用同一授权与审计语义；启用它们仍要求对应领域
+  服务已装配，否则装配失败。
+
+宿主页面替换示例（`hostTemplates`/`hostAssets` 可以是 `os.DirFS`、`embed.FS` 或
+`fstest.MapFS` 等任意 `fs.FS`）：
+
+```go
+HTTP: &app.HTTPOptions{
+    Prefix: "/idp",
+    PageOverrides: &app.PageOverrides{
+        Brand: &login.UIBrand{Name: "HostBrand"},
+        HostTemplates: &login.UIHostTemplates{
+            FS: hostTemplates,
+            Overrides: []login.UITemplateOverride{
+                {RouteName: "auth.login", TemplatePath: "pages/login.html"},
+            },
+        },
+        HostRenderer:  myRenderer{},                 // 最高优先级单页渲染
+        AssetOverlays: []fs.FS{hostAssets},          // 同路径覆盖内置 css/js 等
+        Translations:  myCatalogProvider{},
+        DisableBuiltinPages: false,                  // true 只关闭内置系统页
+    },
+}
+```
+
 ## 4. 生命周期、取消与资源所有权
 
 - 状态机：`StateNew → StateRunning → StateClosed`。`Start` 只能成功一次；失败或
@@ -418,12 +506,14 @@ go list -f '{{join .Imports "\n"}}' .   # 直接导入仅 stdlib + github.com/ka
 
 - 公开 `app` 包已提供与独立服务共用的运行时基础装配（配置、SQLite、迁移策略、
   主密钥环、审计、领域服务、敏感闸门、认证/安全域、后台任务注册/显式启停、管理域
-  服务），并提供密码登录、TOTP/Passkey 第二因素、受限恢复、敏感操作再次认证与
-  受信管理门面（步骤 180/181/182）。HTTP/页面挂载（183）仍在后续步骤补齐；在该
-  步骤完成前，宿主不能仅靠公开包获得完整身份服务（但可用 Go API 完成账户、认证、
-  安全、管理与权限流程）。
+  服务），并提供密码登录、TOTP/Passkey 第二因素、受限恢复、敏感操作再次认证、
+  受信管理门面与 HTTP/页面挂载（步骤 180/181/182/183）。宿主可用 Go API 或挂载
+  `Runtime.Handler()` 完成账户、认证、安全、管理与权限流程。
 - 受信管理门面只覆盖用户/资料/应用/角色/权限；应用删除、会话管理、客服恢复等
-  其余管理能力仍走后续步骤/页面的受控入口。
+  其余管理能力仍走后续步骤/页面的受控入口（页面上由管理命名空间提供）。
+- 管理页面（`/admin/*`）要求“近期强认证”的管理会话；生产上强认证由 Passkey 完成，
+  密码+TOTP 登录只完成登录、不自动获得管理会话。宿主页面/资源替换（`PageOverrides`）
+  已可用（见 §3.4）；`DisableBuiltinPages` 只关闭内置系统页，不关闭账号/管理页。
 - 本步骤的公开认证门面不包含 Passkey 注册/登录 ceremony 的浏览器交互与邮件验证码
   输入界面（需要 183 的 HTTP/页面挂载）；Passkey 正向流程由内部服务测试覆盖，外部
   module 验收覆盖关闭 Passkey 时 TOTP 仍可用，未做真实浏览器/真实认证器互操作。
@@ -433,6 +523,31 @@ go list -f '{{join .Imports "\n"}}' .   # 直接导入仅 stdlib + github.com/ka
   未在本步验证；通知/邮件真实外发一律需宿主显式配置目标。
 
 ## 8. 变更记录
+
+### 步骤 183（2026-11，未发布 v1 前）
+
+通过公开接口暴露已装配的 HTTP handler、页面与管理 API 挂载能力（全部为兼容扩展；
+未设置 `Options.HTTP` 时行为不变）：
+
+- `Options.HTTP`（`app.HTTPOptions`）：站点前缀、访问日志、OAuth/OIDC 协议端点、
+  管理 JSON API、业务托管 API、应用客服 API 的显式启停与挂载前缀；`PageOverrides`
+  预留宿主页面/资源替换。
+- `Runtime.Handler()`、`Runtime.HTTPPrefix()`、`Runtime.HTTPMounts()`、
+  `Runtime.Mount(mux)`：宿主把同一安全链挂到自己的 `http.Server`；监听器与
+  `http.Server` 生命周期归宿主，处理器可在 `Start` 之前挂载。
+- `internal/serverapp` 新增共享 HTTP/页面装配 `BuildHTTPRuntime`：独立服务
+  `RunServe` 与嵌入模式使用同一实现（协议域→内置页面→管理/托管/客服 API→限流/
+  CSRF/安全头/访问日志→前缀组合）；缺依赖或非法配置在构造期失败，不退化为
+  “只有健康页”。
+- 前缀、CSRF（缺 token/跨来源拒绝）、未认证管理页 401、无权限 403、健康检查、
+  管理 API 挂载真实存在等均有真实 HTTP 级测试（`app/http_test.go`）与外部 module
+  示例（`examples/embedded-runtime` 自建 `http.Server`）。
+- 宿主页面/资源替换（`PageOverrides`）已接通 `BuildPagesWithOptions`：模板/渲染器/
+  品牌/静态资源/翻译覆盖与关闭内置系统页均有真实 HTTP 正向测试与外部 module 示例；
+  替换不改变服务端会话/权限/CSRF 校验。
+- 已知限制：管理页面要求 Passkey 强认证会话，测试用“强认证新鲜度”数据库夹具覆盖
+  管理页 200 路径（身份/第二因素/权限仍为真实链路）；未做真实浏览器/WebAuthn
+  ceremony 与非 Windows 运行验收。
 
 ### 步骤 182（2026-11，未发布 v1 前）
 

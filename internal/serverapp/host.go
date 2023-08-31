@@ -391,89 +391,26 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 			logger.Warn("数据库尚未完成首次初始化：已按 --allow-uninitialized 显式放行，" +
 				"仅用于开发/测试，不要暴露到非回环网络")
 		}
-		// 认证/安全域已由 OpenBase 与嵌入模式共用装配（含 TOTP/Passkey/MFA/恢复/
-		// 敏感操作闸门接线）；这里只继续装配协议域与页面。
-		protocolDomains, protocolErr := BuildProtocolDomains(base.Deps, base.Services,
-			base.Managed, base.Gate)
-		if protocolErr != nil {
-			return protocolErr
-		}
-		pages, pageErr := BuildPages(base.Deps, base.Services, base.Managed,
-			base.Security, base.Gate, protocolDomains)
-		if pageErr != nil {
-			return pageErr
-		}
-		mounts := append([]HandlerMount(nil), options.ExtraMounts...)
-		if protocolDomains != nil {
-			mounts = append(mounts, protocolDomains.protocolMounts()...)
-			logger.Info("已启用 OAuth/OIDC 协议端点",
-				"issuer", protocolIssuer(base.Deps),
-				"paths", protocolDomains.Protocol.Paths())
-		}
-		if options.EnableAdminAPI {
-			adminHandler, adminPrefix, adminErr := BuildAdminAPIServer(
-				base.Deps, base.Services, base.Managed, base.Tasks, pages,
-				options.AdminAPIPrefix, base.Gate)
-			if adminErr != nil {
-				return adminErr
-			}
-			mounts = append(mounts, HandlerMount{
-				Name: "admin-api", Prefix: adminPrefix, Handler: adminHandler,
-				KeepPrefix: true,
-			})
-			logger.Info("已启用管理 JSON API",
-				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+adminPrefix,
-				"note", "只挂载已装配领域服务路由；未装配域返回 404")
-		}
-		if options.EnableManagedAPI {
-			managedHandler, managedPrefix, managedErr := BuildManagedAPIHTTPHandler(
-				base.Deps, base.Services, base.Managed, options.ManagedAPIPrefix)
-			if managedErr != nil {
-				return managedErr
-			}
-			mounts = append(mounts, HandlerMount{
-				Name: "managed-api", Prefix: managedPrefix, Handler: managedHandler,
-				KeepPrefix: true,
-			})
-			logger.Info("已启用业务应用托管管理 API",
-				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+managedPrefix,
-				"auth", "user-session-bearer-or-app-client-secret-certificate")
-		}
-		if options.EnableAppSupport {
-			if protocolDomains == nil {
-				return fmt.Errorf("启用应用客服 API 必须同时启用 OAuth 协议端点")
-			}
-			supportHandler, supportPrefix, supportErr := BuildAppSupportHandler(
-				base.Deps, base.Managed, protocolDomains, options.AppSupportAudience,
-				options.AppSupportPrefix)
-			if supportErr != nil {
-				return supportErr
-			}
-			mounts = append(mounts, HandlerMount{
-				Name: "app-support", Prefix: supportPrefix, Handler: supportHandler,
-				KeepPrefix: true,
-			})
-			logger.Info("已启用应用受限客服 API",
-				"prefix", normalizePathPrefix(cfg.Server.PathPrefix)+supportPrefix,
-				"auth", "oauth-user-delegated-access-token")
-		}
-		httpOptions, httpErr := BuildHTTPOptions(base.Deps, pages, logger, accessWriter)
+		// 协议域/页面/HTTP 防护/挂载点由共享装配构造（与 app.Open 同一实现）。
+		httpRuntime, httpErr := BuildHTTPRuntime(base, HTTPRuntimeOptions{
+			Prefix:             cfg.Server.PathPrefix,
+			AccessLog:          accessWriter,
+			ExtraMounts:        options.ExtraMounts,
+			EnableProtocol:     options.EnableProtocol,
+			EnableAdminAPI:     options.EnableAdminAPI,
+			AdminAPIPrefix:     options.AdminAPIPrefix,
+			EnableManagedAPI:   options.EnableManagedAPI,
+			ManagedAPIPrefix:   options.ManagedAPIPrefix,
+			EnableAppSupport:   options.EnableAppSupport,
+			AppSupportPrefix:   options.AppSupportPrefix,
+			AppSupportAudience: options.AppSupportAudience,
+			Logger:             logger,
+		})
 		if httpErr != nil {
 			return httpErr
 		}
-		assembled, handlerErr := login.NewHTTPHandler(httpOptions)
-		if handlerErr != nil {
-			return fmt.Errorf("构造 HTTP 处理程序失败: %w", handlerErr)
-		}
-		withMounts, mountErr := ComposeHandler(assembled, cfg.Server.PathPrefix, mounts)
-		if mountErr != nil {
-			return fmt.Errorf("协议/管理 API 挂载点配置无效: %w", mountErr)
-		}
-		handler = withMounts
-		for _, mount := range mounts {
-			mountPaths = append(mountPaths,
-				normalizePathPrefix(cfg.Server.PathPrefix)+mount.Prefix)
-		}
+		handler = httpRuntime.Handler
+		mountPaths = append(mountPaths, httpRuntime.Mounts...)
 	}
 
 	server, err = login.NewServer(login.ServerOptions{

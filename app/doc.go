@@ -23,5 +23,7 @@
 //     无关）、资料读写、应用/角色/权限登记、应用角色分配与权限查询；调用者必须由
 //     Runtime.LocalAdmin()（本机受信操作者，自举通道）或 Runtime.AdminSession()
 //     （真实管理用户会话，按当前权限/委派/再次认证判定）建立。
-//   - HTTP/页面挂载（183）仍在后续步骤补齐，本包不复制第二套业务逻辑。
+//   - HTTP 与页面挂载（步骤 183）：Options.HTTP 装配与独立服务共用的协议域/内置
+//     页面/管理 API/HTTP 防护链；宿主用 Runtime.Handler()/Mount() 挂到自己的
+//     http.Server，监听与生命周期归宿主。缺依赖或非法配置在 Open 阶段失败。
 package app

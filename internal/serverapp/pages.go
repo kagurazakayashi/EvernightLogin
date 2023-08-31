@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -129,6 +130,24 @@ type Pages struct {
 	Support *uiadminadapter.SupportAdapter
 }
 
+// PageBuildOptions 是宿主页面替换/资源覆盖选项（步骤 183）。
+// options 为 nil 时行为与既有 BuildPages 完全一致；替换不等于跳过认证/权限/CSRF。
+type PageBuildOptions struct {
+	// Prefix 必须与宿主 HTTP handler 的固定前缀一致；空使用配置的 server.path_prefix。
+	Prefix string
+	// HostTemplates 是宿主模板覆盖来源；HostRenderer 是最高优先级单页渲染器。
+	HostTemplates *login.UIHostTemplates
+	HostRenderer  login.UIPageRenderer
+	// Brand 覆盖页面品牌；nil 使用内置品牌。
+	Brand *login.UIBrand
+	// AssetOverlays 按顺序覆盖内置静态资源（同逻辑路径后者优先）。
+	AssetOverlays []fs.FS
+	// Translations 追加/覆盖翻译目录；nil 使用内置 zh-CN。
+	Translations login.UICatalogProvider
+	// DisableBuiltinPages 关闭内置页面，仅由宿主模板/渲染器提供页面。
+	DisableBuiltinPages bool
+}
+
 // BuildPages 装配内置页面：ui.go 共 14 个页面选项，安全中心随核心安全服务注册，
 // OAuth 授权页仍按协议端点条件注册；Passkey/OAuth 子能力在安全中心内按能力位显示。
 //
@@ -148,11 +167,27 @@ type Pages struct {
 func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 	securityDomains *SecurityDomains, gate *SecurityGate,
 	protocolDomains *ProtocolDomains) (*Pages, error) {
+	return BuildPagesWithOptions(deps, services, managed, securityDomains, gate,
+		protocolDomains, nil)
+}
+
+// BuildPagesWithOptions 在 BuildPages 基础上应用宿主页面替换/资源覆盖选项；
+// options 为 nil 时与 BuildPages 完全等价。
+func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServices,
+	securityDomains *SecurityDomains, gate *SecurityGate,
+	protocolDomains *ProtocolDomains, options *PageBuildOptions) (*Pages, error) {
 	if services == nil || services.Sessions == nil || services.Authn == nil {
 		return nil, fmt.Errorf("装配页面缺少会话或认证服务")
 	}
 	if securityDomains == nil || gate == nil || managed == nil {
 		return nil, fmt.Errorf("装配页面缺少安全域/敏感操作闸门/管理域服务")
+	}
+	// 步骤 183：页面前缀必须与宿主 HTTP handler 一致；宿主显式覆盖优先，未覆盖时
+	// 沿用配置（options==nil 与旧行为等价）。前缀只影响路由/表单/公开表单路径，
+	// 不改变页面 Access 级别、会话/权限判定与 CSRF 校验。
+	prefix := deps.Config.Server.PathPrefix
+	if options != nil && strings.TrimSpace(options.Prefix) != "" {
+		prefix = strings.TrimSpace(options.Prefix)
 	}
 	logger := deps.Logger
 	now := deps.Now
@@ -232,9 +267,9 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		return services.Sessions.ValidateCSRFToken(ctx, request, token)
 	}
 	webOptions := login.WebUIOptions{
-		Prefix: deps.Config.Server.PathPrefix,
+		Prefix: prefix,
 		Session: pageSessions{service: services.Sessions, gate: gate,
-			pathPrefix: deps.Config.Server.PathPrefix},
+			pathPrefix: prefix},
 		FormTokens: csrfProvider,
 		PageAuth: &login.UIPageAuthOptions{
 			Backend:       authAdapter,
@@ -445,6 +480,29 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 	webOptions.PageSecurityPolicy = &login.UIPageSecurityPolicyOptions{
 		Backend: newPolicyWriteBackend(policyAdapter, gate, deps.Audit), ValidateCSRF: validateCSRF,
 	}
+	// 步骤 183：应用宿主页面替换/资源覆盖。这里只覆盖内容与资源来源；页面路由的
+	// Access 级别、会话/权限判定与 CSRF 校验仍由同一 WebUI 契约强制执行，替换不等于
+	// 跳过认证。options==nil 时以下分支全部不执行，保持旧行为。
+	if options != nil {
+		if options.Brand != nil {
+			webOptions.Brand = *options.Brand
+		}
+		if options.HostRenderer != nil {
+			webOptions.HostRenderer = options.HostRenderer
+		}
+		if options.HostTemplates != nil {
+			webOptions.HostTemplates = options.HostTemplates
+		}
+		if len(options.AssetOverlays) > 0 {
+			webOptions.AssetOverlays = append(webOptions.AssetOverlays, options.AssetOverlays...)
+		}
+		if options.Translations != nil {
+			webOptions.Translations = options.Translations
+		}
+		if options.DisableBuiltinPages {
+			webOptions.DisableBuiltinPages = true
+		}
+	}
 	web, err := login.NewWebUI(webOptions)
 	if err != nil {
 		return nil, fmt.Errorf("构造内置页面失败: %w", err)
@@ -453,7 +511,7 @@ func BuildPages(deps Deps, services *Services, managed *ManagedServices,
 		WebUI:      web,
 		CSRF:       csrfProvider,
 		Sessions:   services.Sessions,
-		PublicForm: publicFormPaths(deps.Config.Server.PathPrefix),
+		PublicForm: publicFormPaths(prefix),
 		Admin:      adminAdapter, RBAC: rbacAdapter, Apps: appsAdapter, Support: supportAdapter,
 	}, nil
 }

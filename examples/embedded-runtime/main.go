@@ -15,6 +15,9 @@
 //   - 步骤 182：本机受信操作者自举应用/权限/角色/委派资格与首个应用管理员；
 //     真实管理员关闭自主注册时建用户、读写资料、分配/撤回应用角色、查询权限；
 //     跨应用写入/越权转授/普通用户伪造管理员被拒绝；撤销后权限立即失效。
+//   - 步骤 183：把 Runtime.Handler/Mount 挂到宿主自己的 http.Server：真实前缀、
+//     登录/注册/找回页面、CSRF 拒绝、登录后页面、无权限 403、健康检查；缺依赖或
+//     非法配置在 Open 阶段失败；宿主模板/品牌/静态资源替换与关闭内置系统页均可用。
 //   - 显式 Start 启动允许的后台任务；重复 Start 返回 ErrAlreadyStarted；
 //   - Close 幂等；宿主注入的数据库/通知器不被运行时关闭；
 //   - 启动前取消 fail-closed（实例进入 closed），之后只能 Close；
@@ -34,6 +37,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,7 +96,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "embedded-runtime 验收失败:", err)
 		os.Exit(1)
 	}
-	fmt.Println("embedded-runtime 验收通过：公开 app 包完成 TOTP 第二因素/敏感操作再次认证/受限恢复/受信管理（建用户/资料/应用角色分配/权限查询/越权拒绝）/显式启动/取消/重复关闭/宿主资源所有权/失败清理")
+	fmt.Println("embedded-runtime 验收通过：公开 app 包完成 TOTP 第二因素/敏感操作再次认证/受限恢复/受信管理（建用户/资料/应用角色分配/权限查询/越权拒绝）/嵌入 HTTP 页面挂载（前缀/CSRF/无权限/健康检查/模板与品牌替换）/显式启动/取消/重复关闭/宿主资源所有权/失败清理")
 }
 
 func run() error {
@@ -101,6 +106,7 @@ func run() error {
 	}
 	defer os.RemoveAll(dir)
 	cfg := login.Default()
+	cfg.Server.PublicBaseURL = httpExampleOrigin + "/idp"
 	cfg.Registration.Enabled = true
 	cfg.Registration.RequireReview = false
 	cfg.Registration.RequireEmailVerification = false
@@ -110,11 +116,36 @@ func run() error {
 	notifier := &captureNotifier{}
 	databasePath := filepath.Join(dir, "login.db")
 	masterKeyPath := filepath.Join(dir, "master.key")
+	// 宿主页面替换/静态资源覆盖（步骤 183）：真实文件系统来源 + 命名路由覆盖。
+	hostTemplateDir := filepath.Join(dir, "host-templates")
+	hostAssetDir := filepath.Join(dir, "host-assets")
+	if err := os.MkdirAll(filepath.Join(hostTemplateDir, "pages"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(hostTemplateDir, "pages", "login.html"),
+		[]byte(hostLoginTemplate), 0o600); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(hostAssetDir, "css"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(hostAssetDir, "css", "base.css"),
+		[]byte("/* HOST-ASSET-MARKER */\n"), 0o600); err != nil {
+		return err
+	}
 	runtime, err := app.Open(ctx, app.Options{
 		Config: &cfg, DatabasePath: databasePath,
 		MasterKeyFile: masterKeyPath, CreateMasterKey: true,
 		Migrate: true, OperatorID: "embedded-example", Now: clock.Now,
 		Database: hostDatabase, Notifier: notifier,
+		HTTP: &app.HTTPOptions{Prefix: "/idp", AccessLog: io.Discard,
+			PageOverrides: &app.PageOverrides{
+				Brand: &login.UIBrand{Name: "EmbeddedHostBrand"},
+				HostTemplates: &login.UIHostTemplates{FS: os.DirFS(hostTemplateDir),
+					Overrides: []login.UITemplateOverride{{RouteName: "auth.login",
+						TemplatePath: "pages/login.html"}}},
+				AssetOverlays: []fs.FS{os.DirFS(hostAssetDir)},
+			}},
 	})
 	if err != nil {
 		return fmt.Errorf("Open: %w", err)
@@ -313,6 +344,14 @@ func run() error {
 	// ===== 步骤 182：受信管理门面（用户/资料/应用/角色/权限） =====
 	if err := runAdminScenario(ctx, runtime, clock, start.Secret, user.ID,
 		alicePassword); err != nil {
+		return err
+	}
+
+	// ===== 步骤 183：嵌入式 HTTP/页面挂载（宿主自己的 http.Server） =====
+	if err := runHTTPChecks(ctx, runtime); err != nil {
+		return err
+	}
+	if err := runHTTPFailStartChecks(ctx, databasePath, masterKeyPath); err != nil {
 		return err
 	}
 

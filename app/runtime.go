@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -32,6 +34,9 @@ type Runtime struct {
 	instance   *login.Instance
 	boot       *bootstrap.Service
 	bootCaller bootstrap.Caller
+	handler    http.Handler
+	httpPrefix string
+	httpMounts []string
 	mu         sync.Mutex
 	closeErr   error
 	closed     bool
@@ -86,6 +91,45 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		_ = base.Close(context.Background())
 		return nil, wrapInternal("构造首次初始化服务失败", err)
 	}
+	// HTTP/页面挂载（步骤 183）：与独立服务共用同一装配链；任何缺依赖/非法配置
+	// 都在 Open 阶段失败，不会退化为“只有健康页”。
+	var handler http.Handler
+	var httpPrefix string
+	var httpMounts []string
+	if opts.HTTP != nil {
+		var overrides *serverapp.PageOverrides
+		if opts.HTTP.PageOverrides != nil {
+			overrides = &serverapp.PageOverrides{
+				HostTemplates:       opts.HTTP.PageOverrides.HostTemplates,
+				HostRenderer:        opts.HTTP.PageOverrides.HostRenderer,
+				Brand:               opts.HTTP.PageOverrides.Brand,
+				AssetOverlays:       opts.HTTP.PageOverrides.AssetOverlays,
+				Translations:        opts.HTTP.PageOverrides.Translations,
+				DisableBuiltinPages: opts.HTTP.PageOverrides.DisableBuiltinPages,
+			}
+		}
+		httpRuntime, httpErr := serverapp.BuildHTTPRuntime(base, serverapp.HTTPRuntimeOptions{
+			Prefix:             opts.HTTP.Prefix,
+			AccessLog:          opts.HTTP.AccessLog,
+			EnableProtocol:     opts.HTTP.EnableProtocol,
+			EnableAdminAPI:     opts.HTTP.EnableAdminAPI,
+			AdminAPIPrefix:     opts.HTTP.AdminAPIPrefix,
+			EnableManagedAPI:   opts.HTTP.EnableManagedAPI,
+			ManagedAPIPrefix:   opts.HTTP.ManagedAPIPrefix,
+			EnableAppSupport:   opts.HTTP.EnableAppSupport,
+			AppSupportPrefix:   opts.HTTP.AppSupportPrefix,
+			AppSupportAudience: opts.HTTP.AppSupportAudience,
+			Logger:             logger,
+			PageOverrides:      overrides,
+		})
+		if httpErr != nil {
+			_ = base.Close(context.Background())
+			return nil, wrapInternal("装配嵌入式 HTTP 与页面失败", httpErr)
+		}
+		handler = httpRuntime.Handler
+		httpPrefix = httpRuntime.Prefix
+		httpMounts = httpRuntime.Mounts
+	}
 	// 后台任务运行时作为实例组件登记：只有显式 Start 才会启动，Close 时由实例
 	// 逆序停止；宿主注入的 Database/Notifier 只被使用、不被关闭。
 	components := make([]login.BackgroundComponent, 0, 1)
@@ -104,7 +148,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		return nil, wrapInternal("构造实例失败", err)
 	}
 	return &Runtime{opts: opts, config: cfg, logger: logger, nowFn: now,
-		base: base, instance: instance, boot: boot, bootCaller: bootCaller}, nil
+		base: base, instance: instance, boot: boot, bootCaller: bootCaller,
+		handler: handler, httpPrefix: httpPrefix, httpMounts: httpMounts}, nil
 }
 
 // loadConfig 加载/规范化配置。配置规则与独立服务共用 internal/appcore：只支持
@@ -172,6 +217,58 @@ func (r *Runtime) Ready(ctx context.Context) error {
 		return login.ErrNotRunning
 	}
 	return r.instance.Ready(ctx)
+}
+
+// Handler 返回与独立服务共用安全链的 HTTP 处理器；未配置 Options.HTTP 时为 nil。
+// 宿主负责自己的监听与 http.Server 生命周期；处理器可在 Start 之前挂载。
+func (r *Runtime) Handler() http.Handler {
+	if r == nil {
+		return nil
+	}
+	return r.handler
+}
+
+// HTTPPrefix 返回 HTTP 处理器的规范化站内前缀（根路径为空字符串）。
+func (r *Runtime) HTTPPrefix() string {
+	if r == nil {
+		return ""
+	}
+	return r.httpPrefix
+}
+
+// HTTPMounts 返回已挂载的协议/管理 API 站内路径（含前缀，供诊断/测试）。
+func (r *Runtime) HTTPMounts() []string {
+	if r == nil {
+		return nil
+	}
+	return append([]string(nil), r.httpMounts...)
+}
+
+// Mount 把已装配的 HTTP 处理器挂到宿主 *http.ServeMux 上：按固定前缀注册子树
+// （根路径注册 "/"）。未配置 HTTP、mux 为 nil 或 pattern 冲突时返回 CONFIG_INVALID，
+// 不向宿主抛 panic。宿主也可以直接使用 Handler() 自行挂载，但必须使用 HTTPPrefix。
+func (r *Runtime) Mount(mux *http.ServeMux) (err error) {
+	if mux == nil {
+		return login.NewAppError(login.CodeConfigInvalid, "挂载 HTTP 处理器需要宿主 mux",
+			login.WithRequestID(login.NewRequestID()))
+	}
+	if r == nil || r.handler == nil {
+		return login.NewAppError(login.CodeConfigInvalid, "运行时未配置 HTTP 处理器",
+			login.WithRequestID(login.NewRequestID()))
+	}
+	pattern := "/"
+	if r.httpPrefix != "" {
+		pattern = r.httpPrefix + "/"
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = login.NewAppError(login.CodeConfigInvalid, "挂载 HTTP 处理器失败",
+				login.WithCause(fmt.Errorf("宿主 mux 拒绝注册模式 %q: %v", pattern, recovered)),
+				login.WithRequestID(login.NewRequestID()))
+		}
+	}()
+	mux.Handle(pattern, r.handler)
+	return nil
 }
 
 // Close 幂等关闭本 Runtime 打开的资源（实例后台任务、任务运行时、数据库）；
