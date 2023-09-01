@@ -92,6 +92,9 @@ type Store interface {
 	GetChallenge(ctx context.Context, id string) (ChallengeRecord, bool, error)
 	// IncreaseAttempts 原子递增尝试次数并返回新值。
 	IncreaseAttempts(ctx context.Context, id string, now time.Time) (int, error)
+	// CancelChallenge 把 pending 挑战条件迁移为 cancelled；已过期/已确认/已取消时
+	// 返回 ok=false（取消不是批准，不产生任何可执行能力）。
+	CancelChallengeTx(ctx context.Context, tx audit.Tx, id string, now time.Time) (bool, error)
 	// ApproveTx 在审计事务内把挑战从 pending 条件迁移为 verified 并写入批准行。
 	// 挑战已不是 pending、已过期或写入批准失败时返回 ok=false。
 	ApproveTx(ctx context.Context, tx audit.Tx, challengeID string, now time.Time, approval ApprovalRecord) (bool, error)

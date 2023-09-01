@@ -125,6 +125,8 @@ func RunWithOptions(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		return r.runOnline(group, rest)
 	case "admin":
 		return r.runAdmin(rest)
+	case "confirm":
+		return r.runConfirm(rest)
 	default:
 		fmt.Fprintf(stderr, "错误：未知的管理命令 %q（用法：loginctl help）\n", group)
 		return ExitUsage
@@ -187,6 +189,8 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl backups retention get|set ...")
 	fmt.Fprintln(out, "  loginctl backups cleanup preview|submit ...")
 	fmt.Fprintln(out, "  loginctl admin users|user|groups|group|roles|role|permissions|applications|application|support-cases|support-case [...]")
+	fmt.Fprintln(out, "  loginctl admin write <path> --body ... [--approval-file <受保护文件>]")
+	fmt.Fprintln(out, "  loginctl confirm begin|verify|status|cancel ...（一次性 CLI 再次认证/确认）")
 	fmt.Fprintln(out, "  loginctl notifications status|test ...")
 	fmt.Fprintln(out, "  loginctl tasks get <task_id> ...")
 	fmt.Fprintln(out, "  公共参数：--server <url>（默认 http://127.0.0.1:8080） --api-path </admin/v1> \\")

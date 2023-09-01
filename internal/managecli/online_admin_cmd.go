@@ -165,7 +165,7 @@ func (r *runner) runAdminWrite(args []string) int {
 	r.usageText = adminCommandUsage
 	values, positional, err := parseFlags(args, onlineFlagDefs(
 		flagDef{name: "body", value: true}, flagDef{name: "confirm", value: true},
-		flagDef{name: "method", value: true}))
+		flagDef{name: "method", value: true}, flagDef{name: "approval-file", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -194,8 +194,23 @@ func (r *runner) runAdminWrite(args []string) int {
 		return r.usage("--method 只允许 POST/PUT/DELETE/PATCH")
 	}
 	path := "/" + strings.TrimPrefix(positional[0], "/")
+	// 可选：一次性 CLI 确认证明（由 loginctl confirm verify/status 写入受保护文件）。
+	// 只从受保护文件读取，不进入命令行/JSON 输出；服务端重新校验绑定与一次性消费。
+	confirmToken := ""
+	if approvalFile := strings.TrimSpace(values["approval-file"]); approvalFile != "" {
+		loaded, loadErr := readProtectedSecret(approvalFile, "CLI 确认证明文件")
+		if loadErr != nil {
+			return r.fail("APPROVAL_FILE_INVALID", ExitUnauthenticated,
+				"CLI 确认证明文件无效："+loadErr.Error(), nil)
+		}
+		confirmToken = loaded
+	}
+	headers := map[string]string{}
+	if confirmToken != "" {
+		headers["X-Login-Confirmation"] = confirmToken
+	}
 	return r.withOnline(values, func(target *onlineTarget) int {
-		reply, failure := target.doJSON(r.ctx, method, path, nil, fields)
+		reply, failure := target.doJSONHeaders(r.ctx, method, path, nil, fields, headers)
 		if failure != nil {
 			return r.onlineFailure("执行管理写操作", failure)
 		}

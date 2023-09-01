@@ -613,6 +613,67 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 		TargetType: record.TargetType, TargetID: record.TargetID}, nil
 }
 
+// CancelChallenge 取消用户本人尚未完成的再次认证挑战：pending 条件迁移为
+// cancelled 并写审计。取消不产生批准、不签发任何令牌，之后 VerifyChallenge 一律
+// 返回 CHALLENGE_INVALID；已经 verified/cancelled/expired 的挑战不可再取消。
+//
+// 取消是降低风险的动作，但仍需身份绑定：调用者必须是对应挑战的用户本人，不能
+// 由他人或普通请求参数代取消。
+func (s *Service) CancelChallenge(ctx context.Context, caller Caller, challengeID string) error {
+	ctx = normalizeContext(ctx)
+	if err := caller.actor.Validate(); err != nil {
+		return ErrAccessDenied
+	}
+	if !caller.IsUser() {
+		return fmt.Errorf("%w: 只有用户本人可以取消再次认证", ErrAccessDenied)
+	}
+	if !validDatabaseID(challengeID, "chl_") {
+		return fmt.Errorf("%w: 挑战标识格式非法", ErrInvalidRequest)
+	}
+	challenge, found, err := s.opts.Store.GetChallenge(ctx, challengeID)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if !found || challenge.UserID != caller.actor.ID {
+		// 不泄露他人挑战是否存在。
+		return ErrChallengeInvalid
+	}
+	now := s.now()
+	if challenge.State != ChallengePending || !now.Before(challenge.ExpiresAt) {
+		return ErrChallengeInvalid
+	}
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor: caller.actor, Action: "reauth.challenge_cancelled",
+			Target:    audit.Target{Type: "reauth_challenge", ID: challenge.ID},
+			RequestID: caller.requestID,
+			Changes: []audit.FieldChange{
+				{Field: "operation_id", After: challenge.OperationID},
+				{Field: "target_type", After: challenge.TargetType},
+				{Field: "target_id", After: safeValue(challenge.TargetID)},
+			},
+		},
+		FailureReasonCode: "reauth.challenge_cancel_failed",
+		FailureErrorCodeFor: func(err error) string {
+			return string(CodeOf(mapCriticalError(err)))
+		},
+	}
+	err = s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		ok, cancelErr := s.opts.Store.CancelChallengeTx(txCtx, tx, challenge.ID, now)
+		if cancelErr != nil {
+			return cancelErr
+		}
+		if !ok {
+			return ErrChallengeInvalid
+		}
+		return nil
+	})
+	if err != nil {
+		return mapCriticalError(err)
+	}
+	return nil
+}
+
 // Notifications 读取用户最近的安全告知记录：本人或受信系统/本地通道/root 可读。
 func (s *Service) Notifications(ctx context.Context, caller Caller, userID string, limit int) ([]NotificationRecord, error) {
 	ctx = normalizeContext(ctx)

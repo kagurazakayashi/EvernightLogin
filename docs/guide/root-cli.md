@@ -175,3 +175,51 @@ loginctl restore-init-state ...
 - **本地离线命令**（`user/group/role/permission/app` 的本地管理、`root-recover`、`restore-*`、
   `maintenance-*`）：面向已认证本地管理员/应急维护边界，需要本地数据库/维护状态与 `--operator`/`--confirm`；
   它们不替代在线管理 API 的委派、数据范围与审计语义。普通在线管理请优先使用 API/页面/在线命令。
+
+## 10. CLI 敏感操作再次认证与确认（步骤 186）
+
+在线敏感操作除了要求真实管理会话（近期强认证）外，还需要**操作绑定的一次性再认证
+证明**。`loginctl confirm` 与 `--approval-file` 提供这条通道；证明只由服务端签发，
+CLI 只把它保存在受保护文件并附加到**同一个**管理写请求，服务端会重新校验并消费。
+
+流程：
+
+```powershell
+# 1) 开始确认：绑定操作/目标/参数摘要/即将执行的写请求（method+路径+规范化请求体）
+loginctl confirm begin --operation password.change --scope-id system \
+  --target-type user --target-id <user_id> \
+  --params '{}' --method PUT --path /users/me/password \
+  --body '{"new_password":"..."}' \
+  --server https://login.example:8443 --session-file <管理会话受保护文件>
+
+# 2) 完成真实再次认证（密码/TOTP 从 stdin 交互读取；密码+强因素可用时）
+loginctl confirm verify --confirmation-id <cfm_id> --approval-out <证明文件> \
+  --server https://login.example:8443 --session-file <管理会话受保护文件>
+
+# 3) 执行同一个写请求并携带证明文件（证明一次性、只对绑定请求有效）
+loginctl admin write /users/me/password --method PUT \
+  --body '{"new_password":"..."}' --confirm ADMIN-WRITE \
+  --approval-file <证明文件> --server https://login.example:8443 \
+  --session-file <管理会话受保护文件>
+```
+
+WebAuthn 账户：`confirm begin` 会输出受控跳转 URL（`browser_path` 拼上服务地址与
+API 基路径）；在浏览器完成真实 Passkey 断言后，用
+`loginctl confirm status --confirmation-id <cfm_id> --wait 120s --approval-out <证明文件>`
+取回一次性证明。取消未完成确认用 `loginctl confirm cancel --confirmation-id <cfm_id>`，
+取消不会产生任何可执行能力。
+
+安全语义：
+
+- 只有真实管理会话（`AuthorizeManagement`）能开始/完成/取消确认；普通/受限会话被拒绝，
+  不能通过 CLI 参数或请求体自称管理员。
+- 证明绑定：主体（用户+管理会话 ID）、作用域/操作 ID、目标、参数摘要、HTTP 方法/
+  相对路径/规范化请求体摘要、有效期（≤5 分钟）；换目标、换参数、换会话、换请求、
+  过期、重复使用都会返回 `TOKEN_INVALID`；挑战过期/取消/重放返回 `CHALLENGE_INVALID`。
+- 密码/TOTP 只从 stdin 读取（终端不回显），不进入命令行、进程列表、环境变量或日志；
+  `--json` 输出不含一次性证明或长期令牌，证明只写入 `--approval-out` 的受保护文件
+  （绝对路径、0600、非符号链接、不覆盖既有文件）。
+- 服务端在证明消费时重新执行敏感策略与领域授权（`reauth.approval_consumed` 审计），
+  请求头存在不等于放行；失败不留下可重放的证明。
+- 187 的管理强制下线等命令按 `.ai/lead/reports/step186-contract.md` 复用同一
+  header/端点契约；操作/目标/参数必须与 `Sensitive.Authorize` 完全一致。

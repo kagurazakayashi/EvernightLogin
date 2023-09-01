@@ -35,6 +35,9 @@ const selectAttemptsSQL = `SELECT attempts FROM reauth_challenges WHERE id=?`
 const verifyChallengeSQL = `UPDATE reauth_challenges SET status='verified',verified_at_ms=?,
 updated_at_ms=? WHERE id=? AND status='pending' AND expires_at_ms>?`
 
+const cancelChallengeSQL = `UPDATE reauth_challenges SET status='cancelled',updated_at_ms=?
+WHERE id=? AND status='pending'`
+
 const insertApprovalSQL = `INSERT INTO reauth_approvals(
 id,challenge_id,token_sha256,user_id,scope_id,operation_id,target_type,target_id,
 params_sha256,granted_strength,authentication_complete,granted_at_ms,expires_at_ms,
@@ -144,6 +147,23 @@ func (s *Store) IncreaseAttempts(ctx context.Context, id string, now time.Time) 
 		return 0, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
 	return attempts, nil
+}
+
+// CancelChallengeTx 在审计事务内把 pending 挑战条件迁移为 cancelled；已确认/过期/
+// 已取消返回 false（取消不是批准，不产生任何可执行能力）。
+func (s *Store) CancelChallengeTx(ctx context.Context, tx audit.Tx, id string, now time.Time) (bool, error) {
+	if tx == nil {
+		return false, fmt.Errorf("%w: 审计事务为空", reauth.ErrOptionsInvalid)
+	}
+	result, err := tx.ExecContext(ctx, cancelChallengeSQL, now.UTC().UnixMilli(), id)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	return affected == 1, nil
 }
 
 // ApproveTx 在审计事务内条件迁移挑战状态并写入批准行。

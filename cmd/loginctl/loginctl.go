@@ -64,7 +64,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, factory Promp
 		return runRestoreReenable(args[1:], stdout, stderr)
 	case "config", "diag", "migrate", "task", "session", "user",
 		"group", "role", "app", "permission", "notify",
-		"audit", "reports", "backups", "notifications", "tasks", "admin":
+		"audit", "reports", "backups", "notifications", "tasks", "admin", "confirm":
 		// 步骤 84 常规管理/诊断/设置命令与在线管理命令：本地运维边界不联网；
 		// group/role/app/permission/notify 是本地管理命令组（只读 + 受控建组，
 		// 需要委派/敏感策略的写动作返回 MANAGEMENT_WRITE_NOT_EXPOSED）；在线域

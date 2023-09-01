@@ -127,6 +127,14 @@ func BuildHTTPRuntime(base *Base, options HTTPRuntimeOptions) (*HTTPRuntime, err
 		if adminErr != nil {
 			return nil, fmt.Errorf("装配管理 JSON API 失败: %w", adminErr)
 		}
+		// 步骤 186：CLI 一次性再认证/确认通道挂在管理 API 外层，证明由服务端
+		// 校验后把 reauth 信号注入同一次写请求的 ctx。
+		cliReauth, cliErr := newCLIReauthHandler(deps, base.Services, base.Gate,
+			base.Security, adminPrefix)
+		if cliErr != nil {
+			return nil, fmt.Errorf("装配 CLI 再认证确认通道失败: %w", cliErr)
+		}
+		adminHandler = cliReauth.wrap(adminHandler)
 		mounts = append(mounts, HandlerMount{
 			Name: "admin-api", Prefix: adminPrefix, Handler: adminHandler,
 			KeepPrefix: true,

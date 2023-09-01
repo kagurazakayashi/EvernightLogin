@@ -463,6 +463,13 @@ func onlineUserAgent() string {
 // 字节；失败响应映射为 onlineError。它从不把原始错误文本、路径或秘密写入错误。
 func (t *onlineTarget) doJSON(ctx context.Context, method, relative string,
 	query url.Values, body any) (*onlineReply, *onlineError) {
+	return t.doJSONHeaders(ctx, method, relative, query, body, nil)
+}
+
+// doJSONHeaders 与 doJSON 相同，但允许附加受控请求头（例如一次性 CLI 确认证明）。
+// 头值不写入日志/错误，调用方必须只从受保护文件读取证明。
+func (t *onlineTarget) doJSONHeaders(ctx context.Context, method, relative string,
+	query url.Values, body any, headers map[string]string) (*onlineReply, *onlineError) {
 	requestID := t.newRequestID()
 	endpoint := t.route(relative)
 	var payload io.Reader
@@ -488,6 +495,9 @@ func (t *onlineTarget) doJSON(ctx context.Context, method, relative string,
 	request.Header.Set("User-Agent", onlineUserAgent())
 	request.Header.Set("X-Request-ID", requestID)
 	request.Header.Set("Authorization", "Bearer "+t.secret)
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
 	if len(query) > 0 {
 		request.URL.RawQuery = query.Encode()
 	}
