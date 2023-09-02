@@ -67,6 +67,13 @@ type SessionAdminRevoker interface {
 	AdminRevoke(ctx context.Context, adminSecret string, request session.AdminRevokeRequest) (session.AdminRevokeResult, error)
 }
 
+// SessionAdminLister 是可选的“管理员查询目标用户活动会话”会话能力（步骤 187）。
+// 生产实现是 *session.Service；测试替身/旧装配未实现时管理 API 不挂载该路由，
+// 不会退化为无授权的空列表。
+type SessionAdminLister interface {
+	AdminListSessions(ctx context.Context, adminSecret string, request session.AdminSessionListRequest) (session.AdminSessionListResult, error)
+}
+
 // DomainHandler 是宿主补充的领域路由处理器（步骤 156）。认证、CSRF、统一
 // envelope/错误映射由本包统一处理；领域授权、敏感策略与审计由 DomainHandler
 // 内部调用真实服务完成，禁止只依赖本层会话。
@@ -307,6 +314,7 @@ type Server struct {
 	version        string
 	session        ManagementSession
 	sessionRevoker SessionAdminRevoker
+	sessionLister  SessionAdminLister
 	audit          AuditService
 	reports        ReportService
 	plans          ReportPlanService
@@ -415,6 +423,9 @@ func New(options Options) (*Server, error) {
 	}
 	if revoker, ok := options.Session.(SessionAdminRevoker); ok {
 		server.sessionRevoker = revoker
+	}
+	if lister, ok := options.Session.(SessionAdminLister); ok {
+		server.sessionLister = lister
 	}
 	server.routes = server.buildRoutes()
 	if len(server.routes) == 0 {

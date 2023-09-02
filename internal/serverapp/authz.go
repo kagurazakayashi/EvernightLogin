@@ -353,6 +353,7 @@ var pageActionPermissions = map[string]string{
 	// 保留别名避免不同调用点因拼写差异被误判为“未登记动作”而一律拒绝。
 	"applications.credentials.manage": "applications.credentials.manage",
 	"support.read":                    "support.cases.read",
+	"sessions.revoke":                 "sessions.revoke",
 	"support.update":                  "support.cases.update",
 	"recovery.approve":                "recovery.approve",
 	"audit.read":                      "audit.read",

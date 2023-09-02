@@ -15,7 +15,7 @@ type denyingManagementRunner struct{ calls int }
 
 func (r *denyingManagementRunner) Authorize(ctx context.Context, caller reauth.Caller, request reauth.Request) (reauth.Result, error) {
 	r.calls++
-	if request.OperationID != "session.management.access" {
+	if request.OperationID != session.OperationSessionRevokeOther {
 		return reauth.Result{}, reauth.ErrInvalidRequest
 	}
 	return reauth.Result{}, reauth.ErrMFARequired
@@ -43,8 +43,8 @@ func TestAdminRevokeRequiresSensitivePolicy(t *testing.T) {
 	targetSession := env.loginWith(service, targetID, "", false, session.ClientInfo{})
 	if _, err := service.AdminRevoke(env.ctx, adminSession.Secret.Reveal(), session.AdminRevokeRequest{
 		TargetSessionID: targetSession.Session.ID,
-	}); !errors.Is(err, session.ErrAccessDenied) {
-		t.Fatalf("策略拒绝后管理下线错误 = %v，期望 ErrAccessDenied", err)
+	}); !errors.Is(err, session.ErrStrongAuthRequired) {
+		t.Fatalf("策略要求再次认证时错误 = %v，期望 ErrStrongAuthRequired", err)
 	}
 	if runner.calls != 1 {
 		t.Errorf("敏感策略调用数 = %d，期望 1", runner.calls)

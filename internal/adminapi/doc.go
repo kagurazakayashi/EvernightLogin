@@ -81,6 +81,8 @@
 //	GET  /tasks/{id}                             task.Executor.Get/Attempts + TaskAuthorizer：`diagnostics.read` + 数据范围/属主（拒绝 403、不存在 404）；显式剔除任务载荷
 //	GET  /notifications                          宿主 NotificationService：脱敏配置/启用状态；未装配 503 MAIL_DIAGNOSTICS_UNAVAILABLE
 //	POST /notifications/test                     本地捕获 notifier：执行前核验 LocalCapture/DeliveryMode=local_capture；reauth + 真实审计 + 确认；禁止真实外发；未装配或非本地捕获 503 NOTIFICATION_TEST_DISABLED
+//	GET  /sessions                               session.AdminListSessions：强认证管理会话 + sessions.revoke 范围授权 + root/受保护目标拒绝 + 真实读取审计（只返回公开摘要，不含秘密）
+//	POST /sessions/revoke                        session.AdminRevoke：session.revoke.other 敏感策略 + sessions.revoke 范围授权 + 确认/理由 + 原子撤销 + 真实操作者审计
 //
 // 凭据、路径与内部错误不进入响应：响应只包含领域服务公开视图的白名单字段，
 // 下载端点由本包打开受控文件并流式输出字节，绝不回显宿主路径。
@@ -106,8 +108,10 @@
 // 授权并重新检查产物状态，重复兑换或撤权后兑换由领域服务拒绝。
 //
 // 敏感操作（审计导出/清理/保留策略、报告下载令牌/清理/重试、备份创建/下载令牌/
-// 保留策略/清理）由领域服务调用注入的 reauth.OperationRunner 与 internal/policy
-// 判定；未装配策略或未满足强认证要求时领域服务 fail-closed，本包不做降级。
+// 保留策略/清理、管理员强制下线）由领域服务调用注入的 reauth.OperationRunner 与
+// internal/policy 判定；未装配策略或未满足强认证要求时领域服务 fail-closed，本包
+// 不做降级。CLI 的一次性再次认证证明（步骤 186，X-Login-Confirmation）由宿主
+// 中间件在校验并原子消费后向请求 ctx 注入 reauth 信号，本包不解读该头。
 // 通知测试等真实外发能力不在本包实现（禁止真实外发），见“未实现”。
 //
 // # 集成步骤

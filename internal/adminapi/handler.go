@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
 )
@@ -44,6 +46,11 @@ func (s *Server) buildRoutes() []route {
 		// 步骤 151：管理员强制下线。权限/作用范围/强认证/root 保护/审计全部由
 		// 会话服务重新判定；本层只做参数与错误映射。
 		add(http.MethodPost, "sessions/revoke", s.handleSessionAdminRevoke)
+	}
+	if s.sessionLister != nil {
+		// 步骤 187：管理员按范围查询目标用户活动会话（只读；强认证 + sessions.revoke
+		// 范围授权 + root/受保护目标拒绝 + 读取审计均由会话服务完成）。
+		add(http.MethodGet, "sessions", s.handleSessionAdminList)
 	}
 	if s.audit != nil {
 		add(http.MethodGet, "audit/events", s.handleAuditEventList)
@@ -259,6 +266,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeProblem(w, requestID, s.codeProblem(string(codeAccessDenied), nil))
 		return
 	}
+	// 步骤 187：管理 API 的敏感动作需要“已校验管理会话的强认证事实”。CLI 证明由
+	// 宿主 186 中间件在进入本处理器前注入（含一次性 ApprovalToken）；这里只对没有
+	// 任何信号的请求补上会话事实，绝不覆盖 186 注入的证明，也不默认 Confirmed
+	// （确认由具体 handler 在显式 confirm 后追加）。
+	ctx = withManagementSessionSignals(ctx, sessionRecord)
+	r = r.WithContext(ctx)
 	caller, callerErr := account.UserCaller(sessionRecord.UserID)
 	if callerErr != nil {
 		s.writeProblem(w, requestID, s.codeProblem(string(codeAccessDenied), callerErr))
@@ -278,6 +291,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if handlerErr := matched.handler(call); handlerErr != nil {
 		s.writeProblem(w, requestID, s.problemFor(ctx, handlerErr))
 	}
+}
+
+// withManagementSessionSignals 把已校验管理会话的强认证事实放入 ctx，供领域服务的
+// 敏感策略重新判定。若 ctx 中已有 186 中间件注入的证明/认证事实则原样保留（一次性
+// ApprovalToken 优先），绝不覆盖；Confirmed 保持 false，由具体写 handler 在显式
+// confirm 通过后追加。
+func withManagementSessionSignals(ctx context.Context, record session.Session) context.Context {
+	signals := reauth.SignalsFromContext(ctx)
+	if signals.Complete || !signals.VerifiedAt.IsZero() || signals.ApprovalToken != "" {
+		return ctx
+	}
+	return reauth.WithSignals(ctx, reauth.Signals{
+		VerifiedAt: record.StrongAuthVerifiedAt,
+		Strength:   policy.StrengthStrong,
+		Complete:   true,
+	})
+}
+
+// withExplicitConfirm 在保留已有认证事实与一次性批准令牌的前提下把 Confirmed 置为
+// true。调用者必须先校验请求中的显式确认字段；确认框不是授权，领域策略仍会重新
+// 判定强认证、权限、范围与目标保护。
+func withExplicitConfirm(ctx context.Context) context.Context {
+	signals := reauth.SignalsFromContext(ctx)
+	signals.Confirmed = true
+	return reauth.WithSignals(ctx, signals)
 }
 
 // authenticate 先做一次“会话秘密存在性”检查，避免把未认证请求送进后续逻辑；

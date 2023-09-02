@@ -496,6 +496,48 @@ type AdminRevokeResult struct {
 	Revoked int64
 }
 
+// OperationSessionRevokeOther 是管理员强制下线在敏感操作策略目录中的稳定操作 ID。
+// 页面/API/CLI 的再认证证明都绑定该操作，参数由 AdminRevokeParams 唯一生成，
+// 避免各入口各自拼接导致参数摘要不一致。
+const OperationSessionRevokeOther = "session.revoke.other"
+
+// AdminRevokeParams 返回管理员强制下线的敏感策略参数（唯一构造器，service 与 CLI
+// 共用）。三个字段一律显式出现（空字符串也保留），保证参数摘要逐字节稳定：
+// 证明、策略判定与审计都基于同一组参数。
+func AdminRevokeParams(scopeAppID, targetUserID, targetSessionID string) map[string]string {
+	return map[string]string{
+		"scope_app_id":      scopeAppID,
+		"target_user_id":    targetUserID,
+		"target_session_id": targetSessionID,
+	}
+}
+
+// AdminSessionListRequest 是管理员按作用范围查询目标用户活动会话的请求。
+//
+// ScopeAppID 为空表示系统范围（返回目标全部活动会话）；非空表示只返回绑定该应用
+// 的会话。TargetUserID 必填；分页由 Page/PageSize 控制。授权、目标保护与读审计
+// 均由服务端重新判定，绝不采用客户端自称的范围或权限。
+type AdminSessionListRequest struct {
+	ScopeAppID   string
+	TargetUserID string
+	Page         int
+	PageSize     int
+	RequestID    string
+}
+
+// AdminSessionListResult 是管理员会话查询结果。只包含展示所需的会话摘要，不含
+// 会话秘密、CSRF 令牌或任何验证摘要；TargetUserID/ScopeAppID 是服务端回显的
+// 实际范围，便于页面展示“可撤销范围”。
+type AdminSessionListResult struct {
+	TargetUserID string
+	ScopeAppID   string
+	Sessions     []SessionSummary
+	Page         int
+	PageSize     int
+	Total        int64
+	HasMore      bool
+}
+
 // Action 是可审计的会话操作动作。
 type Action string
 
@@ -511,6 +553,9 @@ const (
 	ActionSessionRevokeOwn Action = "session.revoke_own"
 	// ActionSessionAdminRevoke 是管理员按授权范围强制下线。
 	ActionSessionAdminRevoke Action = "session.admin_revoke"
+	// ActionSessionAdminList 是管理员按授权范围读取目标用户活动会话（只读审计，
+	// 记录真实管理员操作者；查询本身不授予撤销能力）。
+	ActionSessionAdminList Action = "session.admin_list"
 	// ActionSessionEviction 是并发登录上限或单设备策略触发的自动淘汰。
 	ActionSessionEviction Action = "session.eviction"
 	// ActionSessionAccountDisabledRevoke 是账户禁用流程触发的服务端批量退出。
@@ -524,7 +569,7 @@ const (
 func (a Action) Valid() bool {
 	switch a {
 	case ActionSessionIssue, ActionSessionLoginGrantIssued, ActionSessionRevoke,
-		ActionSessionRevokeOwn, ActionSessionAdminRevoke, ActionSessionEviction,
+		ActionSessionRevokeOwn, ActionSessionAdminRevoke, ActionSessionAdminList, ActionSessionEviction,
 		ActionSessionAccountDisabledRevoke, ActionSessionRestrictedDenied:
 		return true
 	default:

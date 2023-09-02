@@ -690,7 +690,7 @@ func defaultOperations() []Operation {
 			Description:   "按授权范围撤销其他用户或应用的在线会话；必须强认证，root 与受保护目标拒绝，不能用于窃取会话。",
 			Default:       strongReauthNoNotify,
 			PermissionKey: "sessions.revoke",
-			Implemented:   false,
+			Implemented:   true,
 		},
 		{
 			ID: "security.policy.change", Domain: DomainPermission, Name: "修改敏感操作策略",

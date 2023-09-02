@@ -30,14 +30,17 @@ const sessionCommandUsage = `用法：
   loginctl session list --session-file <f> --keyring-file <f> [--page N] [--page-size N] \
 [--config <file>] [--json]
   loginctl session revoke <session_id> --session-file <f> --keyring-file <f> [--config <file>] [--json]
+  loginctl session admin-list --user <id> [--scope-app <app>] [--page N] [--page-size N] \
+      <在线公共参数>
   loginctl session admin-revoke (--user <id> | --session-id <id>) [--scope-app <app>] \
-      --reason <原因> --confirm ADMIN-REVOKE <在线公共参数>
+      --reason <原因> --confirm ADMIN-REVOKE [--approval-file <证明文件>] <在线公共参数>
 
 安全说明：
   - 会话秘密只从 --session-file 读取；该文件必须是受保护普通文件，不接受命令行明文。
   - --keyring-file 是主密钥环文件（与备份/会话摘要分离保管），不会写入输出。
-  - revoke 只能撤销本人名下会话；管理强制下线需走 session admin-revoke 在线命令，
-    由服务端重新校验管理强认证、permissions/作用范围/root 保护与审计。`
+  - revoke 只能撤销本人名下会话；管理查询/强制下线需走 session admin-list /
+    admin-revoke 在线命令，由服务端重新校验管理强认证、权限/作用范围/root 保护与
+    审计；admin-revoke 在 REAUTH_REQUIRED 时按 186 契约完成一次性再次认证。`
 
 // maxSessionSecretFileBytes 是会话秘密文件大小上限，避免误读大文件。
 const maxSessionSecretFileBytes = 64 << 10
@@ -71,12 +74,14 @@ func (r *runner) runSession(args []string) int {
 		return r.runSessionList(rest)
 	case "revoke":
 		return r.runSessionRevoke(rest)
+	case "admin-list":
+		return r.runSessionAdminList(rest)
 	case "admin-revoke":
 		return r.runSessionAdminRevoke(rest)
 	case "help", "-h", "--help":
 		return r.helpText("session", sessionCommandUsage)
 	default:
-		return r.usage("未知的 session 子命令 %q（可用：whoami/list/revoke/admin-revoke）", subcommand)
+		return r.usage("未知的 session 子命令 %q（可用：whoami/list/revoke/admin-list/admin-revoke）", subcommand)
 	}
 }
 

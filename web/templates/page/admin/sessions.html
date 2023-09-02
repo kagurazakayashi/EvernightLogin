@@ -1,0 +1,98 @@
+{{define "page-title"}}{{t "page.admin.sessions.title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{if .Data.done}}
+  {{if .Data.noop}}
+  <div class="ln-banner ln-banner--warning" role="status"><p>{{t "page.admin.sessions.noop"}}</p><p class="ln-meta">{{t "page.admin.sessions.noop_help"}}</p></div>
+  {{else}}
+  <div class="ln-banner ln-banner--success" role="status"><p>{{t "page.admin.sessions.success_revoked_label"}} {{format_number .Data.revoked}}</p></div>
+  {{end}}
+{{end}}
+<p>{{t "page.admin.sessions.intro"}}</p>
+<p class="ln-meta">{{t "page.admin.sessions.effect_note"}}</p>
+<p class="ln-meta">{{t "page.admin.sessions.oauth_note"}}</p>
+<p class="ln-meta">{{t "page.admin.sessions.self_service_note"}} {{t "page.admin.sessions.self_service_link"}}</p>
+
+<section aria-labelledby="admin-sessions-query-title">
+<h2 id="admin-sessions-query-title">{{t "page.admin.sessions.query_title"}}</h2>
+<form method="get" action="{{route "admin.sessions"}}">
+  {{template "component.field" (dict "id" "admin-sessions-target" "name" "target_user_id" "label" (t "page.admin.sessions.target_user_id") "help" (t "page.admin.sessions.target_user_id_help") "value" .Data.targetUserID "required" true)}}
+  {{template "component.field" (dict "id" "admin-sessions-scope" "name" "scope_app_id" "label" (t "page.admin.sessions.scope") "help" (t "page.admin.sessions.scope_help") "value" .Data.scopeAppID "required" false)}}
+  <input type="hidden" name="page_size" value="{{.Data.pageSize}}">
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.sessions.query") "variant" "primary" "type" "submit")}}</div>
+</form>
+<p class="ln-meta">{{t "page.admin.sessions.scope_system_hint"}}</p>
+</section>
+
+{{if .Data.listUnavailable}}
+  {{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.sessions.list_unavailable"))}}
+{{else if .Data.empty}}
+  {{template "component.state" (dict "state" "empty" "title" (t "page.admin.sessions.empty") "description" (t "page.admin.sessions.empty_help"))}}
+{{else if .Data.result}}
+<section aria-labelledby="admin-sessions-list-title">
+<h2 id="admin-sessions-list-title">{{t "page.admin.sessions.list_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.sessions.total_label"}} {{format_number .Data.result.Total}}</p>
+<div class="ln-table-scroll" tabindex="0" role="region" aria-label="{{t "page.admin.sessions.list_title"}}">
+<table class="ln-table">
+  <caption>{{t "page.admin.sessions.list_title"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "page.admin.sessions.column_id"}}</th>
+    <th scope="col">{{t "page.admin.sessions.column_app"}}</th>
+    <th scope="col">{{t "page.admin.sessions.column_kind"}}</th>
+    <th scope="col">{{t "page.admin.sessions.column_created"}}</th>
+    <th scope="col">{{t "page.admin.sessions.column_last_seen"}}</th>
+    <th scope="col">{{t "page.admin.sessions.column_expires"}}</th>
+    <th scope="col">{{t "page.admin.sessions.column_client"}}</th>
+  </tr></thead>
+  <tbody>
+  {{range .Data.result.Sessions}}
+  <tr>
+    <td><code>{{.ID}}</code>{{if .Current}} <span class="ln-badge">{{t "page.admin.sessions.current"}}</span>{{end}}{{if .RememberMe}} <span class="ln-meta">{{t "page.admin.sessions.remember_me"}}</span>{{end}}</td>
+    <td>{{if .AppID}}<code>{{.AppID}}</code>{{else}}{{t "page.admin.sessions.system_scope"}}{{end}}</td>
+    <td><code>{{.Kind}}</code>{{if .Reason}} <code>{{.Reason}}</code>{{end}}</td>
+    <td>{{format_time .CreatedAt "UTC"}}</td>
+    <td>{{format_time .LastSeenAt "UTC"}}</td>
+    <td>{{format_time .AbsoluteExpiresAt "UTC"}}</td>
+    <td>{{if .ClientUserAgent}}<span class="ln-meta">{{.ClientUserAgent}}</span>{{end}}{{if .ClientAddress}}<br><span class="ln-meta">{{.ClientAddress}}</span>{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="ln-meta">{{t "page.admin.sessions.client_untrusted"}}</p>
+{{if .Data.result.HasMore}}
+<nav class="ln-actions"><a class="ln-button ln-button--secondary" rel="next" href="{{route "admin.sessions"}}?target_user_id={{.Data.result.TargetUserID}}&scope_app_id={{.Data.result.ScopeAppID}}&page={{.Data.result.Page}}&page_size={{.Data.result.PageSize}}">{{t "common.action.next"}}</a></nav>
+{{end}}
+</section>
+{{end}}
+
+{{if .Data.capabilities.Revoke}}
+<section aria-labelledby="admin-sessions-revoke-title">
+<h2 id="admin-sessions-revoke-title">{{t "page.admin.sessions.revoke_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.sessions.revoke_scope_note"}}</p>
+<p class="ln-meta">{{t "page.admin.sessions.revoke_effect_note"}}</p>
+{{if .Data.reauthReady}}
+<form method="post" action="{{route "admin.sessions.revoke"}}" data-ln-module="async-form">{{csrf_field}}
+  <input type="hidden" name="mode" value="user">
+  {{template "component.field" (dict "id" "admin-sessions-revoke-user-target" "name" "target_user_id" "label" (t "page.admin.sessions.target_user_id") "help" (t "page.admin.sessions.revoke_user_help") "value" .Data.targetUserID "required" true)}}
+  {{template "component.field" (dict "id" "admin-sessions-revoke-user-scope" "name" "scope_app_id" "label" (t "page.admin.sessions.scope") "help" (t "page.admin.sessions.scope_help") "value" .Data.scopeAppID "required" false)}}
+  {{template "component.field" (dict "id" "admin-sessions-revoke-user-reason" "name" "reason" "label" (t "page.admin.sessions.reason") "help" (t "page.admin.sessions.reason_help") "value" "" "required" true)}}
+  {{template "component.field" (dict "id" "admin-sessions-revoke-user-confirm" "name" "confirm" "type" "checkbox" "label" (t "page.admin.sessions.confirm_user") "help" "" "value" "yes" "required" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.sessions.revoke_user_submit") "variant" "danger" "type" "submit")}}</div>
+</form>
+<form method="post" action="{{route "admin.sessions.revoke"}}" data-ln-module="async-form">{{csrf_field}}
+  <input type="hidden" name="mode" value="session">
+  {{template "component.field" (dict "id" "admin-sessions-revoke-session-id" "name" "target_session_id" "label" (t "page.admin.sessions.target_session_id") "help" (t "page.admin.sessions.target_session_id_help") "value" "" "required" true)}}
+  {{template "component.field" (dict "id" "admin-sessions-revoke-session-scope" "name" "scope_app_id" "label" (t "page.admin.sessions.scope") "help" (t "page.admin.sessions.scope_help") "value" .Data.scopeAppID "required" false)}}
+  {{template "component.field" (dict "id" "admin-sessions-revoke-session-reason" "name" "reason" "label" (t "page.admin.sessions.reason") "help" (t "page.admin.sessions.reason_help") "value" "" "required" true)}}
+  {{template "component.field" (dict "id" "admin-sessions-revoke-session-confirm" "name" "confirm" "type" "checkbox" "label" (t "page.admin.sessions.confirm_session") "help" "" "value" "yes" "required" true)}}
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.sessions.revoke_session_submit") "variant" "danger" "type" "submit")}}</div>
+</form>
+{{else}}
+  {{template "component.banner" (dict "tone" "warning" "message" (t "page.admin.sessions.reauth_unavailable"))}}
+{{end}}
+</section>
+{{else}}
+<p class="ln-meta">{{t "page.admin.sessions.revoke_unavailable"}}</p>
+{{end}}
+{{end}}

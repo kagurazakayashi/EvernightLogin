@@ -463,6 +463,29 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		return nil, fmt.Errorf("构造客服页适配器失败: %w", supportErr)
 	}
 	webOptions.PageSupport = &login.UIPageSupportOptions{Backend: supportAdapter}
+	// 步骤 187：系统管理员强制下线页（/admin/sessions）。查询/撤销调用真实
+	// session.Service；宿主回调提供页面再次认证证据（管理强认证短时事实 + 真实
+	// session.revoke.other 策略评估）；CLI 证明通道由 186 中间件单独消费。
+	adminSessionsAdapter, adminSessionsErr := uiadminadapter.NewAdminSessions(uiadminadapter.AdminSessionsOptions{
+		Sessions:  services.Sessions,
+		Authorize: managed.Checker.authorizePageAction,
+		Logger:    logger,
+	})
+	if adminSessionsErr != nil {
+		return nil, fmt.Errorf("构造管理员会话页适配器失败: %w", adminSessionsErr)
+	}
+	webOptions.PageAdminSessions = &login.UIPageAdminSessionsOptions{
+		Backend: adminSessionsAdapter,
+		Reauth: func(ctx context.Context, userID string,
+			binding login.UIAdminSessionActionBinding) (login.UIAdminSessionEvidence, error) {
+			return adminSessionsReauth(ctx, gate, userID, binding)
+		},
+	}
+	// 管理命名空间导航只影响展示：仅对真实管理会话显示“会话管理”入口；权限、
+	// 强认证与范围仍由页面路由和领域服务每次重新判定。
+	if webOptions.Navigation == nil {
+		webOptions.Navigation = adminSessionsNavigation{}
+	}
 	// 敏感操作策略/安全通知页：真实 policy 服务 + 宿主再次认证回调（管理会话
 	// 强认证事实 + 页面签名预览绑定）+ 真实审计；SMTP 秘密替换能力未配置（nil）。
 	policyAdapter, policyErr := uiadminadapter.NewSecurityPolicy(uiadminadapter.SecurityPolicyOptions{

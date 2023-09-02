@@ -135,7 +135,7 @@ func TestCLIViewerListTablesPreview(t *testing.T) {
 		t.Fatalf("list JSON 条目数 = %d，期望 3", len(list.Entries))
 	}
 	if list.Snapshot == nil || !list.Snapshot.Supported ||
-		len(list.Snapshot.SchemaHistory) != 44 || list.Snapshot.TableCount < 50 {
+		len(list.Snapshot.SchemaHistory) != 47 || list.Snapshot.TableCount < 50 {
 		t.Fatalf("list JSON schema_history 异常：%+v warning=%s",
 			list.Snapshot, list.SnapshotWarning)
 	}

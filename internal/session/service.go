@@ -1232,6 +1232,122 @@ func (s *Service) ListSessions(ctx context.Context, secret string, options ListO
 	}, nil
 }
 
+// AdminListSessions 让管理员按授权范围查询目标用户当前活动会话（步骤 187）。
+//
+// 安全边界与强制下线一致：
+//   - 必须出示普通（非受限）管理会话且已完成强认证（CanAccessManagement），
+//     普通密码会话与受限恢复会话一律拒绝；
+//   - 与 AdminRevoke 共用 ScopeAuthorizer：系统范围要求 sessions.revoke 系统权限，
+//     应用范围只允许该应用范围内且目标不受保护的查询；
+//   - root 目标一律拒绝；目标不存在返回空列表（不泄露存在性）；应用范围返回的
+//     会话只包含绑定该应用的会话；
+//   - 只返回展示摘要，不含会话秘密、CSRF 令牌或验证摘要；成功后写
+//     session.admin_list 读取审计，审计不可用时拒绝（管理读取必须留痕）。
+func (s *Service) AdminListSessions(ctx context.Context, adminSecret string, request AdminSessionListRequest) (AdminSessionListResult, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return AdminSessionListResult{}, err
+	}
+	scopeAppID := strings.TrimSpace(request.ScopeAppID)
+	targetUserID := strings.TrimSpace(request.TargetUserID)
+	if scopeAppID != "" && !validAppID(scopeAppID) {
+		return AdminSessionListResult{}, fmt.Errorf("%w: 作用范围应用 ID 格式无效", ErrInvalidRequest)
+	}
+	if !account.ValidUserID(targetUserID) {
+		return AdminSessionListResult{}, fmt.Errorf("%w: 目标用户 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.RequestID != "" && !validRequestID(request.RequestID) {
+		return AdminSessionListResult{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
+	}
+	admin, err := s.Validate(ctx, adminSecret)
+	if err != nil {
+		return AdminSessionListResult{}, err
+	}
+	if !admin.CanAccessManagement() {
+		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "strong_auth_required")
+	}
+	if s.authorizer == nil {
+		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "authorizer_missing")
+	}
+	actor := audit.Actor{Type: audit.ActorUser, ID: admin.UserID}
+	// 先授权（不读取目标状态），再读取目标用户状态做 root 保护与存在性判定。
+	if err := s.authorizeAdmin(ctx, actor, scopeAppID, targetUserID); err != nil {
+		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "authorization_denied")
+	}
+	state, found, err := s.store.LoadUserState(ctx, targetUserID)
+	if err != nil {
+		return AdminSessionListResult{}, s.storeFailure(ctx, "读取目标账户状态", err)
+	}
+	if found && state.IsRoot {
+		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "root_protected")
+	}
+	page, pageSize, err := normalizeListOptions(ListOptions{Page: request.Page, PageSize: request.PageSize})
+	if err != nil {
+		return AdminSessionListResult{}, err
+	}
+	result, err := s.store.ListUserSessions(ctx, UserSessionQuery{
+		UserID:   targetUserID,
+		AppID:    scopeAppID,
+		Now:      s.clockNow(),
+		Offset:   (page - 1) * pageSize,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		return AdminSessionListResult{}, s.storeFailure(ctx, "读取目标会话列表", err)
+	}
+	currentID, _, _ := parseSessionSecret(adminSecret)
+	summaries := make([]SessionSummary, 0, len(result.Records))
+	for _, record := range result.Records {
+		summaries = append(summaries, record.summary(record.ID == currentID))
+	}
+	consumed := int64((page-1)*pageSize + len(summaries))
+	if err := s.audit.Record(ctx, audit.Event{
+		Actor:     actor,
+		AppID:     scopeAppID,
+		Action:    string(ActionSessionAdminList),
+		Outcome:   audit.OutcomeSuccess,
+		Target:    audit.Target{Type: "user", ID: targetUserID},
+		RequestID: request.RequestID,
+		Changes: []audit.FieldChange{
+			{Field: "scope_app_id", After: scopeAppID},
+			{Field: "page", After: strconv.Itoa(page)},
+			{Field: "page_size", After: strconv.Itoa(pageSize)},
+			{Field: "total", After: strconv.FormatInt(result.Total, 10)},
+		},
+	}); err != nil {
+		return AdminSessionListResult{}, fmt.Errorf("%w: 读取审计写入失败", ErrAuditUnavailable)
+	}
+	return AdminSessionListResult{
+		TargetUserID: targetUserID,
+		ScopeAppID:   scopeAppID,
+		Sessions:     summaries,
+		Page:         page,
+		PageSize:     pageSize,
+		Total:        result.Total,
+		HasMore:      consumed < result.Total,
+	}, nil
+}
+
+// denyAdminList 记录被拒绝的管理员会话查询并返回统一无权错误；失败审计写入失败
+// 只写日志，不改变“拒绝”的结论。
+func (s *Service) denyAdminList(ctx context.Context, admin Session, scopeAppID, targetUserID, requestID, reason string) error {
+	event := audit.Event{
+		Actor:      audit.Actor{Type: audit.ActorUser, ID: admin.UserID},
+		AppID:      scopeAppID,
+		Action:     string(ActionSessionAdminList),
+		Target:     audit.Target{Type: "user", ID: targetUserID},
+		Outcome:    audit.OutcomeDenied,
+		ErrorCode:  string(CodeAccessDenied),
+		ReasonCode: reason,
+		RequestID:  requestID,
+	}
+	if err := s.audit.RecordFailure(ctx, event); err != nil {
+		s.logger.Warn("管理员会话查询被拒绝的失败审计写入失败", "reason", reason, "error_category", "audit_unavailable")
+	}
+	s.logger.Info("管理员会话查询被拒绝", "admin_user_id", admin.UserID, "scope_app_id", scopeAppID, "reason", reason)
+	return ErrAccessDenied
+}
+
 // RevokeSession 让调用方退出自己名下的指定会话。目标不存在、已失效或不属于
 // 调用方时按幂等成功返回 false（不泄露他人会话是否存在，也不区分“不存在”与
 // “已撤销”）；只有实际撤销才返回 true 并写 session.revoke_own 审计。
@@ -1430,13 +1546,19 @@ func (s *Service) AdminRevoke(ctx context.Context, adminSecret string, request A
 			targetType, targetID = "session", targetSessionID
 		}
 		guarded, guardErr := s.sensitive.Authorize(ctx, guardCaller, reauth.Request{
-			ScopeID: "system", OperationID: "session.management.access",
+			ScopeID: "system", OperationID: OperationSessionRevokeOther,
 			TargetType: targetType, TargetID: targetID,
-			Params:      map[string]string{"scope_app_id": scopeAppID},
+			Params:      AdminRevokeParams(scopeAppID, targetUserID, targetSessionID),
 			Description: "管理强制下线", RequestID: request.RequestID,
 		})
 		if guardErr != nil {
-			return AdminRevokeResult{}, s.denyAdminRevoke(ctx, admin, scopeAppID, targetUserID, targetSessionID, request.RequestID, "sensitive_guard_denied")
+			// 记录拒绝审计；认证事实缺失/过期按“需要再次认证”返回，让 CLI 能按
+			// 186 契约发起一次性再次认证；其余策略拒绝仍按无权处理。
+			_ = s.denyAdminRevoke(ctx, admin, scopeAppID, targetUserID, targetSessionID, request.RequestID, "sensitive_guard_denied")
+			if errors.Is(guardErr, reauth.ErrReauthRequired) || errors.Is(guardErr, reauth.ErrMFARequired) {
+				return AdminRevokeResult{}, ErrStrongAuthRequired
+			}
+			return AdminRevokeResult{}, ErrAccessDenied
 		}
 		sensitiveResult = guarded
 		defer func() {

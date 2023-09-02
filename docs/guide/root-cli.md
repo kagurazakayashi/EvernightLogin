@@ -97,15 +97,25 @@ loginctl task get <job_id> --config config\login.yaml
 loginctl task wait <job_id> --timeout 60s --config config\login.yaml
 loginctl task cancel <job_id> --operator <本地管理员标识> --reason "取消原因" --config config\login.yaml
 
-:: 会话：仅操作本人会话；会话秘密只从受保护文件读取
+:: 会话：本人会话只在本地操作；会话秘密只从受保护文件读取
 loginctl session whoami --session-file session.json --keyring-file master-key.json --config config\login.yaml
 loginctl session list --session-file session.json --keyring-file master-key.json
 loginctl session revoke <session_id> --session-file session.json --keyring-file master-key.json
+
+:: 管理强制下线（在线管理 API；需已完成强认证的管理会话，--session-file 为管理会话秘密文件）
+loginctl session admin-list --user <user_id> [--scope-app <app_id>] --session-file mgmt.json --server https://login.example
+loginctl session admin-revoke --user <user_id> --reason "安全事件处置" --confirm ADMIN-REVOKE \
+    --session-file mgmt.json --server https://login.example
+loginctl session admin-revoke --session-id <ses_id> [--scope-app <app_id>] --reason "..." --confirm ADMIN-REVOKE \
+    [--approval-file proof.secret] --session-file mgmt.json --server https://login.example
 ```
 
 `task wait` 本地等待上限 1s～24h；等待超时退出码 7，任务失败/超时终态 8，已取消 3。
-`session revoke` 只能撤销本人会话；管理强制下线需要已完成强认证的管理会话，当前 CLI
-明确返回不可用。
+`session revoke` 只能撤销本人会话；`admin-list`/`admin-revoke` 走在线管理 API，由服务端重新
+判定强认证、sessions.revoke 权限、作用范围、root/受保护目标与审计。`admin-revoke` 收到
+REAUTH_REQUIRED 时按步骤 186 契约完成一次性再次认证（密码/TOTP），也可先用
+`loginctl confirm begin|verify` 取得证明并传 `--approval-file`；证明不入命令行/日志/JSON。
+`revoked=0` 表示目标不存在、已失效或超出作用范围（幂等成功，不代表发生撤销）。
 
 ## 6. 用户只读/启停（本地管理员边界）
 

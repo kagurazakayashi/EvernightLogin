@@ -331,6 +331,9 @@ type WebUIOptions struct {
 	PageReports *UIPageReportsOptions
 	// PageBackups 非 nil 时注册步骤 81 备份计划/任务/历史/下载/保留清理页面。
 	PageBackups *UIPageBackupOptions
+	// PageAdminSessions 非 nil 时注册步骤 187 管理员强制下线页面（目标会话查询、
+	// 影响说明、撤销当前范围/指定会话；系统管理 UIAccessManagement）。
+	PageAdminSessions *UIPageAdminSessionsOptions
 	// DisableBuiltinPages 为 true 时关闭内置页面，仅宿主渲染器/模板可提供页面。
 	DisableBuiltinPages bool
 	// EnableComponentPreview 允许注册 ui.component_preview（仅测试/示例）。
@@ -383,6 +386,7 @@ type WebUI struct {
 	pageStats           *pageStatsPages
 	pageReports         *pageReportsPages
 	pageBackups         *pageBackupPages
+	pageAdminSessions   *pageAdminSessionsPages
 }
 
 // NewWebUI 校验依赖与页面资源并构造页面处理器。
@@ -527,6 +531,13 @@ func NewWebUI(options WebUIOptions) (*WebUI, error) {
 			return nil, pageErr
 		}
 		ui.pageBackups = pages
+	}
+	if options.PageAdminSessions != nil {
+		pages, pageErr := newPageAdminSessionsPages(*options.PageAdminSessions)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		ui.pageAdminSessions = pages
 	}
 	ui.opts.Brand = brand
 	if err := ui.loadCatalog(); err != nil {
@@ -737,6 +748,9 @@ func (ui *WebUI) registerRoutes() error {
 	if ui.pageBackups != nil {
 		routes = append(routes, ui.pageBackups.routes...)
 	}
+	if ui.pageAdminSessions != nil {
+		routes = append(routes, ui.pageAdminSessions.routes...)
+	}
 	for _, route := range routes {
 		if err := validateUIRoute(route); err != nil {
 			return err
@@ -833,6 +847,13 @@ func (ui *WebUI) registerRoutes() error {
 	}
 	if ui.pageSecurityPolicy != nil {
 		for name := range ui.pageSecurityPolicy.handlers {
+			if _, ok := ui.byName[name]; !ok {
+				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
+			}
+		}
+	}
+	if ui.pageAdminSessions != nil {
+		for name := range ui.pageAdminSessions.handlers {
 			if _, ok := ui.byName[name]; !ok {
 				return fmt.Errorf("页面处理器引用了未注册路由: %s", name)
 			}
@@ -1175,6 +1196,9 @@ func (ui *WebUI) serveRoute(writer http.ResponseWriter, request *http.Request,
 	}
 	if handler == nil && ui.pageBackups != nil {
 		handler = ui.pageBackups.handlers[route.Name]
+	}
+	if handler == nil && ui.pageAdminSessions != nil {
+		handler = ui.pageAdminSessions.handlers[route.Name]
 	}
 	if handler != nil {
 		outcome, handleErr := handler.HandlePage(ctx, request, page)
