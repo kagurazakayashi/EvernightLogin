@@ -24,6 +24,35 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-release.ps1 `
 构建脚本与校验脚本都是**只读 Git**：仅 `git rev-parse`/`git status --porcelain` 读取
 当前状态，不做任何 Git 写操作。
 
+### 1.1 一键六平台构建入口（步骤179）
+
+从仓库根目录一次构建 Login 三命令与 Mail 一命令的六目标产物（Windows/Linux/macOS ×
+amd64/arm64），并做独立校验：
+
+```powershell
+# Windows：默认输出 dist/build；参数见 docs/acceptance/step179-build-entry.md
+.\build.ps1 -Version 0.1.0-dev
+
+# 单独复跑构建树校验（manifest/大小/SHA-256/PE-ELF-Mach-O 类型与架构）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-build.ps1 -BuildRoot dist\build -Version 0.1.0-dev
+```
+
+- `build.cmd` 为 cmd 包装；`build.sh` 为 POSIX 维护入口（委托 PowerShell 逻辑，本轮未在
+  Linux/macOS 实测）。
+- 固定条件：`go≥1.27.0`、`GOTOOLCHAIN=local`、`GOWORK=off`、`GOFLAGS=-mod=readonly`、
+  `CGO_ENABLED=0`、`GOMAXPROCS=2`，工具并发由 go-build-all 夹紧到 `max(1, floor(CPU/2))`；
+  两个模块串行调用，不叠加并发。
+- 预检要求：无 `go.work`、两模块 `go.mod` 无 `replace`、EvernightMail 与 go-build-all
+  子模块 HEAD 等于固定提交且工作树干净；工具自身构建到 `_tools/`，不进入产品清单。
+- 交付接口：`dist/build/build-summary.json`（format=1）与 `dist/build/checklist.txt`，
+  记录 24 项产物的路径/大小/SHA-256/类型/架构、工具与模块版本、调用耗时与警告。
+- 输出目录安全：`-OutputDir` 已存在且非空时不会直接递归删除；只有目录内含本入口的
+  `.build-all-root` 标记或显式传 `-ForceClean` 才允许清理，否则退出 10 并保留原目录。
+- 退出码：0 成功；10 预检失败；20 工具构建失败；21 Login 构建失败；22 Mail 构建失败；
+  30 manifest/聚合字段不符；31 产物缺失/类型/尺寸/SHA 不符；40 内部错误。任何必需项
+  缺失或类型/哈希不符都不得返回 0。
+- **发布包压缩不属于本入口**：每目标一个 zip（12 个）由步骤202 基于 24 项目录生成。
+
 ## 2. 发布包内容
 
 每个目标一个压缩包：`evernight-login-<version>-<os>-<arch>.zip`，解压后目录结构：
