@@ -20,6 +20,10 @@ type Store interface {
 	InsertRequestTx(ctx context.Context, tx audit.Tx, record RequestRecord) error
 	// GetRequest 按 ID 读取申请。
 	GetRequest(ctx context.Context, requestID string) (RequestRecord, bool, error)
+	// ListRequests 按状态（可选）与发起者（可选）列出申请，按创建时间倒序；
+	// 返回 hasMore 表示还有更多行。只读，不改变状态；不用于授权决策。
+	ListRequests(ctx context.Context, statuses []Status, initiatorUserID string,
+		offset, limit int) ([]RequestRecord, bool, error)
 	// TransitionRequestTx 条件迁移申请状态：必须匹配期望状态（多次并发迁移只有
 	// 一方成功）；同时递增行版本并写入结局原因。更新后返回当前记录。
 	TransitionRequestTx(ctx context.Context, tx audit.Tx, requestID string, from, to Status,

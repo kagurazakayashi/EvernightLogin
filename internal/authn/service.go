@@ -438,6 +438,22 @@ func (s *Service) Authenticate(ctx context.Context, request AuthenticateRequest)
 		}
 		return AuthenticateResult{}, fmt.Errorf("%w: %s", ErrStoreUnavailable, "判定强认证要求")
 	}
+	// 步骤 188：人工恢复重置 MFA 后强制重绑。存在未清除的重绑需求时，即使账户本身
+	// 不要求强认证，登录也只能得到受限初始化结果（绑定 Passkey 后才可完整登录）。
+	// 存储未实现该能力时保持原有语义；实现返回错误按存储不可用 fail-closed。
+	if rebindStore, ok := s.store.(interface {
+		MFARebindRequired(ctx context.Context, userID string) (bool, error)
+	}); ok {
+		rebindRequired, rebindErr := rebindStore.MFARebindRequired(ctx, user.UserID)
+		if rebindErr != nil {
+			if auditErr := s.recordVerifyFailure(ctx, request, user.UserID, reasonStrongAuthUnknown, CodeDBUnavailable); auditErr != nil {
+				return AuthenticateResult{}, errors.Join(fmt.Errorf("%w: %s", ErrStoreUnavailable, "判定强制重绑要求"),
+					auditErr)
+			}
+			return AuthenticateResult{}, fmt.Errorf("%w: %s", ErrStoreUnavailable, "判定强制重绑要求")
+		}
+		strongAuthRequired = strongAuthRequired || rebindRequired
+	}
 
 	// 密码验证成功：清除该账户的延迟与当前来源组合的锁定状态。
 	s.delays.reset(accountKey)

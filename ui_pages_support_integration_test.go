@@ -331,6 +331,11 @@ func (e *itEnv) newUI(staffID string) *login.WebUI {
 				return nil
 			}
 			return errors.New("denied")
+		},
+		Reauth: func(context.Context, string,
+			login.UISupportActionBinding) (login.UISupportEvidence, error) {
+			return login.UISupportEvidence{VerifiedAt: e.now, Strength: "strong",
+				Complete: true, Confirmed: true}, nil
 		}})
 	if err != nil {
 		e.t.Fatalf("客服适配器: %v", err)

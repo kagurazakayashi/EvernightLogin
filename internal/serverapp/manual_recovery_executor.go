@@ -146,6 +146,9 @@ type manualRecoveryExecutor struct {
 	mfa           *mfa.Service
 	sessions      *session.Service
 	targets       manualRecoveryTargets
+	// strongSetupAllowed 表示强认证初始化可用方法（Passkey）已启用。Q7 裁决：
+	// MFA 恢复后只能 Passkey 重绑；未启用时执行器 fail-closed 拒绝，避免恢复后锁死。
+	strongSetupAllowed bool
 }
 
 // Execute 实现 manualrecovery.Executor。
@@ -159,6 +162,10 @@ func (e manualRecoveryExecutor) Execute(ctx context.Context,
 	}
 	if command.Operation == manualrecovery.OperationMFAReset && e.mfa == nil {
 		return manualrecovery.ExecutionOutcome{}, errors.New("MFA 恢复执行器缺少 MFA 服务")
+	}
+	if command.Operation == manualrecovery.OperationMFAReset && !e.strongSetupAllowed {
+		return manualrecovery.ExecutionOutcome{},
+			errors.New("Passkey 强认证初始化未启用：拒绝 MFA 恢复（避免恢复后无法重绑）")
 	}
 	target, err := e.targets.LoadTarget(ctx, command.TargetUserID)
 	if err != nil {
@@ -255,6 +262,25 @@ func (n manualRecoveryNotifier) Notify(ctx context.Context, notification manualr
 	message := mailer.Message{From: n.from,
 		To: []mailer.Address{{Spec: email}}, Subject: subject, TextBody: body}
 	return n.sender.Send(ctx, message)
+}
+
+// MarkRebindRequiredTx 实现 mfa 管理员重置事务内的可选标记：MFA 恢复成功后登记
+// 强制重新绑定需求（步骤 188）。写入与因素重置/安全版本递增同事务。
+func (b manualRecoveryMFAAdminBackend) MarkRebindRequiredTx(ctx context.Context, tx audit.Tx,
+	userID, sourceRequestID string, now time.Time) error {
+	if tx == nil || b.store == nil {
+		return errors.New("强制重绑写入缺少事务或存储")
+	}
+	if userID == "" || sourceRequestID == "" {
+		return errors.New("强制重绑写入参数无效")
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO mfa_rebind_requirements(
+user_id,required_at_ms,reason_code,source_request_id,cleared_at_ms)
+VALUES(?,?,?,?,NULL)
+ON CONFLICT(user_id) DO UPDATE SET required_at_ms=excluded.required_at_ms,
+reason_code=excluded.reason_code,source_request_id=excluded.source_request_id,cleared_at_ms=NULL`,
+		userID, now.UTC().UnixMilli(), "manual_recovery_mfa_reset", sourceRequestID)
+	return err
 }
 
 // 编译期确认适配器满足领域契约。

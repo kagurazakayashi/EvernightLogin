@@ -2,6 +2,7 @@ package serverapp
 
 import (
 	"context"
+	login "github.com/kagurazakayashi/EvernightLogin"
 	"net/http"
 	"strconv"
 	"strings"
@@ -244,6 +245,57 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 			}
 			return supportCaseJSON(view), nil
 		})
+		if pages != nil && pages.Support != nil {
+			// 步骤 188：独立审批/执行工作台与 CLI 的只读列表/详情（逐条服务端判权）。
+			add(http.MethodGet, "support/recovery/requests", "support.read", func(ctx context.Context, caller account.Caller, request *http.Request) (any, error) {
+				limit, offset := adminQueryPage(request)
+				result, err := pages.Support.ListRecoveryForPage(ctx, caller.Actor().ID,
+					strings.TrimSpace(request.URL.Query().Get("mode")),
+					strings.TrimSpace(request.URL.Query().Get("operation")), offset, limit)
+				if err != nil {
+					return nil, adminDomainError(err, func(e error) string {
+						if typed, ok := e.(*login.UISupportError); ok {
+							return typed.Code
+						}
+						return "ACCESS_DENIED"
+					})
+				}
+				items := make([]map[string]any, 0, len(result.Items))
+				for _, item := range result.Items {
+					items = append(items, map[string]any{
+						"request_id": item.RequestID, "support_case_id": item.SupportCaseID,
+						"operation": string(item.Operation), "status": item.Status,
+						"target_masked": item.TargetMasked, "created_at": item.CreatedAt,
+						"expires_at": item.ExpiresAt, "my_relation": item.MyRelation,
+					})
+				}
+				return map[string]any{"items": items, "has_more": result.HasMore,
+					"next_offset": result.NextOffset}, nil
+			})
+			add(http.MethodGet, "support/recovery/requests/{request_id}", "support.read", func(ctx context.Context, caller account.Caller, request *http.Request) (any, error) {
+				view, err := pages.Support.GetRecoveryRequest(ctx, caller.Actor().ID,
+					strings.TrimSpace(adminPathParam(request)))
+				if err != nil {
+					return nil, adminDomainError(err, func(e error) string {
+						if typed, ok := e.(*login.UISupportError); ok {
+							return typed.Code
+						}
+						return "ACCESS_DENIED"
+					})
+				}
+				return map[string]any{
+					"id": view.ID, "target_user_id": view.TargetUserID,
+					"initiator_user_id": view.InitiatorUserID, "operation": view.Operation,
+					"status": view.Status, "delivery": view.Delivery,
+					"reason": view.Reason, "created_at": view.CreatedAt,
+					"expires_at": view.ExpiresAt, "approval": view.Approval,
+					"has_approval": view.HasApproval, "approval_id": view.ApprovalID,
+					"content_digest":     view.ContentDigestHex,
+					"content_consistent": view.ContentConsistent,
+					"failure_reason":     view.ClosedReason,
+				}, nil
+			})
+		}
 	}
 	routes = append(routes, buildAdminWriteRoutes(managed, pages)...)
 	routes = append(routes, buildAdminWriteRoutesExtra(managed, pages, gate)...)

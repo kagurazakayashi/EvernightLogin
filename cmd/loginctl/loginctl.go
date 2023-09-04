@@ -211,6 +211,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl session whoami|list|revoke ...（本人会话，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl session admin-list ...（管理员查询目标会话，在线，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl session admin-revoke ...（管理强制下线，在线，需 --session-file；必要时 186 再次认证）")
+	fmt.Fprintln(out, "  loginctl support case|recovery ...（客服申请/独立审批/受控执行在线闭环，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl user list|get|disable|enable ...")
 	fmt.Fprintln(out, "  loginctl group|role|app list|get|... |permission list |notify status|test")
 	fmt.Fprintln(out, "  loginctl admin users|user|groups|group|roles|role|permissions|applications|")

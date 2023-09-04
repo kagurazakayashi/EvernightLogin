@@ -161,6 +161,72 @@ func (s *Store) GetRequest(ctx context.Context, requestID string) (manualrecover
 	return record, true, nil
 }
 
+// ListRequests 按状态（可选）与发起者（可选）列出申请；供 188 待办列表只读使用。
+func (s *Store) ListRequests(ctx context.Context, statuses []manualrecovery.Status,
+	initiatorUserID string, offset, limit int) ([]manualrecovery.RequestRecord, bool, error) {
+	if offset < 0 || limit <= 0 {
+		return nil, false, storeError("列出入工恢复申请", manualrecovery.ErrInvalidRequest)
+	}
+	query := `SELECT id,target_user_id,initiator_user_id,operation_type,status,
+verification_basis,verification_reference,evidence_digest,reason,delivery_channel,
+delivery_fingerprint,target_security_version,target_high_privilege,content_digest,
+COALESCE(support_case_id,''),expires_at_ms,COALESCE(closed_reason,''),row_version,
+created_at_ms,updated_at_ms
+FROM manual_recovery_requests WHERE 1=1`
+	args := make([]any, 0, len(statuses)+3)
+	if len(statuses) > 0 {
+		query += ` AND status IN (?`
+		args = append(args, string(statuses[0]))
+		for _, status := range statuses[1:] {
+			query += `,?`
+			args = append(args, string(status))
+		}
+		query += `)`
+	}
+	if initiatorUserID != "" {
+		query += ` AND initiator_user_id=?`
+		args = append(args, initiatorUserID)
+	}
+	query += ` ORDER BY created_at_ms DESC,id LIMIT ? OFFSET ?`
+	args = append(args, limit+1, offset)
+	rows, err := s.store.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, storeError("列出入工恢复申请", err)
+	}
+	defer rows.Close()
+	records := make([]manualrecovery.RequestRecord, 0, limit)
+	for rows.Next() {
+		var record manualrecovery.RequestRecord
+		var operation, status, basis, delivery string
+		var highPrivilege int
+		var expiresMS, createdMS, updatedMS int64
+		if err := rows.Scan(&record.ID, &record.TargetUserID, &record.InitiatorUserID, &operation,
+			&status, &basis, &record.VerificationReference, &record.EvidenceDigest, &record.Reason,
+			&delivery, &record.DeliveryFingerprint, &record.TargetSecurityVersion, &highPrivilege,
+			&record.ContentDigest, &record.SupportCaseID, &expiresMS, &record.ClosedReason,
+			&record.RowVersion, &createdMS, &updatedMS); err != nil {
+			return nil, false, storeError("列出入工恢复申请", err)
+		}
+		record.Operation = manualrecovery.OperationType(operation)
+		record.Status = manualrecovery.Status(status)
+		record.VerificationBasis = manualrecovery.VerificationBasis(basis)
+		record.Delivery = manualrecovery.DeliveryChannel(delivery)
+		record.TargetHighPrivilege = highPrivilege == 1
+		record.ExpiresAt = time.UnixMilli(expiresMS).UTC()
+		record.CreatedAt = time.UnixMilli(createdMS).UTC()
+		record.UpdatedAt = time.UnixMilli(updatedMS).UTC()
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, storeError("列出入工恢复申请", err)
+	}
+	hasMore := len(records) > limit
+	if hasMore {
+		records = records[:limit]
+	}
+	return records, hasMore, nil
+}
+
 // TransitionRequestTx 条件迁移申请状态。
 func (s *Store) TransitionRequestTx(ctx context.Context, tx audit.Tx, requestID string,
 	from, to manualrecovery.Status, closedReason string, now time.Time) (bool, error) {

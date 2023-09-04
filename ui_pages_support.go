@@ -36,6 +36,51 @@ type UIPageSupportOptions struct {
 	Backend UISupportBackend
 }
 
+// UISupportEvidence 是页面再次认证回调返回的服务端认证事实（步骤 188）。页面/适配器
+// 不信任前端自报时间或强度；Strength 只允许 "strong"。
+type UISupportEvidence struct {
+	VerifiedAt time.Time
+	Strength   string
+	Complete   bool
+	Confirmed  bool
+}
+
+// UISupportActionBinding 是客服/人工恢复页面动作的再次认证绑定参数。
+type UISupportActionBinding struct {
+	Action          string
+	ScopeAppID      string
+	TargetUserID    string
+	RequestID       string
+	TargetSessionID string
+	Reason          string
+}
+
+// UISupportRecoveryListItem 是列表最小必要字段（Q6：ID/类型/脱敏目标/时间/状态/关系）。
+type UISupportRecoveryListItem struct {
+	RequestID     string
+	SupportCaseID string
+	Operation     string
+	Status        string
+	TargetMasked  string
+	CreatedAt     time.Time
+	ExpiresAt     time.Time
+	MyRelation    string
+}
+
+// UISupportRecoveryPage 是审批/执行工作台列表结果。
+type UISupportRecoveryPage struct {
+	Items      []UISupportRecoveryListItem
+	HasMore    bool
+	NextOffset int
+}
+
+// UISupportRecoveryLister 是可选列表能力：适配器实现后页面工作台展示真实待办；
+// 旧适配器未实现时页面明确显示“列表能力未提供”，不伪造条目。
+type UISupportRecoveryLister interface {
+	ListRecoveryForPage(ctx context.Context, staffUserID, mode, operation string,
+		offset, limit int) (UISupportRecoveryPage, error)
+}
+
 // UISupportCapabilities 是服务端为当前工作人员判定的页面能力位（只是交互辅助；
 // 每次写操作仍由领域服务重新授权）。
 type UISupportCapabilities struct {
@@ -199,8 +244,13 @@ type UISupportRecoveryView struct {
 	UpdatedAt             time.Time
 	Approval              UISupportApprovalView
 	HasApproval           bool
-	Execution             UISupportExecutionView
-	HasExecution          bool
+	// ContentDigestHex 是内容摘要（十六进制，非秘密），供 CLI approve/execute 的
+	// 186 证明绑定与页面核对使用；不泄露证据明文。
+	ContentDigestHex string
+	// ApprovalID 是当前/最近批准 ID（仅参与者读取时返回，用于 execute 参数绑定）。
+	ApprovalID   string
+	Execution    UISupportExecutionView
+	HasExecution bool
 	// HistoryUnavailable 表示完整生命周期/历史批准查询投影尚未提供（不伪造历史）。
 	HistoryUnavailable bool
 }

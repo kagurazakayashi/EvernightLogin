@@ -10,11 +10,15 @@ import (
 	"log/slog"
 	"net"
 	"net/smtp"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
+	authnsqlite "github.com/kagurazakayashi/EvernightLogin/internal/authn/sqlite"
 	bootstrapsqlite "github.com/kagurazakayashi/EvernightLogin/internal/bootstrap/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	credentialsqlite "github.com/kagurazakayashi/EvernightLogin/internal/credential/sqlite"
@@ -139,19 +143,21 @@ func TestManualRecoveryPasswordResetRealMail(t *testing.T) {
 	insertUser(operatorTwo, "recovery-operator-two")
 	insertUser(operatorRun, "recovery-operator-run")
 	insertUser(targetUser, "recovery-target")
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO password_credentials(
-		user_id,hash_scheme,hash_version,password_hash,must_change,row_version,created_at_ms,updated_at_ms,changed_at_ms)
-		VALUES(?,'argon2id',19,?,0,1,?,?,?)`, targetUser,
-		strings.Repeat("a", 64), nowMS, nowMS, nowMS); err != nil {
-		t.Fatalf("插入密码凭证: %v", err)
-	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO user_emails(
 		user_id,email,email_normalized,verified_at_ms,created_at_ms,updated_at_ms)
 		VALUES(?,?,?,?,?,?)`, targetUser, targetEmail, targetEmail, nowMS, nowMS, nowMS); err != nil {
 		t.Fatalf("插入已验证邮箱: %v", err)
 	}
-	mailService := mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
-	sender := recoveryMailSender{instance: mailService, t: t}
+	realMailAddr := strings.TrimSpace(os.Getenv("LOGIN_E2E_SMTP_ADDR"))
+	realMailData := strings.TrimSpace(os.Getenv("LOGIN_E2E_MAIL_DATA"))
+	var mailService *mailtest.Instance
+	var sender mailer.Sender
+	if realMailAddr != "" {
+		sender = realSMTPMailSender{addr: realMailAddr, t: t}
+	} else {
+		mailService = mailtest.Start(t, mailtest.Options{Required: true, SMTPAuthNone: true})
+		sender = recoveryMailSender{instance: mailService, t: t}
+	}
 	credentialStore, err := credentialsqlite.New(store)
 	if err != nil {
 		t.Fatalf("凭证存储: %v", err)
@@ -170,13 +176,37 @@ func TestManualRecoveryPasswordResetRealMail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("会话服务: %v", err)
 	}
+	authnStore, err := authnsqlite.New(store)
+	if err != nil {
+		t.Fatalf("认证存储: %v", err)
+	}
+	bootstrapStore, err := bootstrapsqlite.New(store)
+	if err != nil {
+		t.Fatalf("初始化存储: %v", err)
+	}
+	authnService, err := authn.New(authn.Options{Store: authnStore, Audit: recorder,
+		RootInitialization: bootstrapStore, Sensitive: recoveryReauthStub{},
+		AllowLegacyWithoutSensitive: true,
+		Logger:                      slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("认证服务: %v", err)
+	}
+	systemCaller, err := authn.SystemCaller("manual-recovery-e2e")
+	if err != nil {
+		t.Fatalf("系统调用者: %v", err)
+	}
+	if _, err := authnService.SetPassword(ctx, systemCaller, authn.SetPasswordRequest{
+		TargetUserID: targetUser, NewPassword: "Hx4!bW8#Tq3@Zn6",
+		RequestID: "req-e2e-initial-password"}); err != nil {
+		t.Fatalf("设置初始密码: %v", err)
+	}
 	resetStore, err := passwordresetsqlite.New(store)
 	if err != nil {
 		t.Fatalf("找回存储: %v", err)
 	}
 	resetService, err := passwordreset.New(passwordreset.Options{
 		Store: resetStore, Audit: recorder, Credentials: credentialService,
-		Passwords: recoveryPasswordStub{}, Sessions: sessionService, Mailer: sender,
+		Passwords: authnService, Sessions: sessionService, Mailer: sender,
 		FromAddress: "noreply@example.test", ResetURLBase: "http://127.0.0.1/reset",
 		Now: time.Now, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -186,10 +216,6 @@ func TestManualRecoveryPasswordResetRealMail(t *testing.T) {
 	var clock = time.Now().UTC()
 	targets := manualRecoveryTargets{store: store, keyring: keyring, roots: nil}
 	// roots 仅用于识别 root；该目标非 root，构造只读 root 检查器即可。
-	bootstrapStore, err := bootstrapsqlite.New(store)
-	if err != nil {
-		t.Fatalf("初始化存储: %v", err)
-	}
 	roots, err := newHostRootChecker(bootstrapStore)
 	if err != nil {
 		t.Fatalf("root 识别器: %v", err)
@@ -273,18 +299,41 @@ func TestManualRecoveryPasswordResetRealMail(t *testing.T) {
 	if result.SessionsRevoked < 0 {
 		t.Fatalf("会话撤销计数异常: %d", result.SessionsRevoked)
 	}
-	// 真实 Mail 夹具必须收到找回邮件与完成通知；结果/邮件不含密码或 token。
-	messages, err := mailService.Messages(mailtest.Query{To: targetEmail, Limit: 10})
-	if err != nil {
-		t.Fatalf("读取 Mail 夹具: %v", err)
-	}
-	if len(messages) == 0 {
-		t.Fatal("真实 Mail 未收到找回/通知邮件")
-	}
-	for _, message := range messages {
-		text := string(message.Data)
-		if strings.Contains(text, "password") && strings.Contains(text, "secret") {
-			t.Fatalf("邮件疑似包含秘密: %s", text)
+	if realMailAddr != "" {
+		token := latestResetToken(t, realMailData)
+		if token == "" {
+			t.Fatal("真实 Mail 未找到一次性找回入口")
+		}
+		if err := resetService.ValidateResetToken(ctx, token); err != nil {
+			t.Fatalf("真实 Mail 找回 token 校验失败: %v", err)
+		}
+		if _, err := resetService.CompleteReset(ctx, passwordreset.CompleteRequest{
+			Token: token, NewPassword: "Qz7!vN9#Lp2@Rm5"}); err != nil {
+			t.Fatalf("真实 Mail 找回改密失败: %v", err)
+		}
+		authResult, authErr := authnService.Authenticate(ctx, authn.AuthenticateRequest{
+			Identifier: "recovery-target", Password: "Qz7!vN9#Lp2@Rm5",
+			ClientIP: "127.0.0.1", RequestID: "req-e2e-login-188"})
+		if authErr != nil || authResult.Outcome != authn.OutcomeComplete {
+			t.Fatalf("新密码重新认证失败: %v / %v", authErr, authResult.Outcome)
+		}
+		if _, loginErr := sessionService.Login(ctx, session.LoginRequest{
+			Result: authResult, RequestID: "req-e2e-session-188"}); loginErr != nil {
+			t.Fatalf("新密码重新登录失败: %v", loginErr)
+		}
+	} else {
+		messages, err := mailService.Messages(mailtest.Query{To: targetEmail, Limit: 10})
+		if err != nil {
+			t.Fatalf("读取 Mail 夹具: %v", err)
+		}
+		if len(messages) == 0 {
+			t.Fatal("真实 Mail 未收到找回/通知邮件")
+		}
+		for _, message := range messages {
+			text := string(message.Data)
+			if strings.Contains(text, "password") && strings.Contains(text, "secret") {
+				t.Fatalf("邮件疑似包含秘密: %s", text)
+			}
 		}
 	}
 	// 重复执行必须幂等/拒绝并保持 completed，不重复投递。
@@ -292,4 +341,72 @@ func TestManualRecoveryPasswordResetRealMail(t *testing.T) {
 		RequestID: created.ID, TraceID: "trace-execute-2"}); err == nil {
 		t.Fatal("重复执行应被拒绝")
 	}
+}
+
+// realSMTPMailSender 向真实本地 Mail 的 loopback SMTP 投递（匿名、无公网）。
+type realSMTPMailSender struct {
+	addr string
+	t    *testing.T
+}
+
+func (s realSMTPMailSender) Send(_ context.Context, message mailer.Message) error {
+	to := make([]string, 0, len(message.To))
+	for _, address := range message.To {
+		to = append(to, address.Spec)
+	}
+	headers := "From: " + message.From.Spec + "\r\n" +
+		"To: " + strings.Join(to, ",") + "\r\n" +
+		"Subject: " + message.Subject + "\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+	client, err := smtp.Dial(s.addr)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if err := client.Mail(message.From.Spec); err != nil {
+		return err
+	}
+	for _, address := range to {
+		if err := client.Rcpt(address); err != nil {
+			return err
+		}
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := writer.Write([]byte(headers + message.TextBody)); err != nil {
+		return err
+	}
+	return writer.Close()
+}
+
+// latestResetToken 从 Mail 临时 data 目录 .eml 中提取一次性找回 token（不打印）。
+func latestResetToken(t *testing.T, dataDir string) string {
+	t.Helper()
+	if dataDir == "" {
+		return ""
+	}
+	pattern := regexp.MustCompile(`token=([A-Za-z0-9_.-]{16,})`)
+	var token string
+	var newest time.Time
+	_ = filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".eml") {
+			return nil
+		}
+		if !info.ModTime().After(newest) {
+			return nil
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		if match := pattern.FindSubmatch(raw); len(match) == 2 {
+			token = string(match[1])
+			newest = info.ModTime()
+		}
+		return nil
+	})
+	return token
 }

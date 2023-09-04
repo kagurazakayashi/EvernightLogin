@@ -146,6 +146,10 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	if err != nil {
 		return nil, fmt.Errorf("构造强制 MFA 策略适配器失败: %w", err)
 	}
+	// 步骤 188：人工恢复 MFA 重置后的强制重绑状态（登录受限 + Passkey 绑定后清除）。
+	rebindStore := mfaRebindRequirementStore{
+		store: deps.Store, audit: deps.Audit, logger: deps.Logger,
+	}
 	// Passkey 服务构造时需要“其他强因素（TOTP）”来源，而 TOTP 服务在本阶段稍后
 	// 构造：用可后接线的适配器避免构造循环，接线前如实报告“没有其他强因素”。
 	totpOtherForPasskey := securitycenter.NewTOTPOtherStrongFactor(nil)
@@ -215,7 +219,7 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	// 完成 Passkey 方向的“其他强因素”接线（此前为避免构造循环暂为 nil）。
 	totpOtherForPasskey.SetTOTP(totpService)
 
-	manualTargets := manualRecoveryTargets{store: deps.Store, keyring: deps.Keyring, roots: managed.Roots}
+	manualTargets := manualRecoveryTargets{store: deps.Store, keyring: deps.Keyring, roots: managed.Roots, checker: managed.Checker}
 	adminResetBackend := manualRecoveryMFAAdminBackend{store: deps.Store, targets: manualTargets}
 	strongFactors := strongFactorSource{totp: totpService, passkeys: passkeyService}
 	var passkeySecondFactor mfa.SecondFactorPasskey
@@ -242,8 +246,9 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		Passkeys:           passkeySecondFactor,
 		StrongFactorSource: strongFactors,
 		StrongSetupAuthorizer: rootStrongSetupAuthorizer{
-			store: services.BootstrapStore, roots: managed.Roots},
+			store: services.BootstrapStore, roots: managed.Roots, rebind: rebindStore},
 		RootReady:             rootReadyMarker{store: services.BootstrapStore},
+		RebindClearer:         rebindStore,
 		Revoker:               services.Sessions,
 		AllowStrongAuthSetup:  true,
 		StrongSetupMethods:    []authfact.Method{authfact.MethodPasskey},
@@ -370,6 +375,7 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	executor := manualRecoveryExecutor{
 		passwordReset: passwordResetService, mfa: mfaService,
 		sessions: services.Sessions, targets: manualTargets,
+		strongSetupAllowed: deps.Config.Passkey.Enabled,
 	}
 	var notifier manualrecovery.Notifier
 	if manualPolicy.Enabled {
@@ -379,12 +385,18 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	manualService, err := manualrecovery.New(manualrecovery.Options{
 		Store: manualStore, Audit: deps.Audit,
 		Reauth:   gate.Reauth,
-		Staff:    manualRecoveryStaff{checker: managed.Checker},
+		Staff:    manualRecoveryStaff{checker: managed.Checker, targets: manualTargets},
 		Targets:  manualTargets,
 		Executor: executor,
 		Notifier: notifier,
 		Policy:   manualPolicy,
-		Now:      now, Logger: deps.Logger,
+		OperationGuard: func(operation manualrecovery.OperationType) error {
+			if operation == manualrecovery.OperationMFAReset && !deps.Config.Passkey.Enabled {
+				return errors.New("Passkey 强认证初始化未启用：拒绝 MFA 恢复（避免恢复后无法重绑）")
+			}
+			return nil
+		},
+		Now: now, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造人工恢复服务失败: %w", err)
@@ -401,8 +413,9 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 
 // rootStrongSetupAuthorizer 只允许真实 root 进入强认证初始化闭环。
 type rootStrongSetupAuthorizer struct {
-	store *bootstrapsqlite.Store
-	roots *hostRootChecker
+	store  *bootstrapsqlite.Store
+	roots  *hostRootChecker
+	rebind mfaRebindRequirementStore
 }
 
 // AuthorizeStrongSetup 实现 mfa.StrongSetupAuthorizer。
@@ -412,9 +425,24 @@ func (a rootStrongSetupAuthorizer) AuthorizeStrongSetup(ctx context.Context,
 		return errors.New("root 识别器未装配")
 	}
 	root, err := a.roots.isRoot(ctx, userID)
-	if err != nil || !root {
-		return errors.New("强认证初始化只允许真实 root")
+	if err == nil && root {
+		return a.authorizeRoot(ctx, userID)
 	}
+	// 步骤 188：人工恢复 MFA 重置后的普通用户强制重绑：只在存在未清除需求时放行。
+	if a.rebind.store != nil {
+		required, rebindErr := a.rebind.MFARebindRequired(ctx, userID)
+		if rebindErr != nil {
+			return errors.New("强制重绑状态不可用")
+		}
+		if required {
+			return nil
+		}
+	}
+	return errors.New("强认证初始化未授权")
+}
+
+// authorizeRoot 保留 root 初始化状态的原有约束。
+func (a rootStrongSetupAuthorizer) authorizeRoot(ctx context.Context, userID string) error {
 	record, found, err := a.store.GetInitialization(ctx)
 	if err != nil || !found || record.RootUserID != userID {
 		return errors.New("root 初始化状态不可用")
@@ -536,6 +564,7 @@ func (p supportTargetProtector) Protected(ctx context.Context, targetUserID stri
 // manualRecoveryStaff 实现 manualrecovery.StaffAuthorizer。
 type manualRecoveryStaff struct {
 	checker *permissionChecker
+	targets manualRecoveryTargets
 }
 
 // authorize 判定工作人员在系统范围是否持有权限键。
@@ -550,22 +579,51 @@ func (m manualRecoveryStaff) authorize(ctx context.Context, staffUserID, key str
 	return nil
 }
 
-// AuthorizeRequest 实现 manualrecovery.StaffAuthorizer。
-func (m manualRecoveryStaff) AuthorizeRequest(ctx context.Context, staffUserID, _ string,
-	_ manualrecovery.OperationType) error {
-	return m.authorize(ctx, staffUserID, "support.cases.update")
+// AuthorizeRequest 实现 manualrecovery.StaffAuthorizer：发起申请使用 recovery.request。
+func (m manualRecoveryStaff) AuthorizeRequest(ctx context.Context, staffUserID, targetUserID string,
+	operation manualrecovery.OperationType) error {
+	if err := m.authorize(ctx, staffUserID, "recovery.request"); err != nil {
+		return err
+	}
+	return m.checkTargetProtection(ctx, targetUserID)
 }
 
-// AuthorizeApproval 实现 manualrecovery.StaffAuthorizer。
-func (m manualRecoveryStaff) AuthorizeApproval(ctx context.Context, approverUserID, _, _ string,
-	_ manualrecovery.OperationType) error {
-	return m.authorize(ctx, approverUserID, "recovery.approve")
+// AuthorizeApproval 实现 manualrecovery.StaffAuthorizer：按操作类型使用
+// recovery.approve / recovery.mfa.approve，并复核目标保护。
+func (m manualRecoveryStaff) AuthorizeApproval(ctx context.Context, approverUserID, targetUserID,
+	_ string, operation manualrecovery.OperationType) error {
+	if err := m.authorize(ctx, approverUserID, operation.ApprovalPermission()); err != nil {
+		return err
+	}
+	return m.checkTargetProtection(ctx, targetUserID)
 }
 
-// AuthorizeExecution 实现 manualrecovery.StaffAuthorizer。
-func (m manualRecoveryStaff) AuthorizeExecution(ctx context.Context, executorUserID, _ string,
+// AuthorizeExecution 实现 manualrecovery.StaffAuthorizer：执行使用 recovery.execute，
+// 并复核目标保护（三权分离由领域服务的 Execute 进一步校验）。
+func (m manualRecoveryStaff) AuthorizeExecution(ctx context.Context, executorUserID, targetUserID string,
 	_ manualrecovery.OperationType) error {
-	return m.authorize(ctx, executorUserID, "recovery.approve")
+	if err := m.authorize(ctx, executorUserID, "recovery.execute"); err != nil {
+		return err
+	}
+	return m.checkTargetProtection(ctx, targetUserID)
+}
+
+// checkTargetProtection 以真实目标状态复核 root/受保护目标；目标不可读时 fail-closed。
+func (m manualRecoveryStaff) checkTargetProtection(ctx context.Context, targetUserID string) error {
+	if targetUserID == "" {
+		return manualrecovery.ErrAccessDenied
+	}
+	if m.targets.store == nil {
+		return manualrecovery.ErrAccessDenied
+	}
+	target, err := m.targets.LoadTarget(ctx, targetUserID)
+	if err != nil {
+		return manualrecovery.ErrAccessDenied
+	}
+	if target.IsRoot || target.HighPrivilege || !target.Active {
+		return manualrecovery.ErrTargetProtected
+	}
+	return nil
 }
 
 // manualRecoveryTargets 读取目标账户状态并计算可信交付指纹。
@@ -573,6 +631,7 @@ type manualRecoveryTargets struct {
 	store   *storagesqlite.Store
 	keyring *secrets.Keyring
 	roots   *hostRootChecker
+	checker *permissionChecker
 }
 
 // LoadTarget 实现 manualrecovery.TargetGuard。
@@ -610,14 +669,75 @@ func (t manualRecoveryTargets) highPrivilege(ctx context.Context, userID string,
 	if isRoot {
 		return true, nil
 	}
-	var count int
-	err := t.store.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM user_roles WHERE user_id=?`,
-		userID).Scan(&count)
-	if err != nil {
-		return false, errors.New("读取目标角色失败")
+	return protectedRecoveryTarget(ctx, t.checker, t.store, t.roots, userID)
+}
+
+// protectedRecoveryTarget 按 Q3 裁决统一判定受保护目标：root / 持有受保护系统权限 /
+// 持有预设管理角色；读取或权限引擎失败一律按受保护（fail-closed）。
+func protectedRecoveryTarget(ctx context.Context, checker *permissionChecker,
+	store *storagesqlite.Store, roots *hostRootChecker, userID string) (bool, error) {
+	if roots != nil {
+		root, err := roots.isRoot(ctx, userID)
+		if err != nil {
+			return true, err
+		}
+		if root {
+			return true, nil
+		}
 	}
-	return count > 0, nil
+	if store != nil {
+		var presetRoles int
+		err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM user_roles ur
+JOIN roles r ON r.id=ur.role_id AND r.scope_id=ur.scope_id
+WHERE ur.user_id=? AND r.scope_id='system'
+AND r.role_key IN ('system_admin','user_admin','support','auditor')`, userID).Scan(&presetRoles)
+		if err != nil {
+			return true, err
+		}
+		if presetRoles > 0 {
+			return true, nil
+		}
+	}
+	if checker == nil {
+		// 测试/旧装配未注入权限引擎时退回“持有任意系统角色即视为受保护”的保守判定；
+		// 生产装配始终注入 checker，按真实有效权限判定。
+		if store == nil {
+			return true, errors.New("权限引擎未装配")
+		}
+		var count int
+		if err := store.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM user_roles WHERE user_id=?`, userID).Scan(&count); err != nil {
+			return true, err
+		}
+		return count > 0, nil
+	}
+	for _, key := range protectedRecoveryPermissionKeys {
+		allowed, err := checker.evaluate(ctx, userID, key, "system")
+		if err != nil {
+			return true, err
+		}
+		if allowed {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// protectedRecoveryPermissionKeys 是与 internal/preset 目录对照维护的受保护系统权限
+// 集合（宁多勿漏）；新增管理权限时同步复查。
+var protectedRecoveryPermissionKeys = []string{
+	"users.read", "users.create", "users.update", "users.disable", "users.delete",
+	"users.export", "groups.read", "groups.manage", "roles.read", "roles.manage",
+	"roles.assign", "permissions.read", "permissions.manage",
+	"applications.read", "applications.create", "applications.update",
+	"applications.credentials.manage", "applications.members.manage",
+	"recovery.request", "recovery.approve", "recovery.mfa.approve", "recovery.execute",
+	"support.cases.read", "support.cases.create", "support.cases.update",
+	"sessions.revoke", "audit.read", "audit.export", "audit.purge",
+	"reports.read", "reports.generate", "reports.export", "reports.schedule.manage",
+	"reports.cleanup", "backups.create", "backups.read", "backups.cancel",
+	"backups.export", "backups.restore", "backups.retention", "backups.cleanup",
+	"security.policy.manage", "settings.manage", "diagnostics.read",
 }
 
 // deliveryFingerprint 返回已验证邮箱的 HMAC 指纹（不是邮箱明文）。

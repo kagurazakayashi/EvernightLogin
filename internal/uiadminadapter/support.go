@@ -17,6 +17,8 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/manualrecovery"
+	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 )
 
@@ -27,6 +29,10 @@ type SupportOptions struct {
 	// Authorize 由宿主实现（authz + 管理强认证），用于判定页面能力位；为 nil 时
 	// 能力位全部为 false（页面只呈现只读事实，写操作仍由领域服务授权）。
 	Authorize func(ctx context.Context, staffUserID, action string) error
+	// Reauth 是宿主页面再次认证回调（步骤 188）：页面显式确认后取服务端认证事实，
+	// 适配器转换为 reauth.Signals 交给领域服务；nil 时写动作 fail-closed。
+	Reauth func(ctx context.Context, staffUserID string,
+		binding login.UISupportActionBinding) (login.UISupportEvidence, error)
 }
 
 // SupportAdapter 实现 login.UISupportBackend。
@@ -83,6 +89,56 @@ func recoveryMapError(err error) error {
 		code = "INTERNAL_ERROR"
 	}
 	return &login.UISupportError{Code: code}
+}
+
+// withPageReauth 在页面路径把宿主再次认证证据转换为 reauth 信号；若请求 ctx 已有
+// 186 中间件注入的证明/认证事实则原样保留（CLI/API 路径）。
+func (a *SupportAdapter) withPageReauth(ctx context.Context, staffUserID string,
+	binding login.UISupportActionBinding) (context.Context, error) {
+	signals := reauth.SignalsFromContext(ctx)
+	if signals.Complete || !signals.VerifiedAt.IsZero() || signals.ApprovalToken != "" {
+		return ctx, nil
+	}
+	if a.opts.Reauth == nil {
+		return ctx, supportErr("REAUTH_REQUIRED")
+	}
+	evidence, err := a.opts.Reauth(ctx, staffUserID, binding)
+	if err != nil {
+		return ctx, supportErr("REAUTH_REQUIRED")
+	}
+	if evidence.Strength != "strong" || !evidence.Complete || !evidence.Confirmed ||
+		evidence.VerifiedAt.IsZero() {
+		return ctx, supportErr("REAUTH_REQUIRED")
+	}
+	return reauth.WithSignals(ctx, reauth.Signals{
+		VerifiedAt: evidence.VerifiedAt, Strength: policy.StrengthStrong,
+		Complete: true, Confirmed: true,
+	}), nil
+}
+
+// ListRecoveryForPage 实现 login.UISupportRecoveryLister（步骤 188 工作台列表）。
+func (a *SupportAdapter) ListRecoveryForPage(ctx context.Context, staffUserID, mode, operation string,
+	offset, limit int) (login.UISupportRecoveryPage, error) {
+	caller, err := manualrecovery.UserCaller(staffUserID)
+	if err != nil {
+		return login.UISupportRecoveryPage{}, supportErr("ACCESS_DENIED")
+	}
+	page, err := a.opts.Recovery.ListForPage(ctx, caller, manualrecovery.ListRequest{
+		Mode: manualrecovery.ListMode(mode), Operation: manualrecovery.OperationType(operation),
+		Offset: offset, Limit: limit})
+	if err != nil {
+		return login.UISupportRecoveryPage{}, recoveryMapError(err)
+	}
+	result := login.UISupportRecoveryPage{HasMore: page.HasMore, NextOffset: page.NextOffset}
+	for _, item := range page.Items {
+		result.Items = append(result.Items, login.UISupportRecoveryListItem{
+			RequestID: item.RequestID, SupportCaseID: item.SupportCaseID,
+			Operation: string(item.Operation), Status: string(item.Status),
+			TargetMasked: item.TargetMasked, CreatedAt: item.CreatedAt,
+			ExpiresAt: item.ExpiresAt, MyRelation: item.MyRelation,
+		})
+	}
+	return result, nil
 }
 
 // Capabilities 返回当前工作人员的页面能力位（只影响呈现）。
@@ -222,6 +278,12 @@ func (a *SupportAdapter) CreateCase(ctx context.Context, staffUserID, targetUser
 	if err != nil {
 		return login.UISupportCaseView{}, supportErr("ACCESS_DENIED")
 	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "support.case.create", TargetUserID: targetUserID, Reason: reason,
+		RequestID: requestID})
+	if err != nil {
+		return login.UISupportCaseView{}, err
+	}
 	view, err := a.opts.Cases.CreateCase(ctx, caller, support.CreateCaseRequest{
 		TargetUserID: targetUserID, Reason: reason, RequestID: requestID})
 	if err != nil {
@@ -236,6 +298,11 @@ func (a *SupportAdapter) ReassignCase(ctx context.Context, staffUserID, caseID,
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
 		return login.UISupportCaseView{}, supportErr("ACCESS_DENIED")
+	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "support.case.update", TargetUserID: caseID, RequestID: requestID})
+	if err != nil {
+		return login.UISupportCaseView{}, err
 	}
 	view, err := a.opts.Cases.ReassignCase(ctx, caller, support.ReassignRequest{
 		CaseID: caseID, NewAssigneeUserID: newAssigneeUserID, RequestID: requestID})
@@ -252,6 +319,11 @@ func (a *SupportAdapter) TransitionCase(ctx context.Context, staffUserID, caseID
 	if err != nil {
 		return login.UISupportCaseView{}, supportErr("ACCESS_DENIED")
 	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "support.case.update", TargetUserID: caseID, RequestID: requestID})
+	if err != nil {
+		return login.UISupportCaseView{}, err
+	}
 	view, err := a.opts.Cases.TransitionCase(ctx, caller, support.TransitionRequest{
 		CaseID: caseID, ToStatus: support.CaseStatus(toStatus), Note: note, RequestID: requestID})
 	if err != nil {
@@ -266,6 +338,11 @@ func (a *SupportAdapter) SendReset(ctx context.Context, staffUserID, caseID,
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
 		return login.UISupportSendResult{}, supportErr("ACCESS_DENIED")
+	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "support.reset.send", TargetUserID: caseID, RequestID: requestID})
+	if err != nil {
+		return login.UISupportSendResult{}, err
 	}
 	result, err := a.opts.Cases.SendReset(ctx, caller, support.SendRequest{
 		CaseID: caseID, RequestID: requestID})
@@ -310,6 +387,12 @@ func (a *SupportAdapter) CreateRecoveryRequest(ctx context.Context, staffUserID 
 	if err != nil {
 		return login.UISupportRecoveryView{}, supportErr("ACCESS_DENIED")
 	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "recovery.request", TargetUserID: create.TargetUserID,
+		Reason: create.Reason, RequestID: requestID})
+	if err != nil {
+		return login.UISupportRecoveryView{}, err
+	}
 	record, err := a.opts.Recovery.Create(ctx, caller, manualrecovery.CreateRequest{
 		TargetUserID: create.TargetUserID, Operation: manualrecovery.OperationType(create.Operation),
 		VerificationBasis:     manualrecovery.VerificationBasis(create.VerificationBasis),
@@ -337,7 +420,11 @@ func (a *SupportAdapter) GetRecoveryRequest(ctx context.Context, staffUserID,
 	if err != nil {
 		return login.UISupportRecoveryView{}, recoveryMapError(err)
 	}
-	return a.recoveryView(ctx, staffUserID, record), nil
+	view := a.recoveryView(ctx, staffUserID, record)
+	if approval, found, approvalErr := a.opts.Recovery.GetApproval(ctx, caller, requestID); approvalErr == nil && found {
+		view.ApprovalID = approval.ID
+	}
+	return view, nil
 }
 
 // recoveryView 组合申请/批准/执行投影（只显示真实读取到的数据）。
@@ -351,6 +438,7 @@ func (a *SupportAdapter) recoveryView(ctx context.Context, staffUserID string,
 		EvidenceRegistered:    len(record.EvidenceDigest) > 0,
 		Reason:                record.Reason, Delivery: string(record.Delivery),
 		DeliveryBound:         "unknown",
+		ContentDigestHex:      fmt.Sprintf("%x", record.ContentDigest),
 		ContentConsistent:     manualrecovery.ContentConsistent(record),
 		TargetSecurityVersion: record.TargetSecurityVersion,
 		TargetHighPrivilege:   record.TargetHighPrivilege,
@@ -397,6 +485,11 @@ func (a *SupportAdapter) ApproveRecovery(ctx context.Context, staffUserID, reque
 	if err != nil {
 		return login.UISupportApprovalView{}, supportErr("ACCESS_DENIED")
 	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "recovery.approve", RequestID: requestID, Reason: note})
+	if err != nil {
+		return login.UISupportApprovalView{}, err
+	}
 	approval, err := a.opts.Recovery.Approve(ctx, caller, manualrecovery.ApproveRequest{
 		RequestID: requestID, Note: note, TraceID: traceID})
 	if err != nil {
@@ -415,6 +508,11 @@ func (a *SupportAdapter) RejectRecovery(ctx context.Context, staffUserID, reques
 	caller, err := manualrecovery.UserCaller(staffUserID)
 	if err != nil {
 		return supportErr("ACCESS_DENIED")
+	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "recovery.approve", RequestID: requestID, Reason: reason})
+	if err != nil {
+		return err
 	}
 	if err := a.opts.Recovery.Reject(ctx, caller, manualrecovery.RejectRequest{
 		RequestID: requestID, Reason: reason, TraceID: traceID}); err != nil {
@@ -442,6 +540,11 @@ func (a *SupportAdapter) ExecuteRecovery(ctx context.Context, staffUserID, reque
 	caller, err := manualrecovery.UserCaller(staffUserID)
 	if err != nil {
 		return login.UISupportExecutionView{}, supportErr("ACCESS_DENIED")
+	}
+	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+		Action: "recovery.execute", RequestID: requestID})
+	if err != nil {
+		return login.UISupportExecutionView{}, err
 	}
 	result, err := a.opts.Recovery.Execute(ctx, caller, manualrecovery.ExecuteRequest{
 		RequestID: requestID, TraceID: traceID})

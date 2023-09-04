@@ -2567,5 +2567,21 @@
   "page.admin.sessions.confirm_required": "必须勾选确认后才能执行强制下线。",
   "page.admin.sessions.reason_required": "必须填写不超过 256 字符的下线理由。",
   "page.admin.sessions.total_label": "活动会话总数：",
-  "page.admin.sessions.success_revoked_label": "已撤销活动会话数："
+  "page.admin.sessions.success_revoked_label": "已撤销活动会话数：",
+  "page.support.recovery_inbox.mode": "列表类型",
+  "page.support.recovery_inbox.mode_initiated": "我发起的",
+  "page.support.recovery_inbox.mode_pending": "待我审批",
+  "page.support.recovery_inbox.mode_executable": "待我执行",
+  "page.support.recovery_inbox.mode_history": "历史（我发起）",
+  "page.support.recovery_inbox.request_id": "申请编号",
+  "page.support.recovery_inbox.operation": "操作类型",
+  "page.support.recovery_inbox.target": "目标（脱敏）",
+  "page.support.recovery_inbox.relation": "我的关系",
+  "page.support.recovery_inbox.created": "申请时间",
+  "page.support.recovery_inbox.case": "关联工单",
+  "page.support.recovery_inbox.open_approval": "打开审批",
+  "page.support.recovery_inbox.open_execute": "打开执行",
+  "page.support.recovery_inbox.open_detail": "查看详情",
+  "page.support.recovery_inbox.minimum_fields": "列表仅显示最小必要字段；完整目标仅在参与人详情读取通过后展示。",
+  "page.support.recovery_inbox.load_failed": "读取待办列表失败，请稍后重试。"
 }

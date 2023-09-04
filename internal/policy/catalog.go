@@ -668,9 +668,9 @@ func defaultOperations() []Operation {
 		},
 		{
 			ID: "support.recovery.execute", Domain: DomainRecovery, Name: "执行人工核验恢复",
-			Description:   "在批准等待期已满且未过期时一次性执行密码恢复或 MFA 恢复；必须强认证并绑定请求/批准/内容摘要，执行前复核审批人与目标状态，双执行竞争只成功一次，成功后撤销旧凭证/会话并要求重新登录。",
+			Description:   "在批准等待期已满且未过期时一次性执行密码恢复或 MFA 恢复；必须强认证并绑定请求/批准/内容摘要，执行前复核审批人与目标状态，执行人不得是发起者或审批人，双执行竞争只成功一次，成功后撤销旧凭证/会话并要求重新登录。",
 			Default:       strongReauth,
-			PermissionKey: "recovery.approve",
+			PermissionKey: "recovery.execute",
 			Implemented:   true,
 		},
 		{

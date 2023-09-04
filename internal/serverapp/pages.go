@@ -458,6 +458,10 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		Cases:     securityDomains.Support,
 		Recovery:  securityDomains.ManualRecovery,
 		Authorize: managed.Checker.authorizePageAction,
+		Reauth: func(ctx context.Context, userID string,
+			binding login.UISupportActionBinding) (login.UISupportEvidence, error) {
+			return supportPageReauth(ctx, gate, userID, binding)
+		},
 	})
 	if supportErr != nil {
 		return nil, fmt.Errorf("构造客服页适配器失败: %w", supportErr)

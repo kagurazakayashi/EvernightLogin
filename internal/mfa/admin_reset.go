@@ -119,6 +119,15 @@ func (s *Service) AdminResetFactors(ctx context.Context, caller Caller,
 			return err
 		}
 		result.SecurityVersion = securityVersion
+		// 步骤 188：人工恢复重置 MFA 后在同一事务内登记“强制重新绑定强因素”，
+		// 登录将只得到受限初始化会话，完成 Passkey 绑定后才清除。
+		if marker, ok := s.opts.AdminResetBackend.(interface {
+			MarkRebindRequiredTx(ctx context.Context, tx audit.Tx, userID, sourceRequestID string, now time.Time) error
+		}); ok {
+			if markErr := marker.MarkRebindRequiredTx(txCtx, tx, target, request.RequestID, now); markErr != nil {
+				return markErr
+			}
+		}
 		return nil
 	})
 	if err != nil {

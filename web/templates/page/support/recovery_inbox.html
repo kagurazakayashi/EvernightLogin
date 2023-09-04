@@ -6,13 +6,55 @@
 </div>
 <h1 tabindex="-1">{{t "page.support.recovery_inbox.title"}}</h1>
 <p class="ln-meta">{{t "page.support.recovery_inbox.description"}}</p>
+<nav class="ln-actions" aria-label="{{t "page.support.recovery_inbox.mode"}}">
+  <a class="ln-button ln-button--secondary" href="{{route "support.recovery_inbox"}}?mode=initiated"{{if eq .Data.mode "initiated"}} aria-current="true"{{end}}>{{t "page.support.recovery_inbox.mode_initiated"}}</a>
+  <a class="ln-button ln-button--secondary" href="{{route "support.recovery_inbox"}}?mode=pending_approval"{{if eq .Data.mode "pending_approval"}} aria-current="true"{{end}}>{{t "page.support.recovery_inbox.mode_pending"}}</a>
+  <a class="ln-button ln-button--secondary" href="{{route "support.recovery_inbox"}}?mode=executable"{{if eq .Data.mode "executable"}} aria-current="true"{{end}}>{{t "page.support.recovery_inbox.mode_executable"}}</a>
+  <a class="ln-button ln-button--secondary" href="{{route "support.recovery_inbox"}}?mode=history"{{if eq .Data.mode "history"}} aria-current="true"{{end}}>{{t "page.support.recovery_inbox.mode_history"}}</a>
+</nav>
 {{if .Data.listUnavailable}}
 <div class="ln-state" role="status">
   <p class="ln-state__title">{{t "page.support.recovery_inbox.unavailable"}}</p>
   <p class="ln-meta">{{t "page.support.recovery_inbox.unavailable_hint"}}</p>
 </div>
-{{else}}
+{{else if not .Data.items}}
 <div class="ln-state"><p>{{t "page.support.recovery_inbox.empty"}}</p></div>
+{{else}}
+<table class="ln-table">
+  <caption>{{t "page.support.recovery_inbox.title"}}</caption>
+  <thead><tr>
+    <th scope="col">{{t "page.support.recovery_inbox.request_id"}}</th>
+    <th scope="col">{{t "page.support.recovery_inbox.operation"}}</th>
+    <th scope="col">{{t "page.support.recovery_inbox.target"}}</th>
+    <th scope="col">{{t "common.label.status"}}</th>
+    <th scope="col">{{t "page.support.recovery_inbox.relation"}}</th>
+    <th scope="col">{{t "page.support.recovery_inbox.created"}}</th>
+    <th scope="col">{{t "common.label.actions"}}</th>
+  </tr></thead>
+  <tbody>
+  {{range .Data.items}}
+  <tr>
+    <td><code>{{.RequestID}}</code>{{if .SupportCaseID}}<br><span class="ln-meta">{{t "page.support.recovery_inbox.case"}}: <code>{{.SupportCaseID}}</code></span>{{end}}</td>
+    <td>{{if eq .Operation "password_reset"}}{{t "manual_recovery.operation.password_reset"}}{{else if eq .Operation "mfa_reset"}}{{t "manual_recovery.operation.mfa_reset"}}{{else}}{{.Operation}}{{end}}</td>
+    <td><code>{{.TargetMasked}}</code></td>
+    <td>{{.Status}}</td>
+    <td>{{.MyRelation}}</td>
+    <td>{{format_time .CreatedAt "UTC"}}</td>
+    <td>
+      {{if eq .MyRelation "candidate_approver"}}
+      <a href="{{route "support.recovery_approval"}}?request_id={{.RequestID}}">{{t "page.support.recovery_inbox.open_approval"}}</a>
+      {{else if eq .MyRelation "candidate_executor"}}
+      <a href="{{route "support.recovery_execute"}}?request_id={{.RequestID}}">{{t "page.support.recovery_inbox.open_execute"}}</a>
+      {{else}}
+      <a href="{{route "support.recovery_request"}}?request_id={{.RequestID}}">{{t "page.support.recovery_inbox.open_detail"}}</a>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{if .Data.hasMore}}<p><a class="ln-button ln-button--secondary" rel="next" href="{{route "support.recovery_inbox"}}?mode={{.Data.mode}}&operation={{.Data.operation}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+<p class="ln-meta">{{t "page.support.recovery_inbox.minimum_fields"}}</p>
 {{end}}
 {{if not .Data.policyAvailable}}
 <p class="ln-meta">{{t "page.support.recovery_inbox.policy_unavailable"}}</p>

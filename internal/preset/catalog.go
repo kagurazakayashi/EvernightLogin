@@ -476,12 +476,17 @@ func catalogPermissionsV1() []PermissionDefinition {
 		{
 			Key: "recovery.approve", Name: "审批人工核验恢复", Summary: "审批通过人工核验的普通账户恢复申请。",
 			Scope: "仅获准的普通账户恢复申请；需独立审批。", Limits: "默认不授予；不能审批本人发起的申请，不能审批 root 或高权限账户。",
-			RequiresReauth: true, Implemented: false,
+			RequiresReauth: true, Implemented: true,
 		},
 		{
 			Key: "recovery.mfa.approve", Name: "审批两步验证恢复", Summary: "审批普通用户的两步验证恢复申请。",
 			Scope: "仅获准的普通账户，独立核验与审批。", Limits: "默认不授予；不能与密码恢复合并，完成后必须强制重新绑定。",
-			RequiresReauth: true, Implemented: false,
+			RequiresReauth: true, Implemented: true,
+		},
+		{
+			Key: "recovery.execute", Name: "执行人工核验恢复", Summary: "执行已独立批准且等待期结束的人工核验恢复申请。",
+			Scope: "仅获准的普通账户恢复；执行人不得是发起者或审批人。", Limits: "默认不授予；不能跳过审批/等待期，root 与高权限账户拒绝，执行后旧会话/旧凭证失效。",
+			RequiresReauth: true, Implemented: true,
 		},
 		// 用户组与角色。
 		{
@@ -559,7 +564,7 @@ func catalogPermissionsV1() []PermissionDefinition {
 		{
 			Key: "sessions.revoke", Name: "强制会话退出", Summary: "强制获准范围内的普通用户退出相关会话。",
 			Scope: "仅获准用户或应用会话。", Limits: "不包含 root；不能用于绕过登录验证或冒充用户。",
-			Implemented: false, DefaultRoles: []string{"system_admin", "user_admin"},
+			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin"},
 		},
 		// 审计与报告。
 		{

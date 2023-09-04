@@ -10,6 +10,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -279,6 +280,28 @@ func (s *Store) StrongAuthRequired(ctx context.Context, userID string) (bool, er
 		return false, fmt.Errorf("%w: %w", authn.ErrStoreUnavailable, err)
 	}
 	return false, nil
+}
+
+// MFARebindRequired 报告账户是否存在未清除的人工恢复 MFA 重绑需求（步骤 188）。
+// 表由迁移 0048 创建；查询失败按存储错误返回，由 authn 登录路径 fail-closed。
+func (s *Store) MFARebindRequired(ctx context.Context, userID string) (bool, error) {
+	rows, err := s.store.QueryContext(ctx,
+		`SELECT cleared_at_ms FROM mfa_rebind_requirements WHERE user_id=?`, userID)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", authn.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("%w: %w", authn.ErrStoreUnavailable, err)
+		}
+		return false, nil
+	}
+	var cleared sql.NullInt64
+	if err := rows.Scan(&cleared); err != nil {
+		return false, fmt.Errorf("%w: %w", authn.ErrStoreUnavailable, err)
+	}
+	return !cleared.Valid, nil
 }
 
 // SetPassword 在审计事务中创建/替换密码、递增安全版本并维护有界历史。

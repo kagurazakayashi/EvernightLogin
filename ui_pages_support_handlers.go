@@ -6,6 +6,7 @@ package login
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -478,17 +479,48 @@ func (h *supportPageHandlers) recoveryActionErrorOutcome(ctx context.Context, pa
 
 // ===== 独立审批 =====
 
-// recoveryInbox 渲染审批工作台：真实受控待审批列表当前未提供，明确显示不可用。
+// recoveryInbox 渲染审批/执行工作台：通过可选列表能力读取真实待办，逐条由服务端
+// 判权；旧适配器未实现列表时明确显示不可用，不枚举 ID、不伪造条目。
 func (h *supportPageHandlers) recoveryInbox(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	caps := h.supportCapabilities(ctx, page)
 	policy, policyErr := h.pages.options.Backend.RecoveryPolicy(ctx, page.Session.UserID)
-	return UIPageOutcome{Data: map[string]any{
+	mode := strings.TrimSpace(request.URL.Query().Get("mode"))
+	if mode == "" {
+		mode = "pending_approval"
+	}
+	operation := strings.TrimSpace(request.URL.Query().Get("operation"))
+	offset := 0
+	if raw := strings.TrimSpace(request.URL.Query().Get("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	data := map[string]any{
 		"capabilities": caps, "policy": policy, "policyAvailable": policyErr == nil,
-		// 列表能力尚未提供：不枚举 ID、不显示静态卡片。
-		"listUnavailable": true,
-		"mayApprove":      caps.ApprovePassword || caps.ApproveMFA,
-	}}, nil
+		"mode": mode, "operation": operation, "offset": offset,
+		"mayApprove": caps.ApprovePassword || caps.ApproveMFA,
+		"mayExecute": caps.ExecuteRecovery, "mayRequest": caps.RequestRecovery,
+	}
+	lister, ok := h.pages.options.Backend.(UISupportRecoveryLister)
+	if !ok {
+		data["listUnavailable"] = true
+		return UIPageOutcome{Data: data}, nil
+	}
+	list, listErr := lister.ListRecoveryForPage(ctx, page.Session.UserID, mode, operation,
+		offset, 20)
+	if listErr != nil {
+		// 制度关闭是真实状态，不是页面故障：显示关闭说明而不是错误页。
+		if typed, ok := listErr.(*UISupportError); ok && typed != nil && typed.Code == "DISABLED" {
+			data["listUnavailable"] = true
+			return UIPageOutcome{Data: data}, nil
+		}
+		return supportErrorOutcome(listErr, data, "page.support.recovery_inbox.load_failed"), nil
+	}
+	data["items"] = list.Items
+	data["hasMore"] = list.HasMore
+	data["nextOffset"] = list.NextOffset
+	return UIPageOutcome{Data: data}, nil
 }
 
 // recoveryApproval 渲染独立审批页：真正将执行的目标/操作/交付/等待期在批准表单之前。

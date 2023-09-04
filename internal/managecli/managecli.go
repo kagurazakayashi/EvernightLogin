@@ -117,6 +117,8 @@ func RunWithOptions(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		return r.runTask(rest)
 	case "session":
 		return r.runSession(rest)
+	case "support":
+		return r.runSupport(rest)
 	case "user":
 		return r.runUser(rest)
 	case "group", "role", "app", "permission", "notify":
@@ -161,6 +163,8 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl session revoke <session_id> --session-file <f> --keyring-file <f> [--json]")
 	fmt.Fprintln(out, "  loginctl session admin-list --user <id> [--scope-app <app>] <在线公共参数>")
 	fmt.Fprintln(out, "  loginctl session admin-revoke (--user <id> | --session-id <id>) --reason <原因> --confirm ADMIN-REVOKE [--approval-file <证明文件>] <在线公共参数>")
+	fmt.Fprintln(out, "  loginctl support case create|send-reset ...（客服工单，在线，需 --session-file）")
+	fmt.Fprintln(out, "  loginctl support recovery list|get|request|approve|reject|cancel|execute ...（人工恢复闭环，在线）")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "本地用户管理（需要 --operator 本地管理员标识；写操作需要 --confirm）：")
 	fmt.Fprintln(out, "  loginctl user list --operator <id> [--config <file>] [--status <s>] [--limit N] [--json]")

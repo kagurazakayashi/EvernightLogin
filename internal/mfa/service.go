@@ -36,6 +36,12 @@ const (
 )
 
 // Options 是 MFA 服务依赖。
+// RebindRequirementClearer 在强认证初始化完成后清除“人工恢复 MFA 重绑需求”
+// （步骤 188）。nil 表示该宿主不启用强制重绑；实现失败时初始化不得视为完成。
+type RebindRequirementClearer interface {
+	ClearRebindRequirement(ctx context.Context, userID, requestID string) error
+}
+
 type Options struct {
 	Store       Store
 	Audit       AuditRecorder
@@ -79,6 +85,9 @@ type Options struct {
 	// RootReady 是 root 强认证初始化完成后的受控 bootstrap 状态更新回调；在
 	// 强认证完成的同一审计事务内调用，失败整体回滚（fail-closed）。
 	RootReady RootReadyMarker
+	// RebindClearer 在强认证初始化成功后清除人工恢复产生的强制重绑需求（步骤 188）；
+	// nil 时不清除（该能力未启用的宿主保持原行为）。
+	RebindClearer RebindRequirementClearer
 	// AdminResetBackend / AdminResetTargetGuard 是步骤 152 人工恢复执行器的受控
 	// MFA 重置依赖；未装配时 AdminResetFactors 明确拒绝，不影响普通 MFA 流程。
 	AdminResetBackend     AdminFactorResetBackend
@@ -726,6 +735,15 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 	}
 	if err := s.opts.Audit.Record(ctx, event); err != nil {
 		return StrongSetupCompleteResult{}, fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
+	}
+	// 步骤 188：强认证初始化成功即清除人工恢复产生的强制重绑需求；清除失败时
+	// 登录仍会被强制重绑（fail-closed），不能宣称完成。
+	if !isNil(s.opts.RebindClearer) {
+		if clearErr := s.opts.RebindClearer.ClearRebindRequirement(ctx, challenge.UserID, request.RequestID); clearErr != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.strong_setup_denied", "rebind_clear_failed", string(CodeDBUnavailable), request.RequestID)
+			return StrongSetupCompleteResult{}, fmt.Errorf("%w: %v", ErrSessionUnavailable, clearErr)
+		}
 	}
 	return StrongSetupCompleteResult{UserID: challenge.UserID, Methods: methods,
 		MustReauthenticate: true}, nil

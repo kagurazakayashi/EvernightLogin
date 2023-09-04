@@ -32,9 +32,12 @@ type Options struct {
 	Notifier Notifier
 	// Policy 是 root/宿主显式配置的人工恢复制度；零值表示默认关闭。
 	Policy Policy
-	Now    func() time.Time
-	Random io.Reader
-	Logger *slog.Logger
+	// OperationGuard 是宿主的操作类型可用性校验（步骤 188）：例如 Passkey 未启用时
+	// 拒绝 mfa_reset 申请/执行，避免恢复后无法重绑。nil 表示不额外限制。
+	OperationGuard func(operation OperationType) error
+	Now            func() time.Time
+	Random         io.Reader
+	Logger         *slog.Logger
 }
 
 // Service 是人工恢复申请/独立审批/受控执行服务。构造后不可变、可并发使用；不启动
@@ -139,6 +142,12 @@ func (s *Service) Create(ctx context.Context, caller Caller, request CreateReque
 	if err := s.validateCreateRequest(request); err != nil {
 		s.recordFailure(ctx, caller.actor, ActionDenied, "user", request.TargetUserID, "invalid_request", string(CodeOf(err)), request.RequestID)
 		return RequestRecord{}, err
+	}
+	if s.opts.OperationGuard != nil {
+		if guardErr := s.opts.OperationGuard(request.Operation); guardErr != nil {
+			s.recordFailure(ctx, caller.actor, ActionDenied, "user", request.TargetUserID, "operation_disallowed", string(CodeAccessDenied), request.RequestID)
+			return RequestRecord{}, fmt.Errorf("%w: %v", ErrAccessDenied, guardErr)
+		}
 	}
 	guard, err := s.authorizeSensitive(ctx, caller, OperationRequest, map[string]string{
 		"target_user_id":         request.TargetUserID,
@@ -514,6 +523,21 @@ func (s *Service) Execute(ctx context.Context, caller Caller, request ExecuteReq
 	if !found {
 		s.recordFailure(ctx, caller.actor, ActionDenied, "manual_recovery_request", record.ID, "no_active_approval", string(CodeConflict), request.TraceID)
 		return ExecutionResult{}, ErrApprovalExpired
+	}
+	// 步骤 188 Q1 三权分离：执行人不得是发起者或审批人（目标本人已在上面拒绝）。
+	if caller.actor.ID == record.InitiatorUserID {
+		s.recordFailure(ctx, caller.actor, ActionDenied, "manual_recovery_request", record.ID, "executor_is_initiator", string(CodeAccessDenied), request.TraceID)
+		return ExecutionResult{}, ErrAccessDenied
+	}
+	if caller.actor.ID == approval.ApproverUserID {
+		s.recordFailure(ctx, caller.actor, ActionDenied, "manual_recovery_request", record.ID, "executor_is_approver", string(CodeAccessDenied), request.TraceID)
+		return ExecutionResult{}, ErrAccessDenied
+	}
+	if s.opts.OperationGuard != nil {
+		if guardErr := s.opts.OperationGuard(record.Operation); guardErr != nil {
+			s.recordFailure(ctx, caller.actor, ActionDenied, "manual_recovery_request", record.ID, "operation_disallowed", string(CodeAccessDenied), request.TraceID)
+			return ExecutionResult{}, fmt.Errorf("%w: %v", ErrAccessDenied, guardErr)
+		}
 	}
 	now := s.clockNow()
 	// 内容替换检测：申请内容摘要与批准绑定的摘要必须一致。
