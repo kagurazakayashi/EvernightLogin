@@ -32,6 +32,7 @@ import (
 	bootstrapsqlite "github.com/kagurazakayashi/EvernightLogin/internal/bootstrap/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/emailchange"
 	emailchangesqlite "github.com/kagurazakayashi/EvernightLogin/internal/emailchange/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/manualrecovery"
 	manualrecoverysqlite "github.com/kagurazakayashi/EvernightLogin/internal/manualrecovery/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
@@ -125,6 +126,12 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 			}
 			emailChangeMailer = adapter
 		}
+	}
+	// 步骤 197：可靠投递服务（任务运行时已在本函数之前构造）；仅邮件启用时使用，
+	// 未启用时保持 nil 回退直接 Sender（与既有 mail disabled 语义一致）。
+	var mailDeliveries *mailer.DeliveryService
+	if deps.Config.Mail.Enabled && deps.MailDeliveryProvider != nil {
+		mailDeliveries = deps.MailDeliveryProvider()
 	}
 	now := deps.Now
 	if now == nil {
@@ -293,6 +300,7 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		Store: passwordResetStore, Audit: deps.Audit,
 		Credentials: services.Credential, Passwords: services.Authn,
 		Sessions: services.Sessions, Mailer: deps.Mail.SenderOrDisabled(),
+		Deliveries:  mailDeliveries,
 		Templates:   mustMailTemplates(),
 		FromAddress: deps.Mail.FromAddress().Spec, AppName: deps.Mail.AppDisplayName(),
 		SupportURL:   mailURLs.Support,
@@ -369,7 +377,8 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	}
 	// 启用制度必须真实可交付：邮件发送器与真实执行器都要在启动期确认，避免
 	// 运行到执行时才失败而留下“看似可用”的恢复入口。
-	if manualPolicy.Enabled && (deps.Mail == nil || deps.Mail.Sender == nil) {
+	if manualPolicy.Enabled && (deps.Mail == nil || !deps.Config.Mail.Enabled ||
+		(deps.Mail.Sender == nil && mailDeliveries == nil)) {
 		return nil, fmt.Errorf("人工恢复制度启用时必须配置真实邮件发送器（mail.enabled）")
 	}
 	executor := manualRecoveryExecutor{
@@ -379,17 +388,19 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	}
 	var notifier manualrecovery.Notifier
 	if manualPolicy.Enabled {
-		notifier = manualRecoveryNotifier{sender: deps.Mail.Sender, store: deps.Store,
-			from: deps.Mail.FromAddress(), appName: deps.Mail.AppDisplayName()}
+		notifier = manualRecoveryNotifier{sender: deps.Mail.Sender, deliveries: mailDeliveries,
+			store: deps.Store, from: deps.Mail.FromAddress(), appName: deps.Mail.AppDisplayName(),
+			supportURL: mailURLs.Support}
 	}
 	manualService, err := manualrecovery.New(manualrecovery.Options{
 		Store: manualStore, Audit: deps.Audit,
-		Reauth:   gate.Reauth,
-		Staff:    manualRecoveryStaff{checker: managed.Checker, targets: manualTargets},
-		Targets:  manualTargets,
-		Executor: executor,
-		Notifier: notifier,
-		Policy:   manualPolicy,
+		Reauth:              gate.Reauth,
+		Staff:               manualRecoveryStaff{checker: managed.Checker, targets: manualTargets},
+		Targets:             manualTargets,
+		Executor:            executor,
+		Notifier:            notifier,
+		NotificationsQueued: notifier != nil && mailDeliveries != nil,
+		Policy:              manualPolicy,
 		OperationGuard: func(operation manualrecovery.OperationType) error {
 			if operation == manualrecovery.OperationMFAReset && !deps.Config.Passkey.Enabled {
 				return errors.New("Passkey 强认证初始化未启用：拒绝 MFA 恢复（避免恢复后无法重绑）")

@@ -565,7 +565,11 @@ type ExecutionResult struct {
 	SessionsRevoked  int
 	FactorsReset     bool
 	CredentialIssued bool
+	// NotificationSent 仅表示直接发送路径已确认送达；队列路径（queued）为 false。
 	NotificationSent bool
+	// NotificationState 是真实通知状态：sent/queued/failed/not_configured 等；
+	// queued 表示已交给可靠投递队列，不代表已送达（步骤 197）。
+	NotificationState string
 }
 
 // newDomainID 生成领域内稳定 ID（前缀 + 128 位安全随机十六进制）。

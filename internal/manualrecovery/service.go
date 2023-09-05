@@ -30,6 +30,9 @@ type Options struct {
 	Executor Executor
 	// Notifier 发送完成/失败通知（既有渠道）；nil 表示未装配，只记录状态。
 	Notifier Notifier
+	// NotificationsQueued 表示 Notifier 走可靠投递队列（步骤 197）：通知成功仅代表
+	// enqueue 已受理，记录 state=queued 而不是 sent；真实送达/失败以投递任务为准。
+	NotificationsQueued bool
 	// Policy 是 root/宿主显式配置的人工恢复制度；零值表示默认关闭。
 	Policy Policy
 	// OperationGuard 是宿主的操作类型可用性校验（步骤 188）：例如 Passkey 未启用时
@@ -673,14 +676,14 @@ func (s *Service) Execute(ctx context.Context, caller Caller, request ExecuteReq
 		}
 		return ExecutionResult{}, finishErr
 	}
-	notificationSent, _ := s.notifyCompleted(ctx, record)
+	_, notificationState := s.notifyCompleted(ctx, record)
 	s.logger.Info("人工恢复已执行完成", "request_id", record.ID, "execution_id", executionID,
 		"operation_type", string(record.Operation), "sessions_revoked", outcome.SessionsRevoked)
 	return ExecutionResult{
 		RequestID: record.ID, ExecutionID: executionID, Status: StatusCompleted,
 		Operation: record.Operation, SessionsRevoked: outcome.SessionsRevoked,
 		FactorsReset: outcome.FactorsReset, CredentialIssued: outcome.ResetCredentialIssued,
-		NotificationSent: notificationSent,
+		NotificationSent: notificationState == "sent", NotificationState: notificationState,
 	}, nil
 }
 
@@ -1117,10 +1120,15 @@ func (s *Service) notifyCompleted(ctx context.Context, record RequestRecord) (bo
 		}
 		return false, "failed"
 	}
-	if err := s.opts.Store.SetNotificationState(ctx, record.ID, "sent"); err != nil {
+	// 步骤 197：队列投递只代表已受理/排队；直接 Sender 才代表发送成功。
+	state := "sent"
+	if s.opts.NotificationsQueued {
+		state = "queued"
+	}
+	if err := s.opts.Store.SetNotificationState(ctx, record.ID, state); err != nil {
 		s.logger.Warn("人工恢复通知状态写入失败", "request_id", record.ID)
 	}
-	return true, "sent"
+	return true, state
 }
 
 // notifyFailed 尽力通知既有渠道执行失败（由宿主决定渠道），不改执行结果。

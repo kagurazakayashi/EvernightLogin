@@ -230,17 +230,20 @@ func (e manualRecoveryExecutor) Compensate(context.Context, manualrecovery.Execu
 	return nil
 }
 
-// manualRecoveryNotifier 通过真实邮件发送器向目标既有已验证邮箱发送完成/失败告知。
+// manualRecoveryNotifier 通过可靠投递队列（步骤 197）或直接发送器向目标既有已验证
+// 邮箱发送完成/失败告知；不含链接、密码、验证码或秘密。
 type manualRecoveryNotifier struct {
-	sender  mailer.Sender
-	store   *storagesqlite.Store
-	from    mailer.Address
-	appName string
+	sender     mailer.Sender
+	deliveries mailer.DeliveryEnqueuer
+	store      *storagesqlite.Store
+	from       mailer.Address
+	appName    string
+	supportURL string
 }
 
 // Notify 实现 manualrecovery.Notifier；不含链接、密码、验证码或秘密。
 func (n manualRecoveryNotifier) Notify(ctx context.Context, notification manualrecovery.Notification) error {
-	if n.sender == nil || n.store == nil {
+	if n.store == nil || (n.deliveries == nil && n.sender == nil) {
 		return errors.New("人工恢复通知邮件发送器未装配")
 	}
 	var email string
@@ -255,9 +258,36 @@ func (n manualRecoveryNotifier) Notify(ctx context.Context, notification manualr
 	}
 	subject := n.appName + " 人工恢复状态更新"
 	body := "你的账户人工恢复申请已处理。若这不是你发起的请求，请立即联系管理员。"
+	event := "人工恢复已完成"
 	if notification.Kind == manualrecovery.NotificationFailed {
 		subject = n.appName + " 人工恢复未完成"
 		body = "你的账户人工恢复申请未完成；账户状态未被伪造为已恢复，请联系管理员。"
+		event = "人工恢复未完成"
+	}
+	if n.deliveries != nil {
+		caller, callerErr := mailer.SystemCaller("manual-recovery")
+		if callerErr != nil {
+			return errors.New("构造人工恢复通知投递身份失败")
+		}
+		key := "manual-recovery-" + notification.RequestID + "-" + string(notification.Kind)
+		if len(key) < 8 {
+			return errors.New("人工恢复通知幂等键无效")
+		}
+		if len(key) > 128 {
+			return errors.New("人工恢复通知幂等键超长")
+		}
+		if _, enqueueErr := n.deliveries.Enqueue(ctx, mailer.EnqueueRequest{
+			Caller: caller, IdempotencyKey: key, Kind: mailer.KindSecurityNotice,
+			Recipient: email,
+			Data: mailer.RenderRequest{Kind: mailer.KindSecurityNotice, Notice: &mailer.SecurityNoticeData{
+				Event: event, OccurredAt: notification.OccurredAt.UTC().Format(time.RFC3339),
+				ClientInfo: "人工恢复", AppName: n.appName, SupportURL: n.supportURL,
+			}},
+			RequestID: notification.RequestID,
+		}); enqueueErr != nil {
+			return errors.New("人工恢复通知入队失败")
+		}
+		return nil
 	}
 	message := mailer.Message{From: n.from,
 		To: []mailer.Address{{Spec: email}}, Subject: subject, TextBody: body}

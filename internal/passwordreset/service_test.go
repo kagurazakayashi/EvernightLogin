@@ -86,15 +86,18 @@ func (s *stubSessions) RevokeAllForUser(ctx context.Context, userID, reason stri
 }
 
 type testEnv struct {
-	t       *testing.T
-	ctx     context.Context
-	raw     *storagesqlite.Store
-	audit   *audit.Recorder
-	mail    *mailtest.Instance
-	now     time.Time
-	pass    *stubPasswords
-	sess    *stubSessions
-	service *passwordreset.Service
+	t          *testing.T
+	ctx        context.Context
+	raw        *storagesqlite.Store
+	audit      *audit.Recorder
+	mail       *mailtest.Instance
+	now        time.Time
+	pass       *stubPasswords
+	sess       *stubSessions
+	service    *passwordreset.Service
+	keyring    *secrets.Keyring
+	creds      *credential.Service
+	resetStore *passwordresetsqlite.Store
 }
 
 func newTestEnv(t *testing.T, mutate func(*passwordreset.Options)) *testEnv {
@@ -165,6 +168,9 @@ func newTestEnv(t *testing.T, mutate func(*passwordreset.Options)) *testEnv {
 		t.Fatalf("找回服务: %v", err)
 	}
 	env.service = service
+	env.keyring = keyring
+	env.creds = credentialService
+	env.resetStore = store
 	env.seedUser(userID, "alice", "active", false)
 	env.seedUser(otherUserID, "bob", "disabled", false)
 	env.seedEmail(userID, "alice@example.com")

@@ -81,10 +81,13 @@ type Options struct {
 	// StrongFactors 是第二条强因素验证器；nil 时 strong 要求 fail-closed。
 	StrongFactors StrongFactorVerifier
 	Mailer        mailer.Sender
-	FromAddress   string
-	AppName       string
-	SupportURL    string
-	Templates     *mailer.TemplateSet
+	// Deliveries 是可靠投递入队服务（步骤 197）：非空时安全告知改走 mailer 队列，
+	// 由任务有限重试/重启恢复承担；nil 时回退直接 Mailer（单测/嵌入兼容）。
+	Deliveries  mailer.DeliveryEnqueuer
+	FromAddress string
+	AppName     string
+	SupportURL  string
+	Templates   *mailer.TemplateSet
 	// AvailableStrengths 是当前环境已实现的认证强度；nil 时只认为 none/password
 	// 可用（MFA/Passkey 未实现），要求强认证的操作 fail-closed。
 	AvailableStrengths  []policy.Strength

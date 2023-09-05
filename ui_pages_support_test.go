@@ -649,3 +649,22 @@ func TestUIPageSupportExecuteGatingAndFailedHint(t *testing.T) {
 		t.Fatalf("失败错误码展示缺失 = %d", page.Code)
 	}
 }
+
+// TestSupportRecoveryNotificationQueuedShown 验证步骤 197 N2：队列已受理时页面显示
+// “已受理（待投递）”，不得宣称“完成通知已发送”。
+func TestSupportRecoveryNotificationQueuedShown(t *testing.T) {
+	backend := newSupportFakeBackend()
+	backend.recovery.HasExecution = true
+	backend.recovery.Execution = backend.execution
+	backend.recovery.Execution.Notification = "queued"
+	ui := newSupportTestUI(t, backend, supportTestStaffID)
+	page := serveSupportPage(ui, http.MethodGet,
+		"/support/recovery/request?request_id="+supportTestRequestID, nil)
+	body := supportBody(page)
+	if !strings.Contains(body, "已受理（待投递）") {
+		t.Fatalf("queued 通知未显示待投递提示：%s", body)
+	}
+	if strings.Contains(body, "完成通知已发送") {
+		t.Fatalf("queued 通知不得显示为已发送：%s", body)
+	}
+}

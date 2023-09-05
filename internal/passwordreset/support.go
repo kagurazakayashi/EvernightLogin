@@ -170,7 +170,7 @@ func (s *Service) SendResetForSupport(ctx context.Context, request SupportResetR
 	s.revokeCredentials(ctx, oldPending)
 	token := resetID + "." + secret
 	resetURL := s.opts.ResetURLBase + "?token=" + url.QueryEscape(token)
-	if err := s.sendResetMail(ctx, candidate, resetURL, request.RequestID); err != nil {
+	if err := s.sendResetMail(ctx, candidate, resetURL, request.RequestID, resetID); err != nil {
 		s.recordSupportFailure(ctx, candidate.UserID, "mail_failed", string(CodeMailDeliveryFailed), request.RequestID)
 		return SupportResetResult{}, err
 	}

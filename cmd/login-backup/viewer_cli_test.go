@@ -16,7 +16,9 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
+	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
 // cliListResult 是 list --json 的测试解析结构。
@@ -134,10 +136,19 @@ func TestCLIViewerListTablesPreview(t *testing.T) {
 	if len(list.Entries) != 3 {
 		t.Fatalf("list JSON 条目数 = %d，期望 3", len(list.Entries))
 	}
-	if list.Snapshot == nil || !list.Snapshot.Supported ||
-		len(list.Snapshot.SchemaHistory) != 48 || list.Snapshot.TableCount < 50 {
+	if list.Snapshot == nil || !list.Snapshot.Supported {
 		t.Fatalf("list JSON schema_history 异常：%+v warning=%s",
 			list.Snapshot, list.SnapshotWarning)
+	}
+	// 期望值读取真实内嵌迁移，避免每次新增迁移后测试硬编码漂移（步骤 197 N1）。
+	migrationList, err := migrate.LoadMigrations(appmigrations.SQLite)
+	if err != nil {
+		t.Fatalf("加载内嵌迁移: %v", err)
+	}
+	expectedHistory := len(migrationList)
+	if len(list.Snapshot.SchemaHistory) != expectedHistory || list.Snapshot.TableCount < 50 {
+		t.Fatalf("list JSON schema_history 异常：expected=%d got=%+v warning=%s",
+			expectedHistory, list.Snapshot, list.SnapshotWarning)
 	}
 	if strings.Contains(stdout, env.keyFile) {
 		t.Fatal("list JSON 泄露了主密钥路径")

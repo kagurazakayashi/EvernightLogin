@@ -1010,3 +1010,31 @@ func TestGetRequestHistoricalApprover(t *testing.T) {
 		t.Fatalf("无关人员不应查看申请，得到 %v", err)
 	}
 }
+
+// TestNotificationQueuedState 验证步骤 197：通知走可靠队列时只记 queued（不写 sent），
+// 通知成功仍不回滚已完成的恢复。
+func TestNotificationQueuedState(t *testing.T) {
+	env := newTestEnv(t, func(options *manualrecovery.Options) {
+		options.NotificationsQueued = true
+	})
+	record := env.create()
+	env.approve(record.ID)
+	env.now = env.now.Add(time.Hour + time.Minute)
+	result, err := env.service.Execute(env.ctx, env.caller(executor), manualrecovery.ExecuteRequest{
+		RequestID: record.ID, TraceID: "req-notify-queued"})
+	if err != nil {
+		t.Fatalf("执行: %v", err)
+	}
+	if result.NotificationSent {
+		t.Fatal("queued 通知不得标记为已送达")
+	}
+	if result.NotificationState != "queued" {
+		t.Fatalf("通知状态 = %q，期望 queued", result.NotificationState)
+	}
+	if env.count(`SELECT COUNT(*) FROM manual_recovery_executions WHERE notification_state='queued'`) != 1 {
+		t.Fatal("队列通知状态未记录为 queued")
+	}
+	if env.count(`SELECT COUNT(*) FROM manual_recovery_executions WHERE notification_state='sent'`) != 0 {
+		t.Fatal("队列通知不得记录为 sent（未送达）")
+	}
+}

@@ -2,6 +2,8 @@ package reauth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -35,7 +37,7 @@ func (s *Service) notifyOutcome(ctx context.Context, result Result, outcome Outc
 				"failure_notice_rate_limited", nil)
 		}
 	}
-	if isNil(s.opts.Mailer) || s.opts.FromAddress == "" {
+	if s.opts.Deliveries == nil && (isNil(s.opts.Mailer) || s.opts.FromAddress == "") {
 		return s.recordNotification(ctx, result, outcome, NotificationNotConfigured,
 			"mailer_not_configured", ErrNotificationFailed)
 	}
@@ -69,6 +71,27 @@ func (s *Service) notifyOutcome(ctx context.Context, result Result, outcome Outc
 		ClientInfo:  "身份服务敏感操作审核",
 		AppName:     s.opts.AppName,
 		SupportURL:  s.opts.SupportURL,
+	}
+	// 步骤 197：可靠队列优先。enqueue 成功只记 queued（已受理，不是已送达）；
+	// 真实送达/失败由 mailer 投递记录与 mail_delivery 任务终态体现。
+	if s.opts.Deliveries != nil {
+		caller, callerErr := mailer.SystemCaller("reauth")
+		if callerErr != nil {
+			return s.recordNotification(ctx, result, outcome, NotificationFailed,
+				"delivery_enqueue_failed", ErrNotificationFailed, "delivery_enqueue_failed")
+		}
+		if _, enqueueErr := s.opts.Deliveries.Enqueue(ctx, mailer.EnqueueRequest{
+			Caller: caller, IdempotencyKey: securityNoticeKey(result, outcome),
+			Kind: mailer.KindSecurityNotice, Recipient: address,
+			Data:      mailer.RenderRequest{Kind: mailer.KindSecurityNotice, Notice: notice},
+			RequestID: result.RequestID,
+		}); enqueueErr != nil {
+			// 入队失败不回滚已完成的业务操作，只记录失败状态与稳定原因。
+			return s.recordNotification(ctx, result, outcome, NotificationFailed,
+				"delivery_enqueue_failed", fmt.Errorf("%w: %w", ErrNotificationFailed, enqueueErr),
+				"delivery_enqueue_failed")
+		}
+		return s.recordNotification(ctx, result, outcome, NotificationQueued, "", nil)
 	}
 	content, renderErr := s.opts.Templates.Render(mailer.RenderRequest{
 		Kind: mailer.KindSecurityNotice, Notice: notice,
@@ -117,7 +140,7 @@ func (s *Service) recordNotification(ctx context.Context, result Result, outcome
 		Outcome: outcome, State: state, ErrorCode: errorCode,
 		ReasonCode: safeReason(reason), CreatedAt: s.now(),
 	}
-	if state == NotificationSent && record.ReasonCode != "" {
+	if (state == NotificationSent || state == NotificationQueued) && record.ReasonCode != "" {
 		record.ReasonCode = ""
 	}
 	notificationID, idErr := newDatabaseID(s.opts.Random, "ntf_")
@@ -126,7 +149,7 @@ func (s *Service) recordNotification(ctx context.Context, result Result, outcome
 	}
 	record.ID = notificationID
 	// 收件地址只保存脱敏值；通知状态本身不含邮箱明文。
-	if state == NotificationSent || state == NotificationFailed {
+	if state == NotificationSent || state == NotificationQueued || state == NotificationFailed {
 		if address, found, err := s.opts.Store.VerifiedEmail(ctx, result.UserID); err == nil && found {
 			record.RecipientMasked = maskAddress(address)
 		}
@@ -135,7 +158,7 @@ func (s *Service) recordNotification(ctx context.Context, result Result, outcome
 		return fmt.Errorf("%w: 记录告知状态失败: %v", ErrStoreUnavailable, err)
 	}
 	auditOutcome := audit.OutcomeSuccess
-	if state != NotificationSent {
+	if state != NotificationSent && state != NotificationQueued {
 		auditOutcome = audit.OutcomeFailure
 	}
 	event := audit.Event{
@@ -160,7 +183,7 @@ func (s *Service) recordNotification(ctx context.Context, result Result, outcome
 		s.opts.Logger.Warn("安全告知审计写入失败", "error", auditErr)
 	}
 	switch state {
-	case NotificationSent:
+	case NotificationSent, NotificationQueued:
 		return nil
 	case NotificationNoVerifiedEmail:
 		return fmt.Errorf("%w: %s", ErrNotificationFailed, "无已验证邮箱")
@@ -183,4 +206,19 @@ func truncateText(value string, maxRunes int) string {
 		return value
 	}
 	return string(runes[:maxRunes])
+}
+
+// securityNoticeKey 构造队列幂等键：优先用请求编号绑定业务实例；请求编号缺失时
+// 用用户/操作/目标摘要；最终长度裁剪到 mailer 允许的 8～128 字节。
+func securityNoticeKey(result Result, outcome Outcome) string {
+	key := "security-notice-" + result.RequestID + "-" + string(outcome)
+	if len(result.RequestID) == 0 || len(key) < 8 {
+		sum := sha256.Sum256([]byte(result.UserID + "|" + result.OperationID + "|" + result.TargetID))
+		key = "security-notice-" + hex.EncodeToString(sum[:8]) + "-" + string(outcome)
+	}
+	if len(key) > 128 {
+		sum := sha256.Sum256([]byte(key))
+		key = "security-notice-" + hex.EncodeToString(sum[:16])
+	}
+	return key
 }

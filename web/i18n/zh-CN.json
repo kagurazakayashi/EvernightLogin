@@ -1149,6 +1149,7 @@
   "manual_recovery.delivery.unknown": "未知交付方式",
   "manual_recovery.delivery.verified_email": "目标此前已验证邮箱",
   "manual_recovery.notification.pending": "完成通知待处理",
+  "manual_recovery.notification.queued": "完成通知已受理（待投递）",
   "manual_recovery.notification.sent": "完成通知已发送",
   "manual_recovery.notification.failed": "完成通知发送失败",
   "manual_recovery.notification.not_configured": "完成通知渠道未配置",

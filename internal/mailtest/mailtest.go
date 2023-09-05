@@ -76,6 +76,9 @@ type Options struct {
 	Context context.Context
 	// ExtraYAML 追加到生成配置末尾（负向测试用；正常测试应留空）。
 	ExtraYAML string
+	// FaultsYAML 替换默认 "faults:\n  enabled: false" 段（步骤 197 真实故障注入测试）；
+	// 需包含 enabled 与 rules，缩进与 Mail 配置一致。空时保持默认关闭。
+	FaultsYAML string
 	// ForcePorts 固定端口（负向测试/端口冲突测试用；非零时只尝试一次）。
 	ForcePorts struct{ SMTP, POP3, HTTP int }
 }
@@ -595,6 +598,10 @@ web:
 		adminUsername, instance.AdminPassword, smtpAuth,
 		instance.UserID, instance.UserLogin, instance.UserPassword, smtpAuth, anonymousMail,
 		instance.UserLogin, strings.Join(localDomains, ", "))
+	if opts.FaultsYAML != "" {
+		yaml = strings.Replace(yaml, "faults:\n  enabled: false",
+			"faults:\n"+strings.TrimRight(opts.FaultsYAML, "\n"), 1)
+	}
 	return yaml, nil
 }
 

@@ -164,11 +164,18 @@ func BuildSecurityGate(deps Deps, bootstrapStore *bootstrapsqlite.Store,
 	if totpErr != nil {
 		return nil, fmt.Errorf("构造再次认证 TOTP 服务失败: %w", totpErr)
 	}
+	// 步骤 197：安全告知改走可靠投递队列；任务运行时晚于本函数构造，用延迟代理在
+	// 实际入队时取 provider。邮件未启用时保持 nil（回退现有 Sender/failed 语义）。
+	var reauthDeliveries mailer.DeliveryEnqueuer
+	if deps.Config.Mail.Enabled {
+		reauthDeliveries = lateMailDeliveries{provider: deps.MailDeliveryProvider}
+	}
 	reauthService, err := reauth.New(reauth.Options{
 		Store: reauthStore, Audit: deps.Audit, Policy: policyService,
 		Passwords:     authn.ReauthPasswordVerifier{Service: authnService},
 		StrongFactors: &reauthStrongFactorVerifier{totp: strongTOTP, now: now},
 		Mailer:        deps.Mail.SenderOrDisabled(),
+		Deliveries:    reauthDeliveries,
 		Templates:     mustMailTemplates(),
 		FromAddress:   deps.Mail.FromAddress().Spec,
 		AppName:       deps.Mail.AppDisplayName(),
@@ -193,6 +200,25 @@ func disabledMailSender() mailer.Sender {
 	return mailer.SenderFunc(func(ctx context.Context, message mailer.Message) error {
 		return mailer.SenderFunc(nil).Send(ctx, message)
 	})
+}
+
+// lateMailDeliveries 在每次 Enqueue 时通过 provider 取可靠投递服务：用于早于
+// 任务运行时构造的领域服务（步骤 197 的 reauth 安全告知）。provider 为 nil 或
+// 尚未装配时明确失败，不伪造入队成功。
+type lateMailDeliveries struct {
+	provider func() *mailer.DeliveryService
+}
+
+// Enqueue 实现 mailer.DeliveryEnqueuer。
+func (l lateMailDeliveries) Enqueue(ctx context.Context, request mailer.EnqueueRequest) (mailer.EnqueueResult, error) {
+	if l.provider == nil {
+		return mailer.EnqueueResult{}, errors.New("邮件可靠投递服务未装配")
+	}
+	delivery := l.provider()
+	if delivery == nil {
+		return mailer.EnqueueResult{}, errors.New("邮件可靠投递服务尚未就绪")
+	}
+	return delivery.Enqueue(ctx, request)
 }
 
 // policyReauthRelay 把 internal/policy 的再次验证契约接到真实 reauth 服务。

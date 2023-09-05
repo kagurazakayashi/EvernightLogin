@@ -551,9 +551,13 @@ func (a *SupportAdapter) ExecuteRecovery(ctx context.Context, staffUserID, reque
 	if err != nil {
 		return login.UISupportExecutionView{}, recoveryMapError(err)
 	}
-	notification := "unknown"
-	if result.NotificationSent {
-		notification = "sent"
+	// 通知状态如实透出：queued 表示已交给可靠投递队列（待投递），不是已发送。
+	notification := result.NotificationState
+	if notification == "" {
+		notification = "unknown"
+		if result.NotificationSent {
+			notification = "sent"
+		}
 	}
 	return login.UISupportExecutionView{
 		ID: result.ExecutionID, ExecutorUserID: staffUserID, Status: string(result.Status),

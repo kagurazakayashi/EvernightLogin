@@ -60,7 +60,11 @@ type ApprovalRecord struct {
 type NotificationState string
 
 const (
-	NotificationSent            NotificationState = "sent"
+	// NotificationSent 表示直接发送成功（送达由发送器确认）；队列路径不写该状态。
+	NotificationSent NotificationState = "sent"
+	// NotificationQueued 表示告知已入可靠投递队列（enqueue 成功），不代表已送达；
+	// 真实送达/失败以 mailer 投递记录与任务终态为准（步骤 197）。
+	NotificationQueued          NotificationState = "queued"
 	NotificationFailed          NotificationState = "failed"
 	NotificationNoVerifiedEmail NotificationState = "no_verified_email"
 	NotificationRateLimited     NotificationState = "rate_limited"

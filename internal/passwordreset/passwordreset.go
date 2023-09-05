@@ -229,6 +229,9 @@ type Options struct {
 	Passwords   PasswordService
 	Sessions    SessionRevoker
 	Mailer      mailer.Sender
+	// Deliveries 是可靠投递入队服务（步骤 197）：非空时找回邮件/安全告知改走队列，
+	// 失败由投递任务的有限重试承担；nil 时回退直接 Mailer（单测/嵌入式兼容）。
+	Deliveries  mailer.DeliveryEnqueuer
 	Templates   *mailer.TemplateSet
 	FromAddress string
 	AppName     string

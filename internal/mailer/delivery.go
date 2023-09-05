@@ -262,6 +262,12 @@ type EnqueueResult struct {
 	Duplicate bool
 }
 
+// DeliveryEnqueuer 是可靠投递入队的最小公共契约；生产实现为 *DeliveryService。
+// 领域服务用它把“直接发送”替换为可重试/可恢复的队列投递；测试可注入捕获实现。
+type DeliveryEnqueuer interface {
+	Enqueue(ctx context.Context, request EnqueueRequest) (EnqueueResult, error)
+}
+
 // Enqueue 幂等入队一封邮件：先校验模板数据，再加密模板数据落库，最后创建任务。
 func (s *DeliveryService) Enqueue(ctx context.Context, request EnqueueRequest) (EnqueueResult, error) {
 	if ctx == nil {

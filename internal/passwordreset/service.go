@@ -155,7 +155,7 @@ func (s *Service) BeginReset(ctx context.Context, request BeginResetRequest) (Be
 	s.revokeCredentials(ctx, oldPending)
 	token := resetID + "." + secret
 	resetURL := s.opts.ResetURLBase + "?token=" + url.QueryEscape(token)
-	if err := s.sendResetMail(ctx, candidate, resetURL, request.RequestID); err != nil {
+	if err := s.sendResetMail(ctx, candidate, resetURL, request.RequestID, resetID); err != nil {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
 			"password.reset_requested", "mail_failed", string(CodeMailDeliveryFailed), request.RequestID)
 		return BeginResult{}, nil
@@ -351,7 +351,7 @@ func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (R
 		s.opts.Logger.Warn("找回改密后 OAuth 撤销事件写入失败", "error", outboxErr)
 	}
 	// 安全告知：投递失败只记录失败审计，不回滚已成功重置；正文不含密码/token。
-	s.sendResetNotice(ctx, resetRequest.UserID, request.RequestID)
+	s.sendResetNotice(ctx, resetRequest.UserID, request.RequestID, resetRequest.ID)
 	return ResetResult{
 		UserID: resetRequest.UserID, SecurityVersion: result.SecurityVersion,
 		RequiresRelogin: true, SessionsRevoked: sessionsRevoked,
@@ -404,22 +404,41 @@ func (s *Service) invalidatePending(ctx context.Context, userID, requestID, reas
 }
 
 // sendResetNotice 在找回重置成功后发送安全告知；失败只记录失败审计，不回滚重置。
-func (s *Service) sendResetNotice(ctx context.Context, userID, requestID string) {
+// 步骤 197：配置可靠投递时改走 mailer 队列（失败由任务有限重试承担）；nil 时保持
+// 直接 Sender 回退（单测/嵌入兼容）。enqueue 成功仅表示“已受理/排队”，不表示送达。
+func (s *Service) sendResetNotice(ctx context.Context, userID, requestID, resetID string) {
 	email, found, err := s.opts.Store.VerifiedEmail(ctx, userID)
 	if err != nil || !found || email == "" {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
 			"password.reset_notice_failed", "no_verified_email", string(CodeMailDeliveryFailed), requestID)
 		return
 	}
-	content, err := s.opts.Templates.Render(mailer.RenderRequest{
+	render := mailer.RenderRequest{
 		Kind: mailer.KindSecurityNotice,
 		Notice: &mailer.SecurityNoticeData{
 			Event:      "密码已通过邮件找回被重置",
 			OccurredAt: s.now().Format(time.RFC3339),
 			AppName:    s.opts.AppName, SupportURL: s.opts.SupportURL,
 		},
-	})
-	if err != nil {
+	}
+	if s.opts.Deliveries != nil {
+		caller, callerErr := mailer.SystemCaller("passwordreset")
+		if callerErr != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+				"password.reset_notice_failed", "delivery_enqueue_failed", string(CodeMailDeliveryFailed), requestID)
+			return
+		}
+		if _, enqueueErr := s.opts.Deliveries.Enqueue(ctx, mailer.EnqueueRequest{
+			Caller: caller, IdempotencyKey: "password-reset-notice-" + resetID,
+			Kind: mailer.KindSecurityNotice, Recipient: email, Data: render, RequestID: requestID,
+		}); enqueueErr != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+				"password.reset_notice_failed", "delivery_enqueue_failed", string(CodeMailDeliveryFailed), requestID)
+		}
+		return
+	}
+	content, renderErr := s.opts.Templates.Render(render)
+	if renderErr != nil {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
 			"password.reset_notice_failed", "template_invalid", string(CodeMailDeliveryFailed), requestID)
 		return
@@ -510,14 +529,30 @@ func validResetID(value string) bool {
 }
 
 // sendResetMail 渲染并投递找回邮件；明文 token 只出现在该邮件正文中。
-func (s *Service) sendResetMail(ctx context.Context, candidate Candidate, resetURL, requestID string) error {
-	content, err := s.opts.Templates.Render(mailer.RenderRequest{
+// 步骤 197：配置可靠投递时改走 mailer 队列（幂等键由 resetID 绑定业务实例）；
+// nil 时保持直接 Sender 回退。enqueue 成功只表示已受理，不表示已送达。
+func (s *Service) sendResetMail(ctx context.Context, candidate Candidate, resetURL, requestID, resetID string) error {
+	render := mailer.RenderRequest{
 		Kind: mailer.KindPasswordReset,
 		PasswordReset: &mailer.PasswordResetData{
 			DisplayName: candidate.Username, ResetURL: resetURL,
 			ExpiresIn: formatDuration(s.opts.TokenTTL), AppName: s.opts.AppName,
 		},
-	})
+	}
+	if s.opts.Deliveries != nil {
+		caller, callerErr := mailer.SystemCaller("passwordreset")
+		if callerErr != nil {
+			return fmt.Errorf("%w: 无法构造投递身份", ErrMailFailed)
+		}
+		if _, enqueueErr := s.opts.Deliveries.Enqueue(ctx, mailer.EnqueueRequest{
+			Caller: caller, IdempotencyKey: "password-reset-" + resetID,
+			Kind: mailer.KindPasswordReset, Recipient: candidate.Email, Data: render, RequestID: requestID,
+		}); enqueueErr != nil {
+			return fmt.Errorf("%w: 投递入队失败", ErrMailFailed)
+		}
+		return nil
+	}
+	content, err := s.opts.Templates.Render(render)
 	if err != nil {
 		return fmt.Errorf("%w: 模板渲染失败", ErrMailFailed)
 	}
