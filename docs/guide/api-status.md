@@ -50,8 +50,8 @@ Handler 会在 `<prefix>/openapi.json` 提供该文档。
 **它不包含**业务接口（账户、权限、OAuth/OIDC、设备码、扫码、管理、报告、备份等）的
 路径定义。真实状态：**OAuth/OIDC 协议端点、管理 JSON API、托管 API 与应用客服 API 已装配**
 （可配置开关，默认关闭：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`、
-`--enable-managed-api`、`--enable-app-support`）；**设备码、扫码登录、令牌状态查询
-（introspection）仅部分实现且未完成验收（142–145，143 未交付）**；维护模式一律 503（见
+`--enable-managed-api`、`--enable-app-support`）；**设备码与扫码登录已按步骤 192/193
+验收其已实现边界；令牌状态查询（introspection）仍未交付（143）**；维护模式一律 503（见
 [deployment-modes.md](deployment-modes.md) 第 3.1 节与 `standalone-service.md` 第
 3.8 节）。不要按“OpenAPI 里有”去对接，
 也不要为了对接去改本文件；协议契约目前以受信 Go API 与
@@ -61,6 +61,14 @@ Handler 会在 `<prefix>/openapi.json` 提供该文档。
 与内置账户入口页（`<prefix>/login` 等）提供服务；但它同样**不提供业务 JSON API**，
 OpenAPI 仍只有上述两条路径。`login-server init` 是本地受控首次初始化入口，
 不是 HTTP 接口。
+
+管理 JSON API（`--enable-admin-api` 开启，默认关闭）挂载在 `/admin/v1` 下，本轮新增/验收的
+关键路由包括：`GET /admin/v1/sessions`（强认证管理会话 + 范围授权；步骤 187）、
+`POST /admin/v1/sessions/revoke`（`session.revoke.other` 敏感策略 + 186 证明）、
+`GET /admin/v1/support/recovery/requests[/{id}]`（步骤 188 人工恢复待办/详情，逐条判权）。
+写操作要求管理会话与 186/187 的一次性再认证证明；字段与错误 envelope 以
+`internal/adminapi` GoDoc 和开启 `--enable-admin-api` 后的真实响应为准，不要从页面路由
+推断 API 路径。
 
 预览文档（不监听端口，直接生成）：
 
@@ -120,7 +128,7 @@ document, err := login.OpenAPIDocument("/login") // /login 是路径前缀，可
 | 缺口 | 影响 |
 |---|---|
 | 业务 HTTP API 与 OpenAPI 业务路径未提供 | 不能用标准 HTTP 客户端对接账户/OAuth/OIDC/管理能力 |
-| 独立服务可启动，页面/协议按开关提供 | `login-server serve` 可启动并服务健康检查与 14 个页面选项（默认注册 12、条件注册 2），具备单实例数据库锁、访问日志轮转、后台任务执行器/调度器（邮件投递本地禁用、Webhook 投递）、管理会话强认证门禁、真实敏感操作 policy+reauth 链；OAuth/OIDC 协议端点（Discovery/JWKS/授权/令牌/UserInfo/撤销）、管理 JSON API、托管 API 与应用客服 API 已实现但默认关闭；设备码/令牌状态查询/扫码登录仅部分实现且未完成验收（142–145） |
+| 独立服务可启动，页面/协议按开关提供 | `login-server serve` 可启动并服务健康检查与 14 个页面选项（默认注册 12、条件注册 2），具备单实例数据库锁、访问日志轮转、后台任务执行器/调度器（邮件投递本地禁用、Webhook 投递）、管理会话强认证门禁、真实敏感操作 policy+reauth 链；OAuth/OIDC 协议端点（Discovery/JWKS/授权/令牌/UserInfo/撤销）、管理 JSON API、托管 API 与应用客服 API 已实现但默认关闭；设备码与扫码登录已按 192/193 验收；令牌状态查询（introspection）仍未交付（143） |
 | 完整服务装配入口未公开 | 外部宿主无法只靠公开 API 装配完整身份服务；独立进程请用 `login-server` |
 | `cmd/*` 参数与输出不承诺稳定 | 发布包脚本应以本文与 `--help` 为准，不要长期依赖输出文本 |
 | 未发布 `v1.0.0` | 破坏性变更策略按 `host_integration.md` 第 2 节执行，但仍应做适配测试 |

@@ -107,7 +107,7 @@ $action = New-ScheduledTaskAction -Execute "C:\apps\evernight-login\bin\login-ba
 
 - 服务单元/Windows 服务样例**未在真实服务管理器上验收**；样例启动命令仍需补
   `serve --config ...` 参数。OAuth/OIDC 协议端点与管理 JSON API 已装配但默认关闭
-  （需配置开关），设备码/扫码/令牌状态查询部分实现且未完成验收（142–145）。
+  （需配置开关），设备码与扫码登录已按 192/193 验收；令牌状态查询（introspection）仍未交付（143）。
 - 未实现进程守护、双机主备、自动故障切换；SQLite 单实例部署。
 - 没有“服务运行中禁止 CLI 应急操作”的进程锁装配：`loginctl root-recover` 等命令要求
   操作者确认停服/维护并取得排他锁，详见相关命令帮助。

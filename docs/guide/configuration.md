@@ -194,6 +194,18 @@ secrets:
 > 环境变量名是稳定契约：新增字段只能追加新变量，不能改名已有变量。
 > 秘密的环境变量既可直接提供值，也可在 YAML 中引用；诊断与错误输出始终脱敏。
 
+> **邮件队列与通知状态（步骤 197）**：业务邮件（找回链接/找回后安全告知、人工恢复完成
+> 通知、敏感操作告知）先写入可靠投递队列，状态记为 `queued`（已受理、待投递），
+> **`queued` 不等于已送达**；真实送达/失败以 `mail_deliveries` 投递记录与投递任务终态为准。
+> `mail.delivery.max_attempts`（1～10，默认 3）是受控重试上限，超过后为失败终态
+> （`MAIL_DELIVERY_FAILED`），已完成的业务变更不回滚。同一业务实例的重复入队由幂等键去重
+> （如 `password-reset-<请求ID>`、`manual-recovery-<恢复ID>-<kind>`、
+> `security-notice-<请求/摘要>-<outcome>`），重试不会重复发送。`mail.enabled=false` 时
+> 邮件能力明确拒绝；人工恢复启用期要求真实邮件通道（队列或发送器），否则 fail-closed。
+> 迁移 `0049_notification_queued_state.sql` 为 `security_notifications.state` 与
+> `manual_recovery_executions.notification_state` 增加 `queued` 枚举（已有库升级后需重启服务
+> 使新状态语义生效；升级回归登记 203）。
+
 ## 5. 修改配置的正确姿势
 
 1. **先校验再使用**：改完先 `loginctl config validate` 或 `go run ./examples/config-load`，

@@ -113,6 +113,8 @@
 | 报告 PDF 失败 | 需要宿主提供中文字体；仓库不随包附带字体 |
 | 备份 `create` 报参数/路径错误 | 需先准备受保护输出目录与主密钥环文件；主密钥环由首次初始化 `login-server init --master-key-file <受保护路径>` 生成（只打印路径，不打印密钥材料），`login-backup --key-file` 指向同一文件，并与数据库/备份分开保存（见 [backup-and-restore.md](backup-and-restore.md) 第 3、5 节） |
 | 配置改了不生效 | 看字段“分类”：`restart-required` 必须重启进程；`hot-reloadable` 也需要宿主触发重新加载（CLI 不会替你重启） |
+| 页面/详情显示“完成通知已受理（待投递）” | 通知已入可靠投递队列（`queued`），**不代表已送达**；查 `mail_deliveries` 投递记录与投递任务终态。不要因为 `queued` 重试恢复流程，也不要把它显示成“已发送” |
+| 邮件通知一直 queued / 反复重试 | 检查 `mail.enabled`、SMTP/CA/凭据与投递 worker；`mail.delivery.max_attempts`（默认 3）用尽后为失败终态 `MAIL_DELIVERY_FAILED`，已完成的业务变更不回滚（步骤 197） |
 
 ## 6. 安全注意事项
 

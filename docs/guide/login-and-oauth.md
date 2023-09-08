@@ -179,7 +179,7 @@ go run .\examples\app-qr-login
 
 ## 9. 未实现/未实测（如实登记）
 
-- 令牌状态查询（introspection）**仍有未完成验收项**（142–145）；默认关闭，Discovery 只声明已实现能力，不能按未验收能力对接。OAuth/OIDC 其他端点、管理 JSON API、托管 API 与应用客服 API 需显式开关（默认关闭），未开启时 404、维护模式 503。
+- 令牌状态查询（introspection）**仍未交付（143）**；默认关闭，Discovery 只声明已实现能力，不能按未验收能力对接。OAuth/OIDC 其他端点、管理 JSON API、托管 API 与应用客服 API 需显式开关（默认关闭），未开启时 404、维护模式 503。
 - APP 扫码登录已完成双会话（匿名发起端网页 + 已登录确认端）真实内置网页与 HTTP 闭环验收（确认展示/批准/拒绝/领取/重复/抢领/过期/取消，步骤 193，见 `docs/acceptance/step193-qr-login.md`）；真实手机相机扫码与真机 APP 互操作未测。
 - 设备码已完成真实公开客户端 + 真实 HTTP 回环服务的边界验收（pending/slow_down/确认页应用与范围/批准领取/重复兑换/错误客户端/拒绝/过期/取消/Discovery 一致性，步骤 192，见 `docs/acceptance/step192-device-code.md`）；真实手机/硬件与第三方客户端库互操作未测。
 - OIDC UserInfo 已用真实 HTTP 协议流程验收正向接入与 audience/scope/签发方/重放/撤销/过期拒绝（步骤 191，见 `docs/acceptance/step191-oidc-userinfo.md`）；真实第三方 OIDC 客户端库互操作未测。

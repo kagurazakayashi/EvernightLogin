@@ -117,6 +117,41 @@ REAUTH_REQUIRED 时按步骤 186 契约完成一次性再次认证（密码/TOTP
 `loginctl confirm begin|verify` 取得证明并传 `--approval-file`；证明不入命令行/日志/JSON。
 `revoked=0` 表示目标不存在、已失效或超出作用范围（幂等成功，不代表发生撤销）。
 
+### 5.1 客服工单与人工恢复（步骤 188）
+
+```bat
+:: 系统客服工单（在线管理 API；写操作经服务端权限与 186 证明重新判权）
+loginctl support case create --operator <客服标识> --summary "<脱敏求助摘要>" --json
+loginctl support case send-reset --case-id <case_id> --operator <客服标识> --json
+
+:: 人工核验恢复（默认关闭；申请 → 独立审批 → 受控执行）
+loginctl support recovery list --state pending_approval --json
+loginctl support recovery get <request_id> --json
+loginctl support recovery request --target-user <user_id> --channel <受控渠道> --json
+loginctl support recovery approve <request_id> --reason "<依据>" --json
+loginctl support recovery reject <request_id> --reason "<原因>" --json
+loginctl support recovery cancel <request_id> --reason "<原因>" --json
+loginctl support recovery execute <request_id> --reason "<执行依据>" --json
+```
+
+- 权限三权分离：请求→`recovery.request`、审批→`recovery.approve`（MFA 恢复为
+  `recovery.mfa.approve`）、执行→`recovery.execute`；**执行人不得是发起者或审批人**，违反
+  由服务端拒绝并写审计。`support recovery execute` 还会复核受保护目标（root 与受保护
+  管理角色）后 fail-closed。
+- `approve`/`execute` 先从受控详情（管理 API `GET /admin/v1/support/recovery/requests/{id}`）取
+  `content_digest`/`approval_id` 绑定 186 证明；参数由服务端唯一构造器生成，不手拼。
+  敏感动作遇到 `REAUTH_REQUIRED`/`MFA_REQUIRED` 时按 186 契约自动 `begin+verify` 重试
+  同一 method/path/body；证明只在内存使用，不进入命令行、日志或 JSON。
+- 状态以服务端返回为准：`initiated`（已发起）、`pending_approval`（待独立审批）、
+  `executable`（等待期后已可执行）、`history`（终态历史）；列表逐条按当前权限过滤。
+- 页面与 JSON API 同源：内置客服/审批页面使用同一 manualrecovery/support 服务；应用客服
+  只能在应用范围创建工单，不得调用全局审批/执行（见
+  [support-and-recovery.md](support-and-recovery.md) 与
+  [../deployment/app-support-api.md](../deployment/app-support-api.md)）。
+- 限制：CLI 的“真实 adminapi + 186 中间件”组合端到端尚未补跑（188 报告 §4.3），页面
+  表单驱动与真实浏览器 Passkey ceremony 未实测（登记 203）；默认关闭时命令返回真实关闭
+  原因，不伪造成功。
+
 ## 6. 用户只读/启停（本地管理员边界）
 
 ```bat

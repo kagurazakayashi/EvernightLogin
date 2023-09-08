@@ -90,7 +90,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Mail -Req
 ## 6. 发布包与测试器边界
 
 - `scripts/build-release.ps1` 只构建 `cmd/login-server`、`cmd/loginctl`、`cmd/login-backup`，**不包含** `EvernightMail`、测试夹具或测试邮件工具。
-- 生产发布包不需要 Mail；Mail 只用于开发测试与发布前邮件链路验证。发布包内不包含 `tools/`、`examples/`、`scripts/`，也不包含测试器源码或构建产物。
+- 一键构建入口（步骤 179）`build.ps1` 在干净提交/固定 gitlink 下同时构建 Login 三命令与 Mail 的 `cmd/evernightmail`（六目标、24 项产物、`dist/build/build-summary.json`），两个模块串行调用 go-build-all；任一步失败即非 0。发布打包（步骤 202）`scripts/package-release.ps1` 按 2 产品 × 6 目标生成 12 个 zip，Mail 使用独立 `evernightmail-<version>-<os>-<arch>.zip`；Mail 独立 Windows 功能复验记录见 `EvernightMail/docs/acceptance/step175-windows.md`。
+- 生产发布包不需要 Mail 的测试器；Mail 只用于开发测试与发布前邮件链路验证。发布包内不包含 `tools/`、`examples/`、`scripts/`，也不包含测试器源码或构建产物；Mail zip 只含 `bin/evernightmail`、许可证/第三方声明、样例配置与最小运行文档。
 - 开发包/源码树可保留测试夹具（例如父项目 `internal/mailtest`，迁移完成后）与 Mail 子模块，但不得把它们误打进生产发布包。
 - 推送/发布/上传仍由维护者人工执行；AI 不推送远端、不创建发布包上传。
 

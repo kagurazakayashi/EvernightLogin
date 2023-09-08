@@ -3,7 +3,7 @@
 本文给出一条**当前版本真实可执行**的最短路径：从空配置开始，校验配置、迁移一个临时
 数据库、做本地诊断、执行首次安全初始化，并真实启动独立 HTTP 服务。每一步都给出可
 复现命令与预期结果；OAuth/OIDC 协议端点与管理 JSON API 已实现（可配置开关，默认关闭），
-部分实现/未完成验收的能力（设备码、扫码登录、令牌状态查询/introspection，142–145）与未真机互操作项在文末如实
+设备码与扫码登录已按步骤 192/193 验收；令牌状态查询（introspection）仍未交付（143）与未真机互操作项在文末如实
 列出，不把规划写成可用。
 
 > 运行环境：Windows 11 / amd64 / Go 1.27.x（本项目唯一运行实测平台）。更完整的部署、Web 管理台、CLI/API 接入与安全运维说明见根目录 [README.md](../../README.md)。
@@ -83,8 +83,8 @@ if not exist %TEMP%\login-begin\data mkdir %TEMP%\login-begin\data
 
 - 第 1 条退出码 1，错误码 `DATABASE_NOT_INITIALIZED`，明确说明“不会创建新数据库”。
 - 不带 `--confirm MIGRATE` 的 `migrate apply` 退出码 2，错误码 `USAGE_INVALID`。
-- 带确认的 `migrate apply` 退出码 0，`data.applied` 列出 `0001`…`0046` 共 46 个迁移。
-- 复查 `migrate status`：`applied_count=46`、`applied_version="0046"`、`current=true`。
+- 带确认的 `migrate apply` 退出码 0，`data.applied` 列出 `0001`…`0049` 共 49 个迁移。
+- 复查 `migrate status`：`applied_count=49`、`applied_version="0049"`、`current=true`。
 
 迁移只作用于临时库；已应用的迁移不可改写，真实部署中迁移前必须先备份（见
 [backup-and-restore.md](backup-and-restore.md)）。
@@ -213,5 +213,5 @@ rmdir /s /q %TEMP%\login-begin
 | `go run ./examples/deployment-minimal` | 0 | 装配自检，不监听端口 |
 
 下一步阅读：[deployment-modes.md](deployment-modes.md)（选部署形态）→
-[configuration.md](configuration.md)（配好 51 个字段）→
+[configuration.md](configuration.md)（配好 52 个字段）→
 [api-status.md](api-status.md)（宿主集成）。

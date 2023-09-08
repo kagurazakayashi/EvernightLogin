@@ -233,8 +233,8 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 ## 8. 已知限制
 
 - 独立服务装配为 MVP：包内 `login-server` 可 `init`/`serve`；OAuth/OIDC 协议端点与管理
-  JSON API 已装配但默认关闭（开关见 `standalone-service.md` 第 3.8 节）；设备码/扫码/
-  令牌状态查询部分实现且未完成验收（142–145）；14 个页面选项（默认注册 12、条件 2）；root Passkey 强认证绑定已接线
+  JSON API 已装配但默认关闭（开关见 `standalone-service.md` 第 3.8 节）；设备码与扫码登录已按
+  192/193 验收其已实现边界，令牌状态查询（introspection）仍未交付（143）；14 个页面选项（默认注册 12、条件 2）；root Passkey 强认证绑定已接线
   但未做真机互操作。不要按“已上线完整 OAuth2/OIDC 服务”宣传本发布包。
 - 本轮已从干净 HEAD `597b503` 重建并完成 `verify-release.ps1` 159 项校验；版本号仍为开发态
   `0.1.0-dev`，正式发布版本号需维护者决定后重建。包内文档与 `VERSION.txt`/`README.txt` 由
@@ -255,3 +255,81 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 - 字体未随包分发，PDF 报告需要单独获取字体并配置路径。
 - 发布包应由干净工作树构建（`VERSION.txt` 标注 `worktree_dirty: no`）；若为 `yes` 说明包含
   未提交改动，不得作为正式发布，应由维护者在提交后重新构建。
+
+## 9. 双产品发布打包与独立校验（步骤202）
+
+步骤 202 在步骤 179 的 `dist/build/` + `build-summary.json`（format=1，24/24 已验证、
+无 dirty/SKIPPED/FAILED）之上生成**两个产品 x 六个目标 = 12 个 zip**；本步骤只提供脚本与
+文档骨架，不生成正式发布包，正式打包等待 200/201 完成并给出干净最终提交。
+
+### 9.1 打包命令
+
+```powershell
+# 前置：先用步骤179入口在干净提交重建 dist/build（-Analyze on）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-release.ps1 `
+  -Version 0.1.0   `
+  -BuildDir distuild `
+  -BuildSummary distuilduild-summary.json `
+  -OutputDir dist
+elease\evernight-0.1.0
+```
+
+输出：
+
+- `evernight-login-<ver>-<os>-<arch>.zip` x6（bin/login-server、loginctl、login-backup +
+  config/deploy/docs/licenses/LICENSE/第三方声明/VERSION/BUILDINFO/DEPENDENCIES/包内 SHA256SUMS.txt）；
+- `evernightmail-<ver>-<os>-<arch>.zip` x6（bin/evernightmail + LICENSE/第三方声明/
+  evernightmail.example.yaml/docs/五篇文档/VERSION/BUILDINFO/DEPENDENCIES/包内 SHA256SUMS.txt）；
+- 顶层 `SHA256SUMS.txt`（GNU 格式、LF、字节序排序、不含自身）、`build-matrix.txt`、
+  `release-summary.json`（format=1，含 zip 与包内文件 size/sha256）、`RELEASE-NOTES.md` 模板。
+
+安全/边界：脚本只读 Git 与构建树，不做 commit/tag/push/upload，不启动服务/端口，不联网；
+显式复制清单构造包内容，`_tools/`、AI 资料、数据库、日志、密钥、脚本、子模块源码、字体本体
+不进入任何 zip；任一必需元数据缺失退出 30，不静默省略。当前仓库若尚未提供 `config/`、`deploy/`
+等正式元数据，正式打包会以退出码 30 失败（预期，待 200/201）；不会静默省略必需文件。
+
+### 9.2 校验命令与退出码
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scriptserify-release.ps1 `
+  -ReleaseDir dist
+elease\evernight-0.1.0 `
+  -BuildSummary distuilduild-summary.json
+```
+
+校验内容：顶层文件集合与校验和/矩阵一致；解压后文件集合、禁止项、必需许可/元数据；
+包内 SHA256SUMS（GNU 格式、LF、排序、无自身）；PE/ELF/Mach-O magic 与架构、size/sha256
+对照 build-summary；Windows/amd64 四命令短冒烟（login-server `--version`/`--help`、loginctl
+`--version`、login-backup `version`、evernightmail `--version`），不启动 `serve`/`init`、不监听端口。
+
+退出码：0 通过；10 发布目录/前置/矩阵结构不符；20 build-summary 不合格（非 24/24、dirty、
+SKIPPED/FAILED）；21 解压/文件集合/禁止项；22 顶层或包内校验和不符；30 许可/元数据缺失；
+31 二进制类型/架构/冒烟失败；40 内部错误。
+
+### 9.3 已验证的干跑方式（2026-11-23）
+
+在 `P:\go\tmp\step202-dryrun` 用 179 兼容的本地临时产物（旧六目标二进制）合成 build-summary
+与最小元数据根，运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-release.ps1 -Version 0.1.0-dev `
+  -BuildDir P:\go	mp\step202-dryrunuild `
+  -BuildSummary P:\go	mp\step202-dryrunuild-summary.json `
+  -MetadataRoot P:\go	mp\step202-dryrun\meta `
+  -OutputDir P:\go	mp\step202-dryrun
+elease
+powershell -NoProfile -ExecutionPolicy Bypass -File scriptserify-release.ps1 `
+  -ReleaseDir P:\go	mp\step202-dryrun
+elease `
+  -BuildSummary P:\go	mp\step202-dryrunuild-summary.json -ExpectedVersion 0.1.0-dev
+```
+
+结果：packaging PASS 12 zip；verify PASS（含 Windows/amd64 冒烟）；干跑临时目录与二进制已清理
+（仅保留本文件记录）。正式发布前仍必须使用真实 179 干净构建重新执行，不能复用预演产物。
+
+### 9.4 已知限制
+
+- zip 不保留 Unix 执行位，Linux/macOS 解压后需 `chmod +x bin/*`；发布说明中已标注。
+- 仅 Windows/amd64 运行冒烟；其他五目标只做编译/类型/SHA 检查，不宣称运行实测。
+- 字体文件本体不随包（仅 OFL 文本）；PDF 报告使用系统/外部字体。
+- 应用客服/Mail 等产品文档按 201 定稿；本步骤只固定文件集合与校验规则，不代替最终文档评审。

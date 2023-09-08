@@ -82,6 +82,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -OutputDir P:\go\t
 ## 6. 证据与复现
 
 - 入口/脚本：`build.ps1`、`build.cmd`、`build.sh`、`scripts/build-all.ps1`、`scripts/verify-build.ps1`。
+- 发布包（12 个 per-target zip）由步骤 202 基于本步 24 项目录生成，命令/布局/校验见
+  [`docs/deployment/packaging.md`](../deployment/packaging.md) §9。
 - 样例证据（提交边界之外、开发记录）：`.ai/lead/reports/step179-build-summary.sample.json`、`.ai/lead/reports/step179-checklist.sample.txt`、`.ai/lead/reports/step179-verify-result.sample.json`；详细报告 `.ai/lead/reports/step179-dev.md`。
 - 复现：
 

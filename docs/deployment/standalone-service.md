@@ -19,7 +19,7 @@
 | 访问日志文件受控轮转（单文件上限 + 历史数量上限） | 已实现（文件访问日志默认启用，见第 3.5 节） |
 | 单实例数据库排他锁（同一 SQLite 只允许一个 `serve`） | 已实现（跨进程文件锁，见第 3.5 节） |
 | 后台任务执行器 + 定时计划调度器（`internal/task`） | 已实现（随 serve 启动；已注册邮件投递、Webhook 投递处理器） |
-| 通知投递：邮件/Webhook 投递队列与 worker | 已实现但**本地禁用外发**：邮件发送器为显式「未配置」实现，投递必以明确错误失败；Webhook 投递使用真实出站网络策略，但端点管理入口未开放 |
+| 通知投递：邮件/Webhook 投递队列与 worker | 已实现（步骤 197 起业务邮件先入可靠投递队列、记 `queued` 后由 worker 投递；`queued≠delivered`，真实送达/失败以投递记录与任务终态为准）；邮件发送器仍需 `mail.enabled` + SMTP 配置，未配置时任务以明确错误失败（默认本地禁用外发）；Webhook 投递使用真实出站网络策略，但端点管理入口未开放 |
 | 管理会话强认证门禁（root/高权限必须完成强认证且在新鲜度窗口内） | 已实现（页面会话层，见第 3.6 节） |
 | 协议端点/管理 JSON API 装配挂载点 | 已实现（`ServeOptions.ExtraMounts` + 内置协议/管理 API 开关，见第 3.7、3.8 节） |
 | 14 个页面选项（账户入口/资料/两步验证/OAuth/安全中心/用户/RBAC/应用/客服/敏感策略/审计/统计/报告/备份）：默认注册 12 个、条件注册 2 个 | 已装配（真实领域服务 + 生产授权；逐页依赖见第 3.8 节） |
@@ -196,7 +196,7 @@ login-server.exe serve --config config\login.yaml ^
 ## 6. 已知限制（与本次 MVP 缺口一致）
 
 1. **协议端点默认关闭且能力有限**：授权码/刷新/客户端凭证、Discovery、JWKS、UserInfo、
-   撤销已实现并默认关闭；**设备码/扫码/状态查询仅部分实现且未完成验收（142–145，143 未交付）**：
+   撤销已实现并默认关闭；**设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）仍未交付（143）**：
    默认关闭，设备确认页/短码密钥环/资源服务注册表/扫码领取闭环尚未完成生产验收。
    第三方客户端互操作未做真实联调。
 2. **管理 JSON API 默认关闭**：`--enable-admin-api` 后提供任务/错误码/审计/报告/计划/
@@ -207,9 +207,11 @@ login-server.exe serve --config config\login.yaml ^
    完成真实 Passkey（WebAuthn）注册，再重新登录取得管理会话；自动化测试覆盖服务层与
    页面状态，但**未**在真实浏览器 + Windows Hello/YubiKey 上操作验证。绑定前管理页
    仍 403（fail-closed）。
-5. **邮件/Webhook 不真实外发**：邮件发送器是显式「未配置」实现（投递/告知以明确失败
-   留痕，不访问网络）；因此两步验证邮件因素、找回密码、安全告知不可用（TOTP/Passkey
-   不受影响）。Webhook 端点管理入口未开放。注册邮箱验证在配置要求时仍拒绝启动。
+5. **邮件/Webhook 默认不真实外发**：默认邮件发送器是显式「未配置」实现（投递/告知任务以
+   明确错误失败留痕，不访问网络）；配置 `mail.enabled` + SMTP 后业务邮件先入可靠投递队列
+   （`queued`，见 3.10），由 worker 受控重试投递，`queued` 不等于已送达。未配置时两步验证
+   邮件因素、找回密码、安全告知不可用（TOTP/Passkey 不受影响）。Webhook 端点管理入口未开放。
+   注册邮箱验证在配置要求时仍拒绝启动。
 6. **后台任务调度已启动，但领域处理器有限**：执行器 + 定时计划调度器随 serve 启动，当前
    只注册邮件投递与 Webhook 投递处理器；报告计划生成、备份计划/清理、审计保留清理等
    处理器要等 `reports`/`backupadmin`/`auditops` 域服务装配后注册（否则相应管理页继续
@@ -274,6 +276,25 @@ protocol:
 4. 重新登录：密码 + Passkey 第二步 → 服务端记录强认证时间 → 完整会话。
 5. 该会话在强认证新鲜度窗口内（默认 15 分钟）可进入管理页；过期后需重新强认证。
 6. 绑定前/强认证过期后管理页仍 403；不存在只凭密码的高权限会话旁路。
+
+### 3.10 邮件投递队列与通知状态（步骤 197）
+
+- 四条业务邮件路径（密码找回链接、找回后安全告知、人工恢复完成通知、敏感操作告知）先写入
+  可靠投递队列（复用 `mailer` 的幂等键、`MaxAttempts` 与任务 Reconcile），成功只记
+  `queued`，再由 `mail_delivery` 任务 worker 投递；真实送达/失败以 `mail_deliveries`
+  投递记录与任务终态为准。
+- **`queued` ≠ 已送达**：页面/详情显示“完成通知已受理（待投递）”
+  （`manual_recovery.notification.queued`）；`sent` 仅表示直接发送器已接受（队列不可用的
+  回退路径），不用于队列路径。
+- 失败按 `mail.delivery.max_attempts`（1～10，默认 3）有界重试，超过后任务失败终态
+  `MAIL_DELIVERY_FAILED`；通知失败不回滚已完成的业务变更。幂等键绑定业务实例
+  （如 `password-reset-<prq>`、`manual-recovery-<rcv>-<kind>`、
+  `security-notice-<req>-<outcome>`），重复入队不会重复发送。
+- 迁移 0049 为 `security_notifications.state` 与 `manual_recovery_executions.notification_state`
+  增加 `queued` 枚举（SQLite 按既有模式重建表）。`mail.enabled=false` 时邮件能力明确拒绝；
+  人工恢复启用期要求真实邮件通道（队列或 Sender），否则 fail-closed。
+- 未完成（登记 203）：notification 记录 `queued→delivered/failed` 终态回写、通知页与投递
+  证据关联、已有 0048 生产库升级回归。197 未改 EvernightMail 子模块（固定 `b9891ac`）。
 
 ## 7. 服务托管
 

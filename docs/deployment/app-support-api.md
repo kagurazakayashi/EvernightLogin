@@ -58,6 +58,15 @@ Token 必须满足：
 不返回密码/MFA/恢复链接/验证码。创建工单初始状态为 `manual_review`（人工升级申请），
 应用不能自行改为 `closed`/审批通过，也不能触发全局恢复执行。
 
+**全局审批/执行不在本 API**：系统侧人工恢复（步骤 188）由管理 JSON API
+`GET /admin/v1/support/recovery/requests[/{id}]` 与
+`loginctl support recovery list|get|request|approve|reject|cancel|execute` 提供，要求系统
+`recovery.request`/`recovery.approve`（MFA 为 `recovery.mfa.approve`）/`recovery.execute`
+权限、三权分离（执行人≠发起者/审批人）与 186 一次性再认证证明；应用客服 Token 不得调用
+全局审批/执行，应用工单只作为跨链路来源。详见
+[../guide/support-and-recovery.md](../guide/support-and-recovery.md) 与
+[../guide/root-cli.md](../guide/root-cli.md) §5.1。
+
 ## 4. 响应与错误
 
 成功：
