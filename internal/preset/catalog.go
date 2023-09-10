@@ -382,17 +382,20 @@ func catalogV1() *Catalog {
 //   - false：没有真实执行路径，或流程被默认关闭/执行器 fail-closed，不能完成该权限
 //     承诺的业务动作。
 //
-// 保持 false 的 6 键及原因：
+// 保持 false 的 5 键及原因：
 //   - recovery.approve / recovery.mfa.approve：internal/manualrecovery 的申请/审批/
 //     执行状态机与权限判定已实现，但独立服务装配为 Policy{Enabled:false} 且执行器是
 //     显式 fail-closed 实现，人工核验恢复无法真正完成（MFA 审批在生产装配中也未按
 //     操作类型区分授权键）。
-//   - authorization.check：internal/tokenauthz 的联合判定服务与 HTTP 端点在库内已实现
-//     并有验收，但独立服务未挂载该端点、也没有以该权限键做服务端判定。
 //   - sessions.revoke：internal/session.AdminRevoke 有权限授权器实现，但生产装配未注入
 //     ScopeAuthorizer，`loginctl session admin-revoke` 明确返回强认证不可用；当前只有
 //     本人会话撤销（self.sessions.manage）可用。
-//   - settings.manage / diagnostics.read：没有对应的服务端执行路径（见条目内注释）。
+//   - settings.manage / diagnostics.read：没有对应的服务端执行路径，保持 false 且
+//     **不授予任何预设角色**（避免误以为可用）；后续实现从 203 起登记。
+//
+// authorization.check 已标记 Implemented=true：扩展联合判定端点 POST /oauth/token/authorize
+// 在登记 protocol.resource_services 时由生产装配挂载（internal/serverapp/resource_authz.go），
+// 权限键是能力标记、不授予预设角色；端点仍以资源服务 client 凭证 + 令牌当前权限联合判定。
 func catalogPermissionsV1() []PermissionDefinition {
 	return []PermissionDefinition{
 		// 本人权限：所有正常用户的基础角色。
@@ -559,7 +562,9 @@ func catalogPermissionsV1() []PermissionDefinition {
 		{
 			Key: "authorization.check", Name: "联合校验授权", Summary: "校验访问令牌与所需应用权限。",
 			Scope: "仅获准调用的应用与目标资源。", Limits: "不能查询其他应用的身份详情，不能改变权限或签发令牌。",
-			Implemented: false,
+			// 扩展联合判定端点 /oauth/token/authorize 随 protocol.resource_services 登记挂载；
+			// 能力已实现，但权限键不授予预设角色。
+			Implemented: true,
 		},
 		{
 			Key: "sessions.revoke", Name: "强制会话退出", Summary: "强制获准范围内的普通用户退出相关会话。",
@@ -648,19 +653,19 @@ func catalogPermissionsV1() []PermissionDefinition {
 			Scope: "全系统高风险操作。", Limits: "仅 root；不能通过普通角色分配下放，不能取消安全底线。",
 			RootOnly: true, RequiresReauth: true, Implemented: true,
 		},
-		// 常规设置与诊断：缺少权限键对应的服务端真实执行路径，保持未实现。
+		// 常规设置与诊断：缺少权限键对应的服务端真实执行路径，保持未实现且不授予预设角色。
 		// settings.manage：当前没有常规设置的读取/写入服务、页面或 API，只有权限目录项；
 		// diagnostics.read：仅有本地受信边界下的 `loginctl diag` 脱敏诊断，没有以该键做的
 		// 服务端管理判定，管理 API 任务详情按任务类型复用各域读取权限。
 		{
 			Key: "settings.manage", Name: "修改常规设置", Summary: "修改常规运行设置。",
 			Scope: "仅常规设置，不包含敏感策略。", Limits: "不能修改敏感操作规则、主密钥或未脱敏秘密。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: false,
 		},
 		{
 			Key: "diagnostics.read", Name: "查看运行诊断", Summary: "查看脱敏的运行诊断信息。",
 			Scope: "仅脱敏诊断信息。", Limits: "不能查看未脱敏秘密、主密钥或敏感策略内容。",
-			Implemented: false, DefaultRoles: []string{"system_admin"},
+			Implemented: false,
 		},
 	}
 }
@@ -670,7 +675,7 @@ func catalogRolesV1() []RoleTemplate {
 	return []RoleTemplate{
 		{
 			Key: "system_admin", Name: "系统管理员",
-			Summary: "管理普通用户、应用、用户组和普通角色，维护常规设置、备份与报告。",
+			Summary: "管理普通用户、应用、用户组和普通角色，维护备份与报告。",
 			Limits:  "仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围。",
 			Builtin: true, DefaultGroupKey: "system-administrators",
 			DefaultPermissions: []string{
@@ -685,8 +690,7 @@ func catalogRolesV1() []RoleTemplate {
 				"reports.generate", "reports.export", "reports.schedule.manage",
 				"reports.cleanup",
 				"backups.create", "backups.read", "backups.cancel",
-				"backups.retention", "backups.cleanup", "settings.manage",
-				"diagnostics.read",
+				"backups.retention", "backups.cleanup",
 			},
 		},
 		{

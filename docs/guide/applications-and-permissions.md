@@ -44,10 +44,11 @@
 - “作用范围”列是直白概括，完整范围/限制由权限目录（含页面展示）提供。
 - 权限目录中每项带有“是否已实现”标记，表示**服务端是否已有该权限键对应的真实业务执行
   路径且执行前经服务端授权判定**（不是“页面/领域服务是否存在”的粗略口径）。当前 51 项中
-  48 项为已实现；保持未实现的是 3 项：`authorization.check`（联合判定服务在库内已实现，
-  步骤 144 的真实 HTTP 黑盒验收未完成，独立服务是否挂载以最终装配为准）、
-  `settings.manage`、`diagnostics.read`（没有对应的服务端执行路径）。**这个标记不是功能开关**，接入时以真实服务装配与测试为准，不要据此
-  推断某能力完全不可用或已经可用。
+  49 项为已实现；保持未实现的是 2 项：`settings.manage`、`diagnostics.read`（没有对应的
+  服务端执行路径；**不授予任何预设角色**，从 203 起再实现）。`authorization.check` 已实现：
+  扩展联合判定端点 `POST /oauth/token/authorize` 在登记 `protocol.resource_services` 时由
+  生产装配挂载，权限键是资源服务能力标记、不授予预设角色。**这个标记不是功能开关**，
+  接入时以真实服务装配与测试为准，不要据此推断某能力完全不可用或已经可用。
 - 权限键只增不删、不复用；新增权限必须同步目录、说明与测试。
 
 ### 3.1 本人（所有正常用户的基础权限）
@@ -98,7 +99,7 @@
 | `applications.read` / `applications.create` / `applications.update` | 查看 / 创建 / 修改应用 |
 | `applications.credentials.manage` | 轮换应用密钥或公钥凭证 |
 | `applications.members.manage` | 管理应用成员及应用内状态 |
-| `authorization.check` | 业务服务联合校验访问令牌与所需权限 |
+| `authorization.check` | 业务服务联合校验访问令牌与所需权限（扩展端点 `/oauth/token/authorize`，登记资源服务时挂载；不授予预设角色） |
 | `sessions.revoke` | 强制获准范围内的普通用户退出会话 |
 
 ### 3.6 审计与报告
@@ -117,8 +118,8 @@
 | `backups.export` / `backups.retention` / `backups.cleanup` | 下载 / 管理保留策略 / 清理产物 |
 | `backups.restore` | 恢复备份（root 专属，维护模式 + 预演 + 凭证失效） |
 | `security.policy.manage` | 修改敏感操作策略（root 专属，不可覆盖安全约束） |
-| `settings.manage` | 修改常规运行设置 |
-| `diagnostics.read` | 查看脱敏运行诊断 |
+| `settings.manage` | 修改常规运行设置（**未实现：203，不授予预设**） |
+| `diagnostics.read` | 查看脱敏运行诊断（**未实现：203，不授予预设**） |
 
 > `root` 是特殊账户：唯一的 root 不能通过分配普通角色产生；`root_only` 的操作不会出现
 > 在可组合角色列表里，服务端会再次拒绝。不要试图用“分配一个管理员角色”制造 root。

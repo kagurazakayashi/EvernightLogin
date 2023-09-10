@@ -291,13 +291,12 @@ func TestCatalogIntegrity(t *testing.T) {
 		t.Fatalf("机器可读目录缺少版本: %s", string(data))
 	}
 	// 未实现的权限必须显式标记，不能伪装成功。逐键核对代码后：权限键对应的真实
-	// 服务端执行路径已实现的标 true；下列键没有真实执行路径，必须保持 false：
-	//   authorization.check（tokenauthz 未挂载到独立服务）、
-	//   settings.manage、diagnostics.read（无服务端执行路径）。
+	// 服务端执行路径已实现的标 true；下列键没有真实执行路径，必须保持 false 且不
+	// 授予任何预设角色：
+	//   settings.manage、diagnostics.read（无服务端执行路径，203 再实现）。
 	notImplemented := map[string]struct{}{
-		"authorization.check": {},
-		"settings.manage":     {},
-		"diagnostics.read":    {},
+		"settings.manage":  {},
+		"diagnostics.read": {},
 	}
 	for _, definition := range catalog.Permissions {
 		want := true
@@ -307,6 +306,29 @@ func TestCatalogIntegrity(t *testing.T) {
 		if definition.Implemented != want {
 			t.Fatalf("权限 %q Implemented = %v，期望 %v（未实现能力不得标记为已实现）",
 				definition.Key, definition.Implemented, want)
+		}
+	}
+	// authorization.check 有真实联合判定端点（/oauth/token/authorize，登记资源服务时
+	// 挂载），因此 Implemented=true；但作为资源服务能力标记不授予预设角色。
+	byKey := make(map[string]preset.PermissionDefinition, len(catalog.Permissions))
+	for _, definition := range catalog.Permissions {
+		byKey[definition.Key] = definition
+	}
+	authorization, ok := byKey["authorization.check"]
+	if !ok || !authorization.Implemented || len(authorization.DefaultRoles) != 0 {
+		t.Fatalf("authorization.check 应有实现且不授予预设角色: %+v", authorization)
+	}
+	for key := range notImplemented {
+		definition := byKey[key]
+		if definition.Implemented || len(definition.DefaultRoles) != 0 {
+			t.Fatalf("未实现权限 %q 必须保持 false 且不授予预设角色: %+v", key, definition)
+		}
+		for _, template := range catalog.Roles {
+			for _, granted := range template.DefaultPermissions {
+				if granted == key {
+					t.Fatalf("未实现权限 %q 不得出现在预设角色 %q 的默认权限中", key, template.Key)
+				}
+			}
 		}
 	}
 }

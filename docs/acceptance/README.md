@@ -26,6 +26,7 @@
 | `step196-backup-restore-credentials.md` | 第 9 轮步骤 196：备份恢复后旧凭据失效（会话/refresh/授权码/恢复代码/重置链接/一次性凭证/JWT 签名密钥）、失败审计与回滚边界 |
 | `step198-windows.md` | 第 9 轮步骤 198：公开接入与身份流程 Windows 独立回归（固定 commit 40bc265；外部 Module/嵌入/OIDC+PKCE/refresh/设备码/扫码/找回/queued/错误限流/旧令牌矩阵；硬件与第三方 NOT_TESTED） |
 | `step199-windows.md` | 第 9 轮步骤 199：管理隔离与客服 Windows 独立回归（固定 commit 350cbd3；角色×操作×范围矩阵 M1–M13、真实 Mail 找回/审批/执行、197 提交后需复跑通知/审计相关项） |
+| `step200-final-gap-check.md` | 第 9 轮步骤 200：最终需求差距核对（最终基线 778fc226；24 章/R01–R06/A01–A08/§4 七项关闭依据、203 与 NOT_TESTED 清单、202 发布包占位；PASS_WITH_NOTES） |
 
 ## 使用约定
 

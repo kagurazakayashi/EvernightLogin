@@ -60,7 +60,7 @@
 |---|---|
 | 状态 | 部分实现 |
 | 本项目情况 | `internal/authz` 服务端判定“令牌范围 ∩ 当前有效权限 ∩ 应用成员/状态 ∩ 数据范围”；内置页面、管理 JSON API、OAuth 客户端动作与 CLI 在线命令都经服务端重新判定，前端隐藏按钮不作为授权；系统权限与应用独有权限分离；root 唯一且不可通过普通角色分配；委派 Guard 在关键写路径同事务检查；跨应用访问返回 `APP_SCOPE_MISMATCH`/`PERMISSION_REQUIRED`。 |
-| 缺口/未覆盖 | 按部门/应用的细粒度数据范围映射尚未装配（当前授权器多按“系统范围全覆盖”处理，无权限即拒绝）；管理员强制下线未接线；权限目录中 6 个键（`recovery.approve`、`recovery.mfa.approve`、`authorization.check`、`sessions.revoke`、`settings.manage`、`diagnostics.read`）仍标记未实现。 |
+| 缺口/未覆盖 | 按部门/应用的细粒度数据范围映射尚未装配（当前授权器多按“系统范围全覆盖”处理，无权限即拒绝）；管理员强制下线未接线；权限目录中 5 个键（`recovery.approve`、`recovery.mfa.approve`、`sessions.revoke`、`settings.manage`、`diagnostics.read`）仍标记未实现；`authorization.check` 已按扩展端点 `/oauth/token/authorize` 标记实现且不授予预设，`settings.manage`/`diagnostics.read` 不授予预设并登记 203。 |
 | 证据 | [docs/guide/applications-and-permissions.md](../guide/applications-and-permissions.md)、[docs/guide/roles-and-scopes.md](../guide/roles-and-scopes.md)、`docs/acceptance/requirements-matrix-login.md` 权限矩阵；`internal/preset/catalog.go` 逐键审计注释。 |
 
 ### V5 输入验证与编码
