@@ -27,6 +27,7 @@
 | `step198-windows.md` | 第 9 轮步骤 198：公开接入与身份流程 Windows 独立回归（固定 commit 40bc265；外部 Module/嵌入/OIDC+PKCE/refresh/设备码/扫码/找回/queued/错误限流/旧令牌矩阵；硬件与第三方 NOT_TESTED） |
 | `step199-windows.md` | 第 9 轮步骤 199：管理隔离与客服 Windows 独立回归（固定 commit 350cbd3；角色×操作×范围矩阵 M1–M13、真实 Mail 找回/审批/执行、197 提交后需复跑通知/审计相关项） |
 | `step200-final-gap-check.md` | 第 9 轮步骤 200：最终需求差距核对（最终基线 778fc226；24 章/R01–R06/A01–A08/§4 七项关闭依据、203 与 NOT_TESTED 清单、202 发布包占位；PASS_WITH_NOTES） |
+| `step202-release.md` | 第 9 轮步骤 202：双产品 12 个正式发布包（Windows/Linux/macOS × amd64/arm64）打包、独立校验（12 zip/哈希/元数据/类型架构/短冒烟；PASS_WITH_NOTES，Windows 之外仅编译） |
 
 ## 使用约定
 

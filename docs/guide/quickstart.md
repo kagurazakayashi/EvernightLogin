@@ -3,7 +3,7 @@
 本文给出一条**当前版本真实可执行**的最短路径：从空配置开始，校验配置、迁移一个临时
 数据库、做本地诊断、执行首次安全初始化，并真实启动独立 HTTP 服务。每一步都给出可
 复现命令与预期结果；OAuth/OIDC 协议端点与管理 JSON API 已实现（可配置开关，默认关闭），
-设备码与扫码登录已按步骤 192/193 验收；令牌状态查询（introspection）仍未交付（143）与未真机互操作项在文末如实
+设备码与扫码登录已按步骤 192/193 验收；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）与未真机互操作项在文末如实
 列出，不把规划写成可用。
 
 > 运行环境：Windows 11 / amd64 / Go 1.27.x（本项目唯一运行实测平台）。更完整的部署、Web 管理台、CLI/API 接入与安全运维说明见根目录 [README.md](../../README.md)。
@@ -43,7 +43,7 @@ go run .\examples\config-load -config %TEMP%\login-begin\does-not-exist.yaml
 
 预期（Windows amd64 实测）：
 
-- `config show --json` 退出码 0，`data.field_count` 为 `51`，秘密字段显示 `[UNSET]`；
+- `config show --json` 退出码 0，`data.field_count` 为 `52`，秘密字段显示 `[UNSET]`；
   `hot_reloadable` 只有 `server.shutdown_timeout_seconds`、`logging.level`、
   `logging.format` 三项。
 - 指定不存在的文件时退出码 1，输出“配置检查失败：配置错误(…读取 YAML 配置文件失败)”。
@@ -57,7 +57,7 @@ go run .\examples\config-load -config %TEMP%\login-begin\does-not-exist.yaml
 %TEMP%\login-begin\loginctl.exe config validate --config docs\deployment\samples\login.server.example.yaml --json
 ```
 
-预期：退出码 0，`data.valid` 为 `true`，`data.field_count` 为 `51`。
+预期：退出码 0，`data.valid` 为 `true`，`data.field_count` 为 `52`。
 
 样例文件里的域名、路径、证书名都是**占位符**，`tls_terminating_proxy` 等字段只是演示
 组合；真正部署前必须替换，并按 [configuration.md](configuration.md) 校正。

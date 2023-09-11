@@ -72,7 +72,7 @@
 | G157-08 | 应用硬删除无领域能力；只有停用，页面不伪造删除 | 10/11/155 | 155/Lead 决策 | 决定是否另立 app 领域删除任务；否则维持“停用不等于删除”并记录 |
 | G157-09 | 151 可选强制下线 Web 页未做（无 `UIPageSessions` 公共契约） | 9 | 151/156 | 新增页面契约与后端或明确不做；当前仅 API/CLI |
 | G157-10 | 应用管理员 `/admin/applications` 列表受 system-scope 限制 403 | 11/155 | 156/147 | 应用范围列表路由/授权语义收口 |
-| G157-11 | **CLOSED（200 小修复）**：`login-server --help`/注释已改为“设备码与扫码登录已实现（192/193 验收边界，默认关闭）；introspection 仍未交付（143）；真实邮件外发未配置” | 10/22 | 200 | 仅帮助/文档文案，不改能力开关；`go run ./cmd/login-server --help` 已核对 |
+| G157-11 | **CLOSED（200 小修复；2026-11-23 文档修复更正）**：`login-server --help`/注释已改为“设备码与扫码登录已实现（192/193 验收边界，默认关闭）；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭）；真实邮件外发未配置”（更正 200 时误写的“introspection 仍未交付”，能力开关未变） | 10/22 | 200 | 仅帮助/文档文案，不改能力开关；`go run ./cmd/login-server --help` 已核对 |
 | G157-12 | 146 缺“页面→适配器→managedapi→SQLite”单条 E2E；147 YAML 配置因 139 写域未落地 | 13 | 146/147 | 补端到端用例；YAML 配置化完成 |
 | G157-13 | **CLOSED（200 小修复）**：`authorization.check` 有真实扩展端点 `/oauth/token/authorize`（登记资源服务时挂载）故置 true 且不授予预设；`settings.manage`/`diagnostics.read` 确认无服务端执行路径，保持 false、移除预设角色默认授予并文档标“未实现（203，不授予预设）”；51 键现为 49 true/2 false | 11/21 | 200/203 | 已同步 catalog/权限文档/测试；两者实现从 203 起登记，不得只改元数据冒充实现 |
 | G157-14 | 真实浏览器/硬件认证器/第三方 OAuth 客户端/手机扫码 NOT_TESTED | 3/5/6/10/16 | 159/160/161 | 对应真实环境验收；无硬件明确标 NOT_TESTED |
@@ -93,7 +93,7 @@
 |---|---|
 | `go run ./scripts/verify-docs` | **DOCS VERIFY: PASS checks=12 failures=0**（错误码 48、配置字段 51、权限键 50、链接/必备文档） |
 | `go build ./...` | **PASS**（当前树；GOMAXPROCS=4，验证后并行改动仍可能变化） |
-| `go run ./cmd/login-server --help` | **PASS（200 小修复）**：显示 serve/init；帮助末尾为“已实现但默认关闭：设备码与扫码登录（192/193 验收边界）；仍未交付：令牌状态查询（introspection，143）；真实邮件外发未配置” |
+| `go run ./cmd/login-server --help` | **PASS（200 小修复）**：显示 serve/init；帮助末尾为“已实现但默认关闭：设备码与扫码登录（192/193 验收边界）、令牌状态查询（introspection，145/160 验收边界）；真实邮件外发未配置” |
 | `go run ./cmd/loginctl help` | root-recover、restore-*、maintenance-*、config/diag/migrate/task/session/user/group/role/app/permission/notify/audit/reports/backups 等命令组 |
 | `go run ./cmd/login-backup --help` | create/verify/info/list/tables/preview/export/extract/help/version |
 | 页面清单 | `ui.go` **14 个页面选项**；`web/templates/page` **104 个模板**；路由名 grep 218 条（含少量非页面匹配，正式以 WebUI.Routes 为准） |

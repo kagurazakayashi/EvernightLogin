@@ -45,14 +45,14 @@
 | 独立服务进程 `cmd/login-server` | 已实现（MVP） | `serve` 真实启动 HTTP 服务（配置/数据库/迁移门禁/密钥/审计/维护门禁/单实例锁/内置账户入口页/健康检查/TLS/访问日志轮转/后台任务运行时/协议与管理 API 挂载点/有界优雅关闭）；`init` 本地受控首次初始化 |
 | 首次配置入口 | 已实现（CLI） | `login-server init`：本地一次性凭证 + 交互式/受保护 stdin 密码；不提供 HTTP 初始化入口，不接受命令行明文密码 |
 | 内置页面装配范围 | 已装配 | `ui.go` 共 **14 个页面选项**：默认注册 **12 个**（账户入口/资料/两步验证/用户管理/RBAC/应用/客服/敏感策略/审计/统计/报告/备份）；**2 个条件注册**：安全中心需 `passkey.enabled` 且 `protocol.enabled`、OAuth 页面需 `protocol.enabled`，未满足时不注册（404），全部满足时 14 个。安全中心页另含 TOTP/Passkey/恢复代码/会话/已授权应用；真实服务与生产授权见 `standalone-service.md` 第 3.8 节 |
-| OAuth/OIDC 协议、管理/托管/应用客服 API 的 HTTP 路由 | 已装配但默认关闭；部分能力未完成验收 | `protocol.enabled`/`--enable-protocol` 开启 OAuth/OIDC；`--enable-admin-api` 开启管理 JSON API；`--enable-managed-api` 开启业务托管 API；`--enable-app-support` 开启应用客服 API。设备码与扫码登录已按 192/193 验收边界；令牌状态查询（introspection）仍未交付（143）；关闭时 404、维护模式 503 |
+| OAuth/OIDC 协议、管理/托管/应用客服 API 的 HTTP 路由 | 已装配但默认关闭；部分能力未完成验收 | `protocol.enabled`/`--enable-protocol` 开启 OAuth/OIDC；`--enable-admin-api` 开启管理 JSON API；`--enable-managed-api` 开启业务托管 API；`--enable-app-support` 开启应用客服 API。设备码与扫码登录已按 192/193 验收边界；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）；关闭时 404、维护模式 503 |
 | 备份创建与离线查看工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
 | 本地管理/应急命令 `cmd/loginctl` | 已实现（部分写动作受限） | root 应急恢复、恢复/维护、`config`/`diag`/`migrate`/`task`/`session`/`user` 本地命令；`group`/`role`/`app`/`permission`/`notify` 本地管理（读取与受控建组；需要委派/敏感策略的写动作返回 `MANAGEMENT_WRITE_NOT_EXPOSED`）；`audit`/`reports`/`backups`/`notifications`/`tasks` 在线管理需 `--session-file` 并连接已启用管理 JSON API 的服务；逐条用法以 `loginctl help` 为准（详见 `../guide/root-cli.md` 第 8 节） |
 | 数据库迁移 | 已实现（SQLite 为主） | `migrations/` 内嵌，按版本追加；MySQL/PostgreSQL/SQL Server 适配**未运行实测** |
 
 > 结论：本版本可以**在受限范围内**作为独立 HTTP 服务启动（健康检查 + 14 个页面选项：
 > 默认注册 12、条件 2 + 本地初始化），并可按开关提供 OAuth/OIDC 协议端点与管理 JSON API
-> （默认关闭）；设备码与扫码登录已按 192/193 验收；令牌状态查询（introspection）仍未交付（143），root Passkey 绑定未做真机互操作，邮件
+> （默认关闭）；设备码与扫码登录已按 192/193 验收；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测），root Passkey 绑定未做真机互操作，邮件
 > 外发仍本地禁用。不要把「能启动」等同于「所有客户端互操作已验证」；可交付边界见
 > `standalone-service.md` 第 6 节。
 

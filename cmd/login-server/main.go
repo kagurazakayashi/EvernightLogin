@@ -16,7 +16,7 @@
 //   - init：本地受控首次安全初始化（创建 root、兑换一次性凭证、设置正式密码）。
 //
 // 已实现但默认关闭：设备码与扫码登录（步骤 192/193 已验收其已实现边界，需显式配置
-// 协议/扫码开关）；仍未交付：令牌状态查询（introspection，143）；真实邮件外发未配置
+// 协议/扫码开关）、令牌状态查询（introspection，145/160 验收边界；mTLS/故障等未实测）；真实邮件外发未配置
 // （本地禁用）；发布包不等同于已完成真机互操作验证的完整对外身份服务。
 package main
 
@@ -62,8 +62,8 @@ func newRootCommand(build login.BuildInfo) *cobra.Command {
 			"       OAuth2/OIDC 协议端点与管理 JSON API 已装配但默认关闭，\n" +
 			"       由 --enable-protocol / --enable-admin-api 显式启用。\n" +
 			"init   本地受控首次初始化：创建唯一 root、兑换一次性配置凭证并设置正式密码。\n\n" +
-			"已实现但默认关闭：设备码与扫码登录（192/193 验收其已实现边界，需显式配置）；" +
-			"仍未交付：令牌状态查询（introspection，143）；真实邮件外发未配置。",
+			"已实现但默认关闭：设备码与扫码登录（192/193 验收其已实现边界，需显式配置）、" +
+			"令牌状态查询（introspection，145/160 验收边界；mTLS/故障等未实测）；真实邮件外发未配置。",
 		Version:       build.String(),
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,

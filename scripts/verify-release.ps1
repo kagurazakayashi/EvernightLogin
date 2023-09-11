@@ -1,342 +1,308 @@
-# Step 89: verify a local EvernightLogin release directory.
+# verify-release.ps1 - Step 202 release package verifier.
 #
-# Checks every zip against SHA256SUMS.txt, extracts each package, re-checks the
-# inner checksum manifest, enforces the exclusion policy (no AI files, runtime
-# databases, logs, test keys or secrets), verifies required content, scans text
-# files for private key blocks, and on Windows optionally smoke-runs the
-# windows/amd64 binaries (version/help/no-arg exit codes).
+# Verifies a local release directory produced by scripts/package-release.ps1:
+# - top-level file set (12 zips + SHA256SUMS.txt + build-matrix.txt +
+#   release-summary.json + RELEASE-NOTES.md);
+# - top-level SHA-256/manifest and build-matrix consistency;
+# - every zip: inner SHA256SUMS.txt (GNU format, LF, sorted, no self entry),
+#   exact file set, forbidden-path scan, required license/metadata files;
+# - binary magic/arch (PE/ELF/Mach-O) and size/sha256 against build-summary v1;
+# - Windows/amd64 short smoke: login-server/loginctl/login-backup/evernightmail
+#   version commands only (no serve, no init, no port).
 #
-# Read-only with respect to the repository: it only reads <ReleaseDir> and uses
-# a temporary extraction directory which it deletes before returning.
-# No network access, no git write, no server/port is started.
-#
-# Windows PowerShell 5.1 and PowerShell 7 compatible (ASCII messages).
-#
-# Usage:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -ReleaseDir P:\go\tmp\deploy-step89
-#
-# Exit codes: 0 = all checks passed; 1 = at least one check failed.
+# Read-only, no network/git writes, temporary extraction dir always removed.
+# Exit codes: 0 ok; 10 release/prereq structure invalid; 20 build-summary invalid;
+# 21 zip/extract/file-set/forbidden; 22 checksum mismatch; 30 license/metadata;
+# 31 binary type/arch/smoke; 40 internal error.
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$ReleaseDir,
-
+    [string]$BuildSummary = "",
     [string]$ExpectedVersion = "",
-
     [switch]$SkipBinaryRun
 )
 
+Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.IO.Compression | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
 
-# PowerShell 5.1 在进程环境同时存在大小写重复的代理变量（NO_PROXY/no_proxy 等）
-# 时，Start-Process/环境块会抛 "Item has already been added"。发布校验不能因此
-# 失败；在脚本边界清掉这些重复键（不改变网络策略，仅避免环境字典异常）。
-foreach ($name in @('http_proxy','https_proxy','all_proxy','no_proxy',
-        'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY',
-        'Http_Proxy','Https_Proxy','All_Proxy','No_Proxy')) {
-    try { [Environment]::SetEnvironmentVariable($name, $null, 'Process') } catch { }
+$Targets = @("windows/amd64", "windows/arm64", "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64")
+$RequiredTop = @("SHA256SUMS.txt", "build-matrix.txt", "release-summary.json", "RELEASE-NOTES.md")
+
+function Fail([int]$Code, [string]$Message) {
+    Write-Host ("VERIFY: FAIL [" + $Code + "] " + $Message)
+    exit $Code
 }
-
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$failures = New-Object System.Collections.Generic.List[string]
-$checks = 0
-
-function Add-Check {
-    param([string]$Message, [bool]$Ok)
-    $script:checks = $script:checks + 1
-    if ($Ok) {
-        Write-Host ("  [PASS] " + $Message)
-    } else {
-        Write-Host ("  [FAIL] " + $Message)
-        $script:failures.Add($Message)
+function Get-Sha256Lower([string]$Path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace "-", "").ToLowerInvariant() }
+        finally { $stream.Dispose() }
+    } finally { $sha.Dispose() }
+}
+function Read-ChecksumLines([string]$Path) {
+    $result = New-Object System.Collections.Generic.List[object]
+    $lineNumber = 0
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $lineNumber = $lineNumber + 1
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line.StartsWith("#")) { continue }
+        if ($line -notmatch '^([0-9a-fA-F]{64})  (.+)$') { Fail 22 "invalid checksum line ${lineNumber} in $Path" }
+        $result.Add([pscustomobject]@{ Hash = $Matches[1].ToLowerInvariant(); Relative = $Matches[2] })
+    }
+    return $result
+}
+function Assert-SortedOrdinal([object[]]$Items, [string]$Path) {
+    $last = $null
+    foreach ($item in $Items) {
+        if ($null -ne $last -and [string]::CompareOrdinal($last, $item.Relative) -gt 0) {
+            Fail 22 "checksum entries are not ordinal-sorted in $Path"
+        }
+        $last = $item.Relative
+    }
+}
+function Get-BinaryInfo([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $buffer = New-Object byte[] 4096
+        $read = $stream.Read($buffer, 0, $buffer.Length)
+        if ($read -lt 64) { return $null }
+        if ($buffer[0] -eq 0x4D -and $buffer[1] -eq 0x5A) { # MZ
+            $peOffset = [System.BitConverter]::ToInt32($buffer, 0x3C)
+            if ($peOffset -lt 0 -or $peOffset + 6 -ge $read) { return $null }
+            if ($buffer[$peOffset] -ne 0x50 -or $buffer[$peOffset + 1] -ne 0x45 -or
+                $buffer[$peOffset + 2] -ne 0 -or $buffer[$peOffset + 3] -ne 0) { return $null }
+            $machine = [System.BitConverter]::ToUInt16($buffer, $peOffset + 4)
+            if ($machine -eq 0x8664) { return [pscustomobject]@{ Type = "PE"; Arch = "amd64" } }
+            if ($machine -eq 0xAA64) { return [pscustomobject]@{ Type = "PE"; Arch = "arm64" } }
+            return $null
+        }
+        if ($buffer[0] -eq 0x7F -and $buffer[1] -eq 0x45 -and $buffer[2] -eq 0x4C -and $buffer[3] -eq 0x46) {
+            if ($buffer[4] -ne 2) { return $null }
+            $machine = [System.BitConverter]::ToUInt16($buffer, 18)
+            if ($machine -eq 0x3E) { return [pscustomobject]@{ Type = "ELF"; Arch = "amd64" } }
+            if ($machine -eq 0xB7) { return [pscustomobject]@{ Type = "ELF"; Arch = "arm64" } }
+            return $null
+        }
+        if ($buffer[0] -eq 0xCF -and $buffer[1] -eq 0xFA -and $buffer[2] -eq 0xED -and $buffer[3] -eq 0xFE) {
+            $cpu = [System.BitConverter]::ToInt32($buffer, 4)
+            if ($cpu -eq 0x01000007) { return [pscustomobject]@{ Type = "Mach-O"; Arch = "amd64" } }
+            if ($cpu -eq 0x0100000C) { return [pscustomobject]@{ Type = "Mach-O"; Arch = "arm64" } }
+            return $null
+        }
+        return $null
+    } finally { $stream.Dispose() }
+}
+function Invoke-Captured([string]$Exe, [string[]]$Arguments, [int]$TimeoutMs = 15000) {
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Exe
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    $startInfo.Arguments = (@($Arguments) -join " ")
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $null = $process.Start()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($TimeoutMs)) {
+        try { $process.Kill() } catch { }
+        return [pscustomobject]@{ ExitCode = -1; Stdout = ""; Stderr = "timeout" }
+    }
+    $process.WaitForExit()
+    return [pscustomobject]@{
+        ExitCode = $process.ExitCode
+        Stdout = $stdoutTask.Result
+        Stderr = $stderrTask.Result
     }
 }
 
-function Get-Sha256Lower {
-    param([string]$Path)
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
-}
-
-# Parse "hash  relative/path" lines from a SHA256SUMS.txt file.
-function Read-Checksums {
-    param([string]$Path)
-    $entries = @()
-    foreach ($line in Get-Content -LiteralPath $Path) {
-        $trimmed = $line.Trim()
-        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
-        if ($trimmed.StartsWith("#")) { continue }
-        $parts = $trimmed -split "\s+", 2
-        if ($parts.Count -ne 2) { continue }
-        $entries += [pscustomobject]@{ Hash = $parts[0].ToLowerInvariant(); Relative = $parts[1] }
-    }
-    return $entries
-}
-
-$releaseDir = (Resolve-Path -LiteralPath $ReleaseDir).Path
-$topSumsPath = Join-Path $releaseDir "SHA256SUMS.txt"
-if (-not (Test-Path -LiteralPath $topSumsPath -PathType Leaf)) {
-    Write-Host ("[FAIL] missing top-level checksum manifest: " + $topSumsPath)
-    exit 1
-}
-
-Write-Host "== 1. Top-level checksum manifest"
-$topEntries = Read-Checksums $topSumsPath
-Add-Check "top-level SHA256SUMS.txt has entries" (@($topEntries).Count -gt 0)
-foreach ($entry in $topEntries) {
-    $target = Join-Path $releaseDir $entry.Relative
-    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
-        Add-Check ("missing archive " + $entry.Relative) $false
-        continue
-    }
-    $actual = Get-Sha256Lower $target
-    Add-Check ("sha256 " + $entry.Relative) ($actual -eq $entry.Hash)
-}
-
-$matrixPath = Join-Path $releaseDir "build-matrix.txt"
-Add-Check "build-matrix.txt exists" (Test-Path -LiteralPath $matrixPath -PathType Leaf)
-
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("lv-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
-New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
-
-# Expand-Archive 在 Windows PowerShell 5.1 下对目标目录/长路径较脆弱；统一用
-# .NET ZipFile 解压，并显式创建目标目录，兼容空格/中文路径与嵌套目录。
-function Expand-ReleaseArchive {
-    param([Parameter(Mandatory = $true)][string]$ArchivePath,
-        [Parameter(Mandatory = $true)][string]$DestinationPath)
-    if (Test-Path -LiteralPath $DestinationPath) {
-        Remove-Item -LiteralPath $DestinationPath -Recurse -Force -ErrorAction Stop
-    }
-    New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
-    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
-}
-
-# Forbidden path/content policy of a release package.
-$forbiddenPathPatterns = @(
-    '(^|/)\.ai/',
-    '(^|/)\.agents/',
-    '(^|/)AGENTS\.md$',
-    '(^|/)MEMORY\.md$',
-    '\.db$',
-    '\.db-',
-    '\.sqlite',
-    '\.log$',
-    '\.key$',
-    '\.pem$',
-    '\.p12$',
-    '\.pfx$',
-    '\.env$',
-    '(^|/)secrets/'
-)
-
-$requiredRelativePaths = @(
-    "VERSION.txt",
-    "README.txt",
-    "SHA256SUMS.txt",
-    "DEPENDENCIES.txt",
-    "BUILDINFO.txt",
-    "LICENSE",
-    "docs/licenses/THIRD_PARTY_NOTICES.md",
-    "config/login.example.yaml",
-    "docs/deployment/README.md",
-    "docs/deployment/standalone-service.md",
-    "docs/deployment/first-run.md",
-    "docs/deployment/reverse-proxy.md",
-    "docs/deployment/container.md",
-    "docs/deployment/service-hosting.md",
-    "docs/deployment/integration.md",
-    "docs/deployment/packaging.md",
-    "docs/licenses/THIRD_PARTY_NOTICES.md"
-)
-
+$tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("step202-verify-" + [guid]::NewGuid().ToString("N"))
 try {
-    $archives = Get-ChildItem -LiteralPath $releaseDir -File -Filter "evernight-login-*.zip" | Sort-Object Name
-    Write-Host ""
-    Write-Host ("== 2. Package content and exclusions (" + @($archives).Count + " archives)")
-    Add-Check "at least one release archive found" (@($archives).Count -gt 0)
+    if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) { Fail 10 "release dir not found: $ReleaseDir" }
+    $ReleaseDir = (Resolve-Path -LiteralPath $ReleaseDir).Path
+    $summaryPath = Join-Path $ReleaseDir "release-summary.json"
+    if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) { Fail 10 "release-summary.json missing" }
+    try { $release = Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { Fail 10 "release-summary.json is not valid JSON" }
+    if ([int]$release.format -ne 1) { Fail 10 "release-summary format != 1" }
+    if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) { $ExpectedVersion = [string]$release.version }
+    if ([string]$release.version -ne $ExpectedVersion) { Fail 10 "release version mismatch" }
 
-    foreach ($archive in $archives) {
-        Write-Host ("-- " + $archive.Name)
-        $extractDir = Join-Path $tempRoot ($archive.BaseName)
-        Expand-ReleaseArchive -ArchivePath $archive.FullName -DestinationPath $extractDir
-        $packageDirs = Get-ChildItem -LiteralPath $extractDir -Directory
-        if (@($packageDirs).Count -ne 1) {
-            Add-Check ($archive.Name + " contains exactly one top-level directory") $false
-            continue
-        }
-        $packageRoot = $packageDirs[0].FullName
-        Add-Check ($archive.Name + " top-level directory is " + $packageDirs[0].Name) `
-            ($packageDirs[0].Name -eq $archive.BaseName)
-
-        $allFiles = Get-ChildItem -LiteralPath $packageRoot -File -Recurse
-        $allRelative = @()
-        foreach ($file in $allFiles) {
-            $relative = $file.FullName.Substring($packageRoot.Length + 1).Replace("\", "/")
-            $allRelative += $relative
-            foreach ($pattern in $forbiddenPathPatterns) {
-                if ($relative -match $pattern) {
-                    Add-Check ($archive.Name + " excludes forbidden path " + $relative) $false
-                }
-            }
-        }
-        Add-Check ($archive.Name + " has no forbidden paths") ($true)
-
-        foreach ($required in $requiredRelativePaths) {
-            $exists = Test-Path -LiteralPath (Join-Path $packageRoot $required) -PathType Leaf
-            Add-Check ($archive.Name + " contains " + $required) $exists
-        }
-        $licensePath = Join-Path $packageRoot "LICENSE"
-        if (Test-Path -LiteralPath $licensePath -PathType Leaf) {
-            $licenseText = Get-Content -LiteralPath $licensePath -Raw
-            Add-Check ($archive.Name + " LICENSE identifies Mulan PSL v2") `
-                ($licenseText -match "Mulan PSL v2" -or $licenseText -match "Mulan Permissive Software License")
-            Add-Check ($archive.Name + " LICENSE has required attribution without year") `
-                ($licenseText -match "Copyright \(c\) KagurazakaYashi\(KagurazakaMiyabi\)" -and
-                 -not ($licenseText -match "Copyright \(c\) [0-9]{4} KagurazakaYashi\(KagurazakaMiyabi\)"))
-        } else {
-            Add-Check ($archive.Name + " contains LICENSE") $false
-        }
-        foreach ($requiredBin in @("bin/login-server", "bin/loginctl", "bin/login-backup")) {
-            $found = $false
-            $candidates = @($requiredBin, ($requiredBin + ".exe"))
-            foreach ($candidate in $candidates) {
-                if ($allRelative -contains $candidate) { $found = $true }
-            }
-            Add-Check ($archive.Name + " contains " + $requiredBin) $found
-        }
-
-        # Inner manifest: every listed file matches and no file is missing.
-        $innerSumsPath = Join-Path $packageRoot "SHA256SUMS.txt"
-        if (Test-Path -LiteralPath $innerSumsPath) {
-            $innerEntries = Read-Checksums $innerSumsPath
-            Add-Check ($archive.Name + " inner manifest has entries") (@($innerEntries).Count -gt 0)
-            $bad = 0
-            foreach ($innerEntry in $innerEntries) {
-                $innerTarget = Join-Path $packageRoot $innerEntry.Relative
-                if (-not (Test-Path -LiteralPath $innerTarget -PathType Leaf)) { $bad = $bad + 1; continue }
-                if ((Get-Sha256Lower $innerTarget) -ne $innerEntry.Hash) { $bad = $bad + 1 }
-            }
-            Add-Check ($archive.Name + " inner manifest matches all files (" + @($innerEntries).Count + " entries, bad=" + $bad + ")") ($bad -eq 0)
-        } else {
-            Add-Check ($archive.Name + " has inner SHA256SUMS.txt") $false
-        }
-
-        # Private key material scan (text files only; binaries are covered by policy above).
-        $keyHits = @()
-        foreach ($file in $allFiles) {
-            if ($file.Length -gt 2MB) { continue }
-            $extension = $file.Extension.ToLowerInvariant()
-            if ($extension -in @(".exe", ".zip")) { continue }
-            try {
-                $content = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop
-            } catch {
-                continue
-            }
-            if ($content -match '-----BEGIN [A-Z ]*PRIVATE KEY-----') {
-                $keyHits += $file.Name
-            }
-        }
-        Add-Check ($archive.Name + " contains no private key blocks") (@($keyHits).Count -eq 0)
+    $zips = @($release.zips)
+    if ($zips.Count -ne 12) { Fail 10 "release-summary zips count != 12" }
+    foreach ($required in $RequiredTop) {
+        if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDir $required) -PathType Leaf)) { Fail 10 "top-level file missing: $required" }
+    }
+    $expectedTop = New-Object System.Collections.Generic.List[string]
+    $expectedTop.AddRange([string[]]$RequiredTop)
+    foreach ($zip in $zips) { $expectedTop.Add([string]$zip.name) }
+    $actualTop = @(Get-ChildItem -LiteralPath $ReleaseDir -File | ForEach-Object { $_.Name } | Sort-Object)
+    $expectedTopSorted = @($expectedTop | Sort-Object)
+    if (($actualTop -join "`n") -ne ($expectedTopSorted -join "`n")) {
+        Fail 10 "top-level file set mismatch: got [$($actualTop -join ', ')]"
     }
 
-    # ---------- 3. Optional Windows binary smoke runs ----------
-    Write-Host ""
-    Write-Host "== 3. Windows amd64 binary smoke run"
-    if ($SkipBinaryRun) {
-        Write-Host "  [SKIP] -SkipBinaryRun specified"
-    } elseif (-not ($archives | Where-Object { $_.Name -match "windows-amd64" })) {
-        Write-Host "  [SKIP] no windows-amd64 archive in release dir"
-    } else {
-        $winArchive = $archives | Where-Object { $_.Name -match "windows-amd64" } | Select-Object -First 1
-        $winDir = Join-Path $tempRoot "win-smoke"
-        Expand-ReleaseArchive -ArchivePath $winArchive.FullName -DestinationPath $winDir
-        $packageRoot = (Get-ChildItem -LiteralPath $winDir -Directory)[0].FullName
-        $loginServer = Join-Path $packageRoot "bin\login-server.exe"
-        $loginBackup = Join-Path $packageRoot "bin\login-backup.exe"
-        $loginCtl = Join-Path $packageRoot "bin\loginctl.exe"
-
-        function Invoke-Captured {
-            param([string]$Exe, [string[]]$Arguments)
-            $stdoutFile = [System.IO.Path]::GetTempFileName()
-            $stderrFile = [System.IO.Path]::GetTempFileName()
-            try {
-                if ($null -ne $Arguments -and @($Arguments).Count -gt 0) {
-                    $process = Start-Process -FilePath $Exe -ArgumentList $Arguments -Wait -PassThru `
-                        -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -NoNewWindow
-                } else {
-                    $process = Start-Process -FilePath $Exe -Wait -PassThru `
-                        -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -NoNewWindow
-                }
-                $stdout = (Get-Content -LiteralPath $stdoutFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
-                $stderr = (Get-Content -LiteralPath $stderrFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
-                if ($null -eq $stdout) { $stdout = "" }
-                if ($null -eq $stderr) { $stderr = "" }
-                return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $stdout; Stderr = $stderr }
-            } finally {
-                Remove-Item -LiteralPath $stdoutFile -Force -ErrorAction SilentlyContinue
-                Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
-            }
-        }
-
-        $versionResult = Invoke-Captured $loginServer @("--version")
-        Add-Check ("login-server --version exit code 0 (actual " + $versionResult.ExitCode + ")") ($versionResult.ExitCode -eq 0)
-        Add-Check "login-server --version prints version information" ($versionResult.Stdout -match 'login-server\s')
-        if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
-            Add-Check ("login-server --version contains expected version " + $ExpectedVersion) `
-                ($versionResult.Stdout -match [regex]::Escape($ExpectedVersion))
-        }
-
-        $helpResult = Invoke-Captured $loginServer @("--help")
-        Add-Check ("login-server --help exit code 0 (actual " + $helpResult.ExitCode + ")") ($helpResult.ExitCode -eq 0)
-
-        $noArgsResult = Invoke-Captured $loginServer @()
-        Add-Check ("login-server without arguments fails honestly (actual " + $noArgsResult.ExitCode + ")") ($noArgsResult.ExitCode -ne 0)
-        Add-Check "login-server without arguments prints its honest not-implemented hint" `
-            (($noArgsResult.Stdout + $noArgsResult.Stderr) -match '--help|\u5C1A\u672A\u5B9E\u73B0')
-
-        $backupResult = Invoke-Captured $loginBackup @("version")
-        Add-Check ("login-backup version exit code 0 (actual " + $backupResult.ExitCode + ")") ($backupResult.ExitCode -eq 0)
-        Add-Check "login-backup version prints build information" ($backupResult.Stdout -match 'login-backup\s')
-
-        $ctlResult = Invoke-Captured $loginCtl @("--version")
-        Add-Check ("loginctl --version exit code 0 (actual " + $ctlResult.ExitCode + ")") ($ctlResult.ExitCode -eq 0)
-        Add-Check "loginctl --version prints build information" ($ctlResult.Stdout -match 'loginctl\s')
-
-        Write-Host ("  login-server --version output: " + $versionResult.Stdout.Trim())
-        Write-Host ("  login-server no-arg stderr  : " + $noArgsResult.Stderr.Trim())
-
-        # Optional: validate the packaged sample configuration with the real config loader.
-        $goAvailable = $null -ne (Get-Command go -ErrorAction SilentlyContinue)
-        if ($goAvailable) {
-            $sampleConfig = Join-Path $packageRoot "config\login.example.yaml"
-            $previousLocation = (Get-Location).Path
-            Push-Location $repo
-            try {
-                $env:GOMAXPROCS = "2"
-                $env:CGO_ENABLED = "0"
-                $configResult = Invoke-Captured "go" @("run", "./examples/config-load", "-config", $sampleConfig)
-            } finally {
-                Pop-Location
-                Set-Location $previousLocation
-            }
-            Add-Check ("packaged sample config validates with real loader (actual exit " + $configResult.ExitCode + ")") ($configResult.ExitCode -eq 0)
-            Add-Check "sample config validation reports no secret leakage" (-not ($configResult.Stdout -match 'master_key = [^[]'))
-        } else {
-            Write-Host "  [SKIP] go toolchain not found; packaged sample config not re-validated"
-        }
+    # Top-level checksums: GNU format, sorted, all 12 zips covered, no self.
+    $topSums = Read-ChecksumLines (Join-Path $ReleaseDir "SHA256SUMS.txt")
+    if ($topSums.Count -ne 12) { Fail 22 "top-level SHA256SUMS must list 12 zips" }
+    Assert-SortedOrdinal @($topSums) "SHA256SUMS.txt"
+    $zipByName = @{}
+    foreach ($zip in $zips) { $zipByName[[string]$zip.name] = $zip }
+    foreach ($entry in $topSums) {
+        if ($entry.Relative -eq "SHA256SUMS.txt") { Fail 22 "top-level SHA256SUMS contains itself" }
+        if (-not $zipByName.ContainsKey($entry.Relative)) { Fail 22 "top-level SHA256SUMS lists unknown file: $($entry.Relative)" }
+        $zipPath = Join-Path $ReleaseDir $entry.Relative
+        if ((Get-Item -LiteralPath $zipPath).Length -ne [long]$zipByName[$entry.Relative].size) { Fail 22 "zip size mismatch: $($entry.Relative)" }
+        if ((Get-Sha256Lower $zipPath) -ne $entry.Hash) { Fail 22 "zip sha256 mismatch: $($entry.Relative)" }
     }
+
+    # build-matrix.txt must list exactly the 12 (target, product) rows.
+    $matrix = @(Get-Content -LiteralPath (Join-Path $ReleaseDir "build-matrix.txt") | Where-Object { $_ -and -not $_.StartsWith("#") })
+    if ($matrix.Count -ne 13) { Fail 10 "build-matrix.txt must have header + 12 target/product rows (got $($matrix.Count))" }
+    $matrixRows = @($matrix | Select-Object -Skip 1)
+    $expectedMatrix = @{}
+    foreach ($zip in $zips) { $expectedMatrix["$($zip.goos)/$($zip.goarch)|$($zip.product)"] = [string]$zip.name }
+    if ($matrixRows.Count -ne $expectedMatrix.Count) { Fail 10 "build-matrix row count mismatch" }
+    foreach ($row in $matrixRows) {
+        $parts = $row.Trim() -split "\s+"
+        if ($parts.Count -lt 4) { Fail 10 "invalid build-matrix row: $row" }
+        $key = "$($parts[0])|$($parts[1])"
+        if (-not $expectedMatrix.ContainsKey($key)) { Fail 10 "build-matrix unknown row: $row" }
+        if ($parts[2] -ne $expectedMatrix[$key] -or $parts[3] -ne "status=OK") { Fail 10 "build-matrix row mismatch: $row" }
+    }
+
+    # build-summary v1 cross-check.
+    if ([string]::IsNullOrWhiteSpace($BuildSummary)) { $BuildSummary = [string]$release.build_summary }
+    if ([string]::IsNullOrWhiteSpace($BuildSummary)) { Fail 10 "build-summary path is not recorded; pass -BuildSummary" }
+    if (-not (Test-Path -LiteralPath $BuildSummary -PathType Leaf)) { Fail 10 "build-summary not found: $BuildSummary" }
+    try { $build = Get-Content -LiteralPath $BuildSummary -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { Fail 10 "build-summary is not valid JSON" }
+    if ([int]$build.format -ne 1 -or [int]$build.exit_code -ne 0 -or [string]$build.stage -ne "completed" -or
+        [int]$build.totals.verified -ne 24 -or [int]$build.totals.failed -ne 0 -or
+        [int]$build.verification.exit_code -ne 0) { Fail 20 "build-summary is not a fully verified clean 24/24 build" }
+    foreach ($module in @($build.modules)) { if ([bool]$module.dirty) { Fail 20 "build-summary records dirty module $($module.name)" } }
+    $checklist = @($build.checklist)
+    if ($checklist.Count -ne 24) { Fail 20 "build-summary checklist != 24" }
+    foreach ($item in $checklist) { if ([string]$item.status -ne "OK") { Fail 20 "build-summary non-OK artifact: $($item.path)" } }
+    $checkByKey = @{}
+    foreach ($item in $checklist) {
+        $bin = [System.IO.Path]::GetFileName([string]$item.path)
+        $checkByKey["$($item.module)|$($item.goos)|$($item.goarch)|$bin"] = $item
+    }
+
+    function Test-Forbidden([string]$Relative) {
+        $normalized = $Relative -replace "\\", "/"
+        return ($normalized -cmatch '(^|/)(\.ai|\.agents|AGENTS\.md|MEMORY\.md|database|secrets|scripts|tools|examples|_tools|EvernightMail|go-build-all)(/|$)|\.(db|db-shm|db-wal|log|key|pem|p12|pfx|env|ttf|otf|woff2?)$')
+    }
+
+    New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
+    foreach ($zip in ($zips | Sort-Object name -CaseSensitive)) {
+        $zipName = [string]$zip.name
+        $zipPath = Join-Path $ReleaseDir $zipName
+        $extract = Join-Path $tmpRoot (([string]$zip.product) + "-" + ([string]$zip.goos) + "-" + ([string]$zip.goarch))
+        if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $extract | Out-Null
+        try { [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extract) }
+        catch { Fail 21 "cannot extract $zipName" }
+        $children = @(Get-ChildItem -LiteralPath $extract -Force)
+        if ($children.Count -ne 1 -or -not $children[0].PSIsContainer) { Fail 21 "$zipName must contain exactly one top-level package directory" }
+        $packageRoot = $children[0].FullName
+        $pkgPrefix = $children[0].Name
+        $expectedNamePrefix = if ([string]$zip.product -eq "login") { "evernight-login-" } else { "evernightmail-" }
+        if (-not $pkgPrefix.StartsWith($expectedNamePrefix)) { Fail 21 "unexpected package dir in $zipName" }
+
+        $actualFiles = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File | ForEach-Object {
+            $_.FullName.Substring($packageRoot.Length).TrimStart('\', '/') -replace "\\", "/" } | Sort-Object -CaseSensitive)
+        $expectedFiles = @($zip.files) + @("SHA256SUMS.txt")
+        $expectedFiles = @($expectedFiles | Sort-Object -CaseSensitive)
+        if (($actualFiles -join "`n") -ne ($expectedFiles -join "`n")) { Fail 21 "file set mismatch in $zipName" }
+        foreach ($rel in $actualFiles) { if (Test-Forbidden $rel) { Fail 21 "forbidden path in $zipName : $rel" } }
+
+        $innerPath = Join-Path $packageRoot "SHA256SUMS.txt"
+        $inner = Read-ChecksumLines $innerPath
+        if ($inner.Count -eq 0) { Fail 21 "inner SHA256SUMS empty in $zipName" }
+        Assert-SortedOrdinal @($inner) "$zipName/SHA256SUMS.txt"
+        $innerMap = @{}
+        foreach ($entry in $inner) {
+            if ($entry.Relative -eq "SHA256SUMS.txt") { Fail 22 "inner checksum includes itself: $zipName" }
+            $innerMap[$entry.Relative] = $entry.Hash
+            $filePath = Join-Path $packageRoot ($entry.Relative -replace "/", "\")
+            if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) { Fail 22 "inner checksum file missing: $zipName/$($entry.Relative)" }
+            if ((Get-Sha256Lower $filePath) -ne $entry.Hash) { Fail 22 "inner checksum mismatch: $zipName/$($entry.Relative)" }
+        }
+        $filesWithoutSums = @($actualFiles | Where-Object { $_ -ne "SHA256SUMS.txt" })
+        if ($innerMap.Count -ne $filesWithoutSums.Count) { Fail 22 "inner checksum count mismatch in $zipName" }
+        foreach ($rel in $filesWithoutSums) { if (-not $innerMap.ContainsKey($rel)) { Fail 22 "inner checksum missing entry: $zipName/$rel" } }
+
+        # Required license/metadata.
+        foreach ($required in @("LICENSE", "README.md", "THIRD_PARTY_NOTICES.txt", "VERSION.txt",
+            "BUILDINFO.txt", "DEPENDENCIES.txt", "SHA256SUMS.txt")) {
+            $path = Join-Path $packageRoot $required
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail 30 "$zipName missing $required" }
+            if ((Get-Item -LiteralPath $path).Length -eq 0) { Fail 30 "$zipName has empty $required" }
+        }
+        $license = [System.IO.File]::ReadAllText((Join-Path $packageRoot "LICENSE"))
+        if ($license -notmatch "Mulan PSL v2" -or $license -notmatch "KagurazakaYashi\(KagurazakaMiyabi\)") {
+            Fail 30 "$zipName LICENSE lacks Mulan PSL v2/project attribution"
+        }
+        $versionText = [System.IO.File]::ReadAllText((Join-Path $packageRoot "VERSION.txt"))
+        if ($versionText -notmatch [regex]::Escape($ExpectedVersion)) { Fail 30 "$zipName VERSION.txt lacks version" }
+        if ($versionText -match "worktree_dirty:\s*yes") { Fail 30 "$zipName records dirty worktree" }
+
+        # Binary type/arch and build-summary size/sha.
+        $requiredBins = if ([string]$zip.product -eq "login") {
+            @("login-server", "loginctl", "login-backup") } else { @("evernightmail") }
+        foreach ($bin in $requiredBins) {
+            $candidates = @((Join-Path (Join-Path $packageRoot "bin") $bin),
+                (Join-Path (Join-Path $packageRoot "bin") ($bin + ".exe")))
+            $binPath = $null
+            foreach ($candidate in $candidates) { if (Test-Path -LiteralPath $candidate -PathType Leaf) { $binPath = $candidate; break } }
+            if ($null -eq $binPath) { Fail 31 "$zipName missing binary $bin" }
+            $info = Get-BinaryInfo $binPath
+            if ($null -eq $info) { Fail 31 "$zipName/$bin has no valid PE/ELF/Mach-O magic" }
+            if ($info.Arch -ne [string]$zip.goarch) { Fail 31 "$zipName/$bin architecture $($info.Arch) != $($zip.goarch)" }
+            $expectedType = @{ windows = "PE"; linux = "ELF"; darwin = "Mach-O" }[[string]$zip.goos]
+            if ($info.Type -ne $expectedType) { Fail 31 "$zipName/$bin type $($info.Type) != $expectedType" }
+            $module = if ([string]$zip.product -eq "login") { "EvernightLogin" } else { "EvernightMail" }
+            $key = "$module|$($zip.goos)|$($zip.goarch)|$(Split-Path -Leaf $binPath)"
+            if (-not $checkByKey.ContainsKey($key)) { Fail 20 "build-summary lacks checklist entry for $zipName/$bin" }
+            $item = $checkByKey[$key]
+            if ((Get-Item -LiteralPath $binPath).Length -ne [long]$item.size) { Fail 22 "binary size differs from build-summary: $zipName/$bin" }
+            if ((Get-Sha256Lower $binPath) -ne ([string]$item.sha256).ToLowerInvariant()) { Fail 22 "binary sha256 differs from build-summary: $zipName/$bin" }
+            if ([string]$item.type -ne $info.Type -or [string]$item.arch -ne $info.Arch) { Fail 31 "build-summary type/arch mismatch: $zipName/$bin" }
+        }
+
+        if ([string]$zip.goos -eq "windows" -and [string]$zip.goarch -eq "amd64" -and -not $SkipBinaryRun) {
+            $binDir = Join-Path $packageRoot "bin"
+            if ([string]$zip.product -eq "login") {
+                $versionExe = Join-Path $binDir "login-server.exe"
+                $versionResult = Invoke-Captured $versionExe @("--version")
+                if ($versionResult.ExitCode -ne 0 -or $versionResult.Stdout -notmatch "login-server") { Fail 31 "login-server --version smoke failed" }
+                if ($versionResult.Stdout -notmatch [regex]::Escape($ExpectedVersion)) { Fail 31 "login-server --version lacks version" }
+                $helpResult = Invoke-Captured $versionExe @("--help")
+                if ($helpResult.ExitCode -ne 0) { Fail 31 "login-server --help smoke failed" }
+                $ctlResult = Invoke-Captured (Join-Path $binDir "loginctl.exe") @("--version")
+                if ($ctlResult.ExitCode -ne 0 -or $ctlResult.Stdout -notmatch "loginctl") { Fail 31 "loginctl --version smoke failed" }
+                $backupResult = Invoke-Captured (Join-Path $binDir "login-backup.exe") @("version")
+                if ($backupResult.ExitCode -ne 0 -or $backupResult.Stdout -notmatch "login-backup") { Fail 31 "login-backup version smoke failed" }
+            } else {
+                $mailResult = Invoke-Captured (Join-Path $binDir "evernightmail.exe") @("--version")
+                if ($mailResult.ExitCode -ne 0 -or $mailResult.Stdout -notmatch "evernightmail") { Fail 31 "evernightmail --version smoke failed" }
+            }
+        }
+        Remove-Item -LiteralPath $extract -Recurse -Force
+    }
+
+    Write-Host ("VERIFY: PASS release={0} version={1} zips={2} targets={3}" -f $ReleaseDir, $ExpectedVersion, $zips.Count, $Targets.Count)
+    exit 0
+} catch {
+    Fail 40 ("unexpected error: " + $_.Exception.Message)
 } finally {
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $tmpRoot) { Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
-
-Write-Host ""
-Write-Host ("Checks run: " + $checks + ", failures: " + $failures.Count)
-if ($failures.Count -gt 0) {
-    Write-Host "VERIFY: FAIL"
-    foreach ($failure in $failures) { Write-Host ("  - " + $failure) }
-    exit 1
-}
-Write-Host "VERIFY: PASS"
-exit 0

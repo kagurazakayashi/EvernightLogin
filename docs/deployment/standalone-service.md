@@ -196,7 +196,7 @@ login-server.exe serve --config config\login.yaml ^
 ## 6. 已知限制（与本次 MVP 缺口一致）
 
 1. **协议端点默认关闭且能力有限**：授权码/刷新/客户端凭证、Discovery、JWKS、UserInfo、
-   撤销已实现并默认关闭；**设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）仍未交付（143）**：
+   撤销已实现并默认关闭；**设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）**：
    默认关闭，设备确认页/短码密钥环/资源服务注册表/扫码领取闭环尚未完成生产验收。
    第三方客户端互操作未做真实联调。
 2. **管理 JSON API 默认关闭**：`--enable-admin-api` 后提供任务/错误码/审计/报告/计划/
@@ -255,7 +255,7 @@ login-server.exe serve --config config\login.yaml ^
 protocol:
   enabled: true
   issuer: "https://login.example.com"   # 必须与 server.path_prefix 路径一致
-  # enable_introspection: true          # 145 部分实现；未完成真实 HTTP 黑盒验收前不要用于生产
+  # enable_introspection: true          # 145/160 已验收真实 HTTP 边界；默认关闭，生产启用前按部署文档核对
   # login_path: "/login"
 ```
 

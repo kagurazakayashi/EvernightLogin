@@ -18,7 +18,7 @@
 | [login-and-oauth.md](login-and-oauth.md) | 登录、扫码、OAuth 2.0 / OIDC（OpenID Connect，基于 OAuth 2.0 的身份层）接入契约与当前状态 |
 | [applications-and-permissions.md](applications-and-permissions.md) | 应用、应用成员、系统权限与应用独有权限、权限键清单 |
 | [roles-and-scopes.md](roles-and-scopes.md) | 预设角色、应用内角色、用户组、作用范围（scope）与数据范围、委派与有效权限 |
-| [configuration.md](configuration.md) | 全部 51 个配置字段、默认值、覆盖优先级、秘密来源、热更新与重启分类 |
+| [configuration.md](configuration.md) | 全部 52 个配置字段、默认值、覆盖优先级、秘密来源、热更新与重启分类 |
 | [support-and-recovery.md](support-and-recovery.md) | 客服求助、人工核验恢复、恢复代码与受限恢复会话 |
 | [root-cli.md](root-cli.md) | `loginctl` 本地应急命令（root 恢复、维护模式、恢复流程、诊断）与退出码 |
 | [audit-and-reports.md](audit-and-reports.md) | 安全审计、统计看板与统计报告（HTML/PDF/CSV/JSON/Markdown）能力与边界 |
@@ -72,7 +72,7 @@
 | 内置页面（登录、资料、安全、管理、审计、报告、备份等） | 已实现（内嵌 `embed.FS`） | 需要宿主注入真实后端（会话、权限、数据服务）；`login-server serve` 已装配 14 个页面选项，完整生产验收见 158–163 |
 | 最小 HTTP 契约：`/healthz`、`/openapi.json` | 已实现 | 前缀 + 固定后缀；OpenAPI 只是最小文档（见 [api-status.md](api-status.md)） |
 | 监听、TLS/mTLS、可信代理、多地址 | 已实现（Go API） | `login.NewServer`；默认只监听回环地址 |
-| 账户、应用、角色权限、会话、MFA/Passkey、OAuth/OIDC、客服恢复等**领域服务** | 已装配到内置页面、OAuth/OIDC 协议端点、管理 JSON API 与托管 API（真实服务 + 分段测试） | 协议/管理/托管 API 可配置开关（默认关闭）；**设备码与扫码登录已按 192/193 验收边界；令牌状态查询（introspection）仍未交付（143），默认关闭**；维护模式一律 503 |
+| 账户、应用、角色权限、会话、MFA/Passkey、OAuth/OIDC、客服恢复等**领域服务** | 已装配到内置页面、OAuth/OIDC 协议端点、管理 JSON API 与托管 API（真实服务 + 分段测试） | 协议/管理/托管 API 可配置开关（默认关闭）；**设备码与扫码登录已按 192/193 验收边界；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）**；维护模式一律 503 |
 | 独立服务进程 `cmd/login-server` | MVP 可用 | `serve` 真实启动 HTTP 服务（健康检查/OpenAPI、**14 个页面选项：默认注册 12、条件注册 2**、配置与迁移门禁、维护门禁、TLS、优雅关闭、单实例锁、访问日志轮转、后台任务执行器/调度器与邮件/Webhook 投递 worker、真实敏感操作 policy+reauth 链）；可选开启 OAuth/OIDC 协议端点与管理 JSON API（默认关闭）；`init` 本地受控首次初始化与 root Passkey 强认证绑定 |
 | 首次配置（创建唯一 root） | 已实现（CLI） | `login-server init` 本地受控完成 root 创建、一次性凭证兑换与正式密码设置；不提供匿名 HTTP 入口；root Passkey 强认证绑定已接线（未真机互操作） |
 | 本地应急命令 `cmd/loginctl` | 已实现（部分写动作受限） | `root-recover`、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 可用；`group`/`role`/`app`/`permission`/`notify` 本地管理（读取与受控建组；受限写动作返回 `MANAGEMENT_WRITE_NOT_EXPOSED`）与 `audit`/`reports`/`backups`/`notifications`/`tasks` 在线管理（需 `--session-file`）已接通，详见 [root-cli.md](root-cli.md) 第 8 节 |
@@ -85,7 +85,7 @@
 一句话结论：**当前版本可以作为 Go 库嵌入使用；`login-server` 能真实启动独立 HTTP
 服务并完成本地首次初始化，具备 14 个页面选项（默认 12、条件 2）、单实例数据库锁、访问日志轮转、后台任务
 执行器/调度器、真实敏感操作 policy+reauth 链，并可按开关提供 OAuth/OIDC 协议端点与
-管理 JSON API（均默认关闭）。`mail.enabled` 默认关闭，测试邮件只连本地 EvernightMail，真实外网外发未验收；设备码与扫码登录已按 192/193 验收；令牌状态查询（introspection）仍未交付（143），
+管理 JSON API（均默认关闭）。`mail.enabled` 默认关闭，测试邮件只连本地 EvernightMail，真实外网外发未验收；设备码与扫码登录已按 192/193 验收；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测），
 root Passkey 绑定未做真机互操作，数据范围仍未细粒度化**，因此不要把「可启动」当作
 「所有协议能力与客户端互操作已验证」。
 部署前请读 [deployment-modes.md](deployment-modes.md) 与
@@ -128,7 +128,7 @@ root Passkey 绑定未做真机互操作，数据范围仍未细粒度化**，�
 3. **想接入登录/OIDC/扫码**：[login-and-oauth.md](login-and-oauth.md) →
    `docs/deployment/integration.md`；OAuth/OIDC 协议端点已装配但**默认关闭**，需按
    [standalone-service.md](../deployment/standalone-service.md) 第 3.8 节 / [api-status.md](api-status.md)
-   的真实状态启用后再对接（设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询 introspection 仍未交付 143）。
+   的真实状态启用后再对接（设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询 introspection 已实现（145/160 验收边界；默认关闭，mTLS/故障等未实测））。
 4. **运维已装配好的实例**：[configuration.md](configuration.md)、[root-cli.md](root-cli.md)、
    [backup-and-restore.md](backup-and-restore.md)、[troubleshooting.md](troubleshooting.md)。
 5. **出问题**：[troubleshooting.md](troubleshooting.md) 的错误码表 + 对应章节。

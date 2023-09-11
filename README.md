@@ -13,14 +13,14 @@ login 是一个用 Go 编写的**用户与身份权限系统**：既可以作为
 | 统一账户与权限 | 全局账户、应用成员与应用内角色/权限隔离，默认拒绝，跨应用越权拒绝 |
 | 登录方式 | 密码、Passkey/WebAuthn、TOTP、邮件验证码、恢复代码、邀请/注册审核 |
 | 管理与运维 | 用户/组/角色/权限、应用与客户端凭证、审计、统计、报告、备份/恢复、CLI 应急恢复 |
-| 多应用接入 | OAuth 客户端、设备码、APP 扫码（设备码/扫码已按步骤 192/193 验收其已实现边界，默认关闭；introspection 仍未交付 143） |
+| 多应用接入 | OAuth 客户端、设备码、APP 扫码（设备码/扫码已按步骤 192/193 验收其已实现边界，默认关闭；introspection 已实现（145/160 验收边界；默认关闭，mTLS/故障等未实测）） |
 
 ### 当前边界与安全声明
 
 - **运行实测范围**：Windows 11 + SQLite；Linux/macOS 及其他数据库仅做编译/静态检查，未做运行实测。
 - **加密与安全**：密码用 Argon2id 哈希，可还原秘密用主密钥加密；关键管理操作要求再次认证和真实授权；默认拒绝、fail-closed。
 - **未完成/未测项**：真实浏览器与硬件认证器、第三方 OAuth/OIDC 客户端、真实手机扫码、公网反向代理/mTLS、外部 SMTP 实际送达等未做完整互操作验收。不要仅凭“服务能启动”就认为所有协议和客户端都可用。
-- **协议默认关闭**：OAuth/OIDC、管理 JSON API、业务托管 API、应用客服 API 都需显式开关；设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）仍未交付（143）
+- **协议默认关闭**：OAuth/OIDC、管理 JSON API、业务托管 API、应用客服 API 都需显式开关；设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）
 - **不做的事**：不实现多租户/多实例共享状态、短信供应商、第三方社交登录、动态插件、跨数据库迁移；第一版以 SQLite 为主。
 
 ## 2. 获取与构建
@@ -407,7 +407,7 @@ login-server serve --config /etc/login/login.yaml \
 | 设备码 | `/oauth/device_authorization` | RFC 8628（步骤 192 已验收其已实现边界；真实第三方客户端未测） |
 | 扫码 | `/oauth/qr/...` | 步骤 193 已验收其已实现边界（真实手机相机扫码未测） |
 
-注意：设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）仍未交付（143）。默认关闭；Discovery 只声明实际能力。真实第三方客户端互操作、标准 OIDC 客户端联调未完成，不能按“已全部交付”对待。详见 [`docs/guide/login-and-oauth.md`](docs/guide/login-and-oauth.md)。
+注意：设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）。默认关闭；Discovery 只声明实际能力。真实第三方客户端互操作、标准 OIDC 客户端联调未完成，不能按“已全部交付”对待。详见 [`docs/guide/login-and-oauth.md`](docs/guide/login-and-oauth.md)。
 
 ### 6.3 注册应用与获取客户端
 
@@ -484,7 +484,7 @@ defer instance.Close()
 | 启动提示未迁移 | 使用 `--migrate=apply`；生产先备份。 |
 | 第二个进程启动失败 | 同一 SQLite 只允许一个 `serve`；确认旧进程已退出。 |
 | 管理页 403 | root/管理员需要已完成强认证；完成 `/login/strong-setup` 后重新登录；检查会话新鲜度。 |
-| OAuth/管理端点 404 | 对应 `--enable-protocol`/`--enable-admin-api`/其他开关未开启；设备码/扫码已按 192/193 验收边界，introspection 仍未交付（143）。 |
+| OAuth/管理端点 404 | 对应 `--enable-protocol`/`--enable-admin-api`/其他开关未开启；设备码/扫码已按 192/193 验收边界，introspection 已实现（145/160 验收边界；默认关闭，mTLS/故障等未实测）。 |
 | 邮件发送失败 | `mail.enabled` 未开、SMTP/CA/密码配置错误或投递失败；查看页面错误码、服务日志和 `mail_deliveries`；不要伪造成功。 |
 | 维护模式 503 | 服务处于维护/恢复状态；完成 `restore-apply` 并显式 `maintenance-exit`，不要绕过。 |
 | 忘记 root 密码/MFA | 使用本地 `loginctl root-recover`（停服/维护+排他锁），不要尝试远程匿名恢复。 |

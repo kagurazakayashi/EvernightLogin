@@ -51,7 +51,7 @@ loginctl config set logging.level debug --file copy.yaml --dry-run
 loginctl config set-secret secrets.tls_pfx_password --source env:LOGIN_PFX_PASS --file copy.yaml
 ```
 
-预期（Windows amd64 实测）：默认配置 `field_count` 为 **51**；`config set` 预演输出
+预期（Windows amd64 实测）：默认配置 `field_count` 为 **52**；`config set` 预演输出
 `"written": false, "dry_run": true`，并给出 `class`（`hot-reloadable` 或
 `restart-required`）与 `needs_restart`。
 
