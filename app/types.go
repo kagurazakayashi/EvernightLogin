@@ -561,9 +561,29 @@ type AccessService interface {
 	Check(ctx context.Context, req AccessRequest) (AccessDecision, error)
 }
 
-// SessionService 会话语义有限：撤销当前会话。
+// SessionService 会话语义：校验当前会话、撤销当前会话。
+//
+// Validate 只接受完整（非受限）会话，返回脱敏的会话快照；受限会话、空闲/绝对过期、
+// 已撤销、账户禁用、安全版本变化、应用成员失效都会返回错误。它不会延长会话。
+// ValidateCSRF 校验与会话绑定的 CSRF 令牌；来源（Origin/Referer）仍由宿主 HTTP
+// 防护层负责，不能只靠 CSRF 令牌。
 type SessionService interface {
+	Validate(ctx context.Context, sessionSecret []byte) (SessionInfo, error)
+	ValidateCSRF(ctx context.Context, sessionSecret []byte, token string) error
 	Revoke(ctx context.Context, sessionSecret []byte) error
+}
+
+// SessionInfo 是校验通过后的会话快照；不含会话秘密和 CSRF 令牌。
+type SessionInfo struct {
+	UserID               string
+	SessionID            string
+	AppID                string
+	ExpiresAt            time.Time
+	IdleExpiresAt        time.Time
+	CreatedAt            time.Time
+	SecurityVersion      int64
+	AuthMethods          []string
+	StrongAuthVerifiedAt time.Time
 }
 
 var _ = net.IP{}

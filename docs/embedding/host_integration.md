@@ -18,6 +18,7 @@
 | 范围 | 公开符号 | 说明 |
 |---|---|---|
 | 实例生命周期 | `New`、`Options`、`Instance`、`State`（`StateNew`/`StateRunning`/`StateClosed`）、`Start`、`Close`、`State`、`Config`、`Logger`、`ErrAlreadyStarted`、`ErrClosed`、`ErrNotRunning` | 状态机只有 `New → Running → Closed` 一条路径，关闭后不可重启；重复 `Close` 安全 |
+| 会话校验 | `Runtime.Sessions().Validate`、`Runtime.Sessions().ValidateCSRF`、`SessionInfo` | 只接受完整（非受限）会话；不延长会话；CSRF 只校验令牌绑定，来源校验仍由宿主 HTTP 防护层负责 |
 | 扩展注册 | `Extension`、`ExtensionInfo`、`ExtensionKind`、`MaxExtensions`、`Options.ExtensionStartTimeout`、`DefaultExtensionStartTimeout`、`Instance.Extensions` | 扩展由实例统一启动/关闭；注册信息在 `New` 校验并快照；单扩展启动带 panic 恢复与墙钟上限 |
 | 宿主依赖注入 | `Options.Database`（`Database`）、`Options.Notifications`（`Notifier`、`LifecycleEvent`、`LifecycleEventKind`、`LifecycleNotifyTimeout`）、`Options.AccessControl`（`AccessController`）、`Options.Logger`/`Options.LogOutput` | 注入对象由宿主拥有；实例不关闭它们；生命周期通知在锁外发送且受 2s 上限约束 |
 | HTTP 装配与挂载 | `Options.HTTP`（`HTTPOptions`）、`Options.Pages`（`WebUIOptions`）、`Instance.Handler`、`Instance.HandlerPrefix`、`Instance.Mount`、`NewHTTPHandler`、`OpenAPIDocument` | 只承诺标准 `net/http`（`http.Handler`/`http.ServeMux`）；`New` 不监听端口 |
@@ -261,6 +262,35 @@ overview, err := runtime.Security().Status(ctx, app.SecurityStatusRequest{
   页面挂载提供）。
 - 受限恢复会话只能查询状态并完成新因素绑定，不能读取安全状态或执行业务操作；
   强认证要求下的允许重绑方法只有 Passkey。
+
+### 3.2.1 宿主业务 API 的会话校验
+
+宿主业务 API 不应导入 `internal/session`，也不应把 Evernight 会话秘密当作普通
+Bearer 令牌直接信任。公开门面提供两个方法：
+
+```go
+info, err := runtime.Sessions().Validate(ctx, sessionSecret)
+if err != nil {
+    // 会话无效/过期/撤销/账户禁用/受限会话
+    return
+}
+// info.UserID / info.SessionID / info.ExpiresAt / info.IdleExpiresAt
+// info.AuthMethods / info.StrongAuthVerifiedAt
+
+if err := runtime.Sessions().ValidateCSRF(ctx, sessionSecret, csrfToken); err != nil {
+    // CSRF 令牌与会话不匹配或会话已失效
+    return
+}
+```
+
+硬约束：
+
+- `Validate` 只接受完整（非受限）会话；待第二因素、待改密、受限恢复会话都会失败。
+- `Validate` 不延长会话；需要续期必须显式使用续期能力（若宿主启用）。
+- `ValidateCSRF` 只校验“令牌与会话绑定”，**Origin/Referer 来源校验仍由宿主 HTTP
+  防护层负责**，两者不能互相替代。
+- 会话秘密/CSRF 令牌只能来自可信边界，不得写入日志、URL、localStorage 或普通存储。
+- 宿主必须自行维护 `Evernight UserID ↔ 业务 uuid` 映射；Evernight 不读取业务库。
 
 ### 3.3 受信管理门面（`app` 包，步骤 182 起）
 

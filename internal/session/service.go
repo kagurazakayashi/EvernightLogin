@@ -1947,12 +1947,24 @@ func (s *Service) AuthorizeManagement(ctx context.Context, secret string) (Sessi
 // （两者都经活动会话/账户/成员状态复核与常数时间比较）。来源（Origin/Referer）
 // 允许列表仍由既有 HTTP 防护中间件负责，两者不可互相替代。
 func (s *Service) ValidateCSRFToken(ctx context.Context, request *http.Request, token string) error {
+	secret, ok := s.SessionSecretFromRequest(request)
+	if !ok {
+		return ErrSessionInvalid
+	}
+	return s.ValidateCSRFTokenForSecret(ctx, secret, token)
+}
+
+// ValidateCSRFTokenForSecret 是 ValidateCSRFToken 的“显式会话秘密”版本，供嵌入式
+// Go API 使用：宿主已经从 Cookie/Authorization 之外的安全边界拿到会话秘密时，可
+// 直接校验 CSRF 令牌，而不需要伪造 *http.Request。它不会延长会话，也不读取 URL
+// 或查询参数中的秘密。
+func (s *Service) ValidateCSRFTokenForSecret(ctx context.Context, secret, token string) error {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	secret, ok := s.SessionSecretFromRequest(request)
-	if !ok {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
 		return ErrSessionInvalid
 	}
 	record, err := s.loadVerifiedRecord(ctx, secret, "csrf")
