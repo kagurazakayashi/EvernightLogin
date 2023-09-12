@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -31,6 +32,7 @@ type AuditRecorder interface {
 type Store interface {
 	CreateUser(ctx context.Context, tx audit.Tx, user User) error
 	GetUser(ctx context.Context, id string) (User, error)
+	GetUserByUsername(ctx context.Context, normalizedUsername string) (User, error)
 	ListUsers(ctx context.Context, query ListQuery) ([]User, bool, error)
 	// GetUserState 返回账户快照与受保护标记（is_root）。该标记不放进 User，
 	// 避免普通查询接口顺带暴露系统管理资格。
@@ -264,6 +266,31 @@ func (s *Service) GetUser(ctx context.Context, caller Caller, id string) (User, 
 		return User{}, err
 	}
 	if err := s.recordRead(ctx, caller, ActionGetUser, id); err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
+// GetUserByUsername 按用户名查询账户。用户名按与登录一致的 NFKC + 大小写折叠
+// 规则规范化后精确匹配；仍执行 ActionGetUser 授权和读取审计。找不到返回
+// ErrUserNotFound，不向未授权调用者区分“无权限”和“不存在”。
+func (s *Service) GetUserByUsername(ctx context.Context, caller Caller, username string) (User, error) {
+	if err := s.authorize(ctx, caller, ActionGetUser); err != nil {
+		return User{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return User{}, err
+	}
+	normalized := normalizeUsernameKey(strings.TrimSpace(username))
+	if normalized == "" {
+		return User{}, fmt.Errorf("%w: 用户名不能为空", ErrInvalidRequest)
+	}
+	user, err := s.store.GetUserByUsername(ctx, normalized)
+	if err != nil {
+		return User{}, err
+	}
+	if err := s.recordRead(ctx, caller, ActionGetUser, user.ID); err != nil {
 		return User{}, err
 	}
 	return user, nil

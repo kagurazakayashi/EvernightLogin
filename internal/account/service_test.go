@@ -399,6 +399,16 @@ func TestGetUserAndPagination(t *testing.T) {
 	if _, err := env.service.GetUser(context.Background(), env.caller, missingID); !errors.Is(err, account.ErrUserNotFound) {
 		t.Errorf("不存在用户错误 = %v", err)
 	}
+	byName, err := env.service.GetUserByUsername(context.Background(), env.caller, "ALPHA")
+	if err != nil || byName.ID != created[0].ID {
+		t.Errorf("按用户名查询 = %+v, %v", byName, err)
+	}
+	if _, err := env.service.GetUserByUsername(context.Background(), env.caller, "missing-user"); !errors.Is(err, account.ErrUserNotFound) {
+		t.Errorf("不存在用户名错误 = %v", err)
+	}
+	if _, err := env.service.GetUserByUsername(context.Background(), env.caller, "  "); !errors.Is(err, account.ErrInvalidRequest) {
+		t.Errorf("空用户名错误 = %v", err)
+	}
 	if code := account.CodeOf(fmt.Errorf("%w", account.ErrUserNotFound)); code != account.CodeReqInvalid {
 		t.Errorf("不存在用户错误码 = %q", code)
 	}

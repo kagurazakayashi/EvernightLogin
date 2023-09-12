@@ -42,7 +42,11 @@ func buildMailURLs(cfg login.Config) (MailURLBases, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return MailURLBases{}, fmt.Errorf("server.public_base_url 必须是绝对 http(s) URL（mail.enabled=true）")
 	}
-	base = strings.TrimSuffix(base, "/") + cfg.Server.PathPrefix
+	base = strings.TrimSuffix(base, "/")
+	prefix := strings.TrimSuffix(cfg.Server.PathPrefix, "/")
+	if prefix != "" && !strings.HasSuffix(base, prefix) {
+		base += prefix
+	}
 	return MailURLBases{
 		VerifyEmail:   base + pagePathEmailVerify,
 		ChangeEmail:   base + pagePathEmailChangeVerify,

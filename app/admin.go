@@ -267,6 +267,57 @@ func (f *adminFacade) CreateUser(ctx context.Context,
 		CreatedAt: created.CreatedAt}, nil
 }
 
+// ListUsers 分页查询用户（需要系统范围 users.read 或本机受信通道）。
+func (f *adminFacade) ListUsers(ctx context.Context,
+	req AdminListUsersRequest) (AdminUserList, error) {
+	managed := f.r.managedServices()
+	if managed == nil || managed.Account == nil {
+		return AdminUserList{}, configError("账户服务未装配")
+	}
+	id, err := f.r.resolveAdmin(ctx, req.Caller)
+	if err != nil {
+		return AdminUserList{}, err
+	}
+	caller, err := f.accountCaller(id)
+	if err != nil {
+		return AdminUserList{}, configError("账户服务调用者无效")
+	}
+	result, err := managed.Account.ListUsers(ctx, caller, account.ListRequest{
+		Limit: req.Limit, Offset: req.Offset, Status: account.Status(req.Status),
+		Sort: account.SortField(req.Sort), Descending: req.Descending,
+	})
+	if err != nil {
+		return AdminUserList{}, mapDomainError("查询用户列表失败", string(account.CodeOf(err)))
+	}
+	users := make([]AdminUser, 0, len(result.Users))
+	for _, user := range result.Users {
+		users = append(users, adminUser(user))
+	}
+	return AdminUserList{Users: users, HasMore: result.HasMore}, nil
+}
+
+// GetUserByUsername 按用户名读取脱敏用户记录（需要 users.read 或本机受信通道）。
+func (f *adminFacade) GetUserByUsername(ctx context.Context,
+	req AdminUserByUsernameRequest) (AdminUser, error) {
+	managed := f.r.managedServices()
+	if managed == nil || managed.Account == nil {
+		return AdminUser{}, configError("账户服务未装配")
+	}
+	id, err := f.r.resolveAdmin(ctx, req.Caller)
+	if err != nil {
+		return AdminUser{}, err
+	}
+	caller, err := f.accountCaller(id)
+	if err != nil {
+		return AdminUser{}, configError("账户服务调用者无效")
+	}
+	user, err := managed.Account.GetUserByUsername(ctx, caller, req.Username)
+	if err != nil {
+		return AdminUser{}, mapDomainError("按用户名查询用户失败", string(account.CodeOf(err)))
+	}
+	return adminUser(user), nil
+}
+
 // GetUserProfile 读取用户资料（需要系统范围 users.read 或本机受信通道）。
 func (f *adminFacade) GetUserProfile(ctx context.Context,
 	req AdminUserRequest) (AdminUserProfile, error) {
@@ -709,6 +760,11 @@ func roleAdminError(message string, err error) error {
 }
 
 // adminUserProfile 把领域资料投影为公开脱敏视图。
+func adminUser(value account.User) AdminUser {
+	return AdminUser{ID: value.ID, Username: value.Username, Nickname: value.Nickname,
+		Status: string(value.Status), CreatedAt: value.CreatedAt}
+}
+
 func adminUserProfile(value profile.UserProfile) AdminUserProfile {
 	return AdminUserProfile{UserID: value.UserID, Username: value.Username,
 		Nickname: value.Nickname, Biography: value.Biography, Language: value.Language,

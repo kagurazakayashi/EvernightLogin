@@ -278,6 +278,30 @@ type AdminUserProfile struct {
 	UpdatedAt  time.Time
 }
 
+// AdminListUsersRequest 分页查询用户（状态筛选/受控排序）。
+type AdminListUsersRequest struct {
+	Caller     AdminCaller
+	Limit      int
+	Offset     int
+	Status     string
+	Sort       string
+	Descending bool
+	RequestID  string
+}
+
+// AdminUserList 是用户列表结果。
+type AdminUserList struct {
+	Users   []AdminUser
+	HasMore bool
+}
+
+// AdminUserByUsernameRequest 按用户名读取脱敏用户记录。
+type AdminUserByUsernameRequest struct {
+	Caller    AdminCaller
+	Username  string
+	RequestID string
+}
+
 // AdminCreateUserRequest 由管理门面创建全局账户（与 registration.enabled 无关）。
 // ApplicationIDs 非空时同时建立这些应用的成员关系（需要各应用的成员管理权限）。
 type AdminCreateUserRequest struct {
@@ -505,6 +529,8 @@ type AdminDelegation struct {
 //   - 不接受 is_root、系统资格或已验证状态等特权字段；root 账户受既有服务保护。
 type AdminService interface {
 	CreateUser(ctx context.Context, req AdminCreateUserRequest) (AdminUser, error)
+	ListUsers(ctx context.Context, req AdminListUsersRequest) (AdminUserList, error)
+	GetUserByUsername(ctx context.Context, req AdminUserByUsernameRequest) (AdminUser, error)
 	GetUserProfile(ctx context.Context, req AdminUserRequest) (AdminUserProfile, error)
 	UpdateUserProfile(ctx context.Context, req AdminUpdateProfileRequest) (AdminUserProfile, error)
 	AddApplicationMember(ctx context.Context, req AdminAddMemberRequest) error

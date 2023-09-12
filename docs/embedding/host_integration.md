@@ -292,6 +292,67 @@ if err := runtime.Sessions().ValidateCSRF(ctx, sessionSecret, csrfToken); err !=
 - 会话秘密/CSRF 令牌只能来自可信边界，不得写入日志、URL、localStorage 或普通存储。
 - 宿主必须自行维护 `Evernight UserID ↔ 业务 uuid` 映射；Evernight 不读取业务库。
 
+### 3.2.2 宿主“忘记密码”入口（找回/重置）
+
+宿主不应自己生成重置 token，也不应直接改 Evernight 的密码表；通过公开找回门面
+复用真实的邮件 token、限流、审计、密码策略与会话撤销：
+
+```go
+// 1) 发起找回：identifier 是邮箱。账户不存在/禁用/无密码/邮件失败统一返回 nil，
+//    避免账号枚举；只有邮件能力未配置等装配错误才返回 error。
+_ = runtime.PasswordReset().Request(ctx, app.RequestPasswordResetRequest{
+    Identifier: "alice@example.com", ClientIP: clientIP})
+
+// 2) 邮件链接中的 token 可由宿主重置页先校验
+if err := runtime.PasswordReset().ValidateToken(ctx, token); err != nil {
+    // 无效/过期/已使用
+}
+
+// 3) 设置新密码；成功会撤销旧会话并要求重新登录，不签发会话。
+result, err := runtime.PasswordReset().Complete(ctx, app.CompletePasswordResetRequest{
+    Token: token, NewPassword: newPassword})
+_ = result.UserID
+```
+
+硬约束：
+
+- 必须配置 `mail.enabled`、SMTP、发件人和 `server.public_base_url`；否则 `Request`
+  返回配置错误，不会假装发送成功。
+- 邮件链接由 Evernight 生成，默认指向
+  `PUBLIC_BASE_URL + PATH_PREFIX + /login/reset-password?token=...`；宿主需要在该
+  路径提供重置页（可以使用插件模式自带页面，或挂载自己的表单）。
+- 同一 token 只能使用一次；过期、已使用、账户禁用、无密码账户都会失败。
+- `Complete` 只改密码并撤销旧会话，不签发业务会话；完成后必须重新登录。
+- 所有响应不得区分“邮箱不存在”和“邮件已发送”。
+
+### 3.2.3 用户列表与按用户名查询
+
+宿主创建/同步业务账号时，以 Evernight 返回的 username 为准；需要分页列表或按
+用户名查找时使用管理门面，不要直接读 Evernight 的 SQLite 表：
+
+```go
+page, err := runtime.Admin().ListUsers(ctx, app.AdminListUsersRequest{
+    Caller: runtime.LocalAdmin(), Limit: 20, Status: "active",
+    Sort: "username",
+})
+// page.Users []app.AdminUser; page.HasMore
+
+user, err := runtime.Admin().GetUserByUsername(ctx, app.AdminUserByUsernameRequest{
+    Caller: runtime.LocalAdmin(), Username: "Alice",
+})
+// user.ID / user.Username / user.Nickname / user.Status / user.CreatedAt
+```
+
+约束：
+
+- username 按 NFKC + 大小写折叠后的规范化值匹配；返回的是 Evernight 保存的显示名。
+- 两个接口都要求 `AdminCaller`，并复用真实账户服务的 `users.read` 授权与读取审计。
+- 列表默认 20 条，最大 200；排序字段只接受白名单；状态为空表示不过滤。
+- 返回不含密码、MFA 秘密、恢复代码、`is_root`、安全版本；不可逆删除/禁用仍走
+  账户服务状态机，不在本查询门面中做。
+- 宿主如果暂时保留业务 `user.username`，应在创建/同步时写入这里返回的
+  `AdminUser.Username`，把它当作只读投影。
+
 ### 3.3 受信管理门面（`app` 包，步骤 182 起）
 
 `Runtime.Admin()` 提供用户/资料/应用/角色/权限的受控管理；调用者必须由可信边界

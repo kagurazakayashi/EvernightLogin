@@ -30,6 +30,8 @@ ON CONFLICT(username_normalized) DO NOTHING`
 
 	selectUserByIDSQL = `SELECT ` + selectUserColumns + ` FROM users WHERE id=?`
 
+	selectUserByUsernameSQL = `SELECT ` + selectUserColumns + ` FROM users WHERE username_normalized=?`
+
 	selectUserStateSQL = `SELECT ` + selectUserColumns + `,is_root FROM users WHERE id=?`
 
 	updateUserStateSQL = `UPDATE users SET status=?, security_version=security_version+?, row_version=row_version+1, updated_at_ms=?
@@ -104,6 +106,31 @@ func (s *Store) CreateUser(ctx context.Context, tx audit.Tx, user account.User) 
 // 存储错误返回 account.ErrStoreUnavailable（不泄露驱动错误文本）。
 func (s *Store) GetUser(ctx context.Context, id string) (account.User, error) {
 	rows, err := s.store.QueryContext(ctx, selectUserByIDSQL, id)
+	if err != nil {
+		return account.User{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return account.User{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+		}
+		return account.User{}, account.ErrUserNotFound
+	}
+	user, err := scanUser(rows)
+	if err != nil {
+		return account.User{}, err
+	}
+	if err := rows.Err(); err != nil {
+		return account.User{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	return user, nil
+}
+
+// GetUserByUsername 按规范化用户名查询账户快照。调用方负责先做 NFKC + 大小写
+// 折叠；仓储只做精确匹配，避免在 SQL 中复制规范化规则。不存在返回
+// account.ErrUserNotFound，其他存储错误返回 account.ErrStoreUnavailable。
+func (s *Store) GetUserByUsername(ctx context.Context, normalizedUsername string) (account.User, error) {
+	rows, err := s.store.QueryContext(ctx, selectUserByUsernameSQL, normalizedUsername)
 	if err != nil {
 		return account.User{}, fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
 	}

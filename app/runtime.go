@@ -84,6 +84,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if errors.Is(err, serverapp.ErrMigrationPending) {
 			return nil, configError("数据库尚未迁移；请显式设置 Migrate=true 或先运行迁移")
 		}
+		// 诊断日志保留真实装配原因（宿主日志可定位配置/路径/权限问题）；
+		// 返回给调用方的 AppError 仍不携带内部原因。
+		logger.Error("打开嵌入式运行时失败", "error", err)
 		return nil, wrapInternal("打开嵌入式运行时失败", err)
 	}
 	boot, bootCaller, err := serverapp.BuildBootstrapService(base.Deps, opts.OperatorID)
@@ -324,6 +327,9 @@ func (r *Runtime) Sessions() SessionService { return &sessionFacade{r: r} }
 
 // Security 返回认证/安全设置门面（TOTP 绑定、恢复代码、能力状态）。
 func (r *Runtime) Security() SecurityService { return &securityFacade{r: r} }
+
+// PasswordReset 返回找回密码门面（邮件 token 发起/校验/完成）。
+func (r *Runtime) PasswordReset() PasswordResetService { return &passwordResetFacade{r: r} }
 
 // Admin 返回受信管理门面；调用者必须先由 Runtime.LocalAdmin() 或
 // Runtime.AdminSession() 建立可信上下文，普通请求参数不能自称管理员。
