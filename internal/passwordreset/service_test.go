@@ -98,6 +98,9 @@ type testEnv struct {
 	keyring    *secrets.Keyring
 	creds      *credential.Service
 	resetStore *passwordresetsqlite.Store
+	// options 保存本次构造服务时实际使用的依赖（含 mutate 后的替换），供定向测试
+	// 用同一依赖重建服务（例如注入故障存储）；不参与生产路径。
+	options passwordreset.Options
 }
 
 func newTestEnv(t *testing.T, mutate func(*passwordreset.Options)) *testEnv {
@@ -163,6 +166,7 @@ func newTestEnv(t *testing.T, mutate func(*passwordreset.Options)) *testEnv {
 	if mutate != nil {
 		mutate(&options)
 	}
+	env.options = options
 	service, err := passwordreset.New(options)
 	if err != nil {
 		t.Fatalf("找回服务: %v", err)

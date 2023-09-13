@@ -44,7 +44,8 @@ type PasswordResetResult struct {
 type PasswordResetService interface {
 	// Request 发起找回；成功/未找到/禁用等统一返回 nil，避免账号枚举。
 	Request(ctx context.Context, req RequestPasswordResetRequest) error
-	// ValidateToken 检查邮件 token 是否仍有效（不改状态）。
+	// ValidateToken 检查邮件 token 当前是否仍可用：核对请求状态、一次性凭证状态/
+	// 绑定与账户可找回状态，但不消费、不改状态；所有失败统一返回 CHALLENGE_INVALID。
 	ValidateToken(ctx context.Context, token string) error
 	// Complete 用 token 设置新强密码，并撤销旧会话。
 	Complete(ctx context.Context, req CompletePasswordResetRequest) (PasswordResetResult, error)
@@ -87,8 +88,12 @@ func (f *passwordResetFacade) ValidateToken(ctx context.Context, token string) e
 		return login.NewAppError(login.CodeConfigInvalid, "找回密码服务未装配",
 			login.WithRequestID(login.NewRequestID()))
 	}
+	// 预检查与内置找回页面走同一个领域判断（ValidateResetToken 会核对请求状态、
+	// 一次性凭证状态/绑定与账户可找回状态），但公开错误统一为 CHALLENGE_INVALID：
+	// 不区分 token 不存在/过期/已使用/已撤销/账户禁用/无密码，避免公开入口泄露
+	// 账户状态。服务层对底层存储故障仍按默认拒绝处理，不会当作有效 token。
 	if err := security.PasswordReset.ValidateResetToken(ctx, token); err != nil {
-		return mapDomainError("找回 token 无效", string(passwordreset.CodeOf(err)))
+		return login.NewAppError(login.CodeChallengeInvalid, "找回 token 无效或已失效")
 	}
 	return nil
 }

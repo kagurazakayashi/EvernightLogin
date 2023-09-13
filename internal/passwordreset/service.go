@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -198,9 +199,17 @@ func (s *Service) revokeCredentials(ctx context.Context, requests []ResetRequest
 	}
 }
 
-// ValidateResetToken 只校验入口是否仍可用（不消费凭证、不建立会话）：校验 ID 状态/
-// 有效期与 token secret 摘要，供页面展示新密码表单前的预检查。无效 token 计入同一
-// 限流器，避免被用于探测。
+// ValidateResetToken 是找回页面的只读预检查：不消费凭证、不建立会话、不改变任何
+// 状态，只确认“此刻用该链接提交是否有机会成功”。为保证预检查与 CompleteReset 的
+// 判断一致，这里复用同一组检查：
+//   - 请求维度：token secret 摘要、请求状态（pending）与有效期；
+//   - 凭证维度：复用 internal/credential 的非消费校验（Peek），覆盖用途/目标绑定、
+//     凭证已消费、已撤销与凭证自身过期；
+//   - 账户维度：token 发出后账户仍必须处于可找回状态（存在、启用、非 root、有密码）。
+//
+// 任何一项不满足或底层存储故障都按“默认拒绝”处理。本方法绝不把预检查结果当作
+// CompleteReset 的最终授权：最终提交会重新验证并原子消费同一凭证。无效 token
+// 计入同一限流器，避免被用于探测。
 func (s *Service) ValidateResetToken(ctx context.Context, token string) error {
 	ctx = normalizeContext(ctx)
 	request, secret, err := s.parseToken(ctx, token)
@@ -210,15 +219,85 @@ func (s *Service) ValidateResetToken(ctx context.Context, token string) error {
 	if !s.validateLimiter().allow(hashToken(secret), s.now()) {
 		return ErrTokenInvalid
 	}
+	// 请求维度：被成功使用、被新申请替代或被显式取消后状态不再是 pending。
+	if err := s.verifyPendingRequest(request, secret); err != nil {
+		return err
+	}
+	// 凭证维度：复用一次性凭证的非消费校验，与最终 VerifyAndConsume 使用同一套
+	// 用途/目标绑定与状态判断（已消费、已撤销、过期、内容不匹配都拒绝）。
+	if _, err := s.opts.Credentials.Peek(ctx, credential.VerifyRequest{
+		Kind: credential.KindToken, ID: request.CredentialID,
+		Purpose: resetPurpose, Target: request.UserID, Secret: secret,
+	}); err != nil {
+		return mapCredentialPeekError(err)
+	}
+	// 账户维度：token 发出后账户可能被禁用、删除、改为 root 或移除密码。
+	return s.checkRecoverableTarget(ctx, request.UserID)
+}
+
+// verifyPendingRequest 统一校验找回请求的状态、token secret 摘要与有效期；不消费
+// 凭证、不改变状态。摘要比较使用常量时间，避免长度/内容侧信道。
+func (s *Service) verifyPendingRequest(request ResetRequest, secret string) error {
 	computed := sha256.Sum256([]byte(secret))
 	if len(request.TokenSHA256) != len(computed) ||
 		subtle.ConstantTimeCompare(request.TokenSHA256, computed[:]) != 1 {
+		return ErrTokenInvalid
+	}
+	if request.State != "pending" {
 		return ErrTokenInvalid
 	}
 	if !s.now().Before(request.ExpiresAt) {
 		return ErrTokenExpired
 	}
 	return nil
+}
+
+// checkRecoverableTarget 统一确认 token 对应的账户此刻仍可走找回：账户必须存在且
+// 启用、不是 root、仍持有密码。存储故障返回 ErrStoreUnavailable（默认拒绝，绝不
+// 把读取失败当作可找回）。
+func (s *Service) checkRecoverableTarget(ctx context.Context, userID string) error {
+	target, found, err := s.opts.Store.GetResetTarget(ctx, userID)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if !found || !target.Active {
+		return ErrAccountDisabled
+	}
+	if target.IsRoot {
+		return ErrAccessDenied
+	}
+	if !target.HasPassword {
+		return ErrNoPassword
+	}
+	return nil
+}
+
+// recoveryRejectionReason 把“账户不可找回”错误映射为不影响公开响应的审计原因码。
+func recoveryRejectionReason(err error) (string, ErrorCode) {
+	switch {
+	case errors.Is(err, ErrNoPassword):
+		return "no_password", CodeAccessDenied
+	case errors.Is(err, ErrAccessDenied):
+		return "root_protected", CodeAccessDenied
+	default:
+		return "account_disabled", CodeUserDisabled
+	}
+}
+
+// mapCredentialPeekError 把一次性凭证非消费校验的错误映射为找回域错误：存储故障
+// 返回 ErrStoreUnavailable（默认拒绝并保留可诊断原因），其余失败统一为
+// ErrTokenInvalid，避免外部区分“不存在/已消费/已撤销/内容不符”。
+func mapCredentialPeekError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	case errors.Is(err, credential.ErrStoreUnavailable):
+		return ErrStoreUnavailable
+	default:
+		return ErrTokenInvalid
+	}
 }
 
 // validateLimiter 复用邮箱限流器做 token 预检查限流（同进程有界）。
@@ -246,40 +325,30 @@ func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (R
 			"password.reset_completed", "invalid_token", string(CodeChallengeInvalid), request.RequestID)
 		return ResetResult{}, err
 	}
-	// 非消费摘要校验：token 必须是创建该请求时保存的同一 secret。
-	computed := sha256.Sum256([]byte(secret))
-	if len(resetRequest.TokenSHA256) != len(computed) ||
-		subtle.ConstantTimeCompare(resetRequest.TokenSHA256, computed[:]) != 1 {
+	// 与 ValidateResetToken 使用同一套请求检查（摘要/状态/期限）；预检查结果不能
+	// 替代这里对最终授权的重新验证。
+	if err := s.verifyPendingRequest(resetRequest, secret); err != nil {
+		reason := "token_digest_mismatch"
+		switch {
+		case errors.Is(err, ErrTokenExpired):
+			reason = "expired"
+		case resetRequest.State != "pending":
+			reason = "not_pending"
+		}
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
-			"password.reset_completed", "token_digest_mismatch", string(CodeChallengeInvalid), request.RequestID)
-		return ResetResult{}, ErrTokenInvalid
+			"password.reset_completed", reason, string(CodeChallengeInvalid), request.RequestID)
+		return ResetResult{}, err
 	}
 	now := s.now()
-	if !now.Before(resetRequest.ExpiresAt) {
-		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
-			"password.reset_completed", "expired", string(CodeChallengeInvalid), request.RequestID)
-		return ResetResult{}, ErrTokenExpired
-	}
-	if resetRequest.State != "pending" {
-		return ResetResult{}, ErrTokenInvalid
-	}
 	// 重新确认账户在 token 发出后仍可找回：禁用/删除/无密码/root 必须在完成层拒绝。
-	target, targetFound, err := s.opts.Store.GetResetTarget(ctx, resetRequest.UserID)
-	if err != nil {
-		return ResetResult{}, ErrStoreUnavailable
-	}
-	if !targetFound || !target.Active {
+	if err := s.checkRecoverableTarget(ctx, resetRequest.UserID); err != nil {
+		if errors.Is(err, ErrStoreUnavailable) {
+			return ResetResult{}, err
+		}
+		reason, code := recoveryRejectionReason(err)
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
-			"password.reset_completed", "account_disabled", string(CodeUserDisabled), request.RequestID)
-		return ResetResult{}, ErrAccountDisabled
-	}
-	if target.IsRoot {
-		return ResetResult{}, ErrAccessDenied
-	}
-	if !target.HasPassword {
-		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
-			"password.reset_completed", "no_password", string(CodeAccessDenied), request.RequestID)
-		return ResetResult{}, ErrNoPassword
+			"password.reset_completed", reason, string(code), request.RequestID)
+		return ResetResult{}, err
 	}
 	// 原子消费：同一 token 并发/重放只有一个请求成功。
 	if _, err := s.opts.Credentials.VerifyAndConsume(ctx, credential.VerifyRequest{
@@ -481,18 +550,6 @@ func (s *Service) appendOutbox(ctx context.Context, userID, reason, requestID st
 		return "", mapCriticalError(err)
 	}
 	return eventID, nil
-}
-
-// loadPendingToken 解析 token 并读取 pending 请求（不做凭证验证）。
-func (s *Service) loadPendingToken(ctx context.Context, token string) (ResetRequest, error) {
-	request, _, err := s.parseToken(ctx, token)
-	if err != nil {
-		return ResetRequest{}, err
-	}
-	if request.State != "pending" {
-		return ResetRequest{}, ErrTokenInvalid
-	}
-	return request, nil
 }
 
 // parseToken 拆分 resetID.secret 并加载请求；只做格式与存在性校验。
