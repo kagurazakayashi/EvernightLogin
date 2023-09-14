@@ -313,10 +313,12 @@ type AdminCreateUserRequest struct {
 	RequestID      string
 }
 
-// AdminUserRequest 读取用户资料。
+// AdminUserRequest 读取用户资料。RequestID 用于关联调用、领域审计与返回错误：
+// 空编号由门面统一生成一次，非法编号在查询前拒绝（REQ_INVALID）。
 type AdminUserRequest struct {
-	Caller AdminCaller
-	UserID string
+	Caller    AdminCaller
+	UserID    string
+	RequestID string
 }
 
 // AdminUpdateProfileRequest 修改允许管理员改写的资料字段；nil 表示不修改。
@@ -416,10 +418,12 @@ type AdminCreatePermissionRequest struct {
 	RequestID   string
 }
 
-// AdminRoleRequest 读取角色权限组合。
+// AdminRoleRequest 读取角色权限组合。RequestID 用于关联调用、领域审计与返回
+// 错误；空编号统一生成，非法编号拒绝。
 type AdminRoleRequest struct {
-	Caller AdminCaller
-	RoleID string
+	Caller    AdminCaller
+	RoleID    string
+	RequestID string
 }
 
 // AdminRolePermissionRequest 向角色添加权限（敏感操作：真实再次认证或本机受信
@@ -463,12 +467,14 @@ type AdminAddMemberRequest struct {
 }
 
 // AdminPermissionQuery 查询某用户在指定范围（"system" 或应用 ID）的有效权限。
+// RequestID 用于关联调用、领域审计与返回错误；空编号统一生成，非法编号拒绝。
 type AdminPermissionQuery struct {
-	Caller  AdminCaller
-	UserID  string
-	ScopeID string
-	Limit   int
-	Offset  int
+	Caller    AdminCaller
+	UserID    string
+	ScopeID   string
+	Limit     int
+	Offset    int
+	RequestID string
 }
 
 // AdminEffectivePermissions 是有效权限查询结果；DeniedCode 非空表示查询被状态
@@ -481,12 +487,14 @@ type AdminEffectivePermissions struct {
 }
 
 // AdminPermissionCheck 对某用户执行一次联合权限检查（权限键 + 范围 + all/any）。
+// RequestID 用于关联调用、领域审计与返回错误；空编号统一生成，非法编号拒绝。
 type AdminPermissionCheck struct {
 	Caller     AdminCaller
 	UserID     string
 	ScopeID    string
 	Permission string
 	Mode       string
+	RequestID  string
 }
 
 // AdminPermissionDecision 是联合权限检查结果；拒绝时给出稳定码与原因。
@@ -527,6 +535,16 @@ type AdminDelegation struct {
 //   - 管理员建用户与 registration.enabled 无关；全局账户资格与应用内角色分离；
 //   - 应用作用域操作只影响目标应用，跨应用写入按缺失权限拒绝；
 //   - 不接受 is_root、系统资格或已验证状态等特权字段；root 账户受既有服务保护。
+//
+// 请求关联与未找到契约（步骤 207）：
+//   - 每个请求的 RequestID 会先统一解析一次：空编号生成一次，非法编号在查询前以
+//     REQ_INVALID 拒绝；合法编号贯穿领域调用者/请求、领域审计与返回错误；
+//   - 已通过身份与权限检查的查询若确认目标不存在，返回稳定的公开 *NotFoundError
+//     （Code() == NotFoundCode，即 "NOT_FOUND"，HTTP 建议 404），外部模块用
+//     errors.Is(err, app.ErrNotFound)、app.IsNotFound 或 app.AsNotFound 判断，
+//     不需要导入 internal 包；
+//   - 未授权调用者只会得到 ACCESS_DENIED 等拒绝码，不会通过“未找到/存在”差异
+//     探测记录；参数格式错误仍返回 REQ_INVALID，与合法未找到区分。
 type AdminService interface {
 	CreateUser(ctx context.Context, req AdminCreateUserRequest) (AdminUser, error)
 	ListUsers(ctx context.Context, req AdminListUsersRequest) (AdminUserList, error)

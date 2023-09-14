@@ -15,7 +15,13 @@
 //     Database、Notifier 不被关闭；Close 幂等。
 //   - 装配失败按相反顺序回滚已打开资源；Migrate=false 时未迁移库 fail-closed；
 //     CreateMasterKey=false 时缺失主密钥 fail-closed；不会自动生成隐式默认密钥。
-//   - 不提供跳过认证/伪造 root/关闭鉴权的入口；业务拒绝统一返回 *login.AppError。
+//   - 不提供跳过认证/伪造 root/关闭鉴权的入口；业务拒绝统一返回 *login.AppError
+//     （已授权查询的“目标不存在”是正常结果，见下条）。
+//     管理查询的“已授权但目标不存在”返回公开 *NotFoundError
+//     （Code() == NotFoundCode，即 "NOT_FOUND"，HTTP 建议 404），用 IsNotFound 判断，
+//     与 REQ_INVALID 参数错误、ACCESS_DENIED 权限拒绝区分。
+//   - 请求关联：门面调用先统一解析请求编号（空编号生成、非法编号拒绝），同一编号
+//     用于领域调用者/请求、领域审计与返回错误，便于按编号排查整条调用链。
 //   - 认证/安全域（TOTP/Passkey/MFA/恢复代码/找回/客服）与敏感操作闸门由
 //     internal/serverapp 与独立服务共用同一装配（步骤 181）；关闭 Passkey 不影响
 //     TOTP 等可用能力，恢复代码只替代第二步并进入受限恢复会话。
