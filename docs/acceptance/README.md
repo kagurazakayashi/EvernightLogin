@@ -28,6 +28,9 @@
 | `step199-windows.md` | 第 9 轮步骤 199：管理隔离与客服 Windows 独立回归（固定 commit 350cbd3；角色×操作×范围矩阵 M1–M13、真实 Mail 找回/审批/执行、197 提交后需复跑通知/审计相关项） |
 | `step200-final-gap-check.md` | 第 9 轮步骤 200：最终需求差距核对（最终基线 778fc226；24 章/R01–R06/A01–A08/§4 七项关闭依据、203 与 NOT_TESTED 清单、202 发布包占位；PASS_WITH_NOTES） |
 | `step202-release.md` | 第 9 轮步骤 202：双产品 12 个正式发布包（Windows/Linux/macOS × amd64/arm64）打包、独立校验（12 zip/哈希/元数据/类型架构/短冒烟；PASS_WITH_NOTES，Windows 之外仅编译） |
+| `capability-matrix.json` / `capability-matrix.md` | 第 10 轮步骤 203：由 `go run ./scripts/capabilities` 扫描源码生成的机器可读能力清单（能力→内部服务/公开 Go/HTTP/CLI/页面/权限/分页/定向测试，状态 implemented/untested/missing/unimplemented，含反向未覆盖项；**自动生成、勿手改**） |
+| `shorttest.md` | 第 10 轮步骤 203：无人值守短测试统一入口契约（临时目录/动态回环端口/合成用户/总超时/子进程清理/结构化 JSON）、场景注册表与新增方式 |
+| `step203-capability-shorttest.md` | 第 10 轮步骤 203：能力清单生成与统一短测试入口验收记录（矩阵口径、真实 login-server 冒烟 14/14 PASS、拒绝/超时路径、清理与未测边界；原始 JSON 证据在本地 gitignored 的 `evidence/step203/`） |
 
 ## 使用约定
 

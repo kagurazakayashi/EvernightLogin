@@ -1,0 +1,32 @@
+{
+  "schema": "evernight.shorttest.scenarios/v1",
+  "description": "EvernightLogin 无人值守短测试场景注册表。统一入口 scripts/shorttest.ps1 负责临时目录、动态回环端口、总超时、子进程退出与清理、结构化 JSON 结果；每个场景只实现业务步骤与检查项。新增领域测试时在此登记，不要复制一套入口。",
+  "scenarios": [
+    {
+      "id": "login-server-smoke",
+      "title": "真实 login-server 初始化 + 监听 + 失败关闭拒绝路径冒烟",
+      "program": "./scripts/shorttest/scenario/login_server_smoke",
+      "needs_server_binary": true,
+      "timeout_seconds": 150,
+      "arguments": ["-workdir", "{workdir}", "-server", "{server}", "-timeout", "{timeout}", "-result", "{result}"],
+      "covers": [
+        "bootstrap.root",
+        "auth.password_session",
+        "adminapi.core",
+        "oauth_oidc.protocol",
+        "session.admin"
+      ],
+      "notes": "复用真实 login-server CLI 与生产装配：临时 SQLite/动态回环端口/合成 root 密码；成功路径 healthz/openapi/login，拒绝路径管理 API 与协议端点未启用时 404 fail-closed；结束后删除临时秘密、验证端口释放。"
+    },
+    {
+      "id": "harness-timeout",
+      "title": "短测试入口超时/终止/清理自检（非产品场景）",
+      "program": "./scripts/shorttest/scenario/harness_timeout",
+      "needs_server_binary": false,
+      "timeout_seconds": 60,
+      "arguments": ["-seconds", "120"],
+      "covers": ["harness.timeout_kill_cleanup"],
+      "notes": "用 -TimeoutSeconds 20 运行时，子进程（固定睡眠 120 秒）应被入口强制结束，入口输出 TIMEOUT 结构化结果并清理临时目录；仅用于验证入口自身，不代表产品能力。"
+    }
+  ]
+}

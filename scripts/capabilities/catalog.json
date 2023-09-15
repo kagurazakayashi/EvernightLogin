@@ -1,0 +1,486 @@
+{
+  "schema": "evernight.capability-catalog/v1",
+  "description": "EvernightLogin 第 10 轮能力声明。每项声明面（内部服务目录、公开 Go 符号、管理 API 路由、协议端点点位、CLI 子命令、页面命名路由、内置权限键、分页字段、定向测试函数）都由 scripts/capabilities 在源码中解析核对；解析不到即 missing。expect=unimplemented 的条目表示已知未实现能力，其缺口证据必须能在代码/注释中找到。",
+  "capabilities": [
+    {
+      "id": "runtime.embedded",
+      "title": "嵌入式运行时装配（Open/Handler/Mount/生命周期）",
+      "domain": "嵌入式与运行时",
+      "internal_services": ["internal/appcore", "internal/serverapp"],
+      "app_api": ["Runtime", "Options", "Open", "Runtime.Handler", "Runtime.Mount", "Runtime.Start", "Runtime.Close", "Runtime.Admin", "Runtime.Users", "Runtime.Auth", "Runtime.Sessions", "Runtime.Security", "Runtime.Access", "Runtime.Bootstrap", "Runtime.PasswordReset", "HTTPOptions", "PageOverrides", "NotFoundError"],
+      "root_api": ["Config", "Instance", "New", "NewServer", "Default"],
+      "cli": ["login-server:serve"],
+      "tests": [
+        {"package": "./app", "run": "TestOpenEnsureRootUsersLoginAccessRevokeStartClose"},
+        {"package": "./app", "run": "TestOpenMigrateFalseFailsAndCleansUpResources"},
+        {"package": "./internal/serverapp", "run": "TestOpenBaseBuildsSharedAssemblyWithoutStarting"}
+      ],
+      "pagination": {"mode": "none", "reason": "运行时装配与生命周期不是数据列表，不涉及分页。"},
+      "notes": "宿主只能用公开 app 包构造运行时；Open 不监听端口、不自行启动任务。"
+    },
+    {
+      "id": "bootstrap.root",
+      "title": "受控首次初始化与 root 自举",
+      "domain": "身份基础",
+      "internal_services": ["internal/bootstrap", "internal/preset"],
+      "app_api": ["BootstrapService", "RootRequest", "RootResult"],
+      "root_api": ["CurrentBuildInfo"],
+      "cli": ["login-server:init"],
+      "tests": [
+        {"package": "./internal/bootstrap", "run": "TestInitializeCreatesSinglePendingRoot"},
+        {"package": "./internal/bootstrap", "run": "TestConcurrentInitializeSingleRoot"},
+        {"package": "./internal/preset", "run": "TestCatalogIntegrity"},
+        {"package": "./internal/serverapp", "run": "TestInitCreatesRootAndServeLifecycle"}
+      ],
+      "pagination": {"mode": "none", "reason": "初始化是单次受控操作，不是列表。"}
+    },
+    {
+      "id": "auth.password_session",
+      "title": "密码登录、会话校验与 CSRF",
+      "domain": "认证与会话",
+      "internal_services": ["internal/authn", "internal/session", "internal/credential"],
+      "app_api": ["AuthService", "LoginRequest", "LoginResult", "SecondFactorChallenge", "VerifiedSession", "VerifySecondFactorRequest", "SessionService", "SessionInfo"],
+      "permissions": ["self.sessions.manage"],
+      "tests": [
+        {"package": "./internal/authn", "run": "TestHashAndVerifyPassword"},
+        {"package": "./internal/session", "run": "TestLoginAuthenticateRenewLogout"},
+        {"package": "./internal/session", "run": "TestCSRFValidationRechecksState"},
+        {"package": "./app", "run": "TestSessionServiceValidateAndCSRF"}
+      ],
+      "pagination": {"mode": "none", "reason": "单会话校验不是列表。"}
+    },
+    {
+      "id": "mfa.totp_recovery",
+      "title": "两步验证（TOTP/恢复代码）与受限恢复",
+      "domain": "认证与会话",
+      "internal_services": ["internal/mfa", "internal/totp", "internal/recovery"],
+      "app_api": ["SecurityService", "SecurityStatus", "SecurityStatusRequest", "BeginRecoveryRequest", "RecoverySession", "RecoveryStatus", "RecoveryStatusRequest", "RecoveryCodes", "RecoveryCodesRequest", "TOTPBinding", "TOTPBindingBeginRequest", "TOTPBindingConfirmRequest", "TOTPBindingStart"],
+      "permissions": ["self.credentials.manage"],
+      "tests": [
+        {"package": "./internal/mfa", "run": "TestPasswordTOTPFullSession"},
+        {"package": "./internal/mfa", "run": "TestTOTPStrongAuthGatedByPolicy"},
+        {"package": "./internal/totp", "run": "TestBindConfirmLoginRebindAndRemovalProtection"},
+        {"package": "./internal/recovery", "run": "TestBeginConsumesCodeAndCreatesRestrictedSession"},
+        {"package": "./app", "run": "TestPasswordLoginTOTPSecondFactorAndSensitiveReauth"}
+      ],
+      "pagination": {"mode": "none", "reason": "因素是固定少量集合（TOTP/Passkey/恢复代码），不涉及分页。"}
+    },
+    {
+      "id": "passkey.webauthn",
+      "title": "Passkey/WebAuthn 登录与凭证管理",
+      "domain": "认证与会话",
+      "internal_services": ["internal/passkey"],
+      "app_api": ["VerifySecondFactorRequest", "SecondFactorChallenge"],
+      "tests": [
+        {"package": "./internal/passkey", "run": "TestRegisterListRenameAndReauth"},
+        {"package": "./internal/passkey", "run": "TestDiscoverableLoginAndWrongUserHandle"}
+      ],
+      "pagination": {"mode": "none", "reason": "Passkey 凭证是固定少量集合（列表本身由页面/API 返回，非分页服务）。"},
+      "notes": "真实硬件安全密钥与 Windows Hello 真机 ceremony 不在自动化范围（NOT_TESTED）。"
+    },
+    {
+      "id": "passwordreset.self_service",
+      "title": "自助密码找回",
+      "domain": "恢复",
+      "internal_services": ["internal/passwordreset"],
+      "app_api": ["PasswordResetService", "RequestPasswordResetRequest", "CompletePasswordResetRequest", "PasswordResetResult"],
+      "permissions": ["recovery.request"],
+      "tests": [
+        {"package": "./internal/passwordreset", "run": "TestBeginResetUniformResponse"},
+        {"package": "./internal/passwordreset", "run": "TestCompleteResetConcurrentSingleWinnerAndMFAKept"},
+        {"package": "./app", "run": "TestPasswordResetRequiresMailAndRejectsInvalidToken"}
+      ],
+      "pagination": {"mode": "none", "reason": "找回流程是单次令牌流程，不是列表。"}
+    },
+    {
+      "id": "access.joint_check",
+      "title": "令牌与当前权限联合校验",
+      "domain": "授权",
+      "internal_services": ["internal/authz", "internal/tokenauthz"],
+      "app_api": ["AccessService", "AccessRequest", "AccessDecision"],
+      "protocol_paths": ["PathTokenAuthorize"],
+      "permissions": ["authorization.check"],
+      "tests": [
+        {"package": "./internal/tokenauthz", "run": "TestIntegrationRealTokenAndPermission"},
+        {"package": "./internal/tokenauthz", "run": "TestStep92HTTPJointAuthorization"}
+      ],
+      "pagination": {"mode": "none", "reason": "单次判定不是列表。"}
+    },
+    {
+      "id": "account.users",
+      "title": "用户查询、生命周期与批量导出",
+      "domain": "账户",
+      "internal_services": ["internal/account", "internal/userbatch", "internal/emailchange", "internal/registration"],
+      "app_api": ["UserService", "CreateUserRequest", "User"],
+      "admin_routes": ["GET users*", "POST users*"],
+      "permissions": ["users.read", "users.create", "users.update", "users.disable", "users.delete", "users.export", "self.profile.read", "self.profile.update"],
+      "pagination": {"mode": "offset", "evidence": ["AdminListUsersRequest.Limit", "AdminListUsersRequest.Offset", "AdminUserList.HasMore"]},
+      "tests": [
+        {"package": "./internal/account", "run": "TestGetUserAndPagination"},
+        {"package": "./internal/account", "run": "TestUsernameRulesAndNormalization"},
+        {"package": "./internal/userbatch", "run": "TestExportFieldsScopeAndFormulaInjection"},
+        {"package": "./internal/emailchange", "run": "TestFirstAddEmail"},
+        {"package": "./internal/registration", "run": "TestRegisterDisabled"},
+        {"package": "./app", "run": "TestAdminListUsersAndGetByUsername"}
+      ]
+    },
+    {
+      "id": "admin.facade_api",
+      "title": "受信管理 Go 门面（用户/资料/应用/角色/权限）",
+      "domain": "管理",
+      "app_api": ["AdminService", "AdminCaller", "AdminUser", "AdminUserProfile", "AdminUserList", "AdminListUsersRequest", "AdminUserByUsernameRequest", "AdminUserRequest", "AdminCreateUserRequest", "AdminUpdateProfileRequest"],
+      "permissions": ["users.read"],
+      "pagination": {"mode": "offset", "evidence": ["AdminListUsersRequest.Limit", "AdminListUsersRequest.Offset", "AdminUserList.HasMore"]},
+      "tests": [
+        {"package": "./app", "run": "TestAdminFacadeBootstrapAndApplicationRoleAssignment"},
+        {"package": "./app", "run": "TestAdminQueryRequestIDCorrelation"},
+        {"package": "./app", "run": "TestAdminCallerTrustBoundaries"},
+        {"package": "./app", "run": "TestAdminSessionPermissionCheckedBeforeQuery"}
+      ]
+    },
+    {
+      "id": "session.admin",
+      "title": "管理员会话查询与强制下线",
+      "domain": "认证与会话",
+      "internal_services": ["internal/session"],
+      "admin_routes": ["GET sessions", "POST sessions/revoke"],
+      "permissions": ["sessions.revoke"],
+      "pagination": {"mode": "offset", "evidence": ["internal/session/service.go:Limit"]},
+      "tests": [
+        {"package": "./internal/session", "run": "TestAdminListSessionsScopeAndAudit"},
+        {"package": "./internal/session", "run": "TestListSessionsPaginationAndScope"},
+        {"package": "./internal/session", "run": "TestAdminRevokeScopes"}
+      ]
+    },
+    {
+      "id": "adminapi.core",
+      "title": "管理 JSON API 基础端点、错误码与任务详情",
+      "domain": "管理",
+      "internal_services": ["internal/adminapi", "internal/transport"],
+      "admin_routes": ["GET meta", "GET error-codes", "GET notifications", "POST notifications/test", "GET tasks/{task_id}"],
+      "root_api": ["RegisteredErrorCodes", "OpenAPIDocument", "NewHTTPHandler"],
+      "tests": [
+        {"package": "./internal/adminapi", "run": "TestNewValidatesOptions"},
+        {"package": "./internal/adminapi", "run": "TestDomainRoutesContract"},
+        {"package": "./internal/adminapi", "run": "TestTaskDetailEndpoint"},
+        {"package": "./internal/adminapi", "run": "TestEmittedErrorCodesRegistered"}
+      ],
+      "pagination": {"mode": "fixed", "reason": "meta/error-codes/通知状态是固定少量枚举或单值状态，不构成可增长数据列表，允许不分页。"}
+    },
+    {
+      "id": "audit.events",
+      "title": "安全审计查询、导出与保留清理",
+      "domain": "审计与报告",
+      "internal_services": ["internal/audit", "internal/auditops"],
+      "admin_routes": ["GET audit*", "POST audit*", "PUT audit/retention"],
+      "permissions": ["audit.read", "audit.export", "audit.purge"],
+      "tests": [
+        {"package": "./internal/auditops", "run": "TestQueryDataScopeEnforcedInStore"},
+        {"package": "./internal/auditops", "run": "TestPaginationStableAndHasMore"},
+        {"package": "./internal/audit", "run": "TestRedactChanges"},
+        {"package": "./internal/adminapi", "run": "TestAuditQueryPermissionsAndDataScope"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["internal/auditops/auditops.go:Limit"]}
+    },
+    {
+      "id": "reports.generate",
+      "title": "统计报告生成、导出、计划与清理",
+      "domain": "审计与报告",
+      "internal_services": ["internal/reports"],
+      "admin_routes": ["GET reports*", "POST reports*", "GET report-plans*", "POST report-plans*", "PUT report-plans*", "DELETE report-plans*"],
+      "permissions": ["reports.read", "reports.generate", "reports.export", "reports.schedule.manage", "reports.cleanup"],
+      "tests": [
+        {"package": "./internal/reports", "run": "TestHistoryWritesTerminalStates"},
+        {"package": "./internal/reports", "run": "TestPlanCreateListGet"},
+        {"package": "./internal/adminapi", "run": "TestReportEndpointsWiring"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["internal/reports/history_query.go:Limit"]}
+    },
+    {
+      "id": "backup.restore",
+      "title": "备份创建、校验、离线查看与恢复",
+      "domain": "备份与恢复",
+      "internal_services": ["internal/backup", "internal/backupadmin", "internal/restore", "internal/maintenance"],
+      "admin_routes": ["GET backups*", "POST backups*", "PUT backups*", "DELETE backups*"],
+      "cli": ["login-backup:create", "login-backup:verify", "login-backup:info", "login-backup:list", "login-backup:tables", "login-backup:preview", "login-backup:export", "login-backup:extract", "loginctl:restore-preflight", "loginctl:restore-apply", "loginctl:restore-init-state", "loginctl:restore-merge-audit", "loginctl:restore-disposition", "loginctl:restore-review", "loginctl:restore-reenable"],
+      "permissions": ["backups.create", "backups.read", "backups.cancel", "backups.export", "backups.retention", "backups.cleanup", "backups.restore"],
+      "tests": [
+        {"package": "./internal/backup", "run": "TestCreateBackupWithAttachmentsAndConfig"},
+        {"package": "./internal/restore", "run": "TestRestoreReplacesDatabaseAndRevokesCredentials"},
+        {"package": "./internal/maintenance", "run": "TestEnterMaintenanceBlocksWritesAndExitRestores"},
+        {"package": "./internal/adminapi", "run": "TestBackupEndpointsWiring"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["internal/backupadmin/jobs.go:Limit"]}
+    },
+    {
+      "id": "support.recovery",
+      "title": "客服求助单、人工核验恢复与 root 本地应急",
+      "domain": "恢复",
+      "internal_services": ["internal/support", "internal/manualrecovery", "internal/rootrecovery"],
+      "admin_routes": ["GET support*", "POST support*"],
+      "cli": ["loginctl:root-recover"],
+      "pages": ["name:support.*"],
+      "permissions": ["support.cases.read", "support.cases.create", "support.cases.update", "recovery.request", "recovery.approve", "recovery.execute", "recovery.mfa.approve"],
+      "tests": [
+        {"package": "./internal/support", "run": "TestCreateCaseScopeMaskingAndAudit"},
+        {"package": "./internal/manualrecovery", "run": "TestApprovalWaitingPeriodAndExecution"},
+        {"package": "./internal/rootrecovery", "run": "TestPasswordAndMFAReset"},
+        {"package": "./internal/support", "run": "TestStrongAuthGateAndMissingDependencies"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["internal/support/service.go:Limit"]},
+      "notes": "root 应急只允许本地受控 CLI（loginctl root-recover），不开放远程 HTTP 入口。"
+    },
+    {
+      "id": "applications.manage",
+      "title": "应用、成员与应用凭证管理",
+      "domain": "授权",
+      "internal_services": ["internal/app", "internal/oauthclient", "internal/managedapi", "internal/managedapi/httpapi", "internal/appsupport"],
+      "app_api": ["AdminApplication", "AdminCreateApplicationRequest", "AdminApplicationRequest", "AdminSetApplicationEnabledRequest", "AdminAddMemberRequest"],
+      "admin_routes": ["GET applications*", "POST applications*", "PUT applications*"],
+      "permissions": ["applications.read", "applications.create", "applications.update", "applications.credentials.manage", "applications.members.manage"],
+      "tests": [
+        {"package": "./internal/app", "run": "TestApplicationDeletionLifecycle"},
+        {"package": "./internal/oauthclient", "run": "TestRegisterPublicClient"},
+        {"package": "./internal/managedapi", "run": "TestManagedAPIHTTPRealServices"},
+        {"package": "./internal/managedapi/httpapi", "run": "TestHandlerAuthVersionAndEnvelope"},
+        {"package": "./internal/appsupport", "run": "TestAppSupportCreateAndIsolation"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["AdminPermissionQuery.Limit", "AdminPermissionQuery.Offset"]}
+    },
+    {
+      "id": "rbac.roles_permissions",
+      "title": "用户组、角色、权限目录与委派",
+      "domain": "授权",
+      "internal_services": ["internal/group", "internal/role", "internal/permission", "internal/delegation"],
+      "app_api": ["AdminRole", "AdminCreateRoleRequest", "AdminRoleRequest", "AdminRolePermissionRequest", "AdminPermission", "AdminCreatePermissionRequest", "AdminPermissionQuery", "AdminEffectivePermissions", "AdminPermissionCheck", "AdminPermissionDecision", "GrantRoleRequest", "RevokeRoleRequest", "AdminDelegation", "AdminDelegationGrantRequest"],
+      "admin_routes": ["GET groups*", "POST groups*", "PUT groups*", "DELETE groups*", "GET roles*", "POST roles*", "PUT roles*", "DELETE roles*", "GET permissions*", "POST permissions*", "PUT permissions*"],
+      "permissions": ["groups.read", "groups.manage", "roles.read", "roles.manage", "roles.assign", "permissions.read", "permissions.manage", "permissions.state.update"],
+      "tests": [
+        {"package": "./internal/group", "run": "TestListGroupsDefaultScopeAndPagination"},
+        {"package": "./internal/role", "run": "TestRoleCreateValidationAndIsolation"},
+        {"package": "./internal/permission", "run": "TestCrossScopeIsolationAndList"},
+        {"package": "./internal/delegation", "run": "TestGrantIssuanceAndValidation"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["AdminPermissionQuery.Limit", "AdminPermissionQuery.Offset"]}
+    },
+    {
+      "id": "oauth_oidc.protocol",
+      "title": "OAuth2/OIDC 协议端点（授权码/刷新/撤销/内省/UserInfo）",
+      "domain": "协议",
+      "internal_services": ["internal/protocolapi", "internal/oauthflow", "internal/oidc", "internal/token", "internal/oauthclient"],
+      "protocol_paths": ["PathDiscovery", "PathJWKS", "PathAuthorize", "PathToken", "PathUserInfo", "PathRevoke", "PathIntrospect"],
+      "pages": ["name:oauth.*"],
+      "permissions": ["self.grants.manage"],
+      "tests": [
+        {"package": "./internal/protocolapi", "run": "TestDiscoveryOnlyDeclaresImplementedCapabilities"},
+        {"package": "./internal/oauthflow", "run": "TestAuthorizationCodeHappyPath"},
+        {"package": "./internal/oidc", "run": "TestDiscoveryDocumentOnlyImplemented"},
+        {"package": "./internal/token", "run": "TestIssueAndVerifyAccessToken"}
+      ],
+      "pagination": {"mode": "none", "reason": "协议端点不是列表接口。"}
+    },
+    {
+      "id": "device_code.login",
+      "title": "设备码登录（RFC 8628）",
+      "domain": "协议",
+      "internal_services": ["internal/oauthflow"],
+      "protocol_paths": ["PathDeviceAuthorization", "PathDeviceCancel"],
+      "tests": [
+        {"package": "./internal/protocolapi", "run": "TestDeviceAuthorizationFlow"},
+        {"package": "./internal/oauthflow", "run": "TestDeviceAuthorizationFullFlow"}
+      ],
+      "pagination": {"mode": "none", "reason": "设备码流程是单次轮询，不是列表。"}
+    },
+    {
+      "id": "qr_login.confirm",
+      "title": "已登录 APP 扫码登录与网页领取",
+      "domain": "协议",
+      "internal_services": ["internal/qrlogin"],
+      "protocol_paths": ["PathQRRequest", "PathQRStatus", "PathQRClaim", "PathQRCancel", "PathQRRegenerate", "PathQRPrompt", "PathQRDecision"],
+      "tests": [
+        {"package": "./internal/qrlogin", "run": "TestApproveAndClaimFlow"},
+        {"package": "./internal/protocolapi", "run": "TestQRLoginFlow"}
+      ],
+      "pagination": {"mode": "none", "reason": "扫码请求是单次短期凭证流程，不是列表。"}
+    },
+    {
+      "id": "ui.public_pages",
+      "title": "公开与自助页面（登录/注册/找回/账户/错误页）",
+      "domain": "页面",
+      "internal_services": ["internal/pagecsrf", "internal/pagestate", "internal/uiauthadapter", "internal/uiaccountadapter"],
+      "root_api": ["UIRoute", "UIPageHandler", "UIPageOutcome", "UIPageContext", "UIPageRenderer", "UIPageResponse", "UIHostTemplates", "UIBrand", "UICatalogProvider", "UIAccess", "BuiltinUIRoutes"],
+      "pages": ["name:auth.*", "name:account.*", "name:system.*", "name:app.*", "name:ui.*"],
+      "tests": [
+        {"package": "./app", "run": "TestEmbeddedHTTPPagesMountAndSecurity"},
+        {"package": "./internal/serverapp", "run": "TestPublicFormPathsIncludeMFAAndPasswordReset"},
+        {"package": ".", "run": "TestHTTPHandlerProductionEndpoints"}
+      ],
+      "pagination": {"mode": "fixed", "reason": "页面命名路由是固定集合，页面内列表由各领域 API 的分页契约承担。"}
+    },
+    {
+      "id": "ui.admin_pages",
+      "title": "管理与客服页面框架（固定命名路由）",
+      "domain": "页面",
+      "internal_services": ["internal/uiadminadapter", "internal/uisecurityadapter"],
+      "pages": ["name:admin.*", "name:manage.*"],
+      "tests": [
+        {"package": "./internal/serverapp", "run": "TestManagementPagesRequireStrongAuthSession"},
+        {"package": "./internal/serverapp", "run": "TestThirteenPagesProtocolAndAdminAPI"},
+        {"package": "./internal/uiadminadapter", "run": "TestAuditAdapterQueryAndDetail"},
+        {"package": ".", "run": "TestUIPageManageRoutesContract"}
+      ],
+      "pagination": {"mode": "fixed", "reason": "页面命名路由是固定集合；页面内列表使用领域 API 分页。"}
+    },
+    {
+      "id": "cli.loginctl",
+      "title": "本地/在线管理 CLI（loginctl 命令组）",
+      "domain": "CLI",
+      "internal_services": ["internal/managecli"],
+      "cli": ["loginctl:config", "loginctl:diag", "loginctl:migrate", "loginctl:maintenance-enter", "loginctl:maintenance-exit", "loginctl:user", "loginctl:group", "loginctl:role", "loginctl:app", "loginctl:permission", "loginctl:notify", "loginctl:session", "loginctl:task", "loginctl:tasks", "loginctl:audit", "loginctl:reports", "loginctl:backups", "loginctl:notifications", "loginctl:admin", "loginctl:confirm", "loginctl:case", "loginctl:recovery", "loginctl:root-recover"],
+      "tests": [
+        {"package": "./internal/managecli", "run": "TestConfigShowClassifiesAndRedacts"},
+        {"package": "./internal/managecli", "run": "TestMigrateStatusCurrent"},
+        {"package": "./internal/managecli", "run": "TestUserListAndGet"},
+        {"package": "./internal/managecli", "run": "TestOnlineTransportUnreachableAndTimeout"}
+      ],
+      "pagination": {"mode": "none", "reason": "CLI 是命令入口；列表分页由服务端 API 契约承担，CLI 不自行定义第二套分页。"}
+    },
+    {
+      "id": "config.load",
+      "title": "YAML 配置加载、默认值、覆盖与校验",
+      "domain": "配置",
+      "root_api": ["Config", "Default", "Load", "LoadOptions", "ConfigError"],
+      "cli": ["loginctl:config"],
+      "tests": [
+        {"package": ".", "run": "TestDefaultConfig"},
+        {"package": ".", "run": "TestConfigValidateForProgrammaticConfig"},
+        {"package": ".", "run": "TestServerNetworkConfigYAMLParsing"}
+      ],
+      "pagination": {"mode": "none", "reason": "配置是单文档，不是列表。"}
+    },
+    {
+      "id": "mail.delivery",
+      "title": "站内邮件投递队列与本地测试邮件服务",
+      "domain": "通知",
+      "internal_services": ["internal/mailer", "internal/mailtest", "internal/testutil"],
+      "tests": [
+        {"package": "./internal/mailer", "run": "TestDeliveryHandlerSuccessAndRestartRecovery"},
+        {"package": "./internal/mailer", "run": "TestSMTPStartTLSWithAuth"},
+        {"package": "./internal/mailtest", "run": "TestStartSendAndWaitMessage"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["internal/mailer/delivery.go:Limit"]},
+      "notes": "真实外发邮件在测试中不启用；本地 EvernightMail 测试服务按需拉起。"
+    },
+    {
+      "id": "stats.overview",
+      "title": "统计概览与健康状态",
+      "domain": "审计与报告",
+      "internal_services": ["internal/stats"],
+      "tests": [
+        {"package": "./internal/stats", "run": "TestOverviewSameContext"},
+        {"package": "./internal/stats", "run": "TestNormalizeWindowRejects"}
+      ],
+      "pagination": {"mode": "fixed", "reason": "统计按固定时间窗/固定指标集合返回，不构成可增长列表。"}
+    },
+    {
+      "id": "security.policy_reauth",
+      "title": "敏感操作安全策略与再次认证",
+      "domain": "认证与会话",
+      "internal_services": ["internal/policy", "internal/reauth", "internal/securitycenter", "internal/securityevent"],
+      "permissions": ["security.policy.manage"],
+      "tests": [
+        {"package": "./internal/policy", "run": "TestServiceOperationAndAvailableStrengths"},
+        {"package": "./internal/reauth", "run": "TestAuthorizeFreshStaleWeakAndConfirmed"},
+        {"package": "./internal/securitycenter", "run": "TestMFAPolicyProjection"}
+      ],
+      "pagination": {"mode": "none", "reason": "策略是固定操作集合与单份策略快照，不是列表。"}
+    },
+    {
+      "id": "onboarding.invitations",
+      "title": "邀请与审核注册",
+      "domain": "账户",
+      "internal_services": ["internal/onboarding"],
+      "tests": [
+        {"package": "./internal/onboarding", "run": "TestInviteCreateAcceptNewUser"},
+        {"package": "./internal/onboarding", "run": "TestReviewApproveRejectAndConcurrency"}
+      ],
+      "pagination": {"mode": "offset", "evidence": ["internal/onboarding/service.go:Limit"]}
+    },
+    {
+      "id": "token.jwt_keys",
+      "title": "JWT 签发/验签、JWKS 与签名密钥轮换",
+      "domain": "协议",
+      "internal_services": ["internal/token", "internal/oidc"],
+      "protocol_paths": ["PathJWKS"],
+      "tests": [
+        {"package": "./internal/token", "run": "TestKeyRotationGraceAndRetirement"},
+        {"package": "./internal/token", "run": "TestJWKSContainsOnlyPublicMaterial"},
+        {"package": "./internal/oidc", "run": "TestUserInfoScopeTrimmingAndValidation"}
+      ],
+      "pagination": {"mode": "none", "reason": "密钥/端点集合固定少量，不是列表。"}
+    },
+    {
+      "id": "transport.http_security",
+      "title": "HTTP 传输安全链（限流/CSRF/CORS/边界/错误信封/OpenAPI）",
+      "domain": "传输",
+      "internal_services": ["internal/transport", "internal/netguard", "internal/netpolicy", "internal/proxytrust", "internal/listener"],
+      "root_api": ["Identity", "IdentityKind", "IdentityResolver", "CSRFPolicy", "RateLimitOptions", "OpenAPIDocument", "NewHTTPHandler"],
+      "tests": [
+        {"package": "./internal/transport", "run": "TestProductionRoutesOnly"},
+        {"package": "./internal/transport", "run": "TestCSRFCookieSessionContract"},
+        {"package": "./internal/transport", "run": "TestHealthEndpointMinimal"},
+        {"package": "./internal/listener", "run": "TestStartServeAndCloseReleasesPort"}
+      ],
+      "pagination": {"mode": "none", "reason": "HTTP 中间件与安全契约不是列表能力。"}
+    },
+    {
+      "id": "storage.sqlite_migrations",
+      "title": "SQLite 存储、增量迁移与其他数据库方言适配",
+      "domain": "存储",
+      "internal_services": ["internal/storage", "internal/storage/migrate", "internal/storage/sqlite", "internal/storage/mysql", "internal/storage/postgres", "internal/storage/sqlserver"],
+      "tests": [
+        {"package": "./internal/storage/sqlite", "run": "TestMigrateAndReopen"},
+        {"package": "./internal/storage/migrate", "run": "TestRunnerAppliesPendingInOrderAndIsIdempotent"},
+        {"package": "./internal/storage/mysql", "run": "TestTranslateRepositorySQL"}
+      ],
+      "pagination": {"mode": "none", "reason": "存储与迁移不是列表接口；数据列表分页在各领域服务实现。"},
+      "notes": "本轮运行验证为 SQLite；MySQL/PostgreSQL/SQL Server 仅静态/编译证据，不冒充已实测兼容。"
+    },
+    {
+      "id": "tasks.scheduler",
+      "title": "后台任务执行器与计划调度",
+      "domain": "任务",
+      "internal_services": ["internal/task", "internal/task/sqlite"],
+      "tests": [
+        {"package": "./internal/task/sqlite", "run": "TestSchedulerFiresDailyAndDeduplicates"},
+        {"package": "./internal/task", "run": "TestParseScheduleSpecCanonical"}
+      ],
+      "pagination": {"mode": "none", "reason": "任务能力盘点的是执行器/调度器与单任务详情，不是可增长列表接口；任务列表分页在后续分页步骤补齐。"}
+    },
+    {
+      "id": "webhook.delivery",
+      "title": "Webhook 端点、签名与投递重试",
+      "domain": "通知",
+      "internal_services": ["internal/webhook"],
+      "tests": [
+        {"package": "./internal/webhook", "run": "TestSignatureTamperAndTimeWindow"},
+        {"package": "./internal/webhook", "run": "TestDeliverSuccessAndRetryExhaustion"}
+      ],
+      "pagination": {"mode": "none", "reason": "Webhook 是单次投递事件，不是列表接口。"}
+    },
+    {
+      "id": "gap.unimplemented_permissions",
+      "title": "已知未实现权限键（settings.manage / diagnostics.read）",
+      "domain": "已知缺口",
+      "expect": "unimplemented",
+      "unimplemented_permissions": ["diagnostics.read", "settings.manage"],
+      "gaps": [
+        {
+          "summary": "settings.manage 与 diagnostics.read 只在权限目录登记，没有常规设置写入/运行诊断读取的服务端执行路径；不授予任何预设角色，也不能把页面/CLI 的本地受控操作当作该权限已接通。",
+          "evidence": ["internal/preset/catalog.go:没有对应的服务端执行路径", "internal/preset/catalog.go:保持 false 且"]
+        }
+      ],
+      "notes": "status=unimplemented 表示能力不可用；后续步骤实现后必须把 PermissionDefinition.Implemented 改为 true 并更新本声明，否则扫描会报 missing。"
+    }
+  ]
+}
