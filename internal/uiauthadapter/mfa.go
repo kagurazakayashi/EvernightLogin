@@ -5,8 +5,11 @@
 //     不进入 URL/localStorage/日志；每次读取都重新校验签名、到期与受限会话绑定。
 //   - 页面不能自报“密码已通过”或“恢复代码已验证”：恢复代码前由 mfa 的只读交接
 //     校验挑战+尝试令牌+受限会话，再由 recovery.Begin 原子消费代码。
-//   - 强初始化只允许真实 Passkey 注册 + CompleteStrongSetup；完成后撤销受限会话并
-//     要求重新登录，不签发完整会话。
+//   - 强初始化的允许绑定类别由服务端 mfa 按用户下发（root/高权限固定 Passkey；
+//     人工恢复 MFA 重置后的重绑用户按显式配置可能含 TOTP）。Passkey 走真实注册
+//     ceremony，TOTP 走真实 BeginBinding/ConfirmBinding 验证码持久化；两者都要求
+//     页面近期密码复核产生的 reauth mfa.add 证据，完成后调用 CompleteStrongSetup
+//     撤销受限会话并要求重新登录，不签发完整会话。
 //   - 取消/重绑/完成均调用既有服务，页面只转发 opaque Cookie 与一次性代码，不记录
 //     明文秘密。
 package uiauthadapter
@@ -20,6 +23,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
@@ -27,6 +31,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
 )
 
@@ -227,6 +232,9 @@ func (a *Adapter) BeginStrongSetupPasskey(ctx context.Context,
 	if !state.SetupRequired || a.opts.Passkeys == nil {
 		return login.UIPageStrongSetupStart{}, &login.UIPageAuthError{Code: "MFA_REQUIRED"}
 	}
+	if !mfaStateAllowsMethod(state, authfact.MethodPasskey) {
+		return login.UIPageStrongSetupStart{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
 	caller, callerErr := passkey.UserCaller(state.UserID)
 	if callerErr != nil {
 		return login.UIPageStrongSetupStart{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
@@ -234,8 +242,9 @@ func (a *Adapter) BeginStrongSetupPasskey(ctx context.Context,
 	if strings.TrimSpace(currentPassword) == "" {
 		return login.UIPageStrongSetupStart{}, &login.UIPageAuthError{Code: "REAUTH_REQUIRED"}
 	}
-	challengeCtx, _, approveErr := a.approvePasskey(ctx, state.UserID, currentPassword,
-		requestIDFromRequest(request), "注册 Passkey")
+	challengeCtx, _, approveErr := a.approveOperation(ctx, state.UserID, currentPassword,
+		requestIDFromRequest(request), "passkey.register",
+		map[string]string{"purpose": "both"}, "注册 Passkey")
 	if approveErr != nil {
 		return login.UIPageStrongSetupStart{}, approveErr
 	}
@@ -258,6 +267,9 @@ func (a *Adapter) FinishStrongSetupPasskey(ctx context.Context, request *http.Re
 	if !state.SetupRequired || a.opts.Passkeys == nil {
 		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "MFA_REQUIRED"}
 	}
+	if !mfaStateAllowsMethod(state, authfact.MethodPasskey) {
+		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
 	// ceremony ID 由页面 hidden 字段承载；这里取请求表单中的单一值。
 	ceremonyID := strings.TrimSpace(request.PostForm.Get("passkey_ceremony_id"))
 	if ceremonyID == "" {
@@ -270,8 +282,9 @@ func (a *Adapter) FinishStrongSetupPasskey(ctx context.Context, request *http.Re
 	if strings.TrimSpace(currentPassword) == "" {
 		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "REAUTH_REQUIRED"}
 	}
-	challengeCtx, _, approveErr := a.approvePasskey(ctx, state.UserID, currentPassword,
-		requestIDFromRequest(request), "注册 Passkey")
+	challengeCtx, _, approveErr := a.approveOperation(ctx, state.UserID, currentPassword,
+		requestIDFromRequest(request), "passkey.register",
+		map[string]string{"purpose": "both"}, "注册 Passkey")
 	if approveErr != nil {
 		return login.UIPageStrongSetupResult{}, approveErr
 	}
@@ -283,7 +296,7 @@ func (a *Adapter) FinishStrongSetupPasskey(ctx context.Context, request *http.Re
 	completed, completeErr := a.opts.MFA.CompleteStrongSetup(ctx,
 		mfa.StrongSetupCompleteRequest{ChallengeID: state.ChallengeID,
 			AttemptToken: state.AttemptToken, ExistingSession: secret,
-			RequestID: requestIDFromRequest(request)})
+			Method: authfact.MethodPasskey, RequestID: requestIDFromRequest(request)})
 	if completeErr != nil {
 		return login.UIPageStrongSetupResult{}, publicMFAError(completeErr)
 	}
@@ -294,6 +307,145 @@ func (a *Adapter) FinishStrongSetupPasskey(ctx context.Context, request *http.Re
 	return login.UIPageStrongSetupResult{UserID: completed.UserID, Methods: methods,
 		ReloginRequired: completed.MustReauthenticate,
 		SessionCookie:   a.opts.Sessions.ClearCookie()}, nil
+}
+
+// BeginStrongSetupTOTP 在受限初始化/人工恢复重绑会话内开始真实 TOTP 绑定：
+//   - 状态必须来自服务端签名 Cookie 且 SetupRequired，当前会话必须是该受限会话；
+//   - 绑定方法必须在服务端下发的 AllowedMethods 中（页面隐藏字段不可信）；
+//   - 页面密码复核通过 reauth 的 mfa.add（近期主密码，与普通绑定同一要求，不放宽）
+//     后才调用 totp.BeginBinding 生成加密保存的 pending 绑定；
+//   - 只返回一次性种子/otpauth URI 给当前用户，不写日志/审计/普通存储。
+func (a *Adapter) BeginStrongSetupTOTP(ctx context.Context,
+	request *http.Request, currentPassword string) (login.UIPageStrongSetupTOTPStart, error) {
+	state, _, err := a.loadMFAState(ctx, request)
+	if err != nil {
+		return login.UIPageStrongSetupTOTPStart{}, err
+	}
+	if !state.SetupRequired || a.opts.TOTP == nil {
+		return login.UIPageStrongSetupTOTPStart{}, &login.UIPageAuthError{Code: "MFA_REQUIRED"}
+	}
+	if !mfaStateAllowsMethod(state, authfact.MethodTOTP) {
+		return login.UIPageStrongSetupTOTPStart{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
+	caller, callerErr := totp.UserCaller(state.UserID)
+	if callerErr != nil {
+		return login.UIPageStrongSetupTOTPStart{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
+	if strings.TrimSpace(currentPassword) == "" {
+		return login.UIPageStrongSetupTOTPStart{}, &login.UIPageAuthError{Code: "REAUTH_REQUIRED"}
+	}
+	challengeCtx, _, approveErr := a.approveOperation(ctx, state.UserID, currentPassword,
+		requestIDFromRequest(request), "mfa.add",
+		map[string]string{"factor": "totp"}, "绑定 TOTP 验证器")
+	if approveErr != nil {
+		return login.UIPageStrongSetupTOTPStart{}, approveErr
+	}
+	start, startErr := a.opts.TOTP.BeginBinding(challengeCtx, caller,
+		requestIDFromRequest(request))
+	if startErr != nil {
+		return login.UIPageStrongSetupTOTPStart{}, publicMFAError(startErr)
+	}
+	return login.UIPageStrongSetupTOTPStart{BindingID: start.BindingID,
+		Secret: start.Secret, URI: start.URI, ExpiresAt: start.ExpiresAt,
+		PeriodSeconds: start.PeriodSeconds, Digits: start.Digits}, nil
+}
+
+// FinishStrongSetupTOTP 完成真实 TOTP 绑定并结束受限初始化：
+//   - 再次要求页面密码复核（与 Passkey 完成一致），并取得 mfa.add reauth 证据后
+//     调用 totp.ConfirmBinding 验证真实验证码并原子激活新绑定；
+//   - 只有服务端确认 TOTP 已真实新绑定后，mfa.CompleteStrongSetup 才清除重绑需求、
+//     撤销受限会话并要求重新登录；不返回完整会话。
+func (a *Adapter) FinishStrongSetupTOTP(ctx context.Context, request *http.Request,
+	bindingID, code, currentPassword string) (login.UIPageStrongSetupResult, error) {
+	state, secret, err := a.loadMFAState(ctx, request)
+	if err != nil {
+		return login.UIPageStrongSetupResult{}, err
+	}
+	if !state.SetupRequired || a.opts.TOTP == nil {
+		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "MFA_REQUIRED"}
+	}
+	if !mfaStateAllowsMethod(state, authfact.MethodTOTP) {
+		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
+	if bindingID == "" || len(bindingID) > 128 || code == "" || len(code) > 16 {
+		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "REQ_INVALID"}
+	}
+	caller, callerErr := totp.UserCaller(state.UserID)
+	if callerErr != nil {
+		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
+	if strings.TrimSpace(currentPassword) == "" {
+		return login.UIPageStrongSetupResult{}, &login.UIPageAuthError{Code: "REAUTH_REQUIRED"}
+	}
+	challengeCtx, _, approveErr := a.approveOperation(ctx, state.UserID, currentPassword,
+		requestIDFromRequest(request), "mfa.add",
+		map[string]string{"factor": "totp"}, "绑定 TOTP 验证器")
+	if approveErr != nil {
+		return login.UIPageStrongSetupResult{}, approveErr
+	}
+	if _, confirmErr := a.opts.TOTP.ConfirmBinding(challengeCtx, caller,
+		totp.BindConfirm{BindingID: bindingID, Code: code,
+			RequestID: requestIDFromRequest(request)}); confirmErr != nil {
+		return login.UIPageStrongSetupResult{}, publicMFAError(confirmErr)
+	}
+	completed, completeErr := a.opts.MFA.CompleteStrongSetup(ctx,
+		mfa.StrongSetupCompleteRequest{ChallengeID: state.ChallengeID,
+			AttemptToken: state.AttemptToken, ExistingSession: secret,
+			Method: authfact.MethodTOTP, RequestID: requestIDFromRequest(request)})
+	if completeErr != nil {
+		return login.UIPageStrongSetupResult{}, publicMFAError(completeErr)
+	}
+	methods := make([]string, 0, len(completed.Methods))
+	for _, method := range completed.Methods {
+		methods = append(methods, string(method))
+	}
+	return login.UIPageStrongSetupResult{UserID: completed.UserID, Methods: methods,
+		ReloginRequired: completed.MustReauthenticate,
+		SessionCookie:   a.opts.Sessions.ClearCookie()}, nil
+}
+
+// publicReauthError 把再次认证领域错误映射为页面稳定公开错误码；密码错误返回
+// AUTH_FAILED（可纠正），挑战过期/已用显示失效，存储故障为可重试系统错误，只有
+// 真正未映射的内部错误才返回 INTERNAL_ERROR。
+func publicReauthError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var publicErr *login.UIPageAuthError
+	if errors.As(err, &publicErr) {
+		return publicErr
+	}
+	code := "INTERNAL_ERROR"
+	switch {
+	case errors.Is(err, reauth.ErrAccessDenied):
+		code = "ACCESS_DENIED"
+	case errors.Is(err, reauth.ErrAuthenticationFailed):
+		code = "AUTH_FAILED"
+	case errors.Is(err, reauth.ErrChallengeInvalid), errors.Is(err, reauth.ErrChallengeExpired),
+		errors.Is(err, reauth.ErrAttemptsExceeded):
+		code = "CHALLENGE_INVALID"
+	case errors.Is(err, reauth.ErrMFARequired):
+		code = "MFA_REQUIRED"
+	case errors.Is(err, reauth.ErrReauthRequired), errors.Is(err, reauth.ErrApprovalInvalid),
+		errors.Is(err, reauth.ErrApprovalExpired), errors.Is(err, reauth.ErrApprovalConsumed):
+		code = "REAUTH_REQUIRED"
+	case errors.Is(err, reauth.ErrRateLimited):
+		code = "RATE_LIMITED"
+	case errors.Is(err, reauth.ErrStoreUnavailable), errors.Is(err, reauth.ErrPolicyUnavailable),
+		errors.Is(err, reauth.ErrAuditUnavailable), errors.Is(err, reauth.ErrNotificationFailed):
+		code = "DB_UNAVAILABLE"
+	}
+	return &login.UIPageAuthError{Code: code}
+}
+
+// mfaStateAllowsMethod 报告服务端签名状态下发的方法类别是否包含指定方法。
+func mfaStateAllowsMethod(state mfaPageState, method authfact.Method) bool {
+	for _, allowed := range state.AllowedMethods {
+		if allowed == string(method) {
+			return true
+		}
+	}
+	return false
 }
 
 // BeginRecoveryCode 只读交接挑战后调用 recovery.Begin 原子消费恢复代码。
@@ -475,6 +627,8 @@ func publicMFAError(err error) error {
 		code = string(mfa.CodeOf(err))
 	case passkeyError(err):
 		code = string(passkey.CodeOf(err))
+	case totpError(err):
+		code = string(totp.CodeOf(err))
 	case recoveryError(err):
 		code = string(recovery.CodeOf(err))
 	case passwordResetError(err):
@@ -505,6 +659,16 @@ func mfaError(err error) bool {
 		mfa.ErrFactorRequired, mfa.ErrMailFailed, mfa.ErrSessionUnavailable,
 		mfa.ErrPolicyUnavailable, mfa.ErrStoreUnavailable, mfa.ErrAuditUnavailable,
 		mfa.ErrNoAvailableMethod, mfa.ErrStrongSetupIncomplete, mfa.ErrStrongSetupDenied)
+}
+
+// totpError 报告错误是否属于 TOTP 领域。
+func totpError(err error) bool {
+	return matchesAny(err, totp.ErrOptionsInvalid, totp.ErrInvalidRequest,
+		totp.ErrAccessDenied, totp.ErrReauthRequired, totp.ErrMFARequired,
+		totp.ErrBindingNotFound, totp.ErrBindingExpired, totp.ErrCodeInvalid,
+		totp.ErrAttemptsExceeded, totp.ErrReplay, totp.ErrFactorRequired,
+		totp.ErrRateLimited, totp.ErrSealFailed, totp.ErrPolicyUnavailable,
+		totp.ErrStoreUnavailable, totp.ErrAuditUnavailable)
 }
 
 // passkeyError 报告错误是否属于 Passkey 领域。
@@ -564,22 +728,24 @@ func clientIPFromRequest(request *http.Request) string {
 	return strings.Trim(host, "[]")
 }
 
-// approvePasskey 通过真实 reauth 完成 passkey.register 的页面级再次认证；只产生
-// 一次性批准信号，不把密码写入日志/存储。
-func (a *Adapter) approvePasskey(ctx context.Context, userID, currentPassword,
-	requestID, description string) (context.Context, reauth.Result, error) {
+// approveOperation 通过真实 reauth 完成页面级敏感操作的再次认证；只产生一次性批准
+// 信号，不把密码写入日志/存储。operationID/params 必须与目标领域服务在执行时向
+// reauth.Authorize 提交的完全一致，否则批准令牌无法被消费（fail-closed）。
+func (a *Adapter) approveOperation(ctx context.Context, userID, currentPassword,
+	requestID, operationID string, params map[string]string,
+	description string) (context.Context, reauth.Result, error) {
 	caller, err := reauth.UserCaller(userID)
 	if err != nil {
 		return ctx, reauth.Result{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
 	}
 	challenge, err := a.opts.Reauth.BeginChallenge(ctx, caller, reauth.ChallengeRequest{
-		ScopeID: "system", OperationID: "passkey.register", TargetType: "user",
-		TargetID: userID, Params: map[string]string{"purpose": "both"},
+		ScopeID: "system", OperationID: operationID, TargetType: "user",
+		TargetID: userID, Params: params,
 		Description: description, RequestID: requestID})
 	if err != nil {
-		return ctx, reauth.Result{}, publicMFAError(err)
+		return ctx, reauth.Result{}, publicReauthError(err)
 	}
-	result := reauth.Result{OperationID: "passkey.register", TargetType: "user", TargetID: userID,
+	result := reauth.Result{OperationID: operationID, TargetType: "user", TargetID: userID,
 		UserID: userID}
 	if !challenge.Required {
 		return ctx, result, nil
@@ -587,7 +753,7 @@ func (a *Adapter) approvePasskey(ctx context.Context, userID, currentPassword,
 	grant, verifyErr := a.opts.Reauth.VerifyChallenge(ctx, caller, reauth.VerifyChallengeRequest{
 		ChallengeID: challenge.ID, Password: currentPassword, RequestID: requestID})
 	if verifyErr != nil {
-		return ctx, reauth.Result{}, publicMFAError(verifyErr)
+		return ctx, reauth.Result{}, publicReauthError(verifyErr)
 	}
 	strength := policy.StrengthPassword
 	if grant.GrantedStrength == policy.StrengthStrong {

@@ -421,6 +421,17 @@ type ManualRecoveryConfig struct {
 	WaitPeriodSeconds  int
 	ApprovalTTLSeconds int
 	RequestTTLSeconds  int
+	// RebindMethods 是人工恢复 MFA 重置后，用户可在受限初始化会话中重新绑定的强
+	// 因素类别（步骤 209）。合法值：passkey、totp；默认 ["passkey"]，保持 188 的
+	// Passkey-only 行为。它只决定“允许绑定的类别”，不改变强认证强度：
+	//   - passkey 是抗钓鱼建议方式，但只有 passkey.enabled=true 时才会真正可用；
+	//   - totp 明确不是抗钓鱼因素，加入它只用于让 Passkey 不可用的普通用户恢复
+	//     第二因素；它不会让要求抗钓鱼 Passkey 的管理操作降级（登录强认证仍由
+	//     mfa 的 AllowTOTPForStrongAuth 独立控制且默认 false，root/高权限账户的
+	//     重绑始终固定为 Passkey）；
+	//   - 若列出的类别在运行装配中全部不可用（例如只列 passkey 但未启用 Passkey），
+	//     mfa_reset 申请/执行会 fail-closed 拒绝，而不是恢复后锁死或静默降级。
+	RebindMethods []string
 }
 
 // ProtocolConfig 是 OAuth 2.0 / OpenID Connect 协议端点的宿主配置（步骤 56/57/58
@@ -854,6 +865,7 @@ func Default() Config {
 			WaitPeriodSeconds:  24 * 60 * 60,
 			ApprovalTTLSeconds: 48 * 60 * 60,
 			RequestTTLSeconds:  7 * 24 * 60 * 60,
+			RebindMethods:      []string{"passkey"},
 		},
 	}
 }
@@ -1402,8 +1414,25 @@ func manualRecoveryConfigProblem(cfg ManualRecoveryConfig) string {
 		"notarized_declaration":       true,
 	}
 	allowedDelivery := map[string]bool{"verified_email": true}
+	// 步骤 209：重绑因素类别显式白名单，任何拼写错误都拒绝启动（不能因为 typo
+	// 静默退化为“没有可用重绑方式”）。无论制度是否启用都校验已填写的值。
+	allowedRebind := map[string]bool{"passkey": true, "totp": true}
+	seenRebind := map[string]bool{}
+	for _, method := range cfg.RebindMethods {
+		value := strings.TrimSpace(method)
+		if !allowedRebind[value] {
+			return "重绑方法只允许 passkey 或 totp"
+		}
+		if seenRebind[value] {
+			return "重绑方法不能重复"
+		}
+		seenRebind[value] = true
+	}
 	if !cfg.Enabled {
 		return ""
+	}
+	if len(cfg.RebindMethods) == 0 {
+		return "启用人工恢复时必须配置至少一种强因素重绑方法"
 	}
 	if len(cfg.VerificationBases) == 0 {
 		return "启用人工恢复时必须配置至少一种核验依据"

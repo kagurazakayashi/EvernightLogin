@@ -221,6 +221,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		// 第二因素/Passkey/恢复/找回页面依赖的真实服务。
 		MFA:           securityDomains.MFA,
 		Passkeys:      securityDomains.Passkey,
+		TOTP:          securityDomains.TOTP,
 		Recovery:      securityDomains.Recovery,
 		PasswordReset: securityDomains.PasswordReset,
 		PageState:     pageState,

@@ -33,6 +33,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
 )
 
@@ -53,8 +54,11 @@ type Options struct {
 	Credential        *credential.Service
 	// 步骤 64：第二因素/Passkey/恢复/找回页面所需真实服务；同时参与密码登录后的
 	// 受限结果继续（BeginLogin），未装配时页面只显示受限状态、不伪造成功。
-	MFA           *mfa.Service
-	Passkeys      *passkey.Service
+	MFA      *mfa.Service
+	Passkeys *passkey.Service
+	// TOTP 是受限初始化/人工恢复重绑中 TOTP 绑定所需真实服务（步骤 209）；nil 时
+	// 页面不提供 TOTP 重绑（返回明确未启用错误），不会伪造成功。
+	TOTP          *totp.Service
 	Recovery      *recovery.Service
 	PasswordReset *passwordreset.Service
 	// PageState 是步骤 64 临时页面状态的签名编解码器；MFA 非 nil 时必填。

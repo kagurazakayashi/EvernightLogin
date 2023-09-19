@@ -63,9 +63,16 @@ type Options struct {
 	FactorPreference []FactorType
 	// Passkeys 是 FIDO2 安全密钥第二步适配器；nil 时“安全密钥”因素视为不可用。
 	Passkeys SecondFactorPasskey
-	// StrongFactorSource 报告账户是否已有强认证因素，用于强认证初始化闭环判定；
-	// nil 时视为未就绪（不允许完成初始化）。
+	// StrongFactorSource 报告账户是否已有强认证因素（强因素存在性；用于“最后一个
+	// 可用因素”等判定）；nil 时视为未就绪。
 	StrongFactorSource StrongFactorSource
+	// StrongSetupMethodSource 可选：按用户下发本次受限初始化允许绑定的强因素类别
+	// （root/高权限固定 Passkey；人工恢复重绑用户按配置允许 TOTP）。返回空表示拒绝
+	// 进入初始化；nil 时使用 StrongSetupMethods。
+	StrongSetupMethodSource StrongSetupMethodSource
+	// StrongSetupBindingVerifier 可选：校验强因素是否为本次挑战之后真实新绑定，防止
+	// 用既有因素冒充初始化完成。生产装配必须实现；nil 时退化为因素存在性检查。
+	StrongSetupBindingVerifier StrongSetupBindingVerifier
 	// StrongSetupAuthorizer 授权进入强认证初始化（受控初始化/受邀状态/管理员一次性
 	// 凭证或审批）；AllowStrongAuthSetup=true 时必填，nil 或拒绝时初始化 fail-closed。
 	StrongSetupAuthorizer StrongSetupAuthorizer
@@ -74,13 +81,17 @@ type Options struct {
 	// AllowTOTPForStrongAuth 允许“密码+TOTP”满足管理强认证（受控备用）；默认
 	// false，即强认证默认要求 Passkey/安全密钥的用户验证（UV）。显式设为 true
 	// 时才接受 TOTP 作为强认证备用方式，并在 README/装配文档说明风险。
+	// 注意：该开关只影响“登录第二步是否满足强认证”，不改变受限初始化/重绑允许
+	// 绑定的因素类别（后者由 StrongSetupMethods 与 StrongSetupMethodSource 显式
+	// 下发），不能用它把抗钓鱼要求降级为 TOTP。
 	AllowTOTPForStrongAuth bool
 	// AllowStrongAuthSetup 允许对“要求强认证但未绑定强因素”的管理账户走受限
 	// 初始化闭环（只签发受限会话、绑定允许方式后撤销并要求重新登录）；默认 false
 	// 保守拒绝，宿主显式装配后启用。
 	AllowStrongAuthSetup bool
-	// StrongSetupMethods 是允许在初始化流程中绑定的强因素方法；默认
-	// [MethodPasskey]（邮件永远不允许）。宿主必须保证对应绑定入口已限制为受限会话。
+	// StrongSetupMethods 是允许在初始化流程中绑定的强因素类别（Passkey/TOTP）；
+	// 默认 [MethodPasskey]（邮件/密码/恢复代码永远不允许）。宿主必须保证对应绑定
+	// 入口只接受受限初始化会话；按用户收窄/下发请使用 StrongSetupMethodSource。
 	StrongSetupMethods []authfact.Method
 	// RootReady 是 root 强认证初始化完成后的受控 bootstrap 状态更新回调；在
 	// 强认证完成的同一审计事务内调用，失败整体回滚（fail-closed）。
@@ -547,8 +558,12 @@ func (s *Service) BeginLogin(ctx context.Context, request BeginLoginRequest) (Lo
 }
 
 // beginStrongSetup 为“要求强认证但尚未绑定强因素”的管理账户创建受限初始化挑战：
-// 只签发受限会话、返回允许绑定的强因素方法；绑定成功后必须调用 CompleteStrongSetup
+// 只签发受限会话、返回允许绑定的强因素类别；绑定成功后必须调用 CompleteStrongSetup
 // 撤销受限会话并要求重新登录，绝不在此流程中签发完整会话。
+//
+// 允许绑定的类别由 StrongSetupMethodSource 按用户下发（root/高权限固定 Passkey；
+// 人工恢复 MFA 重置后的重绑用户按显式配置可能包含 TOTP），无可用类别时 fail-closed
+// 拒绝进入初始化，不创建挑战、不签发受限会话。
 func (s *Service) beginStrongSetup(ctx context.Context, base authn.AuthenticateResult,
 	request BeginLoginRequest) (LoginStart, error) {
 	// 受控初始化状态校验：普通受限会话不能自助绑定强因素；授权失败 fail-closed，
@@ -563,9 +578,18 @@ func (s *Service) beginStrongSetup(ctx context.Context, base authn.AuthenticateR
 			"mfa.strong_setup_denied", "initialization_denied", string(CodeMFARequired), request.RequestID)
 		return LoginStart{}, ErrStrongAuthRequired
 	}
-	methods := s.opts.StrongSetupMethods
+	methods, err := s.effectiveStrongSetupMethods(ctx, base.UserID)
+	if err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID},
+			"mfa.strong_setup_denied", "setup_methods_unavailable", string(CodeMFARequired), request.RequestID)
+		return LoginStart{}, ErrStrongAuthRequired
+	}
 	if len(methods) == 0 {
-		methods = []authfact.Method{authfact.MethodPasskey}
+		// 没有任何可在受限初始化中绑定的强因素类别：拒绝进入初始化，避免签发
+		// “看似可完成、实际无法重绑”的受限会话。
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID},
+			"mfa.strong_setup_denied", "no_setup_method", string(CodeMFARequired), request.RequestID)
+		return LoginStart{}, ErrStrongAuthRequired
 	}
 	now := s.now()
 	challengeID, err := newID(s.opts.Random, "mfc_")
@@ -576,8 +600,10 @@ func (s *Service) beginStrongSetup(ctx context.Context, base authn.AuthenticateR
 	if err != nil {
 		return LoginStart{}, err
 	}
+	// 挑战因素类型记录“首个允许类别”对应的因素（Passkey 优先，其次 TOTP）；完成时
+	// 以请求声明的方法 + 策略允许类别 + 真实新鲜绑定三者共同判定，不依赖该默认值。
 	challenge := Challenge{
-		ID: challengeID, UserID: base.UserID, FactorType: FactorPasskey,
+		ID: challengeID, UserID: base.UserID, FactorType: factorTypeOf(methods[0]),
 		Purpose: PurposeStrongSetup, AttemptSHA256: attemptDigest, Generation: 1,
 		State: StatePending, Username: base.Username, AppID: request.AppID,
 		RememberMe: request.RememberMe, ClientUserAgent: request.Client.UserAgent,
@@ -585,6 +611,11 @@ func (s *Service) beginStrongSetup(ctx context.Context, base authn.AuthenticateR
 		RequireStrong:   true,
 		SecurityVersion: base.SecurityVersion, CompletedAt: base.CompletedAt,
 		ExpiresAt: now.Add(s.opts.CodeTTL), CreatedAt: now, UpdatedAt: now,
+	}
+	if challenge.FactorType != FactorPasskey && challenge.FactorType != FactorTOTP {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: base.UserID},
+			"mfa.strong_setup_denied", "unsupported_setup_method", string(CodeMFARequired), request.RequestID)
+		return LoginStart{}, ErrStrongAuthRequired
 	}
 	if err := s.createChallenge(ctx, challenge); err != nil {
 		return LoginStart{}, err
@@ -634,16 +665,19 @@ func (s *Service) beginStrongSetup(ctx context.Context, base authn.AuthenticateR
 	return LoginStart{
 		RequiresSecondFactor: true, SetupRequired: true, ChallengeID: challengeID,
 		AttemptToken: attemptToken, ExpiresAt: challenge.ExpiresAt,
-		FactorType: FactorPasskey, AllowedSetupMethods: methods, RestrictedSession: restricted,
+		FactorType: challenge.FactorType, AllowedSetupMethods: methods, RestrictedSession: restricted,
 	}, nil
 }
 
 // StrongSetupCompleteRequest 是强认证初始化完成请求；ExistingSession 必须是初始化
-// 挑战绑定的那个受限会话。
+// 挑战绑定的那个受限会话。Method 是本次真实完成的绑定方法（Passkey/TOTP）；为空
+// 时按挑战记录的因素类型推断（向后兼容 Passkey-only 调用方），显式传入时会再次按
+// 策略允许类别校验。
 type StrongSetupCompleteRequest struct {
 	ChallengeID     string
 	AttemptToken    string
 	ExistingSession string
+	Method          authfact.Method
 	RequestID       string
 }
 
@@ -651,13 +685,14 @@ type StrongSetupCompleteRequest struct {
 // 据此签发完整会话。
 type StrongSetupCompleteResult struct {
 	UserID             string
+	Method             authfact.Method
 	Methods            []authfact.Method
 	MustReauthenticate bool
 }
 
 // CompleteStrongSetup 完成强认证初始化闭环：校验受限会话/尝试令牌/挑战状态，确认
-// 账户已真实绑定强因素（由 StrongFactorSource 报告），撤销受限会话并标记挑战已完成。
-// 本方法不签发会话；邮箱不是允许的初始化方式。
+// 账户已按策略允许的方法真实绑定（新绑定，不是既有因素）强因素，撤销受限会话并标记
+// 挑战已完成。本方法不签发会话；邮箱不是允许的初始化方式。
 func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCompleteRequest) (StrongSetupCompleteResult, error) {
 	ctx = normalizeContext(ctx)
 	attemptDigest, err := hexAttemptToken(request.AttemptToken)
@@ -668,7 +703,8 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 	if err != nil {
 		return StrongSetupCompleteResult{}, err
 	}
-	if challenge.Purpose != PurposeStrongSetup || challenge.FactorType != FactorPasskey {
+	if challenge.Purpose != PurposeStrongSetup ||
+		(challenge.FactorType != FactorPasskey && challenge.FactorType != FactorTOTP) {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
 			"mfa.strong_setup_denied", "purpose_mismatch", string(CodeChallengeInvalid), request.RequestID)
 		return StrongSetupCompleteResult{}, ErrChallengeInvalid
@@ -698,21 +734,45 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 			"mfa.strong_setup_denied", "restricted_session_invalid", string(CodeChallengeInvalid), request.RequestID)
 		return StrongSetupCompleteResult{}, ErrChallengeInvalid
 	}
-	if isNil(s.opts.StrongFactorSource) || isNil(s.opts.Revoker) {
+	// 本次绑定的方法：请求显式声明优先，否则按挑战默认因素推断（Passkey-only 向后兼容）。
+	method := request.Method
+	if method == "" {
+		method = strongSetupMethodOf(challenge.FactorType)
+	}
+	if method != authfact.MethodPasskey && method != authfact.MethodTOTP {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
-			"mfa.strong_setup_denied", "strong_source_unavailable", string(CodeMFARequired), request.RequestID)
+			"mfa.strong_setup_denied", "unsupported_setup_method", string(CodeMFARequired), request.RequestID)
 		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
 	}
-	hasStrong, err := s.opts.StrongFactorSource.HasStrongFactor(ctx, challenge.UserID)
+	methods, err := s.effectiveStrongSetupMethods(ctx, challenge.UserID)
 	if err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "setup_methods_unavailable", string(CodeMFARequired), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
+	}
+	if !containsMethod(methods, method) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "method_not_allowed", string(CodeMFARequired), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
+	}
+	bound, err := s.strongSetupBindingBound(ctx, challenge, method)
+	if err != nil {
+		// 新鲜绑定判定失败按策略不可用 fail-closed，不允许乐观完成。
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "binding_check_unavailable", string(CodeMFARequired), request.RequestID)
 		return StrongSetupCompleteResult{}, ErrPolicyUnavailable
 	}
-	if !hasStrong {
+	if !bound {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
 			"mfa.strong_setup_denied", "strong_factor_missing", string(CodeMFARequired), request.RequestID)
 		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
 	}
 	// 先撤销受限会话，避免留下临时受限通道；撤销失败则 fail-closed 不标记完成。
+	if isNil(s.opts.Revoker) {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			"mfa.strong_setup_denied", "session_revoker_unavailable", string(CodeMFARequired), request.RequestID)
+		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
+	}
 	if err := s.opts.Revoker.Logout(ctx, request.ExistingSession); err != nil {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
 			"mfa.strong_setup_denied", "restricted_session_revoke_failed", string(CodeDBUnavailable), request.RequestID)
@@ -721,22 +781,21 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 	if err := s.markVerified(ctx, challenge, attemptDigest, now, request.RequestID); err != nil {
 		return StrongSetupCompleteResult{}, err
 	}
-	methods := s.opts.StrongSetupMethods
-	if len(methods) == 0 {
-		methods = []authfact.Method{authfact.MethodPasskey}
-	}
 	event := audit.Event{
 		Actor:   audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
 		Action:  "mfa.strong_setup_completed",
 		Target:  audit.Target{Type: "mfa_challenge", ID: challenge.ID},
 		Outcome: audit.OutcomeSuccess, RequestID: validRequestID(request.RequestID),
-		Changes: []audit.FieldChange{{Field: "restricted_session", Before: challenge.RestrictedSessionID,
-			After: "revoked"}, {Field: "must_reauthenticate", After: "true"}},
+		Changes: []audit.FieldChange{
+			{Field: "factor_type", After: string(factorTypeOf(method))},
+			{Field: "restricted_session", Before: challenge.RestrictedSessionID, After: "revoked"},
+			{Field: "must_reauthenticate", After: "true"},
+		},
 	}
 	if err := s.opts.Audit.Record(ctx, event); err != nil {
 		return StrongSetupCompleteResult{}, fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
 	}
-	// 步骤 188：强认证初始化成功即清除人工恢复产生的强制重绑需求；清除失败时
+	// 步骤 188/209：强认证初始化成功即清除人工恢复产生的强制重绑需求；清除失败时
 	// 登录仍会被强制重绑（fail-closed），不能宣称完成。
 	if !isNil(s.opts.RebindClearer) {
 		if clearErr := s.opts.RebindClearer.ClearRebindRequirement(ctx, challenge.UserID, request.RequestID); clearErr != nil {
@@ -745,8 +804,8 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 			return StrongSetupCompleteResult{}, fmt.Errorf("%w: %v", ErrSessionUnavailable, clearErr)
 		}
 	}
-	return StrongSetupCompleteResult{UserID: challenge.UserID, Methods: methods,
-		MustReauthenticate: true}, nil
+	return StrongSetupCompleteResult{UserID: challenge.UserID, Method: method,
+		Methods: methods, MustReauthenticate: true}, nil
 }
 
 // AvailableSecondFactorMethods 返回用户当前实际启用且满足策略的第二因素方法
@@ -1463,6 +1522,86 @@ var (
 )
 
 // ===== 内部辅助 =====
+
+// effectiveStrongSetupMethods 返回本次受限初始化允许绑定的强因素类别：优先使用
+// StrongSetupMethodSource 的按用户策略，并与 Options.StrongSetupMethods 显式允许
+// 的类别取交集（宿主不能借方法来源越权放开未配置的类别）。
+func (s *Service) effectiveStrongSetupMethods(ctx context.Context, userID string) ([]authfact.Method, error) {
+	configured := s.opts.StrongSetupMethods
+	if len(configured) == 0 {
+		configured = []authfact.Method{authfact.MethodPasskey}
+	}
+	allowed := configured
+	if !isNil(s.opts.StrongSetupMethodSource) {
+		methods, err := s.opts.StrongSetupMethodSource.AllowedStrongSetupMethods(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		allowed = methods
+	}
+	result := make([]authfact.Method, 0, len(allowed))
+	seen := make(map[authfact.Method]bool, len(allowed))
+	for _, method := range allowed {
+		if !containsMethod(configured, method) || seen[method] {
+			continue
+		}
+		// 只有 Passkey/安全密钥与 TOTP 是可绑定的强因素类别；邮件/密码/恢复代码
+		// 等类别即使被下游误传也不接受。
+		if factorTypeOf(method) != FactorPasskey && factorTypeOf(method) != FactorTOTP {
+			continue
+		}
+		seen[method] = true
+		result = append(result, method)
+	}
+	return result, nil
+}
+
+// strongSetupBindingBound 判定本次受限初始化是否已真实完成指定方法的新绑定：优先
+// 使用 StrongSetupBindingVerifier 的“since 之后新绑定”判定（生产装配），未实现时
+// 退化为该因素当前存在的检查（仅测试/受控宿主）。
+func (s *Service) strongSetupBindingBound(ctx context.Context, challenge Challenge,
+	method authfact.Method) (bool, error) {
+	if !isNil(s.opts.StrongSetupBindingVerifier) {
+		return s.opts.StrongSetupBindingVerifier.StrongFactorBoundAfter(ctx,
+			challenge.UserID, method, challenge.CreatedAt)
+	}
+	switch method {
+	case authfact.MethodPasskey:
+		if isNil(s.opts.Passkeys) {
+			return false, nil
+		}
+		return s.opts.Passkeys.HasSecondFactor(ctx, challenge.UserID)
+	case authfact.MethodTOTP:
+		if isNil(s.opts.TOTP) {
+			return false, nil
+		}
+		return s.opts.TOTP.HasActive(ctx, challenge.UserID)
+	default:
+		return false, nil
+	}
+}
+
+// strongSetupMethodOf 把挑战因素类型映射为以它完成的绑定方法（向后兼容旧挑战）。
+func strongSetupMethodOf(factorType FactorType) authfact.Method {
+	switch factorType {
+	case FactorPasskey:
+		return authfact.MethodPasskey
+	case FactorTOTP:
+		return authfact.MethodTOTP
+	default:
+		return ""
+	}
+}
+
+// containsMethod 报告方法列表是否包含指定方法。
+func containsMethod(methods []authfact.Method, target authfact.Method) bool {
+	for _, method := range methods {
+		if method == target {
+			return true
+		}
+	}
+	return false
+}
 
 func (s *Service) activeEmailFactor(ctx context.Context, userID string) (int, error) {
 	count, err := s.opts.Store.CountActiveFactors(ctx, userID, FactorEmail)

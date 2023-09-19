@@ -956,6 +956,53 @@ func (f *fakeStrongFactorSource) HasStrongFactor(ctx context.Context, userID str
 	return f.has, nil
 }
 
+// fakeStrongSetupMethodSource 按用户返回受限初始化允许绑定的强因素类别（nil 表示
+// 实现方拒绝/查询失败）。
+type fakeStrongSetupMethodSource struct {
+	methods map[string][]authfact.Method
+	err     error
+}
+
+func (f *fakeStrongSetupMethodSource) AllowedStrongSetupMethods(ctx context.Context,
+	userID string) ([]authfact.Method, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.methods[userID], nil
+}
+
+// fakeStrongSetupBindingVerifier 模拟“since 之后是否真实新绑定”的生产判定。
+type fakeStrongSetupBindingVerifier struct {
+	bound map[authfact.Method]bool
+	err   error
+	since time.Time
+	calls int
+}
+
+func (f *fakeStrongSetupBindingVerifier) StrongFactorBoundAfter(ctx context.Context,
+	userID string, method authfact.Method, since time.Time) (bool, error) {
+	f.calls++
+	f.since = since
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.bound[method], nil
+}
+
+// fakeRebindClearer 记录人工恢复强制重绑需求的清除调用。
+type fakeRebindClearer struct {
+	calls   int
+	userID  string
+	failErr error
+}
+
+func (f *fakeRebindClearer) ClearRebindRequirement(ctx context.Context,
+	userID, requestID string) error {
+	f.calls++
+	f.userID = userID
+	return f.failErr
+}
+
 type realSessionRevoker struct {
 	session *session.Service
 	calls   int
@@ -1128,16 +1175,19 @@ func TestStrongAuthSetupRequiresControlledAuthorization(t *testing.T) {
 }
 
 // TestStrongAuthInitializationClosure 验证管理账户强认证初始化闭环：受限会话 +
-// 初始化挑战 → 绑定强因素 → 完成初始化（撤销受限会话）→ 必须重新登录；未绑定
-// 强因素时不能完成。
+// 初始化挑战 → 真实绑定强因素 → 完成初始化（撤销受限会话）→ 必须重新登录；未绑定
+// 强因素或只有账户既有因素时不能完成。
 func TestStrongAuthInitializationClosure(t *testing.T) {
-	strongSource := &fakeStrongFactorSource{has: false}
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{}}
 	revoker := &realSessionRevoker{}
 	authorizer := &fakeStrongSetupAuthorizer{allow: true}
+	rebindClearer := &fakeRebindClearer{}
 	env := newTestEnv(t, func(options *mfa.Options) {
 		options.Passkeys = &fakeSecondFactorPasskey{has: false}
 		options.AllowStrongAuthSetup = true
-		options.StrongFactorSource = strongSource
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupBindingVerifier = bindings
+		options.RebindClearer = rebindClearer
 		options.Revoker = revoker
 		options.StrongSetupAuthorizer = authorizer
 	})
@@ -1151,28 +1201,37 @@ func TestStrongAuthInitializationClosure(t *testing.T) {
 		start.AllowedSetupMethods[0] != authfact.MethodPasskey {
 		t.Fatalf("初始化启动结果异常: %+v", start)
 	}
+	if start.FactorType != mfa.FactorPasskey {
+		t.Fatalf("默认应下发 Passkey 初始化: %v", start.FactorType)
+	}
 	if !start.RestrictedSession.Session.IsRestricted() {
 		t.Fatal("初始化流程只能签发受限会话")
 	}
-	// 尚未绑定强因素时不能完成初始化。
+	// 尚未新增绑定（账户既有强因素不算）：不能完成初始化。
 	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
 		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
 		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-setup-2"}); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
-		t.Fatalf("未绑定强因素时完成初始化应拒绝: %v", err)
+		t.Fatalf("未新增绑定强因素时完成初始化应拒绝: %v", err)
+	}
+	if bindings.calls == 0 || bindings.since.IsZero() {
+		t.Fatal("完成判定必须向宿主查询“挑战之后的新绑定”")
 	}
 	// 宿主通过受限流程完成强因素绑定后，完成初始化：撤销受限会话并要求重新登录。
-	strongSource.has = true
+	bindings.bound[authfact.MethodPasskey] = true
 	result, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
 		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
 		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-setup-3"})
 	if err != nil {
 		t.Fatalf("完成强认证初始化: %v", err)
 	}
-	if !result.MustReauthenticate || result.UserID != userID {
+	if !result.MustReauthenticate || result.UserID != userID || result.Method != authfact.MethodPasskey {
 		t.Fatalf("初始化完成结果异常: %+v", result)
 	}
 	if revoker.calls != 1 {
 		t.Fatalf("初始化完成后应撤销受限会话: revoker=%d", revoker.calls)
+	}
+	if rebindClearer.calls != 1 || rebindClearer.userID != userID {
+		t.Fatalf("初始化完成后应清除重绑需求: %+v", rebindClearer)
 	}
 	if _, err := env.session.Validate(env.ctx, start.RestrictedSession.Secret.Reveal()); err == nil {
 		t.Fatal("初始化完成后受限会话必须失效")
@@ -1182,6 +1241,233 @@ func TestStrongAuthInitializationClosure(t *testing.T) {
 		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
 		ExistingSession: start.RestrictedSession.Secret.Reveal(), RequestID: "req-setup-4"}); !errors.Is(err, mfa.ErrChallengeInvalid) {
 		t.Fatalf("重复完成初始化应拒绝: %v", err)
+	}
+}
+
+// TestStrongSetupTOTPRebindClosure 覆盖人工恢复 MFA 重置后的 TOTP 安全重绑闭环：
+// 只有按用户策略允许 TOTP 的恢复用户能进入受限初始化；完成必须声明 TOTP 方法并
+// 真实新绑定（既有 TOTP 不算）；成功清除重绑需求并撤销受限会话；重放/越权方法/
+// 策略不允许均拒绝。
+func TestStrongSetupTOTPRebindClosure(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{}}
+	revoker := &realSessionRevoker{}
+	authorizer := &fakeStrongSetupAuthorizer{allow: true}
+	rebindClearer := &fakeRebindClearer{}
+	source := &fakeStrongSetupMethodSource{methods: map[string][]authfact.Method{
+		userID: {authfact.MethodTOTP},
+	}}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupMethods = []authfact.Method{authfact.MethodPasskey, authfact.MethodTOTP}
+		options.StrongSetupMethodSource = source
+		options.StrongSetupBindingVerifier = bindings
+		options.RebindClearer = rebindClearer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = authorizer
+	})
+	revoker.session = env.session
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-totp-rebind-1"})
+	if err != nil {
+		t.Fatalf("TOTP 重绑初始化启动: %v", err)
+	}
+	if !start.SetupRequired || start.FactorType != mfa.FactorTOTP ||
+		len(start.AllowedSetupMethods) != 1 ||
+		start.AllowedSetupMethods[0] != authfact.MethodTOTP {
+		t.Fatalf("恢复用户应只下发策略允许的 TOTP 类别: %+v", start)
+	}
+	secret := env.queryString(
+		`SELECT factor_type FROM mfa_challenges WHERE id=?`, start.ChallengeID)
+	if secret != string(mfa.FactorTOTP) {
+		t.Fatalf("初始化挑战应记录 TOTP 因素: %q", secret)
+	}
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), Method: authfact.MethodTOTP,
+		RequestID: "req-totp-rebind-2"}); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("未真实新增 TOTP 绑定时完成应拒绝: %v", err)
+	}
+	// 声明未下发的方法（Passkey）被拒绝。
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), Method: authfact.MethodPasskey,
+		RequestID: "req-totp-rebind-3"}); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("声明未允许的绑定方法应拒绝: %v", err)
+	}
+	// 新鲜绑定判定故障必须 fail-closed（不能把“查不到”当成完成）。
+	bindings.err = errors.New("binding store down")
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), Method: authfact.MethodTOTP,
+		RequestID: "req-totp-rebind-check-fail"}); !errors.Is(err, mfa.ErrPolicyUnavailable) {
+		t.Fatalf("绑定新鲜度判定故障应 fail-closed: %v", err)
+	}
+	bindings.err = nil
+	// 非法方法类别拒绝。
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), Method: authfact.MethodEmailOTP,
+		RequestID: "req-totp-rebind-4"}); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("非法绑定方法类别应拒绝: %v", err)
+	}
+	// 真实新绑定后完成：清除重绑需求、撤销受限会话、要求重新登录。
+	bindings.bound[authfact.MethodTOTP] = true
+	result, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), Method: authfact.MethodTOTP,
+		RequestID: "req-totp-rebind-5"})
+	if err != nil {
+		t.Fatalf("TOTP 重绑完成: %v", err)
+	}
+	if result.Method != authfact.MethodTOTP || !result.MustReauthenticate ||
+		rebindClearer.calls != 1 || revoker.calls != 1 {
+		t.Fatalf("TOTP 重绑完成结果异常: %+v clearer=%d revoker=%d",
+			result, rebindClearer.calls, revoker.calls)
+	}
+	if _, err := env.session.Validate(env.ctx, start.RestrictedSession.Secret.Reveal()); err == nil {
+		t.Fatal("TOTP 重绑完成后受限会话必须失效")
+	}
+	// 重放 TOTP 重绑完成应拒绝: 见下。
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(), Method: authfact.MethodTOTP,
+		RequestID: "req-totp-rebind-replay"}); !errors.Is(err, mfa.ErrChallengeInvalid) {
+		t.Fatalf("重放 TOTP 重绑完成应拒绝: %v", err)
+	}
+}
+
+// TestStrongSetupConcurrentCompleteSingleWinner 验证强初始化完成的并发/重复提交只有
+// 一个赢家：同一挑战/尝试令牌/受限会话并发调用时，最多一次成功完成并清除重绑需求，
+// 其余按挑战状态非法 fail-closed，不会二次完成或伪造成功。
+func TestStrongSetupConcurrentCompleteSingleWinner(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{
+		authfact.MethodPasskey: true}}
+	revoker := &realSessionRevoker{}
+	rebindClearer := &fakeRebindClearer{}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		// 账户尚未绑定强因素：提示要进入受限初始化，而不是普通第二因素。
+		options.Passkeys = &fakeSecondFactorPasskey{has: false, userVerified: true}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: true}
+		options.StrongSetupBindingVerifier = bindings
+		options.RebindClearer = rebindClearer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+	})
+	revoker.session = env.session
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-concurrent-setup-1"})
+	if err != nil {
+		t.Fatalf("并发完成前启动初始化: %v", err)
+	}
+	request := mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(),
+		Method:          authfact.MethodPasskey,
+	}
+	results := make([]error, 2)
+	var wait sync.WaitGroup
+	for index := range results {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			_, results[index] = env.service.CompleteStrongSetup(env.ctx, request)
+		}(index)
+	}
+	wait.Wait()
+	successes := 0
+	for _, resultErr := range results {
+		if resultErr == nil {
+			successes++
+			continue
+		}
+		if !errors.Is(resultErr, mfa.ErrChallengeInvalid) &&
+			!errors.Is(resultErr, mfa.ErrSessionUnavailable) {
+			t.Fatalf("并发失败方应 fail-closed（挑战/会话不可用），实际: %v", resultErr)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("并发完成必须恰有一个赢家，实际成功 %d", successes)
+	}
+	if rebindClearer.calls != 1 {
+		t.Fatalf("重绑需求只能被清除一次: %d", rebindClearer.calls)
+	}
+	if _, err := env.session.Validate(env.ctx, start.RestrictedSession.Secret.Reveal()); err == nil {
+		t.Fatal("完成后受限会话必须失效")
+	}
+}
+
+// TestStrongSetupCompleteRebindClearFailureFailClosed 验证初始化最后一步“清除人工
+// 恢复重绑需求”失败时整体 fail-closed（不能宣称完成）：登录仍会被强制重绑，审计
+// 写失败原因，调用方看到会话服务不可用错误而不是成功。
+func TestStrongSetupCompleteRebindClearFailureFailClosed(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{
+		authfact.MethodPasskey: true}}
+	revoker := &realSessionRevoker{}
+	rebindClearer := &fakeRebindClearer{failErr: errors.New("rebind store down")}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: true}
+		options.StrongSetupBindingVerifier = bindings
+		options.RebindClearer = rebindClearer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+	})
+	revoker.session = env.session
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: "req-clear-fail-1"})
+	if err != nil {
+		t.Fatalf("启动初始化: %v", err)
+	}
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(),
+		Method:          authfact.MethodPasskey,
+		RequestID:       "req-clear-fail-2"}); !errors.Is(err, mfa.ErrSessionUnavailable) {
+		t.Fatalf("清除重绑需求失败必须 fail-closed: %v", err)
+	}
+	if rebindClearer.calls != 1 {
+		t.Fatalf("应尝试清除一次重绑需求: %d", rebindClearer.calls)
+	}
+}
+
+// TestStrongSetupMethodPolicyFailClosed 验证没有任何可绑定类别、或按用户方法来源
+// 查询失败时拒绝进入初始化，不创建挑战、不签发受限会话。
+func TestStrongSetupMethodPolicyFailClosed(t *testing.T) {
+	cases := []struct {
+		name   string
+		source *fakeStrongSetupMethodSource
+	}{
+		{name: "empty-methods", source: &fakeStrongSetupMethodSource{
+			methods: map[string][]authfact.Method{}}},
+		{name: "source-error", source: &fakeStrongSetupMethodSource{
+			err: errors.New("policy store down")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			options := func(configured *mfa.Options) {
+				configured.Passkeys = &fakeSecondFactorPasskey{has: false}
+				configured.AllowStrongAuthSetup = true
+				configured.StrongFactorSource = &fakeStrongFactorSource{has: false}
+				configured.StrongSetupMethods = []authfact.Method{
+					authfact.MethodPasskey, authfact.MethodTOTP}
+				configured.StrongSetupMethodSource = tc.source
+				configured.StrongSetupBindingVerifier = &fakeStrongSetupBindingVerifier{}
+				configured.Revoker = &realSessionRevoker{}
+				configured.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+			}
+			env := newTestEnv(t, options)
+			if _, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+				Result: env.pendingStrongAuth(), RequestID: "req-method-deny"}); !errors.Is(err, mfa.ErrStrongAuthRequired) {
+				t.Fatalf("无可用绑定类别时应 fail-closed: %v", err)
+			}
+			if got := env.count(`SELECT COUNT(*) FROM mfa_challenges WHERE purpose='strong_setup'`); got != 0 {
+				t.Fatalf("拒绝时不应创建初始化挑战: %d", got)
+			}
+		})
 	}
 }
 

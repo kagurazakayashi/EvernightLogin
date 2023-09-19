@@ -14,10 +14,11 @@ import (
 
 // fakeMFABackend 实现 UIPageMFABackend 的页面结构测试替身。
 type fakeMFABackend struct {
-	view   UIPageSecondFactor
-	start  UIPageStrongSetupStart
-	result UIPageStrongSetupResult
-	err    error
+	view      UIPageSecondFactor
+	start     UIPageStrongSetupStart
+	totpStart UIPageStrongSetupTOTPStart
+	result    UIPageStrongSetupResult
+	err       error
 }
 
 func (f *fakeMFABackend) LoadSecondFactor(context.Context, *http.Request) (UIPageSecondFactor, error) {
@@ -39,6 +40,14 @@ func (f *fakeMFABackend) BeginStrongSetupPasskey(context.Context,
 }
 func (f *fakeMFABackend) FinishStrongSetupPasskey(context.Context, *http.Request,
 	[]byte, string) (UIPageStrongSetupResult, error) {
+	return f.result, nil
+}
+func (f *fakeMFABackend) BeginStrongSetupTOTP(context.Context, *http.Request,
+	string) (UIPageStrongSetupTOTPStart, error) {
+	return f.totpStart, f.err
+}
+func (f *fakeMFABackend) FinishStrongSetupTOTP(context.Context, *http.Request,
+	string, string, string) (UIPageStrongSetupResult, error) {
 	return f.result, nil
 }
 func (f *fakeMFABackend) BeginRecoveryCode(context.Context, *http.Request,
@@ -146,6 +155,56 @@ func TestMFAStrongSetupRendering(t *testing.T) {
 	}
 	if !strings.Contains(start.Body.String(), `data-ln-mode="create"`) {
 		t.Fatal("强设置页应加载 WebAuthn create ceremony")
+	}
+}
+
+// TestMFAStrongSetupTOTPRendering 验证步骤 209 的强初始化 TOTP 重绑页面：只渲染
+// 服务端下发的允许类别、展示一次性 URI/种子、完成表单回到 totp_finish 路由。
+func TestMFAStrongSetupTOTPRendering(t *testing.T) {
+	backend := &fakeMFABackend{view: UIPageSecondFactor{SetupRequired: true,
+		AllowedMethods: []string{"totp"}, FactorType: "totp"},
+		totpStart: UIPageStrongSetupTOTPStart{BindingID: "tfb_0123456789abcdef0123456789abcdef",
+			Secret: "JBSWY3DPEHPK3PXP", URI: "otpauth://totp/EvernightLogin:alice?secret=JBSWY3DPEHPK3PXP",
+			PeriodSeconds: 30, Digits: 6},
+		result: UIPageStrongSetupResult{UserID: "usr_x", ReloginRequired: true}}
+	ui := mfaTestWebUI(t, backend)
+	setup := serveMFATest(ui, http.MethodGet, "/login/strong-setup")
+	if setup.Code != http.StatusOK {
+		t.Fatalf("强设置页状态 = %d", setup.Code)
+	}
+	body := setup.Body.String()
+	for _, expected := range []string{
+		"绑定验证器（TOTP）", "/login/strong-setup/totp/start", "TOTP 验证器不是抗钓鱼认证方式",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("TOTP 强设置页缺少 %q", expected)
+		}
+	}
+	if strings.Contains(body, "/login/strong-setup/passkey/start") {
+		t.Fatal("未下发 Passkey 类别时不应渲染 Passkey 绑定入口")
+	}
+	start := serveMFATest(ui, http.MethodPost, "/login/strong-setup/totp/start")
+	if start.Code != http.StatusOK {
+		t.Fatalf("TOTP 绑定开始失败: %d body=%s", start.Code, start.Body.String())
+	}
+	startBody := start.Body.String()
+	for _, expected := range []string{
+		`name="binding_id" value="tfb_0123456789abcdef0123456789abcdef"`,
+		"otpauth://totp/EvernightLogin:alice", "JBSWY3DPEHPK3PXP", "验证器动态码",
+		"/login/strong-setup/totp/finish",
+	} {
+		if !strings.Contains(startBody, expected) {
+			t.Errorf("TOTP 绑定开始页缺少 %q", expected)
+		}
+	}
+	// 完成表单缺少绑定/验证码时明确 400，不伪造成功。
+	form := strings.NewReader("csrf_token=test-token")
+	finishRequest := httptest.NewRequest(http.MethodPost, "/login/strong-setup/totp/finish", form)
+	finishRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	finish := httptest.NewRecorder()
+	ui.ServeHTTP(finish, finishRequest)
+	if finish.Code != http.StatusBadRequest {
+		t.Fatalf("缺少字段的 TOTP 完成应 400，实际 %d", finish.Code)
 	}
 }
 

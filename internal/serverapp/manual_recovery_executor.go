@@ -12,6 +12,7 @@ import (
 
 	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/manualrecovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
@@ -19,6 +20,55 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
+
+// manualRecoveryRebindMethods 把人工恢复制度配置的“允许重绑因素类别”解析为领域
+// 方法列表（步骤 209）。passkey 只有真正启用 Passkey 时才可用；totp 作为显式的
+// 非抗钓鱼类别，仅在配置明确列出时提供。列表为空表示没有可用重绑方式，申请/执行
+// mfa_reset 必须 fail-closed 拒绝，避免“恢复后无法重绑”把账户锁死。
+func manualRecoveryRebindMethods(cfg login.ManualRecoveryConfig,
+	passkeyEnabled bool) ([]authfact.Method, error) {
+	methods := make([]authfact.Method, 0, len(cfg.RebindMethods))
+	seen := make(map[authfact.Method]bool, len(cfg.RebindMethods))
+	for _, raw := range cfg.RebindMethods {
+		var method authfact.Method
+		switch strings.TrimSpace(raw) {
+		case "passkey":
+			if !passkeyEnabled {
+				continue
+			}
+			method = authfact.MethodPasskey
+		case "totp":
+			method = authfact.MethodTOTP
+		default:
+			return nil, fmt.Errorf("未知重绑方法类别 %q", raw)
+		}
+		if seen[method] {
+			continue
+		}
+		seen[method] = true
+		methods = append(methods, method)
+	}
+	return methods, nil
+}
+
+// rebindMethodSummary 返回可展示/审计的重绑方法类别摘要（不含秘密）。
+func rebindMethodSummary(methods []authfact.Method) string {
+	if len(methods) == 0 {
+		return "无"
+	}
+	parts := make([]string, 0, len(methods))
+	for _, method := range methods {
+		switch method {
+		case authfact.MethodPasskey, authfact.MethodSecurityKey:
+			parts = append(parts, "Passkey")
+		case authfact.MethodTOTP:
+			parts = append(parts, "TOTP")
+		default:
+			parts = append(parts, string(method))
+		}
+	}
+	return strings.Join(parts, "/")
+}
 
 // manualRecoveryPolicyFromConfig 把根配置转换为领域制度；配置层已做边界校验，
 // 服务构造会再次 Validate（双重 fail-closed）。RequireIndependentApproval 固定 true。
@@ -146,9 +196,10 @@ type manualRecoveryExecutor struct {
 	mfa           *mfa.Service
 	sessions      *session.Service
 	targets       manualRecoveryTargets
-	// strongSetupAllowed 表示强认证初始化可用方法（Passkey）已启用。Q7 裁决：
-	// MFA 恢复后只能 Passkey 重绑；未启用时执行器 fail-closed 拒绝，避免恢复后锁死。
-	strongSetupAllowed bool
+	// rebindMethods 是人工恢复 MFA 重置后受限初始化允许绑定的强因素类别（步骤
+	// 209）：passkey（Passkey 启用时）与显式配置的 totp。空列表表示恢复后无法
+	// 重新绑定，执行器 fail-closed 拒绝，避免把账户锁死。
+	rebindMethods []authfact.Method
 }
 
 // Execute 实现 manualrecovery.Executor。
@@ -163,9 +214,9 @@ func (e manualRecoveryExecutor) Execute(ctx context.Context,
 	if command.Operation == manualrecovery.OperationMFAReset && e.mfa == nil {
 		return manualrecovery.ExecutionOutcome{}, errors.New("MFA 恢复执行器缺少 MFA 服务")
 	}
-	if command.Operation == manualrecovery.OperationMFAReset && !e.strongSetupAllowed {
+	if command.Operation == manualrecovery.OperationMFAReset && len(e.rebindMethods) == 0 {
 		return manualrecovery.ExecutionOutcome{},
-			errors.New("Passkey 强认证初始化未启用：拒绝 MFA 恢复（避免恢复后无法重绑）")
+			errors.New("没有可用的强因素重绑方法：拒绝 MFA 恢复（避免恢复后无法重绑）")
 	}
 	target, err := e.targets.LoadTarget(ctx, command.TargetUserID)
 	if err != nil {
@@ -215,7 +266,9 @@ func (e manualRecoveryExecutor) Execute(ctx context.Context,
 			return manualrecovery.ExecutionOutcome{}, fmt.Errorf("MFA 已重置但撤销目标会话失败: %w", revokeErr)
 		}
 		return manualrecovery.ExecutionOutcome{
-			Summary:         "MFA 因素/恢复代码已重置，Passkey 已撤销，目标会话已撤销；用户需重新登录并重绑",
+			Summary: fmt.Sprintf(
+				"MFA 因素/恢复代码已重置，旧 Passkey 已撤销，目标会话已撤销；用户需重新登录并在受限初始化中绑定新的强因素（%s）",
+				rebindMethodSummary(e.rebindMethods)),
 			SessionsRevoked: int(revoked), FactorsReset: true,
 		}, nil
 	default:

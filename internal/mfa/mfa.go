@@ -272,10 +272,28 @@ type SecondFactorPasskey interface {
 }
 
 // StrongFactorSource 报告账户当前是否已绑定可用于强认证的因素（TOTP 或用途允许
-// 第二步的 Passkey/安全密钥）；用于强认证初始化闭环完成判定。nil 时视为未就绪
-// （fail-closed，不允许完成初始化）。
+// 第二步的 Passkey/安全密钥）；用于“最后一个可用因素”等存在性判定。nil 时视为
+// 未就绪（fail-closed）。
 type StrongFactorSource interface {
 	HasStrongFactor(ctx context.Context, userID string) (bool, error)
+}
+
+// StrongSetupMethodSource 可选：按用户返回本次“受限强认证初始化”（root 首次绑定
+// 强因素、人工恢复 MFA 重置后的强制重绑）允许绑定的强因素类别。生产装配用它把
+// root/高权限账户固定为抗钓鱼的 Passkey，只对存在未清除重绑需求的普通账户按显式
+// 配置下发 Passkey/TOTP 类别；返回空列表表示不允许该用户进入初始化（fail-closed）。
+// 未实现时退化为 Options.StrongSetupMethods。
+type StrongSetupMethodSource interface {
+	AllowedStrongSetupMethods(ctx context.Context, userID string) ([]authfact.Method, error)
+}
+
+// StrongSetupBindingVerifier 可选：确认指定强因素是在 since 之后由该账户真实新绑定
+// 的，防止用账户既有因素（例如历史遗留的 TOTP/Passkey 凭证）冒充本次受限初始化
+// 完成的“新绑定”，从而在完成判定上降级抗钓鱼要求。生产装配必须实现；未实现时退化
+// 为“该因素当前存在”的检查（仅限没有既有因素的受控宿主/测试）。
+type StrongSetupBindingVerifier interface {
+	StrongFactorBoundAfter(ctx context.Context, userID string,
+		method authfact.Method, since time.Time) (bool, error)
 }
 
 // StrongSetupAuthorizer 授权强认证初始化（受控状态）：必须是可信来源确认该用户

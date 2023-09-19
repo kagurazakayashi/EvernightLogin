@@ -50,6 +50,14 @@ type UIPageMFABackend interface {
 	// 成功后受限会话撤销、必须重新登录。
 	FinishStrongSetupPasskey(ctx context.Context, request *http.Request,
 		response []byte, currentPassword string) (UIPageStrongSetupResult, error)
+	// BeginStrongSetupTOTP 为受限初始化会话（人工恢复 MFA 重置后的重绑用户）开始
+	// 真实 TOTP 绑定；只有服务端下发允许 TOTP 类别时可用，页面密码复核不放宽。
+	BeginStrongSetupTOTP(ctx context.Context, request *http.Request,
+		currentPassword string) (UIPageStrongSetupTOTPStart, error)
+	// FinishStrongSetupTOTP 验证真实 TOTP 验证码并完成初始化；成功后清重绑需求、
+	// 撤销受限会话、必须重新登录。
+	FinishStrongSetupTOTP(ctx context.Context, request *http.Request,
+		bindingID, code, currentPassword string) (UIPageStrongSetupResult, error)
 
 	// BeginRecoveryCode 用恢复代码替代第二步：受控读取当前挑战并原子消费代码，
 	// 成功返回受限恢复会话 Cookie。
@@ -120,6 +128,17 @@ type UIPageStrongSetupStart struct {
 	PublicKey  []byte
 	ExpiresAt  time.Time
 	RPID       string
+}
+
+// UIPageStrongSetupTOTPStart 是强初始化 TOTP 绑定开始结果；Secret/URI 只展示给
+// 当前用户（otpauth URI 可作为二维码内容），不进入日志/审计/URL。
+type UIPageStrongSetupTOTPStart struct {
+	BindingID     string
+	Secret        string
+	URI           string
+	ExpiresAt     time.Time
+	PeriodSeconds int
+	Digits        int
 }
 
 // UIPageStrongSetupResult 是强初始化完成结果；必须重新登录。
@@ -208,7 +227,8 @@ func PageMFARouteNames() []string {
 	return []string{
 		"auth.second_factor", "auth.second_factor.verify", "auth.second_factor.resend",
 		"auth.second_factor.cancel", "auth.strong_setup", "auth.strong_setup.passkey_start",
-		"auth.strong_setup.passkey_finish", "auth.recovery_code",
+		"auth.strong_setup.passkey_finish", "auth.strong_setup.totp_start",
+		"auth.strong_setup.totp_finish", "auth.recovery_code",
 		"auth.recovery_code.submit", "auth.recovery_rebind", "auth.recovery_rebind.start",
 		"auth.recovery_rebind.complete", "auth.recovery_cancel", "auth.password_forgot",
 		"auth.password_forgot.submit", "auth.password_reset", "auth.password_reset.submit",
@@ -224,6 +244,8 @@ func UIPageMFAPublicFormPaths(prefix string) map[string]string {
 		prefix + "/login/second-factor/cancel":        "auth.second_factor",
 		prefix + "/login/strong-setup/passkey/start":  "auth.strong_setup",
 		prefix + "/login/strong-setup/passkey/finish": "auth.strong_setup",
+		prefix + "/login/strong-setup/totp/start":     "auth.strong_setup",
+		prefix + "/login/strong-setup/totp/finish":    "auth.strong_setup",
 		prefix + "/login/recovery-code":               "auth.recovery_code",
 		prefix + "/login/recovery/rebind/start":       "auth.recovery_rebind",
 		prefix + "/login/recovery/rebind/complete":    "auth.recovery_rebind",
@@ -273,6 +295,12 @@ func newPageMFAPages(options UIPageMFAOptions) (*pageMFAPages, error) {
 		{Name: "auth.strong_setup.passkey_finish", Method: http.MethodPost,
 			Path: "/login/strong-setup/passkey/finish", Access: UIAccessPublic,
 			Layout: "layout/auth", Template: "page/auth/strong_setup"},
+		{Name: "auth.strong_setup.totp_start", Method: http.MethodPost,
+			Path: "/login/strong-setup/totp/start", Access: UIAccessPublic,
+			Layout: "layout/auth", Template: "page/auth/strong_setup"},
+		{Name: "auth.strong_setup.totp_finish", Method: http.MethodPost,
+			Path: "/login/strong-setup/totp/finish", Access: UIAccessPublic,
+			Layout: "layout/auth", Template: "page/auth/strong_setup"},
 		{Name: "auth.recovery_code", Method: http.MethodGet, Path: "/login/recovery-code",
 			Access: UIAccessPublic, Layout: "layout/auth", Template: "page/auth/recovery_code"},
 		{Name: "auth.recovery_code.submit", Method: http.MethodPost, Path: "/login/recovery-code",
@@ -312,7 +340,8 @@ func mfaFormPurposeForRoute(routeName string) string {
 		"auth.second_factor.resend", "auth.second_factor.cancel":
 		return "auth.second_factor"
 	case "auth.strong_setup", "auth.strong_setup.passkey_start",
-		"auth.strong_setup.passkey_finish":
+		"auth.strong_setup.passkey_finish", "auth.strong_setup.totp_start",
+		"auth.strong_setup.totp_finish":
 		return "auth.strong_setup"
 	case "auth.recovery_code", "auth.recovery_code.submit":
 		return "auth.recovery_code"
@@ -348,7 +377,8 @@ func (h *mfaPageHandlers) HandlePage(ctx context.Context, request *http.Request,
 	case "auth.second_factor", "auth.second_factor.verify",
 		"auth.second_factor.resend", "auth.second_factor.cancel":
 		return h.secondFactor(ctx, request, page, backend)
-	case "auth.strong_setup", "auth.strong_setup.passkey_start", "auth.strong_setup.passkey_finish":
+	case "auth.strong_setup", "auth.strong_setup.passkey_start", "auth.strong_setup.passkey_finish",
+		"auth.strong_setup.totp_start", "auth.strong_setup.totp_finish":
 		return h.strongSetup(ctx, request, page, backend)
 	case "auth.recovery_code", "auth.recovery_code.submit":
 		return h.recoveryCode(ctx, request, page, backend)
@@ -527,6 +557,45 @@ func (h *mfaPageHandlers) strongSetup(ctx context.Context, request *http.Request
 		}
 		password, _ := singleValue(form, "current_password", 1024)
 		result, err := backend.FinishStrongSetupPasskey(ctx, request, []byte(encoded), password)
+		if err != nil {
+			return mfaErrorOutcome(err), nil
+		}
+		outcome := UIPageOutcome{Data: map[string]any{"StrongSetupDone": result}}
+		outcome.SetCookies = append(outcome.SetCookies, result.SessionCookie)
+		return outcome, nil
+	case "auth.strong_setup.totp_start":
+		if request.Method != http.MethodPost {
+			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
+		}
+		form, ok := pageForm(request, page, "current_password")
+		if !ok {
+			return UIPageOutcome{StatusCode: http.StatusBadRequest,
+				ErrorCode: "REQ_INVALID", ErrorSummary: textMFA("error.business.REQ_INVALID")}, nil
+		}
+		password, _ := singleValue(form, "current_password", 1024)
+		start, err := backend.BeginStrongSetupTOTP(ctx, request, password)
+		if err != nil {
+			return mfaErrorOutcome(err), nil
+		}
+		view, _ := backend.LoadSecondFactor(ctx, request)
+		return UIPageOutcome{Data: map[string]any{"StrongSetup": view, "TOTPStart": start}}, nil
+	case "auth.strong_setup.totp_finish":
+		if request.Method != http.MethodPost {
+			return UIPageOutcome{StatusCode: http.StatusMethodNotAllowed}, nil
+		}
+		form, ok := pageForm(request, page, "binding_id", "code", "current_password")
+		if !ok {
+			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
+				ErrorSummary: textMFA("error.business.REQ_INVALID")}, nil
+		}
+		bindingID, _ := singleValue(form, "binding_id", 128)
+		code, _ := singleValue(form, "code", 16)
+		password, _ := singleValue(form, "current_password", 1024)
+		if bindingID == "" || code == "" {
+			return UIPageOutcome{StatusCode: http.StatusBadRequest, ErrorCode: "REQ_INVALID",
+				ErrorSummary: textMFA("error.business.REQ_INVALID")}, nil
+		}
+		result, err := backend.FinishStrongSetupTOTP(ctx, request, bindingID, code, password)
 		if err != nil {
 			return mfaErrorOutcome(err), nil
 		}

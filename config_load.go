@@ -306,6 +306,7 @@ type configOverrides struct {
 	manualRecoveryEnabled    *bool
 	manualRecoveryBases      *[]string
 	manualRecoveryDeliveries *[]string
+	manualRecoveryRebind     *[]string
 	manualRecoveryWait       *int
 	manualRecoveryApproval   *int
 	manualRecoveryRequest    *int
@@ -492,6 +493,9 @@ func (ov *configOverrides) apply(cfg *Config) {
 	if ov.manualRecoveryDeliveries != nil {
 		cfg.ManualRecovery.DeliveryChannels = append([]string(nil), (*ov.manualRecoveryDeliveries)...)
 	}
+	if ov.manualRecoveryRebind != nil {
+		cfg.ManualRecovery.RebindMethods = append([]string(nil), (*ov.manualRecoveryRebind)...)
+	}
 	if ov.manualRecoveryWait != nil {
 		cfg.ManualRecovery.WaitPeriodSeconds = *ov.manualRecoveryWait
 	}
@@ -574,6 +578,7 @@ type yamlManualRecovery struct {
 	Enabled            *bool     `yaml:"enabled"`
 	VerificationBases  *[]string `yaml:"verification_bases"`
 	DeliveryChannels   *[]string `yaml:"delivery_channels"`
+	RebindMethods      *[]string `yaml:"rebind_methods"`
 	WaitPeriodSeconds  *int      `yaml:"wait_period_seconds"`
 	ApprovalTTLSeconds *int      `yaml:"approval_ttl_seconds"`
 	RequestTTLSeconds  *int      `yaml:"request_ttl_seconds"`
@@ -759,6 +764,7 @@ var (
 		"manual_recovery": {
 			"verification_bases": "!!str",
 			"delivery_channels":  "!!str",
+			"rebind_methods":     "!!str",
 		},
 	}
 
@@ -1277,6 +1283,9 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		}
 		if doc.ManualRecovery.DeliveryChannels != nil {
 			ov.manualRecoveryDeliveries = doc.ManualRecovery.DeliveryChannels
+		}
+		if doc.ManualRecovery.RebindMethods != nil {
+			ov.manualRecoveryRebind = doc.ManualRecovery.RebindMethods
 		}
 		if doc.ManualRecovery.WaitPeriodSeconds != nil {
 			ov.manualRecoveryWait = doc.ManualRecovery.WaitPeriodSeconds

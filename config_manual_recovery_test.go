@@ -18,6 +18,11 @@ func TestManualRecoveryConfigDefaultDisabled(t *testing.T) {
 		cfg.ManualRecovery.RequestTTLSeconds != 7*24*60*60 {
 		t.Fatalf("人工恢复默认时间参数不符: %+v", cfg.ManualRecovery)
 	}
+	// 步骤 209：默认保持 188 的 Passkey-only 重绑口径。
+	if len(cfg.ManualRecovery.RebindMethods) != 1 ||
+		cfg.ManualRecovery.RebindMethods[0] != "passkey" {
+		t.Fatalf("重绑方法默认必须只有 passkey: %v", cfg.ManualRecovery.RebindMethods)
+	}
 }
 
 // TestManualRecoveryConfigLoadValid 验证 YAML 字段真实解析。
@@ -27,6 +32,7 @@ manual_recovery:
   enabled: true
   verification_bases: [in_person_identity_document, notarized_declaration]
   delivery_channels: [verified_email]
+  rebind_methods: [passkey, totp]
   wait_period_seconds: 3600
   approval_ttl_seconds: 7200
   request_ttl_seconds: 36000
@@ -38,6 +44,29 @@ manual_recovery:
 		cfg.ManualRecovery.DeliveryChannels[0] != "verified_email" ||
 		cfg.ManualRecovery.WaitPeriodSeconds != 3600 {
 		t.Fatalf("人工恢复字段解析不符: %+v", cfg.ManualRecovery)
+	}
+	// 步骤 209：重绑方法类别列表真实解析且默认值被 YAML 覆盖。
+	if len(cfg.ManualRecovery.RebindMethods) != 2 ||
+		cfg.ManualRecovery.RebindMethods[0] != "passkey" ||
+		cfg.ManualRecovery.RebindMethods[1] != "totp" {
+		t.Fatalf("重绑方法解析不符: %v", cfg.ManualRecovery.RebindMethods)
+	}
+	// 未写 rebind_methods 时保留默认 Passkey-only。
+	defaulted, err := login.Load(login.LoadOptions{YAML: []byte(`
+manual_recovery:
+  enabled: true
+  verification_bases: [notarized_declaration]
+  delivery_channels: [verified_email]
+  wait_period_seconds: 3600
+  approval_ttl_seconds: 7200
+  request_ttl_seconds: 36000
+`)})
+	if err != nil {
+		t.Fatalf("未配置重绑方法时应使用默认值: %v", err)
+	}
+	if len(defaulted.ManualRecovery.RebindMethods) != 1 ||
+		defaulted.ManualRecovery.RebindMethods[0] != "passkey" {
+		t.Fatalf("未配置时重绑方法应保持默认 passkey: %v", defaulted.ManualRecovery.RebindMethods)
 	}
 }
 
@@ -53,6 +82,9 @@ func TestManualRecoveryConfigInvalid(t *testing.T) {
 		{"wait-too-long", "manual_recovery:\n  enabled: true\n  verification_bases: [notarized_declaration]\n  delivery_channels: [verified_email]\n  wait_period_seconds: 700000\n  approval_ttl_seconds: 7200\n  request_ttl_seconds: 36000\n", "等待期"},
 		{"approval-not-after-wait", "manual_recovery:\n  enabled: true\n  verification_bases: [notarized_declaration]\n  delivery_channels: [verified_email]\n  wait_period_seconds: 3600\n  approval_ttl_seconds: 3600\n  request_ttl_seconds: 36000\n", "批准有效期"},
 		{"request-too-short", "manual_recovery:\n  enabled: true\n  verification_bases: [notarized_declaration]\n  delivery_channels: [verified_email]\n  wait_period_seconds: 3600\n  approval_ttl_seconds: 7200\n  request_ttl_seconds: 7200\n", "申请有效期"},
+		{"rebind-unknown", "manual_recovery:\n  enabled: true\n  verification_bases: [notarized_declaration]\n  delivery_channels: [verified_email]\n  rebind_methods: [sms]\n  wait_period_seconds: 3600\n  approval_ttl_seconds: 7200\n  request_ttl_seconds: 36000\n", "重绑方法"},
+		{"rebind-duplicate", "manual_recovery:\n  enabled: true\n  verification_bases: [notarized_declaration]\n  delivery_channels: [verified_email]\n  rebind_methods: [passkey, passkey]\n  wait_period_seconds: 3600\n  approval_ttl_seconds: 7200\n  request_ttl_seconds: 36000\n", "重绑方法"},
+		{"rebind-empty", "manual_recovery:\n  enabled: true\n  verification_bases: [notarized_declaration]\n  delivery_channels: [verified_email]\n  rebind_methods: []\n  wait_period_seconds: 3600\n  approval_ttl_seconds: 7200\n  request_ttl_seconds: 36000\n", "重绑方法"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

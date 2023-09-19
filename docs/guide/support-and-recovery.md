@@ -82,6 +82,17 @@
    `mail_deliveries` 与投递任务终态为准，失败按 `mail.delivery.max_attempts` 有界重试后为
    失败终态。仅直接发送器回退路径会记 `sent`；幂等键绑定恢复实例，重复入队不重复发送。
 6. **资格撤销**：审批人或执行人资格被撤销后，读取/批准/执行均被拒绝。
+7. **MFA 恢复后的强因素重绑（步骤 209）**：`mfa_reset` 执行后旧 TOTP/Passkey/恢复代码
+   在事务内失效、安全版本递增使旧会话失效，并登记强制重绑需求；用户重新登录只能得到
+   受限初始化会话，必须真实绑定新的强因素后才清除需求并恢复正常登录。
+   `manual_recovery.rebind_methods` 显式列出允许重绑的因素类别（默认 `[passkey]`）：
+   - `passkey`：抗钓鱼建议方式，需要 `passkey.enabled=true` 才真正可用；
+   - `totp`：**不是抗钓鱼因素**，加入它只用于让没有可用 Passkey 的普通用户在人工恢复
+     后恢复第二因素；它不会改变管理操作对抗钓鱼 Passkey 的要求（root/高权限账户不进
+     人工恢复，其强认证初始化固定 Passkey）。登录强认证是否接受 TOTP 仍由独立的
+     `mfa.AllowTOTPForStrongAuth` 控制且默认 false。
+   若列出的类别在运行装配中全部不可用（例如只列 `passkey` 但 Passkey 未启用），
+   `mfa_reset` 的申请/执行会 fail-closed 拒绝，避免“恢复后无法重绑”锁死账户。
 
 实现：`internal/manualrecovery`（申请、独立审批、受控执行、制度摘要）与客服/审批页面；
 188 新增待办列表（`initiated`/`pending_approval`/`executable`/`history`）与管理 JSON API
@@ -118,7 +129,7 @@ loginctl root-recover --database <数据库路径> --reason "<原因>" --service
 | 客服求助单、目标定位、分派、发送 | 已实现（领域服务 + 页面） |
 | 人工核验恢复（申请/独立审批/受控执行） | 已实现但**默认关闭**；188 完成三权分离、受保护目标判定、待办列表与管理 API；需宿主启用与装配 |
 | 人工恢复 CLI（`support case/recovery`） | 已实现（在线管理 API + 186 再认证）；真实 adminapi+186 组合端到端未补跑 |
-| MFA 恢复后强制重绑 | 机制已实现（Passkey-only；`mfa_reset` 在无 Passkey 时 fail-closed）；真实浏览器 ceremony 未实测（203） |
+| MFA 恢复后强制重绑 | 机制已实现（`rebind_methods` 默认 Passkey-only，显式配置可加 TOTP；无可用类别时 `mfa_reset` fail-closed）；Passkey 真实浏览器 ceremony 未实测（203） |
 | 恢复相关页面/接口 | 已装配：客服求助与人工恢复内置页面（真实 support/manualrecovery 服务）+ 管理 JSON API `GET support/recovery/requests[/{id}]`；人工恢复制度默认关闭，执行器 fail-closed |
 | root 应急恢复 CLI | 已实现（本地） |
 | 真实邮件外发 | 未实测；需宿主显式配置目标，测试只用本地捕获（188 使用真实本地 Mail 实例） |

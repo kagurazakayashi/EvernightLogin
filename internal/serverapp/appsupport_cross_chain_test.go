@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/appsupport"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	bootstrapsqlite "github.com/kagurazakayashi/EvernightLogin/internal/bootstrap/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/credential"
 	credentialsqlite "github.com/kagurazakayashi/EvernightLogin/internal/credential/sqlite"
@@ -282,7 +283,7 @@ VALUES(?,'argon2id',19,?,0,1,?,?,?)`, ccTarget, strings.Repeat("a", 64), nowMS, 
 	}
 	targets.roots = roots
 	executor := manualRecoveryExecutor{passwordReset: resetService, sessions: sessionService,
-		targets: targets, strongSetupAllowed: true}
+		targets: targets, rebindMethods: []authfact.Method{authfact.MethodPasskey}}
 	notifier := manualRecoveryNotifier{sender: sender, store: store,
 		from: mailer.Address{Spec: "noreply@example.test"}, appName: "CrossChain"}
 	manualService, err := manualrecovery.New(manualrecovery.Options{

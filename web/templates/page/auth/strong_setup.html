@@ -8,6 +8,7 @@
 {{with .Data.StrongSetup}}
   <div class="ln-banner ln-banner--warning">{{t "page.auth.strong_setup.restricted"}}</div>
   {{if .AllowedMethods}}<p class="ln-meta">{{t "page.auth.strong_setup.allowed"}}: {{range .AllowedMethods}}<code>{{.}}</code> {{end}}</p>{{end}}
+  {{if contains .AllowedMethods "passkey"}}
   {{with $.Data.PasskeyStart}}
     <form method="post" action="{{route "auth.strong_setup.passkey_finish"}}" data-ln-module="webauthn" data-ln-mode="create" data-ln-options="{{printf "%s" .PublicKey}}" data-ln-webauthn-form data-ln-response-field="passkey_response">
       {{csrf_field}}
@@ -23,6 +24,32 @@
       {{template "component.field" (dict "id" "strong-setup-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
       <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.strong_setup.bind_passkey") "variant" "primary" "type" "submit")}}</div>
     </form>
+  {{end}}
+  {{end}}
+  {{if contains .AllowedMethods "totp"}}
+  {{with $.Data.TOTPStart}}
+    <section class="ln-strong-setup-totp">
+      <h2>{{t "page.auth.strong_setup.bind_totp"}}</h2>
+      <p class="ln-meta">{{t "page.auth.strong_setup.totp_uri"}}</p>
+      <pre class="ln-secret" tabindex="0">{{.URI}}</pre>
+      <p class="ln-meta">{{t "page.auth.strong_setup.totp_secret"}}: <code>{{.Secret}}</code></p>
+      <form method="post" action="{{route "auth.strong_setup.totp_finish"}}" data-ln-module="async-form">
+        {{csrf_field}}
+        <input type="hidden" name="binding_id" value="{{.BindingID}}">
+        {{template "component.field" (dict "id" "strong-setup-totp-code" "name" "code" "type" "text" "label" (t "page.auth.strong_setup.totp_confirm") "help" "" "value" "" "required" true)}}
+        {{template "component.field" (dict "id" "strong-setup-totp-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+        <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.verify") "variant" "primary" "type" "submit")}}</div>
+      </form>
+      <p class="ln-meta">{{t "page.auth.strong_setup.totp_security_note"}}</p>
+    </section>
+  {{else}}
+    <form method="post" action="{{route "auth.strong_setup.totp_start"}}" data-ln-module="async-form">
+      {{csrf_field}}
+      {{template "component.field" (dict "id" "strong-setup-totp-start-password" "name" "current_password" "type" "password" "label" (t "page.account.security_mfa.current_password") "help" "" "value" "" "required" true)}}
+      <div class="ln-actions">{{template "component.button" (dict "label" (t "page.auth.strong_setup.bind_totp") "variant" "secondary" "type" "submit")}}</div>
+    </form>
+    <p class="ln-meta">{{t "page.auth.strong_setup.totp_security_note"}}</p>
+  {{end}}
   {{end}}
 {{end}}
 {{end}}

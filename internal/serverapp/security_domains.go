@@ -69,10 +69,14 @@ type SecurityDomains struct {
 	PasskeySecondFactor mfa.SecondFactorPasskey
 }
 
-// strongFactorSource 汇总 TOTP 与 Passkey 的强因素存在性。
+// strongFactorSource 汇总 TOTP 与 Passkey 的强因素存在性，并实现步骤 209 的
+// “挑战创建之后真实新绑定”判定（防止用账户既有因素冒充初始化完成）。
 type strongFactorSource struct {
 	totp     *totp.Service
 	passkeys *passkey.Service
+	// store 用于查询绑定时间（totp_bindings.activated_at_ms /
+	// webauthn_credentials.created_at_ms）；缺失时新鲜绑定判定 fail-closed。
+	store *storagesqlite.Store
 }
 
 // HasStrongFactor 实现 authn.StrongFactorPresence 与 mfa.StrongFactorSource。
@@ -96,6 +100,49 @@ func (s strongFactorSource) HasStrongFactor(ctx context.Context, userID string) 
 		}
 	}
 	return false, nil
+}
+
+// StrongFactorBoundAfter 实现 mfa.StrongSetupBindingVerifier：只有当指定类别的强
+// 因素在 since 之后被真实激活/创建时才返回 true。查询失败返回错误（调用方
+// fail-closed），绝不把“存在既有因素”当作本次绑定。
+func (s strongFactorSource) StrongFactorBoundAfter(ctx context.Context, userID string,
+	method authfact.Method, since time.Time) (bool, error) {
+	if s.store == nil || s.store.DB() == nil {
+		return false, errors.New("强因素绑定时间存储未装配")
+	}
+	sinceMS := since.UTC().UnixMilli()
+	var count int
+	var query string
+	switch method {
+	case authfact.MethodTOTP:
+		// 只统计 active 绑定：pending 的 TOTP 尚未完成验证码确认，不构成新因素。
+		query = `SELECT COUNT(*) FROM totp_bindings
+WHERE user_id=? AND status='active' AND activated_at_ms IS NOT NULL AND activated_at_ms>=?`
+	case authfact.MethodPasskey, authfact.MethodSecurityKey:
+		// 只统计用途允许第二步且未撤销的凭证；主登录专用凭证不满足强认证绑定。
+		query = `SELECT COUNT(*) FROM webauthn_credentials
+WHERE user_id=? AND revoked_at_ms IS NULL AND created_at_ms>=? AND usage IN('second_factor','both')`
+	default:
+		return false, nil
+	}
+	if err := s.store.DB().QueryRowContext(ctx, query, userID, sinceMS).Scan(&count); err != nil {
+		return false, fmt.Errorf("查询强因素绑定时间失败: %w", err)
+	}
+	return count > 0, nil
+}
+
+// dedupeAuthfactMethods 去重方法列表（保留首次出现顺序）。
+func dedupeAuthfactMethods(methods []authfact.Method) []authfact.Method {
+	result := make([]authfact.Method, 0, len(methods))
+	seen := make(map[authfact.Method]bool, len(methods))
+	for _, method := range methods {
+		if seen[method] {
+			continue
+		}
+		seen[method] = true
+		result = append(result, method)
+	}
+	return result
 }
 
 // BuildSecurityDomains 装配账户/安全/客服域服务。
@@ -153,9 +200,31 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	if err != nil {
 		return nil, fmt.Errorf("构造强制 MFA 策略适配器失败: %w", err)
 	}
-	// 步骤 188：人工恢复 MFA 重置后的强制重绑状态（登录受限 + Passkey 绑定后清除）。
+	// 步骤 188：人工恢复 MFA 重置后的强制重绑状态（登录受限 + 强因素绑定后清除）。
 	rebindStore := mfaRebindRequirementStore{
 		store: deps.Store, audit: deps.Audit, logger: deps.Logger,
+	}
+	// 步骤 209：人工恢复 MFA 重置后允许的重绑因素类别。配置显式列出（默认仅
+	// passkey）；passkey 只有真实启用 Passkey 时才可用，totp 是非抗钓鱼的显式
+	// 备用类别。空列表表示恢复后无法重绑，mfa_reset 申请/执行必须 fail-closed。
+	rebindMethods, rebindErr := manualRecoveryRebindMethods(
+		deps.Config.ManualRecovery, deps.Config.Passkey.Enabled)
+	if rebindErr != nil {
+		return nil, fmt.Errorf("人工恢复重绑方法配置无效: %w", rebindErr)
+	}
+	// 强认证初始化允许绑定的类别（服务层白名单）：Passkey 启用时含 Passkey，
+	// 另加人工恢复重绑显式允许的类别。按用户真正下发/收窄由 StrongSetupMethodSource
+	// 完成（root/高权限固定 Passkey）。
+	strongSetupMethods := make([]authfact.Method, 0, 2)
+	if deps.Config.Passkey.Enabled {
+		strongSetupMethods = append(strongSetupMethods, authfact.MethodPasskey)
+	}
+	strongSetupMethods = append(strongSetupMethods, rebindMethods...)
+	strongSetupMethods = dedupeAuthfactMethods(strongSetupMethods)
+	if len(strongSetupMethods) == 0 {
+		// 保持 mfa.New 的合法选项（其默认值为 Passkey）；实际是否允许某用户进入
+		// 初始化由 StrongSetupMethodSource 决定，空下发会 fail-closed。
+		strongSetupMethods = []authfact.Method{authfact.MethodPasskey}
 	}
 	// Passkey 服务构造时需要“其他强因素（TOTP）”来源，而 TOTP 服务在本阶段稍后
 	// 构造：用可后接线的适配器避免构造循环，接线前如实报告“没有其他强因素”。
@@ -228,7 +297,7 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 
 	manualTargets := manualRecoveryTargets{store: deps.Store, keyring: deps.Keyring, roots: managed.Roots, checker: managed.Checker}
 	adminResetBackend := manualRecoveryMFAAdminBackend{store: deps.Store, targets: manualTargets}
-	strongFactors := strongFactorSource{totp: totpService, passkeys: passkeyService}
+	strongFactors := strongFactorSource{totp: totpService, passkeys: passkeyService, store: deps.Store}
 	var passkeySecondFactor mfa.SecondFactorPasskey
 	if passkeyService == nil {
 		// Passkey 未启用：MFA 服务仍需要第二步适配器接口，注入显式“未启用”实现，
@@ -241,6 +310,12 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	if err != nil {
 		return nil, fmt.Errorf("构造 MFA 存储失败: %w", err)
 	}
+	// 同一适配器既做“受控初始化授权”，也按用户下发允许绑定的强因素类别：root/
+	// 高权限固定 Passkey，人工恢复重绑用户按配置允许 passkey/totp。
+	strongSetupAuthorizer := rootStrongSetupAuthorizer{
+		store: services.BootstrapStore, roots: managed.Roots, rebind: rebindStore,
+		rebindMethods: rebindMethods, passkeyEnabled: deps.Config.Passkey.Enabled,
+	}
 	mfaService, err := mfa.New(mfa.Options{
 		Store: mfaStore, Audit: deps.Audit, Credentials: services.Credential,
 		Sessions:           services.Sessions,
@@ -252,15 +327,19 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		TOTP:               totpService,
 		Passkeys:           passkeySecondFactor,
 		StrongFactorSource: strongFactors,
-		StrongSetupAuthorizer: rootStrongSetupAuthorizer{
-			store: services.BootstrapStore, roots: managed.Roots, rebind: rebindStore},
-		RootReady:             rootReadyMarker{store: services.BootstrapStore},
-		RebindClearer:         rebindStore,
-		Revoker:               services.Sessions,
-		AllowStrongAuthSetup:  true,
-		StrongSetupMethods:    []authfact.Method{authfact.MethodPasskey},
-		AdminResetBackend:     adminResetBackend,
-		AdminResetTargetGuard: adminResetBackend.CheckAdminResetTarget,
+		// 步骤 209：按用户下发本次受限初始化允许绑定的强因素类别（root/高权限固定
+		// Passkey；人工恢复重绑用户按配置允许 passkey/totp），并强制校验“本次新绑定”
+		// 而不是账户既有因素冒充完成。
+		StrongSetupMethodSource:    strongSetupAuthorizer,
+		StrongSetupBindingVerifier: strongFactors,
+		StrongSetupAuthorizer:      strongSetupAuthorizer,
+		RootReady:                  rootReadyMarker{store: services.BootstrapStore},
+		RebindClearer:              rebindStore,
+		Revoker:                    services.Sessions,
+		AllowStrongAuthSetup:       true,
+		StrongSetupMethods:         strongSetupMethods,
+		AdminResetBackend:          adminResetBackend,
+		AdminResetTargetGuard:      adminResetBackend.CheckAdminResetTarget,
 		// 步骤 194：真实强制 MFA 策略，用于“邮件因素移除是最后一个可用因素”保护。
 		Policy: mfaPolicy,
 		Now:    now, Logger: deps.Logger,
@@ -384,7 +463,7 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	executor := manualRecoveryExecutor{
 		passwordReset: passwordResetService, mfa: mfaService,
 		sessions: services.Sessions, targets: manualTargets,
-		strongSetupAllowed: deps.Config.Passkey.Enabled,
+		rebindMethods: rebindMethods,
 	}
 	var notifier manualrecovery.Notifier
 	if manualPolicy.Enabled {
@@ -402,8 +481,8 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		NotificationsQueued: notifier != nil && mailDeliveries != nil,
 		Policy:              manualPolicy,
 		OperationGuard: func(operation manualrecovery.OperationType) error {
-			if operation == manualrecovery.OperationMFAReset && !deps.Config.Passkey.Enabled {
-				return errors.New("Passkey 强认证初始化未启用：拒绝 MFA 恢复（避免恢复后无法重绑）")
+			if operation == manualrecovery.OperationMFAReset && len(rebindMethods) == 0 {
+				return errors.New("没有可用的强因素重绑方法（Passkey 未启用且未显式允许 TOTP）：拒绝 MFA 恢复（避免恢复后无法重绑）")
 			}
 			return nil
 		},
@@ -422,11 +501,20 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	}, nil
 }
 
-// rootStrongSetupAuthorizer 只允许真实 root 进入强认证初始化闭环。
+// rootStrongSetupAuthorizer 只允许真实 root 与带未清除人工恢复重绑需求的用户进入
+// 受限强认证初始化；同时按用户下发允许绑定的强因素类别（步骤 209）：
+//   - root/高权限初始化固定只允许抗钓鱼的 Passkey，绝不因 TOTP 重绑策略降级；
+//   - 人工恢复 MFA 重置后的重绑用户按配置允许的类别（passkey/totp）；
+//   - 其余用户返回空列表（fail-closed，不允许自助绑定强因素）。
 type rootStrongSetupAuthorizer struct {
 	store  *bootstrapsqlite.Store
 	roots  *hostRootChecker
 	rebind mfaRebindRequirementStore
+	// rebindMethods 是人工恢复重绑允许的强因素类别（已按真实可用性过滤）。
+	rebindMethods []authfact.Method
+	// passkeyEnabled 表示 Passkey 服务真实启用；root 初始化在没有 Passkey 时
+	// fail-closed 拒绝，不降级到 TOTP。
+	passkeyEnabled bool
 }
 
 // AuthorizeStrongSetup 实现 mfa.StrongSetupAuthorizer。
@@ -462,6 +550,38 @@ func (a rootStrongSetupAuthorizer) authorizeRoot(ctx context.Context, userID str
 		return errors.New("root 当前状态不允许强认证初始化")
 	}
 	return nil
+}
+
+// AllowedStrongSetupMethods 实现 mfa.StrongSetupMethodSource：root/高权限固定
+// Passkey-only（未启用 Passkey 时拒绝，不降级 TOTP）；人工恢复重绑用户返回配置
+// 允许且真实可用的类别；其他用户拒绝。
+func (a rootStrongSetupAuthorizer) AllowedStrongSetupMethods(ctx context.Context,
+	userID string) ([]authfact.Method, error) {
+	if a.roots == nil || a.store == nil {
+		return nil, errors.New("root 识别器未装配")
+	}
+	root, err := a.roots.isRoot(ctx, userID)
+	if err != nil {
+		return nil, errors.New("root 识别失败")
+	}
+	if root {
+		if !a.passkeyEnabled {
+			// 抗钓鱼初始化没有 Passkey：不降级到 TOTP，明确拒绝。
+			return nil, errors.New("root 强认证初始化需要 Passkey")
+		}
+		return []authfact.Method{authfact.MethodPasskey}, nil
+	}
+	if a.rebind.store != nil {
+		required, rebindErr := a.rebind.MFARebindRequired(ctx, userID)
+		if rebindErr != nil {
+			return nil, errors.New("强制重绑状态不可用")
+		}
+		if required {
+			// 返回副本，避免调用方修改共享策略切片。
+			return append([]authfact.Method(nil), a.rebindMethods...), nil
+		}
+	}
+	return nil, errors.New("强认证初始化未授权")
 }
 
 // recoveryRequirements 返回恢复代码流程的强度要求：默认要求强认证（fail-closed）。
@@ -788,7 +908,9 @@ func (failClosedRecoveryExecutor) Compensate(context.Context, manualrecovery.Exe
 var (
 	_ authn.StrongFactorPresence     = strongFactorSource{}
 	_ mfa.StrongFactorSource         = strongFactorSource{}
+	_ mfa.StrongSetupBindingVerifier = strongFactorSource{}
 	_ mfa.StrongSetupAuthorizer      = rootStrongSetupAuthorizer{}
+	_ mfa.StrongSetupMethodSource    = rootStrongSetupAuthorizer{}
 	_ recovery.Requirements          = recoveryRequirements{}
 	_ recovery.AuthLevelRequirements = recoveryAuthLevels{}
 	_ avatar.Authorizer              = avatarAuthorizer{}

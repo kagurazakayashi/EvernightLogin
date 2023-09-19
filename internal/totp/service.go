@@ -152,10 +152,19 @@ type BindingStart struct {
 // 加密保存为 pending 绑定并返回一次性种子/URI。重绑允许已有 active 绑定存在，
 // 新绑定验证成功后才替换旧绑定。
 //
-// 装配约束（必须由宿主保证）：本方法只允许从**完整（非受限）已认证会话**调用，
-// 不得接受待第二因素/待改密/受限初始化等受限会话；高权限账户绑定或更换强因素
-// 必须在完成强认证后进行。mfa.add 目录默认只要求近期密码认证，服务层不额外判断
-// 会话是否完整，因此宿主若把受限会话误接到此入口，会退化为主密码即可绑定新因素。
+// 装配约束（必须由宿主保证）：默认只允许从**完整（非受限）已认证会话**调用，且
+// 高权限账户绑定或更换强因素必须在完成强认证后进行。唯一受控例外是步骤 209 的
+// “受限强认证初始化/人工恢复 MFA 重置后的强制重绑”：宿主必须同时满足
+//   - 请求来自服务端签名的受限初始化状态与同用户受限会话（不能是普通待第二因素
+//     或待改密会话）；
+//   - 本次绑定的因素类别在服务端下发的允许类别中；
+//   - 调用前已用页面密码复核取得本服务所需的 reauth mfa.add 证据（不得放宽为
+//     “只凭受限会话即可绑定”）；
+//   - 绑定完成后必须调用 mfa.CompleteStrongSetup 校验“本次真实新绑定”，并撤销
+//     受限会话、要求重新登录。
+//
+// 服务层不额外判断会话是否完整；宿主若把任意受限会话误接到此入口，会退化为主密码
+// 即可绑定新因素。生产适配见 internal/uiauthadapter 的 strong-setup TOTP 路径。
 func (s *Service) BeginBinding(ctx context.Context, caller Caller, requestID string) (BindingStart, error) {
 	ctx = normalizeContext(ctx)
 	if err := caller.actor.Validate(); err != nil || !caller.IsUser() {
