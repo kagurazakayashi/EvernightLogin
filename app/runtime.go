@@ -18,6 +18,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	"github.com/kagurazakayashi/EvernightLogin/internal/serverapp"
+	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
 // Runtime 是嵌入式装配结果。它只持有自己打开的资源；不监听端口。
@@ -34,12 +35,14 @@ type Runtime struct {
 	instance   *login.Instance
 	boot       *bootstrap.Service
 	bootCaller bootstrap.Caller
-	handler    http.Handler
-	httpPrefix string
-	httpMounts []string
-	mu         sync.Mutex
-	closeErr   error
-	closed     bool
+	// resetLimiters 是找回密码公开入口的来源限流器（有界、进程内单实例）。
+	resetLimiters *passwordResetLimiters
+	handler       http.Handler
+	httpPrefix    string
+	httpMounts    []string
+	mu            sync.Mutex
+	closeErr      error
+	closed        bool
 }
 
 // Open 构造真实服务运行时：配置/主密钥环/SQLite/迁移策略/审计/领域服务/敏感闸门/
@@ -71,6 +74,12 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	now := opts.Now
 	if now == nil {
 		now = time.Now
+	}
+	// 找回入口来源限流器：构造只依赖常量策略，失败说明策略常量非法（配置缺陷，
+	// fail-closed，不放行无限流的公开入口）。
+	resetLimiters, err := newPasswordResetLimiters(now)
+	if err != nil {
+		return nil, wrapInternal("构造找回密码限流器失败", err)
 	}
 	base, err := serverapp.OpenBase(ctx, serverapp.BaseOptions{
 		Config:          cfg,
@@ -152,7 +161,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	return &Runtime{opts: opts, config: cfg, logger: logger, nowFn: now,
 		base: base, instance: instance, boot: boot, bootCaller: bootCaller,
-		handler: handler, httpPrefix: httpPrefix, httpMounts: httpMounts}, nil
+		resetLimiters: resetLimiters,
+		handler:       handler, httpPrefix: httpPrefix, httpMounts: httpMounts}, nil
 }
 
 // loadConfig 加载/规范化配置。配置规则与独立服务共用 internal/appcore：只支持
@@ -452,15 +462,26 @@ func (f *userFacade) Create(ctx context.Context, req CreateUserRequest) (User, e
 
 type accessFacade struct{ r *Runtime }
 
+// Check 是“受信调用者已经确认用户身份”后的权限检查入口：UserID 必须来自已校验
+// 的会话/令牌或宿主可信身份，绝不能来自客户端自填字段。它只做权限判定，不验证
+// 会话；需要“会话有效 + 属于当前应用 + 所需权限”的联合判断时使用
+// Sessions.Authorize。RequestID 用于关联审计与返回错误。
 func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDecision, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return AccessDecision{}, err
+	}
 	managed := r.managedServices()
 	if managed == nil || managed.Authz == nil {
-		return AccessDecision{}, configError("权限服务未装配")
+		return AccessDecision{}, configError("权限服务未装配", requestID)
 	}
 	caller, err := authz.UserCaller(req.UserID)
 	if err != nil {
-		return AccessDecision{}, mapServiceError(err)
+		return AccessDecision{}, mapDomainError("访问检查的主体无效", "REQ_INVALID", requestID)
+	}
+	if caller, err = bindCaller(caller, requestID); err != nil {
+		return AccessDecision{}, err
 	}
 	mode := authz.Mode(req.Mode)
 	if mode == "" {
@@ -474,24 +495,32 @@ func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDeci
 		SubjectUserID: req.UserID, ScopeID: scope, Permissions: []string{req.Permission}, Mode: mode,
 	})
 	if err != nil {
-		return AccessDecision{}, mapServiceError(err)
+		return AccessDecision{}, mapDomainError("权限检查失败",
+			string(authz.CodeOf(err)), requestID)
 	}
 	return AccessDecision{Allowed: result.Allowed, Code: string(result.Code),
-		Reason: result.Reason, Application: req.AppID}, nil
+		Reason: result.Reason, RequestID: requestID, Application: req.AppID}, nil
 }
 
 type sessionFacade struct{ r *Runtime }
 
+// Revoke 撤销当前会话（含该会话的刷新/派生状态），不撤销其他会话。会话秘密必须
+// 来自可信边界；失败按会话领域稳定码返回并带本次请求编号。
 func (f *sessionFacade) Revoke(ctx context.Context, sessionSecret []byte) error {
+	requestID, err := resolveRequestID(ctx, "")
+	if err != nil {
+		return err
+	}
 	services := f.r.coreServices()
 	if services == nil {
-		return configError("服务未装配")
+		return configError("服务未装配", requestID)
 	}
 	if len(sessionSecret) == 0 {
-		return configError("会话秘密为空")
+		return login.NewAppError(login.CodeAuthFailed, "会话无效或已失效",
+			login.WithRequestID(requestID))
 	}
 	if _, err := services.Sessions.RevokeAllOwnSessions(ctx, string(sessionSecret), false); err != nil {
-		return mapServiceError(err)
+		return mapDomainError("撤销会话失败", string(session.CodeOf(err)), requestID)
 	}
 	return nil
 }

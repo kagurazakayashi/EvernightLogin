@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
@@ -34,20 +33,21 @@ type authFacade struct{ r *Runtime }
 // 密码流程签发普通会话；待改密等其它受限状态 fail-closed，不签发会话。
 func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		// 非法请求编号是输入错误，不涉及账户存在性，可安全拒绝。
+		return LoginResult{}, err
+	}
 	services := r.coreServices()
 	if services == nil {
-		return LoginResult{}, configError("服务未装配")
+		return LoginResult{}, configError("服务未装配", requestID)
 	}
 	authResult, err := services.Authn.Authenticate(ctx, authn.AuthenticateRequest{
 		Identifier: req.Username, Password: req.Password, ClientIP: req.ClientIP,
-		RequestID: req.RequestID,
+		RequestID: requestID,
 	})
 	if err != nil {
-		return LoginResult{}, mapAuthError(err)
-	}
-	requestID := req.RequestID
-	if requestID == "" {
-		requestID = login.NewRequestID()
+		return LoginResult{}, mapAuthError(err, requestID)
 	}
 	if mfaService := r.mfaService(); mfaService != nil {
 		start, startErr := mfaService.BeginLogin(ctx, mfa.BeginLoginRequest{
@@ -57,7 +57,7 @@ func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, 
 		})
 		if startErr != nil {
 			return LoginResult{}, mapDomainError("登录需要完成第二因素验证",
-				string(mfa.CodeOf(startErr)))
+				string(mfa.CodeOf(startErr)), requestID)
 		}
 		if start.RequiresSecondFactor || start.SetupRequired {
 			return loginResultFromStart(authResult, start), nil
@@ -81,7 +81,7 @@ func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, 
 		Client:    session.ClientInfo{UserAgent: req.UserAgent, Address: req.ClientIP},
 	})
 	if err != nil {
-		return LoginResult{}, mapDomainError("签发会话失败", string(session.CodeOf(err)))
+		return LoginResult{}, mapDomainError("签发会话失败", string(session.CodeOf(err)), requestID)
 	}
 	return loginResultFromIssued(issued, authResult), nil
 }
@@ -90,16 +90,16 @@ func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, 
 func (f *authFacade) VerifySecondFactor(ctx context.Context,
 	req VerifySecondFactorRequest) (VerifiedSession, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return VerifiedSession{}, err
+	}
 	mfaService := r.mfaService()
 	if mfaService == nil {
-		return VerifiedSession{}, configError("第二因素验证服务未装配")
+		return VerifiedSession{}, configError("第二因素验证服务未装配", requestID)
 	}
 	if len(req.SessionSecret) == 0 {
-		return VerifiedSession{}, configError("缺少第一步受限会话秘密")
-	}
-	requestID := req.RequestID
-	if requestID == "" {
-		requestID = login.NewRequestID()
+		return VerifiedSession{}, configError("缺少第一步受限会话秘密", requestID)
 	}
 	result, err := mfaService.Verify(ctx, mfa.VerifyRequest{
 		ChallengeID: req.ChallengeID, AttemptToken: string(req.AttemptToken),
@@ -109,7 +109,7 @@ func (f *authFacade) VerifySecondFactor(ctx context.Context,
 	})
 	if err != nil {
 		return VerifiedSession{}, mapDomainError("第二因素验证失败",
-			string(mfa.CodeOf(err)))
+			string(mfa.CodeOf(err)), requestID)
 	}
 	verified := VerifiedSession{UserID: result.Authenticated.UserID,
 		SessionID: result.Session.Session.ID,
@@ -128,17 +128,17 @@ func (f *authFacade) VerifySecondFactor(ctx context.Context,
 func (f *authFacade) BeginRecovery(ctx context.Context,
 	req BeginRecoveryRequest) (RecoverySession, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return RecoverySession{}, err
+	}
 	mfaService := r.mfaService()
 	security := r.securityDomains()
 	if mfaService == nil || security == nil || security.Recovery == nil {
-		return RecoverySession{}, configError("恢复服务未装配")
+		return RecoverySession{}, configError("恢复服务未装配", requestID)
 	}
 	if len(req.SessionSecret) == 0 {
-		return RecoverySession{}, configError("缺少第一步受限会话秘密")
-	}
-	requestID := req.RequestID
-	if requestID == "" {
-		requestID = login.NewRequestID()
+		return RecoverySession{}, configError("缺少第一步受限会话秘密", requestID)
 	}
 	authResult, err := mfaService.RecoveryAuthentication(ctx,
 		mfa.RecoveryAuthenticationRequest{
@@ -147,7 +147,7 @@ func (f *authFacade) BeginRecovery(ctx context.Context,
 		})
 	if err != nil {
 		return RecoverySession{}, mapDomainError("恢复代码交接失败",
-			string(mfa.CodeOf(err)))
+			string(mfa.CodeOf(err)), requestID)
 	}
 	begin, err := security.Recovery.Begin(ctx, recovery.BeginRequest{
 		Result: authResult, Code: req.RecoveryCode,
@@ -155,7 +155,7 @@ func (f *authFacade) BeginRecovery(ctx context.Context,
 	})
 	if err != nil {
 		return RecoverySession{}, mapDomainError("恢复代码验证失败",
-			string(recovery.CodeOf(err)))
+			string(recovery.CodeOf(err)), requestID)
 	}
 	recovered := RecoverySession{UserID: begin.Session.Session.UserID,
 		SessionID: begin.Session.Session.ID, ExpiresAt: begin.ExpiresAt,
@@ -174,18 +174,22 @@ func (f *authFacade) BeginRecovery(ctx context.Context,
 func (f *authFacade) RecoveryStatus(ctx context.Context,
 	req RecoveryStatusRequest) (RecoveryStatus, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return RecoveryStatus{}, err
+	}
 	services := r.coreServices()
 	security := r.securityDomains()
 	if services == nil || security == nil || security.Recovery == nil {
-		return RecoveryStatus{}, configError("恢复服务未装配")
+		return RecoveryStatus{}, configError("恢复服务未装配", requestID)
 	}
-	if _, err := r.requireSession(ctx, req.SessionSecret, false); err != nil {
+	if _, err := r.requireSession(ctx, req.SessionSecret, false, requestID); err != nil {
 		return RecoveryStatus{}, err
 	}
 	snapshot, err := security.Recovery.Snapshot(ctx, string(req.SessionSecret))
 	if err != nil {
 		return RecoveryStatus{}, mapDomainError("恢复会话状态不可用",
-			string(recovery.CodeOf(err)))
+			string(recovery.CodeOf(err)), requestID)
 	}
 	status := RecoveryStatus{HasActiveGroup: snapshot.AttemptID != "",
 		CodesRemaining:   snapshot.CodesRemaining,
@@ -204,11 +208,15 @@ type securityFacade struct{ r *Runtime }
 func (f *securityFacade) Status(ctx context.Context,
 	req SecurityStatusRequest) (SecurityStatus, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return SecurityStatus{}, err
+	}
 	security := r.securityDomains()
 	if security == nil {
-		return SecurityStatus{}, configError("安全域服务未装配")
+		return SecurityStatus{}, configError("安全域服务未装配", requestID)
 	}
-	record, err := r.requireSession(ctx, req.SessionSecret, true)
+	record, err := r.requireSession(ctx, req.SessionSecret, true, requestID)
 	if err != nil {
 		return SecurityStatus{}, err
 	}
@@ -217,19 +225,19 @@ func (f *securityFacade) Status(ctx context.Context,
 		active, totpErr := security.TOTP.HasActive(ctx, record.UserID)
 		if totpErr != nil {
 			return SecurityStatus{}, mapDomainError("读取 TOTP 状态失败",
-				string(totp.CodeOf(totpErr)))
+				string(totp.CodeOf(totpErr)), requestID)
 		}
 		status.TOTPActive = active
 	}
 	mfaCaller, callerErr := mfa.UserCaller(record.UserID)
 	if callerErr != nil {
-		return SecurityStatus{}, configError("会话主体无效")
+		return SecurityStatus{}, configError("会话主体无效", requestID)
 	}
 	if security.MFA != nil {
 		factors, factorsErr := security.MFA.Factors(ctx, mfaCaller)
 		if factorsErr != nil {
 			return SecurityStatus{}, mapDomainError("读取第二因素状态失败",
-				string(mfa.CodeOf(factorsErr)))
+				string(mfa.CodeOf(factorsErr)), requestID)
 		}
 		for _, factor := range factors {
 			if factor.Type == mfa.FactorEmail && factor.State == "active" {
@@ -240,31 +248,31 @@ func (f *securityFacade) Status(ctx context.Context,
 	if security.Passkey != nil {
 		passkeyCaller, passkeyErr := passkey.UserCaller(record.UserID)
 		if passkeyErr != nil {
-			return SecurityStatus{}, configError("会话主体无效")
+			return SecurityStatus{}, configError("会话主体无效", requestID)
 		}
 		credentials, listErr := security.Passkey.List(ctx, passkeyCaller)
 		if listErr != nil {
 			return SecurityStatus{}, mapDomainError("读取 Passkey 状态失败",
-				string(passkey.CodeOf(listErr)))
+				string(passkey.CodeOf(listErr)), requestID)
 		}
 		status.PasskeyCount = len(credentials)
 	}
 	if security.Recovery != nil {
 		recoveryCaller, recoveryErr := recovery.UserCaller(record.UserID)
 		if recoveryErr != nil {
-			return SecurityStatus{}, configError("会话主体无效")
+			return SecurityStatus{}, configError("会话主体无效", requestID)
 		}
 		inventory, inventoryErr := security.Recovery.Inventory(ctx, recoveryCaller)
 		if inventoryErr != nil {
 			return SecurityStatus{}, mapDomainError("读取恢复代码状态失败",
-				string(recovery.CodeOf(inventoryErr)))
+				string(recovery.CodeOf(inventoryErr)), requestID)
 		}
 		status.RecoveryCodesRemaining = inventory.CodesRemaining
 	}
 	if security.StrongFactors != nil {
 		strong, strongErr := security.StrongFactors.HasStrongFactor(ctx, record.UserID)
 		if strongErr != nil {
-			return SecurityStatus{}, mapDomainError("读取强因素状态失败", "")
+			return SecurityStatus{}, mapDomainError("读取强因素状态失败", "", requestID)
 		}
 		status.StrongFactorBound = strong
 	}
@@ -275,21 +283,21 @@ func (f *securityFacade) Status(ctx context.Context,
 func (f *securityFacade) BeginTOTPBinding(ctx context.Context,
 	req TOTPBindingBeginRequest) (TOTPBindingStart, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return TOTPBindingStart{}, err
+	}
 	security := r.securityDomains()
 	if security == nil || security.TOTP == nil {
-		return TOTPBindingStart{}, configError("TOTP 服务未装配")
+		return TOTPBindingStart{}, configError("TOTP 服务未装配", requestID)
 	}
-	record, err := r.requireSession(ctx, req.SessionSecret, true)
+	record, err := r.requireSession(ctx, req.SessionSecret, true, requestID)
 	if err != nil {
 		return TOTPBindingStart{}, err
 	}
 	caller, callerErr := totp.UserCaller(record.UserID)
 	if callerErr != nil {
-		return TOTPBindingStart{}, configError("会话主体无效")
-	}
-	requestID := req.RequestID
-	if requestID == "" {
-		requestID = login.NewRequestID()
+		return TOTPBindingStart{}, configError("会话主体无效", requestID)
 	}
 	approved, approveErr := r.approveSensitive(ctx, record.UserID, "mfa.add",
 		"开始绑定 TOTP 验证器", req.Password, "", requestID, policy.StrengthNone)
@@ -299,7 +307,7 @@ func (f *securityFacade) BeginTOTPBinding(ctx context.Context,
 	start, err := security.TOTP.BeginBinding(approved, caller, requestID)
 	if err != nil {
 		return TOTPBindingStart{}, mapDomainError("开始绑定 TOTP 失败",
-			string(totp.CodeOf(err)))
+			string(totp.CodeOf(err)), requestID)
 	}
 	return TOTPBindingStart{BindingID: start.BindingID, Secret: start.Secret,
 		OTPAuthURL: start.URI, ExpiresAt: start.ExpiresAt,
@@ -310,28 +318,28 @@ func (f *securityFacade) BeginTOTPBinding(ctx context.Context,
 func (f *securityFacade) ConfirmTOTPBinding(ctx context.Context,
 	req TOTPBindingConfirmRequest) (TOTPBinding, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return TOTPBinding{}, err
+	}
 	security := r.securityDomains()
 	if security == nil || security.TOTP == nil {
-		return TOTPBinding{}, configError("TOTP 服务未装配")
+		return TOTPBinding{}, configError("TOTP 服务未装配", requestID)
 	}
-	record, err := r.requireSession(ctx, req.SessionSecret, true)
+	record, err := r.requireSession(ctx, req.SessionSecret, true, requestID)
 	if err != nil {
 		return TOTPBinding{}, err
 	}
 	caller, callerErr := totp.UserCaller(record.UserID)
 	if callerErr != nil {
-		return TOTPBinding{}, configError("会话主体无效")
-	}
-	requestID := req.RequestID
-	if requestID == "" {
-		requestID = login.NewRequestID()
+		return TOTPBinding{}, configError("会话主体无效", requestID)
 	}
 	metadata, err := security.TOTP.ConfirmBinding(ctx, caller, totp.BindConfirm{
 		BindingID: req.BindingID, Code: req.Code, RequestID: requestID,
 	})
 	if err != nil {
 		return TOTPBinding{}, mapDomainError("确认 TOTP 绑定失败",
-			string(totp.CodeOf(err)))
+			string(totp.CodeOf(err)), requestID)
 	}
 	return TOTPBinding{BindingID: metadata.ID, Status: metadata.Status,
 		CreatedAt: metadata.CreatedAt, ActivatedAt: metadata.ActivatedAt}, nil
@@ -342,21 +350,21 @@ func (f *securityFacade) ConfirmTOTPBinding(ctx context.Context,
 func (f *securityFacade) GenerateRecoveryCodes(ctx context.Context,
 	req RecoveryCodesRequest) (RecoveryCodes, error) {
 	r := f.r
+	requestID, err := resolveRequestID(ctx, req.RequestID)
+	if err != nil {
+		return RecoveryCodes{}, err
+	}
 	security := r.securityDomains()
 	if security == nil || security.Recovery == nil {
-		return RecoveryCodes{}, configError("恢复服务未装配")
+		return RecoveryCodes{}, configError("恢复服务未装配", requestID)
 	}
-	record, err := r.requireSession(ctx, req.SessionSecret, true)
+	record, err := r.requireSession(ctx, req.SessionSecret, true, requestID)
 	if err != nil {
 		return RecoveryCodes{}, err
 	}
 	caller, callerErr := recovery.UserCaller(record.UserID)
 	if callerErr != nil {
-		return RecoveryCodes{}, configError("会话主体无效")
-	}
-	requestID := req.RequestID
-	if requestID == "" {
-		requestID = login.NewRequestID()
+		return RecoveryCodes{}, configError("会话主体无效", requestID)
 	}
 	approved, approveErr := r.approveSensitive(ctx, record.UserID,
 		"recovery.codes.rotate", "生成恢复代码", req.Password, req.TOTPCode, requestID,
@@ -368,7 +376,7 @@ func (f *securityFacade) GenerateRecoveryCodes(ctx context.Context,
 		recovery.GenerateRequest{RequestID: requestID})
 	if err != nil {
 		return RecoveryCodes{}, mapDomainError("生成恢复代码失败",
-			string(recovery.CodeOf(err)))
+			string(recovery.CodeOf(err)), requestID)
 	}
 	codes := make([]string, 0, len(generated.Codes))
 	for _, code := range generated.Codes {
@@ -379,30 +387,33 @@ func (f *securityFacade) GenerateRecoveryCodes(ctx context.Context,
 }
 
 // requireSession 校验会话秘密并返回会话记录；full 为 true 时只接受完整（非受限）
-// 会话，防止待第二因素/受限恢复会话被用于敏感操作或状态读取。
+// 会话，防止待第二因素/受限恢复会话被用于敏感操作或状态读取。requestID 是本次
+// 调用已解析的编号，会带入所有返回错误。
 func (r *Runtime) requireSession(ctx context.Context, secret []byte,
-	full bool) (session.Session, error) {
+	full bool, requestID string) (session.Session, error) {
 	services := r.coreServices()
 	if services == nil {
-		return session.Session{}, configError("服务未装配")
+		return session.Session{}, configError("服务未装配", requestID)
 	}
 	if len(secret) == 0 {
-		return session.Session{}, configError("缺少会话秘密")
+		return session.Session{}, configError("缺少会话秘密", requestID)
 	}
 	record, err := services.Sessions.Validate(ctx, string(secret))
 	if err != nil {
 		return session.Session{}, mapDomainError("会话无效或已失效",
-			string(session.CodeOf(err)))
+			string(session.CodeOf(err)), requestID)
 	}
 	if full && !record.IsNormal() {
-		return session.Session{}, mapDomainError("该操作需要完整登录会话", "ACCESS_DENIED")
+		return session.Session{}, mapDomainError("该操作需要完整登录会话",
+			"ACCESS_DENIED", requestID)
 	}
 	return record, nil
 }
 
 // approveSensitive 执行真实敏感操作再次认证：创建挑战 -> 需要时用密码（及强认证
 // 要求的 TOTP 动态码）验证 -> 把批准信号放入上下文。返回的上下文只用于紧接着的
-// 同一次敏感调用；不发放可复用的长期批准。
+// 同一次敏感调用；不发放可复用的长期批准。requestID 是本次调用已解析的编号，
+// 再次认证挑战、审计与返回错误共用它。
 //
 // minimumStrength 是本次操作要求的认证强度下限（只能提高、不能降低策略要求）：
 // 内置目录里 recovery.codes.rotate 默认只要求近期密码，但恢复领域对已绑定强因素
@@ -413,11 +424,11 @@ func (r *Runtime) approveSensitive(ctx context.Context, userID, operationID, des
 	minimumStrength policy.Strength) (context.Context, error) {
 	gate := r.securityGate()
 	if gate == nil || gate.Reauth == nil {
-		return ctx, configError("敏感操作闸门未装配")
+		return ctx, configError("敏感操作闸门未装配", requestID)
 	}
 	caller, err := reauth.UserCaller(userID)
 	if err != nil {
-		return ctx, configError("会话主体无效")
+		return ctx, configError("会话主体无效", requestID)
 	}
 	challenge, err := gate.Reauth.BeginChallenge(ctx, caller, reauth.ChallengeRequest{
 		ScopeID: "system", OperationID: operationID, TargetType: "user",
@@ -426,13 +437,13 @@ func (r *Runtime) approveSensitive(ctx context.Context, userID, operationID, des
 	})
 	if err != nil {
 		return ctx, mapDomainError("敏感操作再次认证未通过",
-			string(reauth.CodeOf(err)))
+			string(reauth.CodeOf(err)), requestID)
 	}
 	if !challenge.Required {
 		return ctx, nil
 	}
 	if strings.TrimSpace(password) == "" {
-		return ctx, mapDomainError("敏感操作需要近期密码验证", "REAUTH_REQUIRED")
+		return ctx, mapDomainError("敏感操作需要近期密码验证", "REAUTH_REQUIRED", requestID)
 	}
 	grant, err := gate.Reauth.VerifyChallenge(ctx, caller, reauth.VerifyChallengeRequest{
 		ChallengeID: challenge.ID, Password: password, TOTPCode: totpCode,
@@ -440,7 +451,7 @@ func (r *Runtime) approveSensitive(ctx context.Context, userID, operationID, des
 	})
 	if err != nil {
 		return ctx, mapDomainError("敏感操作再次认证未通过",
-			string(reauth.CodeOf(err)))
+			string(reauth.CodeOf(err)), requestID)
 	}
 	strength := policy.StrengthPassword
 	if grant.GrantedStrength == policy.StrengthStrong {

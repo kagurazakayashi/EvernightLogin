@@ -48,6 +48,21 @@ func resolveRequestID(ctx context.Context, requestID string) (string, error) {
 	return login.NewRequestID(), nil
 }
 
+// facadeContextError 在门面入口统一处理已取消/超时的 context：返回带本次请求编号的
+// INTERNAL_ERROR，并在原因链保留 context 错误，调用方可用 errors.Is(context.Canceled/
+// DeadlineExceeded) 判断；已取消的调用不消耗限流预算、不执行领域读写。ctx 为 nil 或
+// 未取消时返回 nil。
+func facadeContextError(ctx context.Context, requestID string) error {
+	if ctx == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return login.NewAppError(login.CodeInternalError, "请求已取消或超时",
+			login.WithCause(err), login.WithRequestID(requestID))
+	}
+	return nil
+}
+
 // wrapInternal 把内部错误包装为不泄露内部细节的公开错误：只返回 INTERNAL_ERROR
 // 与固定摘要，不保留原始错误链（避免宿主通过 errors.Is/As 或 %v 看到内部路径、
 // SQL、密钥材料等信息）。内部错误需要诊断时由内部装配层按脱敏字段记录日志。
@@ -62,17 +77,20 @@ func wrapInternal(message string, err error, requestIDs ...string) error {
 	return login.NewAppError(login.CodeInternalError, message, requestIDOption(requestIDs...))
 }
 
-// mapAuthError 把认证错误映射为公开稳定错误；不返回账户存在性细节。
-func mapAuthError(err error) error {
+// mapAuthError 把认证错误映射为公开稳定错误；不返回账户存在性细节。可选
+// requestID 是本次调用已解析的编号，会带入返回错误（防枚举语义不变：成功/失败、
+// 账户不存在/密码错误对匿名调用者仍不可区分）。
+func mapAuthError(err error, requestIDs ...string) error {
 	if err == nil {
 		return nil
 	}
 	message := "登录失败"
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "disabled") || strings.Contains(lower, "禁用") {
-		return login.NewAppError(login.CodeUserDisabled, "账户当前不可使用")
+		return login.NewAppError(login.CodeUserDisabled, "账户当前不可使用",
+			requestIDOption(requestIDs...))
 	}
-	return login.NewAppError(login.CodeAuthFailed, message)
+	return login.NewAppError(login.CodeAuthFailed, message, requestIDOption(requestIDs...))
 }
 
 // mapServiceError 是通用内部错误映射；只返回稳定公开码与直白说明。

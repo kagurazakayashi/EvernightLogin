@@ -144,6 +144,7 @@ type RecoverySession struct {
 // RecoveryStatusRequest 查询受限恢复会话状态。
 type RecoveryStatusRequest struct {
 	SessionSecret []byte
+	RequestID     string
 }
 
 // RecoveryStatus 是受限恢复会话的只读状态（不含恢复代码或秘密）。
@@ -208,6 +209,7 @@ type RecoveryCodes struct {
 // SecurityStatusRequest 查询当前账户的认证/恢复能力概览。
 type SecurityStatusRequest struct {
 	SessionSecret []byte
+	RequestID     string
 }
 
 // SecurityStatus 是认证/恢复能力概览（不含秘密或代码）。
@@ -605,16 +607,63 @@ type AccessService interface {
 	Check(ctx context.Context, req AccessRequest) (AccessDecision, error)
 }
 
-// SessionService 会话语义：校验当前会话、撤销当前会话。
+// SessionService 会话语义：校验当前会话、应用+权限联合检查、撤销当前会话。
 //
-// Validate 只接受完整（非受限）会话，返回脱敏的会话快照；受限会话、空闲/绝对过期、
-// 已撤销、账户禁用、安全版本变化、应用成员失效都会返回错误。它不会延长会话。
-// ValidateCSRF 校验与会话绑定的 CSRF 令牌；来源（Origin/Referer）仍由宿主 HTTP
-// 防护层负责，不能只靠 CSRF 令牌。
+// 安全边界（步骤 208）：
+//   - Validate 只证明“会话此刻有效且是完整会话”，不证明会话属于当前业务应用，
+//     也不证明用户具备当前操作需要的权限；业务/管理操作禁止只靠 Validate 放行。
+//     需要应用绑定与权限联合判断时使用 Authorize（复用既有授权内核）。
+//   - ValidateCSRF 只校验与会话绑定的 CSRF 令牌；CSRF 通过不会提升受限会话权限，
+//     也不代替 Application/权限判断。来源（Origin/Referer）仍由宿主 HTTP 防护层
+//     负责，不能只靠 CSRF 令牌。
+//   - 三个方法都不会延长会话。
 type SessionService interface {
 	Validate(ctx context.Context, sessionSecret []byte) (SessionInfo, error)
 	ValidateCSRF(ctx context.Context, sessionSecret []byte, token string) error
+	// Authorize 对一个完整（非受限）会话执行“应用绑定 + 所需权限”联合检查，复用
+	// 既有授权内核（令牌/当前权限/应用状态/成员状态/数据范围交集语义由权限引擎
+	// 保证）。CSRFToken 非空时先校验 CSRF，但 CSRF 通过不会提高授权结果；受限会话
+	// 一律拒绝。授权拒绝以决策返回（Allowed=false + 稳定 Code/Reason，error 为 nil），
+	// 只有会话无效、输入非法或内部故障才返回 error。
+	Authorize(ctx context.Context, req SessionAccessRequest) (SessionAccessDecision, error)
 	Revoke(ctx context.Context, sessionSecret []byte) error
+}
+
+// SessionAccessRequest 是“会话 + 应用绑定 + 所需权限”的联合检查请求。
+//
+// 安全语义：
+//   - SessionSecret 必须来自可信边界（Cookie/Authorization 或宿主自己的安全存储），
+//     不能来自 URL、查询参数或客户端自填字段；
+//   - AppID 必填：会话没有当前应用边界时不能做业务授权判断；
+//   - Permissions 必须是业务服务端确定的权限键，不能由客户端任意指定后当成“已授权”；
+//     Mode 为空按 all 处理；
+//   - CSRFToken 可选：适合写操作在同一个入口里同时校验 CSRF；它只参与校验，不会
+//     提升会话或权限。
+type SessionAccessRequest struct {
+	SessionSecret []byte
+	// AppID 是当前业务请求所属应用（"app_..." 稳定 ID）；必填。
+	AppID string
+	// Permissions 是当前操作需要的权限键（例如 "app.invoice.approve"）。
+	Permissions []string
+	// Mode 是 "all"（默认）或 "any"。
+	Mode string
+	// CSRFToken 是可选的会话绑定 CSRF 令牌；非空时先校验。
+	CSRFToken string
+	// RequestID 用于关联调用、领域审计与返回错误；空编号统一生成，非法编号拒绝。
+	RequestID string
+}
+
+// SessionAccessDecision 是联合检查结果：Allowed=true 表示会话有效、属于当前应用
+// 且具备所需权限；Allowed=false 时 Code/Reason 是稳定公开拒绝码与原因。
+type SessionAccessDecision struct {
+	UserID    string
+	SessionID string
+	AppID     string
+	Allowed   bool
+	Code      string
+	Reason    string
+	// RequestID 是与调用/审计/错误一致的请求编号。
+	RequestID string
 }
 
 // SessionInfo 是校验通过后的会话快照；不含会话秘密和 CSRF 令牌。

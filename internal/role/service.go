@@ -1013,6 +1013,13 @@ func (s *Service) authorize(ctx context.Context, caller Caller, action Action, s
 
 // getAuthorizedRole 先按可管理范围预鉴权，再读取角色；无管理范围不查库，范围外仅
 // 读 scope 后拒绝，避免先读完整记录扩大存在性差异。
+//
+// 隐私边界（步骤 208 / 207 安全审计 N1）：当调用者只有部分应用管理范围时，
+// “角色不存在”与“角色属于调用者没有权限的其他应用范围”必须返回同一个拒绝结果
+// （ErrAccessDenied），不能以 ErrRoleNotFound/ErrAccessDenied 的差异让调用者按
+// 角色 ID 枚举出其他应用的角色是否存在。因此 GetRoleScope 的 ErrRoleNotFound
+// 在部分范围分支统一折叠为 ErrAccessDenied；只有通过范围检查后的完整读取才允许
+// 出现 ErrRoleNotFound（授权范围内目标此时确实不存在，属合法未找到）。
 func (s *Service) getAuthorizedRole(ctx context.Context, caller Caller, action Action, id string) (Role, error) {
 	if !ValidRoleID(id) {
 		return Role{}, fmt.Errorf("%w: 角色 ID 格式无效", ErrInvalidRequest)
@@ -1043,6 +1050,10 @@ func (s *Service) getAuthorizedRole(ctx context.Context, caller Caller, action A
 	}
 	scopeID, err := s.store.GetRoleScope(ctx, id)
 	if err != nil {
+		// 部分范围调用者不得区分“不存在”和“存在但范围外”：统一拒绝。
+		if errors.Is(err, ErrRoleNotFound) {
+			return Role{}, ErrAccessDenied
+		}
 		return Role{}, err
 	}
 	allowed := false
