@@ -35,6 +35,17 @@ func TestTranslateRepositorySQL(t *testing.T) {
 				"`row_version`=row_version+1",
 		},
 		{
+			// 步骤 210 N1：SQLite partial unique index 的冲突目标可带 WHERE 谓词；
+			// MySQL 的 ON DUPLICATE KEY UPDATE 不区分冲突来源，谓词被忽略即可。
+			name: "冲突目标 WHERE（partial unique index）",
+			input: "INSERT INTO security_notifications(id,dedup_key,delivery_id)" +
+				" VALUES(?,?,?) ON CONFLICT(dedup_key) WHERE dedup_key IS NOT NULL" +
+				" DO UPDATE SET delivery_id=COALESCE(excluded.delivery_id, delivery_id)",
+			want: "INSERT INTO security_notifications(id,dedup_key,delivery_id)" +
+				" VALUES(?,?,?) ON DUPLICATE KEY UPDATE" +
+				" `delivery_id`=COALESCE(VALUES(`delivery_id`), delivery_id)",
+		},
+		{
 			name:  "INSERT OR IGNORE",
 			input: "INSERT OR IGNORE INTO password_history(user_id,password_hash) VALUES(?,?)",
 			want:  "INSERT IGNORE INTO password_history(user_id,password_hash) VALUES(?,?)",

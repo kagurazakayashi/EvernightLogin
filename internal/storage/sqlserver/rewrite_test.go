@@ -77,6 +77,18 @@ row_version=password_credentials.row_version+1, updated_at_ms=excluded.updated_a
 			},
 		},
 		{
+			// 步骤 210 N1：冲突目标带 partial unique index 的 WHERE 谓词时必须翻译为
+			// MERGE（谓词只服务 SQLite 索引选择），并保留 delivery_id 的保旧语义。
+			name: "conflict target WHERE with delivery preservation",
+			query: `INSERT INTO security_notifications(id,dedup_key,delivery_id) VALUES(?,?,?)
+ON CONFLICT(dedup_key) WHERE dedup_key IS NOT NULL DO UPDATE SET
+delivery_id=COALESCE(excluded.delivery_id, delivery_id)`,
+			wants: []string{
+				"WHEN MATCHED THEN UPDATE SET",
+				"[delivery_id] = COALESCE(source.[delivery_id], target.[delivery_id])",
+			},
+		},
+		{
 			name: "insert select",
 			query: `INSERT INTO group_members(group_id,user_id,created_at_ms)
 SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND status='active')

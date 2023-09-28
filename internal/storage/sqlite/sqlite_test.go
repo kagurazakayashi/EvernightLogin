@@ -548,16 +548,27 @@ func TestMigrateAndReopen(t *testing.T) {
 		t.Fatalf("Open() 失败：%v", err)
 	}
 	migrations := loadedMigrations(t)
+	// 期望迁移数从源迁移文件动态计算（步骤 210 N1：避免每新增/演进迁移后硬编码
+	// 44/49/50 漂移）；同时保留结构断言：全部迁移按源顺序应用、历史行数一致。
+	expectedCount := len(migrations)
+	if expectedCount == 0 {
+		t.Fatal("内嵌迁移为空")
+	}
 
 	result, err := store.Migrate(context.Background(), migrations)
 	if err != nil {
 		t.Fatalf("Migrate() 失败：%v", err)
 	}
-	if result.UpToDate || len(result.Applied) != 44 {
-		t.Fatalf("首次迁移结果 = %+v", result)
+	if result.UpToDate || len(result.Applied) != expectedCount {
+		t.Fatalf("首次迁移结果 = %+v（期望应用 %d 条）", result, expectedCount)
 	}
-	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != 44 {
-		t.Errorf("schema_history 行数 = %d", got)
+	for index, applied := range result.Applied {
+		if applied.Version != migrations[index].Version {
+			t.Fatalf("第 %d 条应用迁移 = %q，期望 %q", index, applied.Version, migrations[index].Version)
+		}
+	}
+	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != expectedCount {
+		t.Errorf("schema_history 行数 = %d，期望 %d（源迁移数）", got, expectedCount)
 	}
 	if got := queryInt(t, store, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`); got != 1 {
 		t.Errorf("users 表未创建")
@@ -627,8 +638,8 @@ func TestMigrateChecksumMismatchRejected(t *testing.T) {
 	if _, err := store.Migrate(context.Background(), changed); !errors.Is(err, migrate.ErrChecksumMismatch) {
 		t.Fatalf("错误 = %v，期望 ErrChecksumMismatch", err)
 	}
-	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != 44 {
-		t.Errorf("校验和不符不应改变历史，实际 %d", got)
+	if got := queryInt(t, store, `SELECT COUNT(*) FROM schema_history`); got != len(migrations) {
+		t.Errorf("校验和不符不应改变历史，实际 %d，期望 %d（源迁移数）", got, len(migrations))
 	}
 }
 
@@ -700,8 +711,8 @@ func TestConcurrentMigrateTwoConnections(t *testing.T) {
 			t.Errorf("并发迁移 %d 失败：%v", index, err)
 		}
 	}
-	if got := queryInt(t, first, `SELECT COUNT(*) FROM schema_history`); got != 44 {
-		t.Errorf("schema_history 行数 = %d，期望 44", got)
+	if got := queryInt(t, first, `SELECT COUNT(*) FROM schema_history`); got != len(migrations) {
+		t.Errorf("schema_history 行数 = %d，期望 %d（源迁移数）", got, len(migrations))
 	}
 	if got := queryInt(t, first, `SELECT COUNT(*) FROM schema_failures`); got != 0 {
 		t.Errorf("schema_failures 行数 = %d，期望 0", got)

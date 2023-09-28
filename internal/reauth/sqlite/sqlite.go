@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
@@ -52,14 +53,38 @@ FROM reauth_approvals WHERE token_sha256=?`
 const consumeApprovalSQL = `UPDATE reauth_approvals SET consumed_at_ms=?
 WHERE id=? AND consumed_at_ms IS NULL AND expires_at_ms>?`
 
-const insertNotificationSQL = `INSERT INTO security_notifications(
+// upsertNotificationSQL 是原子幂等写入：dedup_key 非空且已存在时更新同一行，否则插入。
+//
+//   - 冲突目标必须带 WHERE 子句才能匹配 0050 的“非空 dedup_key”部分唯一索引；
+//   - delivery_id 用 COALESCE 保留旧值：关联回写失败后的重试不能把已保存的投递
+//     标识清空，否则读取投影会丢失与可靠投递记录的关联；
+//   - 其余字段按当前语义更新（状态/错误码/脱敏收件人）。
+const upsertNotificationSQL = `INSERT INTO security_notifications(
 id,user_id,operation_id,target_type,target_id,outcome,state,error_code,reason_code,
-recipient_masked,created_at_ms
-) VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+recipient_masked,created_at_ms,delivery_id,dedup_key
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(dedup_key) WHERE dedup_key IS NOT NULL DO UPDATE SET
+state=excluded.state,
+error_code=excluded.error_code,
+reason_code=excluded.reason_code,
+recipient_masked=excluded.recipient_masked,
+delivery_id=COALESCE(excluded.delivery_id, delivery_id)`
 
-const listNotificationsSQL = `SELECT id,user_id,operation_id,target_type,target_id,outcome,
-state,COALESCE(error_code,''),COALESCE(reason_code,''),recipient_masked,created_at_ms
-FROM security_notifications WHERE user_id=? ORDER BY created_at_ms DESC LIMIT ?`
+// notificationExistsSQL 用于在影响行数为 0 时区分“方言空更新”与“记录根本不存在”。
+const notificationExistsSQL = `SELECT 1 FROM security_notifications WHERE dedup_key=?`
+
+// 只读投影投递记录当前状态；mail_deliveries 归 internal/mailer/sqlite 与迁移 0012
+// 所有，本包只做读取关联，不修改投递状态（投递状态机仍由 mailer 独占）。
+const notificationDeliveryStateSQL = `SELECT COALESCE(state,''),COALESCE(last_error_code,''),
+updated_at_ms FROM mail_deliveries WHERE id=?`
+
+const notificationDeliveryByKeySQL = `SELECT id,COALESCE(state,''),COALESCE(last_error_code,''),
+updated_at_ms FROM mail_deliveries WHERE idempotency_key=?`
+
+const listNotificationsSQL = `SELECT n.id,n.user_id,n.operation_id,n.target_type,n.target_id,
+n.outcome,n.state,COALESCE(n.error_code,''),COALESCE(n.reason_code,''),n.recipient_masked,
+n.created_at_ms,COALESCE(n.delivery_id,''),COALESCE(n.dedup_key,'')
+FROM security_notifications n WHERE n.user_id=? ORDER BY n.created_at_ms DESC LIMIT ?`
 
 const verifiedEmailSQL = `SELECT email FROM user_emails
 WHERE user_id=? AND verified_at_ms IS NOT NULL ORDER BY verified_at_ms DESC LIMIT 1`
@@ -245,24 +270,64 @@ func (s *Store) ConsumeApprovalTx(ctx context.Context, tx audit.Tx, approvalID s
 	return affected == 1, nil
 }
 
-// InsertNotification 记录一次告知结果。
-func (s *Store) InsertNotification(ctx context.Context, record reauth.NotificationRecord) error {
-	if _, err := s.store.ExecContext(ctx, insertNotificationSQL, record.ID, record.UserID,
+// UpsertNotification 记录或幂等更新一次告知结果。
+//
+// dedup_key 非空时同一业务事件只保留一条主记录：先 INSERT OR IGNORE，冲突时改用
+// 条件 UPDATE。delivery_id 只在新值非空时写入，绝不清空已关联的投递标识——这保证
+// “入队成功但关联回写失败”后，同一业务事件的重试/重启可以继续关联同一投递记录
+// 而不产生第二封邮件。dedup_key 为空（历史记录/直接发送回退路径）时按新记录插入。
+func (s *Store) UpsertNotification(ctx context.Context, record reauth.NotificationRecord) error {
+	result, err := s.store.ExecContext(ctx, upsertNotificationSQL, record.ID, record.UserID,
 		record.OperationID, record.TargetType, record.TargetID, string(record.Outcome),
 		string(record.State), nullString(record.ErrorCode), nullString(record.ReasonCode),
-		record.RecipientMasked, record.CreatedAt.UTC().UnixMilli()); err != nil {
+		record.RecipientMasked, record.CreatedAt.UTC().UnixMilli(),
+		nullString(record.DeliveryID), nullString(record.DedupKey))
+	if err != nil {
+		// 约束失败（CHECK/NOT NULL/外键等）必须向上传播：上层不得继续入队或写成功审计。
 		return fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	if affected == 1 {
+		return nil
+	}
+	// 影响行数为 0 的 fail-closed 处理：
+	//   - SQLite/PostgreSQL/SQL Server 的 upsert 命中并更新时至少影响 1 行；0 行说明
+	//     语句没有真正落库（不能当成功）。
+	//   - MySQL 的 ON DUPLICATE KEY UPDATE 在“值未变化”时影响 0 行（仓储连接关闭了
+	//     CLIENT_FOUND_ROWS），因此再做一次只读存在性核对：只有确认同一 dedup_key 的
+	//     记录已存在，才把它视为幂等空更新；否则返回错误，绝不静默吞掉失败。
+	if record.DedupKey == "" {
+		return fmt.Errorf("%w: 告知记录写入未生效（缺少稳定去重键）", reauth.ErrStoreUnavailable)
+	}
+	rows, err := s.store.QueryContext(ctx, notificationExistsSQL, record.DedupKey)
+	if err != nil {
+		return fmt.Errorf("%w: 告知记录写入未生效且无法核对: %w", reauth.ErrStoreUnavailable, err)
+	}
+	exists := rows.Next()
+	if rowsErr := rows.Err(); rowsErr != nil {
+		_ = rows.Close()
+		return fmt.Errorf("%w: 告知记录写入未生效且无法核对: %w", reauth.ErrStoreUnavailable, rowsErr)
+	}
+	_ = rows.Close()
+	if !exists {
+		return fmt.Errorf("%w: 告知记录写入未生效（记录不存在）", reauth.ErrStoreUnavailable)
 	}
 	return nil
 }
 
-// ListNotifications 按用户读取最近告知记录。
+// ListNotifications 按用户读取最近告知记录，并投影关联投递记录的当前状态。
+//
+// 关联规则：优先按主记录 delivery_id 精确关联；若该列为空（关联回写失败/历史数据）
+// 则按稳定去重键查 mail_deliveries.idempotency_key（同一业务事件的幂等键）。两条
+// 路径都只读，不触发重发、不修改投递状态。
 func (s *Store) ListNotifications(ctx context.Context, userID string, limit int) ([]reauth.NotificationRecord, error) {
 	rows, err := s.store.QueryContext(ctx, listNotificationsSQL, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
-	defer rows.Close()
 	records := make([]reauth.NotificationRecord, 0, limit)
 	for rows.Next() {
 		var record reauth.NotificationRecord
@@ -270,18 +335,103 @@ func (s *Store) ListNotifications(ctx context.Context, userID string, limit int)
 		var createdAt int64
 		if err := rows.Scan(&record.ID, &record.UserID, &record.OperationID, &record.TargetType,
 			&record.TargetID, &outcome, &state, &record.ErrorCode, &record.ReasonCode,
-			&record.RecipientMasked, &createdAt); err != nil {
+			&record.RecipientMasked, &createdAt, &record.DeliveryID, &record.DedupKey); err != nil {
+			_ = rows.Close()
 			return nil, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 		}
 		record.Outcome = reauth.Outcome(outcome)
 		record.State = reauth.NotificationState(state)
 		record.CreatedAt = time.UnixMilli(createdAt).UTC()
+		if err := s.projectDeliveryState(ctx, &record); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
 		records = append(records, record)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
 	return records, nil
+}
+
+// projectDeliveryState 为一条告知记录只读补充当前投递状态。
+func (s *Store) projectDeliveryState(ctx context.Context,
+	record *reauth.NotificationRecord) error {
+	if record.DeliveryID != "" {
+		state, errorCode, updatedAt, found, err := s.lookupDelivery(ctx, record.DeliveryID)
+		if err != nil {
+			return err
+		}
+		if found {
+			record.DeliveryState = state
+			record.DeliveryErrorCode = errorCode
+			record.DeliveryUpdatedAt = updatedAt
+		}
+		return nil
+	}
+	if record.DedupKey == "" {
+		return nil
+	}
+	deliveryID, state, errorCode, updatedAt, found, err := s.lookupDeliveryByKey(ctx, record.DedupKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		record.DeliveryID = deliveryID
+		record.DeliveryState = state
+		record.DeliveryErrorCode = errorCode
+		record.DeliveryUpdatedAt = updatedAt
+	}
+	return nil
+}
+
+// lookupDelivery 按投递记录 ID 只读查询状态。
+func (s *Store) lookupDelivery(ctx context.Context, deliveryID string) (
+	mailer.DeliveryState, string, time.Time, bool, error) {
+	rows, err := s.store.QueryContext(ctx, notificationDeliveryStateSQL, deliveryID)
+	if err != nil {
+		return "", "", time.Time{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", "", time.Time{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+		}
+		return "", "", time.Time{}, false, nil
+	}
+	var state, errorCode string
+	var updatedAt int64
+	if err := rows.Scan(&state, &errorCode, &updatedAt); err != nil {
+		return "", "", time.Time{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	return mailer.DeliveryState(state), errorCode, time.UnixMilli(updatedAt).UTC(), true, nil
+}
+
+// lookupDeliveryByKey 按稳定去重键（邮件入队幂等键）只读查询投递状态。
+func (s *Store) lookupDeliveryByKey(ctx context.Context, dedupKey string) (
+	string, mailer.DeliveryState, string, time.Time, bool, error) {
+	rows, err := s.store.QueryContext(ctx, notificationDeliveryByKeySQL, dedupKey)
+	if err != nil {
+		return "", "", "", time.Time{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", "", "", time.Time{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+		}
+		return "", "", "", time.Time{}, false, nil
+	}
+	var deliveryID, state, errorCode string
+	var updatedAt int64
+	if err := rows.Scan(&deliveryID, &state, &errorCode, &updatedAt); err != nil {
+		return "", "", "", time.Time{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	return deliveryID, mailer.DeliveryState(state), errorCode,
+		time.UnixMilli(updatedAt).UTC(), true, nil
 }
 
 // VerifiedEmail 返回用户最近一个已验证邮箱。

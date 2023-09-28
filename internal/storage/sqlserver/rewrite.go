@@ -437,6 +437,16 @@ func rewriteOnConflict(query string) (string, error) {
 	conflictKeys := splitIdentifierList(query[position+1 : closeIndex])
 	position = closeIndex + 1
 	skip()
+	// SQLite 的冲突目标可携带 partial unique index 的 WHERE 谓词；MERGE 的 ON 条件
+	// 已按冲突键构造，谓词只用于 SQLite 索引选择。跳过它，但其余尾随子句仍 fail-closed。
+	if strings.HasPrefix(strings.ToUpper(query[position:]), "WHERE ") {
+		doIndex := topLevelKeyword(query[position:], "DO")
+		if doIndex < 0 {
+			return "", fmt.Errorf("ON CONFLICT ... WHERE 后缺少 DO 子句")
+		}
+		position += doIndex
+		skip()
+	}
 	upperRest := strings.ToUpper(query[position:])
 	if !strings.HasPrefix(upperRest, "DO ") {
 		return "", fmt.Errorf("ON CONFLICT 后缺少 DO 子句")

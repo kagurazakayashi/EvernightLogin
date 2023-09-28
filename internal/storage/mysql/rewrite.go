@@ -120,6 +120,16 @@ func convertOnConflict(query string, index int) (string, error) {
 		conflictColumns = splitIdentifierList(rest[1:closeIndex])
 		rest = strings.TrimSpace(rest[closeIndex+1:])
 	}
+	// SQLite 允许对 partial unique index 的冲突目标携带 WHERE 谓词（例如
+	// "ON CONFLICT(dedup_key) WHERE dedup_key IS NOT NULL DO UPDATE"）。MySQL 的
+	// ON DUPLICATE KEY UPDATE 不区分冲突来源，谓词只服务于唯一索引选择，忽略即可。
+	if strings.HasPrefix(strings.ToUpper(rest), "WHERE ") {
+		doIndex := topLevelKeyword(rest, "DO")
+		if doIndex < 0 {
+			return "", fmt.Errorf("ON CONFLICT ... WHERE 后缺少 DO 子句")
+		}
+		rest = strings.TrimSpace(rest[doIndex:])
+	}
 	upperRest := strings.ToUpper(rest)
 	switch {
 	case strings.HasPrefix(upperRest, "DO NOTHING"):

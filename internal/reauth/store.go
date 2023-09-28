@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 )
 
@@ -73,6 +74,16 @@ const (
 )
 
 // NotificationRecord 是一条安全告知结果；收件地址只保存脱敏值。
+//
+// 可靠投递关联（步骤 210）：
+//   - DeliveryID 是 mailer 投递记录 ID（mail_deliveries.id）；空表示没有关联投递
+//     （历史记录、未配置/无邮箱等未入队状态、直接发送回退路径，或入队前失败）。
+//   - DedupKey 是稳定业务去重键：同一业务事件同一结果的重复告知/重试/服务重启
+//     复用同一键，既作为邮件入队幂等键，也让告知主记录幂等更新而不是重复插入。
+//   - DeliveryState/DeliveryErrorCode/DeliveryUpdatedAt 是**读取时**从投递记录投影的
+//     当前状态；它们不是本表快照，随 mailer 投递重试/重启恢复变化。DeliveryState
+//     为空表示当前未关联到投递记录（不能当作成功）。mailer.DeliverySucceeded 只表示
+//     发送后端已接受，不代表用户已读或最终送达。
 type NotificationRecord struct {
 	ID              string
 	UserID          string
@@ -85,6 +96,12 @@ type NotificationRecord struct {
 	ReasonCode      string
 	RecipientMasked string
 	CreatedAt       time.Time
+
+	DeliveryID        string
+	DedupKey          string
+	DeliveryState     mailer.DeliveryState
+	DeliveryErrorCode string
+	DeliveryUpdatedAt time.Time
 }
 
 // Store 是再次认证持久化契约，由 internal/reauth/sqlite 实现。挑战与批准的状态
@@ -106,9 +123,14 @@ type Store interface {
 	GetApprovalByTokenDigest(ctx context.Context, digest []byte) (ApprovalRecord, bool, error)
 	// ConsumeApprovalTx 在审计事务内一次性消费批准；已消费/过期返回 ok=false。
 	ConsumeApprovalTx(ctx context.Context, tx audit.Tx, approvalID string, now time.Time) (bool, error)
-	// InsertNotification 记录一次告知结果（非关键路径，失败不回滚业务操作）。
-	InsertNotification(ctx context.Context, record NotificationRecord) error
-	// ListNotifications 按用户读取最近的告知记录（最多 limit 条）。
+	// UpsertNotification 记录/更新一次告知结果（非关键路径，失败不回滚业务操作）。
+	// 幂等语义：dedup_key 非空且已存在同键记录时更新该记录（状态/错误码/脱敏收件
+	// 人，并在传入非空 delivery_id 时补写投递关联），否则插入新记录。dedup_key 为
+	// 空（历史/直接发送回退路径）时按新记录插入。实现不得把已存在的 delivery_id
+	// 清空，保证“关联回写失败后重试可恢复”不会丢失投递标识。
+	UpsertNotification(ctx context.Context, record NotificationRecord) error
+	// ListNotifications 按用户读取最近的告知记录（最多 limit 条），并为每条记录
+	// 投影关联投递记录的当前状态（只读；不修改投递记录）。
 	ListNotifications(ctx context.Context, userID string, limit int) ([]NotificationRecord, error)
 	// VerifiedEmail 返回用户最近一个已验证邮箱；没有时返回 found=false。
 	VerifiedEmail(ctx context.Context, userID string) (string, bool, error)

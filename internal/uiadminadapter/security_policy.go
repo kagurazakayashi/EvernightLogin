@@ -830,10 +830,48 @@ func (a *SecurityPolicyAdapter) loadNotices(ctx context.Context, userID string,
 	for _, record := range records {
 		settings.Notices = append(settings.Notices, login.UINotificationNotice{
 			OperationID: record.OperationID, Outcome: string(record.Outcome),
-			State: string(record.State), ErrorCode: record.ErrorCode,
+			State: notificationNoticeState(record), ErrorCode: notificationNoticeErrorCode(record),
 			RecipientMasked: record.RecipientMasked, CreatedAt: record.CreatedAt,
 		})
 	}
+}
+
+// notificationNoticeState 把告知主记录 + 关联投递记录的当前状态映射为页面状态：
+// 排队/投递中/发送后端已接受/失败/取消。页面模板按页面状态拼 i18n 键，因此这里只
+// 返回稳定枚举值。
+//
+// 口径（安全边界）：
+//   - mailer.DeliverySucceeded 只表示“发送后端已接受邮件”，映射为 smtp_accepted，
+//     绝不映射为 sent/已读/已送达；最终邮箱送达与用户已读无法由本服务保证。
+//   - 主记录 state=queued 但当前关联不到投递记录（历史数据、关联回写尚未完成、
+//     投递记录缺失）时映射为 unknown，不能把不确定状态显示为成功。
+//   - 未走可靠队列的直接发送回退路径没有投递状态，沿用主记录 sent/failed 等状态。
+func notificationNoticeState(record reauth.NotificationRecord) string {
+	switch record.DeliveryState {
+	case mailer.DeliveryQueued:
+		return "queued"
+	case mailer.DeliverySending:
+		return "sending"
+	case mailer.DeliverySucceeded:
+		return "smtp_accepted"
+	case mailer.DeliveryFailed:
+		return "failed"
+	case mailer.DeliveryCancelled:
+		return "cancelled"
+	}
+	if record.State == reauth.NotificationQueued {
+		return "unknown"
+	}
+	return string(record.State)
+}
+
+// notificationNoticeErrorCode 优先展示投递记录的失败错误码（如 SMTP 拒绝/重试耗尽），
+// 其次是告知主记录的原因码；都不存在时为空。
+func notificationNoticeErrorCode(record reauth.NotificationRecord) string {
+	if record.DeliveryState == mailer.DeliveryFailed && record.DeliveryErrorCode != "" {
+		return record.DeliveryErrorCode
+	}
+	return record.ErrorCode
 }
 
 // PreviewTemplate 使用合成数据渲染模板（不保存、不发送）。

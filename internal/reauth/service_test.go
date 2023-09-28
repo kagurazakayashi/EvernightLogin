@@ -81,6 +81,14 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T, mutate func(*reauth.Options)) *testEnv {
 	t.Helper()
+	return newTestEnvWithHooks(t, mutate, nil)
+}
+
+// newTestEnvWithHooks 与 newTestEnv 相同，但在构造服务前额外执行 after 钩子，
+// 便于测试注入与 reauth 共享同一数据库的 mailer 投递服务（步骤 210 的关联读取）。
+func newTestEnvWithHooks(t *testing.T, mutate func(*reauth.Options),
+	after func(*testEnv, *reauth.Options)) *testEnv {
+	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(testutil.TempDir(t), "reauth-test.db")
 	storage, err := storagesqlite.Open(ctx, storagesqlite.DefaultOptions(path))
@@ -143,6 +151,9 @@ func newTestEnv(t *testing.T, mutate func(*reauth.Options)) *testEnv {
 	}
 	if mutate != nil {
 		mutate(&options)
+	}
+	if after != nil {
+		after(env, &options)
 	}
 	service, err := reauth.New(options)
 	if err != nil {
