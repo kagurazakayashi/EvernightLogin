@@ -125,27 +125,43 @@ func New(store *storagesqlite.Store) (*Store, error) {
 	return &Store{store: store}, nil
 }
 
-// 编译期确认实现 authn.Store。
-var _ authn.Store = (*Store)(nil)
+// 编译期确认实现 authn.Store 与可选事务扩展。
+var (
+	_ authn.Store            = (*Store)(nil)
+	_ authn.TransactionStore = (*Store)(nil)
+)
+
+// rowQuerier 抽象“独立存储或调用方审计事务”的最小读取能力：*storage/sqlite.Store
+// 与 audit.Tx 都实现，使同一份查询/扫描逻辑同时服务独立与事务内路径。
+type rowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
 
 // FindUserByID 按稳定用户 ID 查找账户；不存在返回 (zero, false, nil)。
 func (s *Store) FindUserByID(ctx context.Context, userID string) (authn.UserRecord, bool, error) {
-	return s.findUser(ctx, selectUserByIDSQL, userID)
+	return s.findUser(ctx, s.store, selectUserByIDSQL, userID)
+}
+
+// FindUserByIDTx 在调用方审计事务内按稳定用户 ID 查找账户；语义同 FindUserByID。
+func (s *Store) FindUserByIDTx(ctx context.Context, tx audit.Tx,
+	userID string) (authn.UserRecord, bool, error) {
+	return s.findUser(ctx, tx, selectUserByIDSQL, userID)
 }
 
 // FindUserByUsernameNormalized 按规范化用户名查找账户；不存在返回 false。
 func (s *Store) FindUserByUsernameNormalized(ctx context.Context, normalized string) (authn.UserRecord, bool, error) {
-	return s.findUser(ctx, selectUserByUsernameSQL, normalized)
+	return s.findUser(ctx, s.store, selectUserByUsernameSQL, normalized)
 }
 
 // FindUserByVerifiedEmail 按规范化已验证邮箱查找账户；未验证邮箱不参与登录。
 func (s *Store) FindUserByVerifiedEmail(ctx context.Context, normalizedEmail string) (authn.UserRecord, bool, error) {
-	return s.findUser(ctx, selectUserByVerifiedEmailSQL, normalizedEmail)
+	return s.findUser(ctx, s.store, selectUserByVerifiedEmailSQL, normalizedEmail)
 }
 
 // findUser 执行账户查询并校验数据合法性；异常数据按存储故障拒绝。
-func (s *Store) findUser(ctx context.Context, query string, argument string) (authn.UserRecord, bool, error) {
-	rows, err := s.store.QueryContext(ctx, query, argument)
+func (s *Store) findUser(ctx context.Context, querier rowQuerier, query string,
+	argument string) (authn.UserRecord, bool, error) {
+	rows, err := querier.QueryContext(ctx, query, argument)
 	if err != nil {
 		return authn.UserRecord{}, false, fmt.Errorf("%w: %w", authn.ErrStoreUnavailable, err)
 	}
@@ -179,7 +195,20 @@ func (s *Store) findUser(ctx context.Context, query string, argument string) (au
 
 // GetPasswordCredential 读取正式密码凭证；没有密码时返回 found=false。
 func (s *Store) GetPasswordCredential(ctx context.Context, userID string) (authn.CredentialRecord, bool, error) {
-	rows, err := s.store.QueryContext(ctx, selectCredentialSQL, userID)
+	return s.getPasswordCredential(ctx, s.store, userID)
+}
+
+// GetPasswordCredentialTx 在调用方审计事务内读取正式密码凭证；语义同
+// GetPasswordCredential。
+func (s *Store) GetPasswordCredentialTx(ctx context.Context, tx audit.Tx,
+	userID string) (authn.CredentialRecord, bool, error) {
+	return s.getPasswordCredential(ctx, tx, userID)
+}
+
+// getPasswordCredential 是独立与事务内路径共用的密码凭证读取/扫描实现。
+func (s *Store) getPasswordCredential(ctx context.Context, querier rowQuerier,
+	userID string) (authn.CredentialRecord, bool, error) {
+	rows, err := querier.QueryContext(ctx, selectCredentialSQL, userID)
 	if err != nil {
 		return authn.CredentialRecord{}, false, fmt.Errorf("%w: %w", authn.ErrStoreUnavailable, err)
 	}

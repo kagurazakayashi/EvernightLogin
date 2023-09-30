@@ -125,3 +125,13 @@ type Store interface {
 	// ErrSetupStateConflict（并发修改，不能覆盖）。
 	UpgradePasswordHash(ctx context.Context, tx audit.Tx, upgrade HashUpgrade) error
 }
+
+// TransactionStore 是 Store 的可选事务扩展：在调用方提供的审计事务内读取找回改密
+// 事务提交前的账户与密码凭证快照，用于“事务外昂贵准备 + 事务内复核并写入”的原子
+// 提交边界（步骤 205）。它不在 Store 中强制，以保持既有存储替身/装配兼容；
+// ApplyRecoveryResetTx 在运行期断言该能力，缺失时 fail-closed，不会退化为事务外
+// 读取或部分提交。
+type TransactionStore interface {
+	FindUserByIDTx(ctx context.Context, tx audit.Tx, userID string) (UserRecord, bool, error)
+	GetPasswordCredentialTx(ctx context.Context, tx audit.Tx, userID string) (CredentialRecord, bool, error)
+}

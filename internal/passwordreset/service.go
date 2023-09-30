@@ -308,9 +308,19 @@ func hashToken(secret string) string {
 	return string(sum[:])
 }
 
-// CompleteReset 校验并原子消费找回入口后重置密码：不签发任何会话（必须重新登录），
-// 不解除 MFA/Passkey，也不为无密码账户添加密码。并发使用同一 token 只有一个成功。
-// 成功后向已验证邮箱发送不含密码/凭证的安全告知，并作废该用户其余 pending 入口。
+// CompleteReset 在同一数据库事务内完成“一次性凭证条件消费 + 请求终态 + 其他入口作废
+// 及其凭证撤销 + 密码/历史/安全版本写入 + OAuth 撤销 outbox + 关键成功审计”，提交后
+// 只做会话撤销与安全告知（网络/邮件不在事务内）。不签发任何会话，不解除 MFA/Passkey，
+// 也不为无密码账户添加密码；并发使用同一 token 只有一个成功。
+//
+// 两阶段设计（步骤 205）：
+//   - 事务外：请求/凭证/秘密与账户可找回性校验，以及密码策略、历史复用与 Argon2
+//     派生（慢操作不入事务）。这些失败都不消费凭证，令牌仍可重试。
+//   - 事务内：重新校验并条件消费凭证、复核账户与凭证版本后写入密码，作废其余
+//     pending 入口及其凭证，写 OAuth 撤销 outbox；任一步失败整体回滚，凭证不会被
+//     消费（这是事务未提交，而不是“失败后恢复令牌”），可安全重试。
+//
+// 预检查（ValidateResetToken）与这里各自重新验证，前者不构成最终授权。
 func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (ResetResult, error) {
 	ctx = normalizeContext(ctx)
 	if err := account.ValidateRequestID(request.RequestID); err != nil {
@@ -340,6 +350,15 @@ func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (R
 		return ResetResult{}, err
 	}
 	now := s.now()
+	// 事务外非消费校验：凭证绑定/状态/秘密（Peek 不消费）与账户可找回性。
+	if _, err := s.opts.Credentials.Peek(ctx, credential.VerifyRequest{
+		Kind: credential.KindToken, ID: resetRequest.CredentialID, Purpose: resetPurpose,
+		Target: resetRequest.UserID, Secret: secret,
+	}); err != nil {
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_completed", "consume_failed", string(CodeChallengeInvalid), request.RequestID)
+		return ResetResult{}, mapCredentialPeekError(err)
+	}
 	// 重新确认账户在 token 发出后仍可找回：禁用/删除/无密码/root 必须在完成层拒绝。
 	if err := s.checkRecoverableTarget(ctx, resetRequest.UserID); err != nil {
 		if errors.Is(err, ErrStoreUnavailable) {
@@ -350,34 +369,26 @@ func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (R
 			"password.reset_completed", reason, string(code), request.RequestID)
 		return ResetResult{}, err
 	}
-	// 原子消费：同一 token 并发/重放只有一个请求成功。
-	if _, err := s.opts.Credentials.VerifyAndConsume(ctx, credential.VerifyRequest{
-		Kind: credential.KindToken, ID: resetRequest.CredentialID, Purpose: resetPurpose,
-		Target: resetRequest.UserID, Secret: secret,
-	}); err != nil {
-		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
-			"password.reset_completed", "consume_failed", string(CodeChallengeInvalid), request.RequestID)
-		return ResetResult{}, ErrTokenInvalid
+	// 原子提交能力是完成路径的硬要求：缺失即 fail-closed，绝不退化为
+	// “先消费凭证、后改密”的非原子路径。
+	committer, ok := s.opts.Passwords.(RecoveryCommitter)
+	if !ok {
+		return ResetResult{}, fmt.Errorf("%w: 密码服务不支持找回改密原子提交", ErrOptionsInvalid)
 	}
 	systemCaller, err := authn.SystemCaller("passwordreset")
 	if err != nil {
 		return ResetResult{}, ErrOptionsInvalid
 	}
-	result, err := s.opts.Passwords.ResetPasswordForRecovery(ctx, systemCaller,
-		authn.RecoveryResetRequest{
-			UserID: resetRequest.UserID, NewPassword: request.NewPassword,
-			RequestID: request.RequestID, Reason: outboxReasonReset,
-		})
+	// 事务外昂贵准备：弱密码/历史复用/哈希资源忙在这里失败，凭证尚未消费。
+	prepared, err := committer.PrepareRecoveryReset(ctx, systemCaller, authn.RecoveryResetRequest{
+		UserID: resetRequest.UserID, NewPassword: request.NewPassword,
+		RequestID: request.RequestID, Reason: outboxReasonReset,
+	})
 	if err != nil {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
 			"password.reset_completed", "password_reset_rejected",
 			string(CodeOf(err)), request.RequestID)
 		return ResetResult{}, err
-	}
-	// 成功路径：标记本次请求 consumed 并作废该用户其余 pending 入口（同一事务）。
-	otherPending, listErr := s.opts.Store.ListPending(ctx, resetRequest.UserID)
-	if listErr != nil {
-		return ResetResult{}, ErrStoreUnavailable
 	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
@@ -385,47 +396,117 @@ func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (R
 			Action: "password.reset_completed", Outcome: audit.OutcomeSuccess,
 			Target:    audit.Target{Type: "user", ID: resetRequest.UserID},
 			RequestID: validRequestID(request.RequestID),
-			Changes: []audit.FieldChange{
-				{Field: "security_version_change", After: "password_reset"},
+			Changes: append([]audit.FieldChange{
 				{Field: "requires_relogin", After: "true"},
-			},
+			}, prepared.AuditChanges()...),
 		},
 		FailureReasonCode:   "password.reset_completed_failed",
 		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
 	}
-	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
-		ok, consumeErr := s.opts.Store.ConsumeRequestTx(txCtx, tx, resetRequest.ID, now)
+	var applied authn.SetPasswordResult
+	var outboxID string
+	err = s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		// (a) 事务内重新校验并条件消费一次性凭证：并发/重放只有一个赢家。
+		if _, consumeErr := s.opts.Credentials.VerifyAndConsumeTx(txCtx, tx, credential.VerifyRequest{
+			Kind: credential.KindToken, ID: resetRequest.CredentialID, Purpose: resetPurpose,
+			Target: resetRequest.UserID, Secret: secret,
+		}); consumeErr != nil {
+			return mapCredentialTransactionError(consumeErr)
+		}
+		// (b) 请求终态：条件 pending→consumed；失败说明已被并发使用或取消。
+		consumedRequest, consumeErr := s.opts.Store.ConsumeRequestTx(txCtx, tx, resetRequest.ID, now)
 		if consumeErr != nil {
 			return consumeErr
 		}
-		if !ok {
+		if !consumedRequest {
 			return ErrTokenInvalid
+		}
+		// (c) 其余 pending 入口作废，并在同一事务内撤销其一次性凭证。
+		others, listErr := s.opts.Store.ListPendingTx(txCtx, tx, resetRequest.UserID)
+		if listErr != nil {
+			return listErr
 		}
 		if _, cancelErr := s.opts.Store.CancelPendingTx(txCtx, tx, resetRequest.UserID, now); cancelErr != nil {
 			return cancelErr
 		}
+		for _, other := range others {
+			if other.CredentialID == "" {
+				continue
+			}
+			if _, revokeErr := s.opts.Credentials.CancelTx(txCtx, tx, credential.CancelRequest{
+				ID: other.CredentialID, Purpose: resetPurpose, Target: resetRequest.UserID,
+			}); revokeErr != nil {
+				return revokeErr
+			}
+		}
+		// (d) 事务内复核账户/凭证版本后写入密码、历史与安全版本。
+		appliedResult, applyErr := committer.ApplyRecoveryResetTx(txCtx, systemCaller, prepared, tx)
+		if applyErr != nil {
+			return mapRecoveryApplyError(applyErr)
+		}
+		applied = appliedResult
+		// (e) OAuth 撤销可靠事件与关键成功审计同一事务提交。
+		eventID, outboxErr := s.opts.Store.InsertOutboxTx(txCtx, tx, resetRequest.UserID, outboxReasonReset, now)
+		if outboxErr != nil {
+			return outboxErr
+		}
+		outboxID = eventID
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return ResetResult{}, mapCriticalError(err)
 	}
-	s.revokeCredentials(ctx, otherPending)
+	// 提交后：安全版本已递增，旧会话在下次校验时失效；撤销失败不回滚已成功的改密。
 	sessionsRevoked, revokeErr := s.opts.Sessions.RevokeAllForUser(ctx, resetRequest.UserID, "password_reset")
 	if revokeErr != nil {
 		s.opts.Logger.Warn("找回改密后会话撤销失败（安全版本已使旧会话失效）", "error", revokeErr)
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
 			"password.reset_completed", "session_revoke_failed", string(CodeDBUnavailable), request.RequestID)
 	}
-	outboxID, outboxErr := s.appendOutboxWithRetry(ctx, resetRequest.UserID, outboxReasonReset, request.RequestID)
-	if outboxErr != nil {
-		s.opts.Logger.Warn("找回改密后 OAuth 撤销事件写入失败", "error", outboxErr)
-	}
-	// 安全告知：投递失败只记录失败审计，不回滚已成功重置；正文不含密码/token。
+	// 安全告知：提交后投递，失败只记录失败审计；正文不含密码/token。
 	s.sendResetNotice(ctx, resetRequest.UserID, request.RequestID, resetRequest.ID)
 	return ResetResult{
-		UserID: resetRequest.UserID, SecurityVersion: result.SecurityVersion,
+		UserID: resetRequest.UserID, SecurityVersion: applied.SecurityVersion,
 		RequiresRelogin: true, SessionsRevoked: sessionsRevoked,
-		OutboxEventID: outboxID, ResetAt: result.PasswordChangedAt,
+		OutboxEventID: outboxID, ResetAt: applied.PasswordChangedAt,
 	}, nil
+}
+
+// mapCredentialTransactionError 把事务内一次性凭证消费失败映射为找回域错误：存储/
+// 能力故障返回 ErrStoreUnavailable 或 ErrOptionsInvalid（默认拒绝），其余一律
+// ErrTokenInvalid，避免外部区分“不存在/已消费/已撤销/内容不符”。
+func mapCredentialTransactionError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	case errors.Is(err, credential.ErrOptionsInvalid):
+		return ErrOptionsInvalid
+	case errors.Is(err, credential.ErrStoreUnavailable):
+		return ErrStoreUnavailable
+	default:
+		return ErrTokenInvalid
+	}
+}
+
+// mapRecoveryApplyError 把事务内密码写入/并发复核失败映射为找回域错误；存储/审计
+// 故障默认拒绝且可重试，并发版本冲突映射 CONFLICT（令牌未消费）。
+func mapRecoveryApplyError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	case errors.Is(err, authn.ErrRecoveryStateConflict):
+		return ErrConflict
+	case errors.Is(err, authn.ErrUserNotFound), errors.Is(err, authn.ErrAccessDenied):
+		return ErrAccessDenied
+	case errors.Is(err, authn.ErrStoreUnavailable), errors.Is(err, authn.ErrAuditUnavailable):
+		return ErrStoreUnavailable
+	default:
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+	}
 }
 
 // ===== 内部辅助 =====

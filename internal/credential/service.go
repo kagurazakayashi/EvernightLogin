@@ -224,21 +224,8 @@ func (s *Service) VerifyAndConsume(ctx context.Context, request VerifyRequest) (
 	if record.KeyID != "" {
 		recordKind = KindCode
 	}
-	if record.Purpose != request.Purpose || record.Target != request.Target ||
-		record.AppID != request.AppID || recordKind != request.Kind {
-		return VerifiedCredential{}, s.invalid(ReasonBindingMismatch, request.ID, request.Purpose, request.AppID)
-	}
-	if record.ConsumedAt != nil {
-		return VerifiedCredential{}, s.invalid(ReasonConsumed, record.ID, record.Purpose, record.AppID)
-	}
-	if record.RevokedAt != nil {
-		return VerifiedCredential{}, s.invalid(ReasonRevoked, record.ID, record.Purpose, record.AppID)
-	}
-	if !record.ExpiresAt.After(currentTime) {
-		return VerifiedCredential{}, s.invalid(ReasonExpired, record.ID, record.Purpose, record.AppID)
-	}
-	if record.Attempts >= record.MaxAttempts {
-		return VerifiedCredential{}, s.invalid(ReasonAttemptsExhausted, record.ID, record.Purpose, record.AppID)
+	if err := s.verifyLoadedRecord(record, request, recordKind, currentTime); err != nil {
+		return VerifiedCredential{}, err
 	}
 
 	var computed []byte
@@ -303,6 +290,148 @@ func (s *Service) VerifyAndConsume(ctx context.Context, request VerifyRequest) (
 		AppID:      record.AppID,
 		ConsumedAt: currentTime,
 	}, nil
+}
+
+// verifyLoadedRecord 校验已加载记录的绑定、消费/撤销状态、有效期与尝试上限。
+// recordKind 由调用方按 KeyID 判定后传入；返回的错误是统一对外无效错误（内部原因
+// 只进结构化日志），与 VerifyAndConsume 的对外语义一致。
+func (s *Service) verifyLoadedRecord(record Record, request VerifyRequest,
+	recordKind Kind, currentTime time.Time) error {
+	if record.Purpose != request.Purpose || record.Target != request.Target ||
+		record.AppID != request.AppID || recordKind != request.Kind {
+		return s.invalid(ReasonBindingMismatch, request.ID, request.Purpose, request.AppID)
+	}
+	if record.ConsumedAt != nil {
+		return s.invalid(ReasonConsumed, record.ID, record.Purpose, record.AppID)
+	}
+	if record.RevokedAt != nil {
+		return s.invalid(ReasonRevoked, record.ID, record.Purpose, record.AppID)
+	}
+	if !record.ExpiresAt.After(currentTime) {
+		return s.invalid(ReasonExpired, record.ID, record.Purpose, record.AppID)
+	}
+	if record.Attempts >= record.MaxAttempts {
+		return s.invalid(ReasonAttemptsExhausted, record.ID, record.Purpose, record.AppID)
+	}
+	return nil
+}
+
+// VerifyAndConsumeTx 与 VerifyAndConsume 语义相同，但在调用方提供的事务内完成
+// “读取 → 绑定/状态/期限/秘密校验 → 条件消费”。它用于把凭证消费与调用方其他领域
+// 的写入放进同一提交边界（步骤 205 找回改密）：任一步返回错误由调用方整体回滚，
+// 凭证不会被消费。
+//
+// 边界与限制：
+//   - 只支持高熵令牌（KindToken）：低熵验证码的失败尝试计数需要独立事务语义，
+//     不属于跨域原子流程；传入 KindCode 返回参数无效。
+//   - 存储必须实现 TransactionStore（生产 SQLite 实现满足），否则 fail-closed
+//     返回 ErrOptionsInvalid，绝不退化为独立事务。
+//   - 事务内条件消费仍是唯一仲裁：并发验证最多一个调用成功；条件不满足返回统一的
+//     凭证无效错误（不会被当成成功）。
+func (s *Service) VerifyAndConsumeTx(ctx context.Context, tx Transaction,
+	request VerifyRequest) (VerifiedCredential, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return VerifiedCredential{}, err
+	}
+	if tx == nil {
+		return VerifiedCredential{}, fmt.Errorf("%w: 事务为空", ErrOptionsInvalid)
+	}
+	txStore, ok := s.store.(TransactionStore)
+	if !ok {
+		return VerifiedCredential{}, fmt.Errorf("%w: 凭证存储不支持事务内消费", ErrOptionsInvalid)
+	}
+	if err := request.validate(); err != nil {
+		return VerifiedCredential{}, err
+	}
+	if request.Kind != KindToken {
+		return VerifiedCredential{}, requestInvalid("事务内消费只支持高熵令牌")
+	}
+	currentTime := s.clockNow()
+	record, found, err := txStore.LoadByIDTx(ctx, tx, request.ID)
+	if err != nil {
+		return VerifiedCredential{}, s.storeFailure(ctx, "读取凭证", err)
+	}
+	if !found {
+		return VerifiedCredential{}, s.invalid(ReasonNotFound, request.ID, request.Purpose, request.AppID)
+	}
+	if err := s.verifyLoadedRecord(record, request, KindToken, currentTime); err != nil {
+		return VerifiedCredential{}, err
+	}
+	computed := tokenVerifierHash(record.ID, record.Purpose, record.Target, record.AppID, request.Secret)
+	if subtle.ConstantTimeCompare(computed, record.VerifierHash) != 1 {
+		// 高熵令牌内容不匹配不记录失败尝试（256 位随机值无法穷举），与 VerifyAndConsume 一致。
+		return VerifiedCredential{}, s.invalid(ReasonSecretMismatch, record.ID, record.Purpose, record.AppID)
+	}
+	consumed, err := txStore.ConsumeTx(ctx, tx, ConsumeCondition{
+		ID:      record.ID,
+		Purpose: record.Purpose,
+		Target:  record.Target,
+		AppID:   record.AppID,
+		Now:     currentTime,
+	})
+	if err != nil {
+		return VerifiedCredential{}, s.storeFailure(ctx, "消费凭证", err)
+	}
+	if !consumed {
+		// 事务内验证通过但条件消费失败：并发消费、恰好过期或被撤销。绝不能返回成功。
+		return VerifiedCredential{}, s.invalid(ReasonConsumeConflict, record.ID, record.Purpose, record.AppID)
+	}
+	s.logger.Info("一次性凭证已在调用方事务内消费",
+		"credential_id", record.ID,
+		"kind", string(KindToken),
+		"purpose", record.Purpose,
+		"app_id", record.AppID,
+	)
+	return VerifiedCredential{
+		ID:         record.ID,
+		Purpose:    record.Purpose,
+		Target:     record.Target,
+		AppID:      record.AppID,
+		ConsumedAt: currentTime,
+	}, nil
+}
+
+// CancelTx 在调用方事务内条件撤销仍活动、未过期且绑定一致的凭证。它用于把“作废
+// 其他找回入口的凭证”与请求状态迁移放进同一提交边界。
+//
+// 返回 (false, nil) 表示凭证已消费/已撤销/已过期或绑定不符（幂等忽略，不视为错误）；
+// 存储错误返回 ErrStoreUnavailable。存储必须实现 TransactionStore，否则 fail-closed
+// 返回 ErrOptionsInvalid。
+func (s *Service) CancelTx(ctx context.Context, tx Transaction, request CancelRequest) (bool, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if tx == nil {
+		return false, fmt.Errorf("%w: 事务为空", ErrOptionsInvalid)
+	}
+	txStore, ok := s.store.(TransactionStore)
+	if !ok {
+		return false, fmt.Errorf("%w: 凭证存储不支持事务内撤销", ErrOptionsInvalid)
+	}
+	if err := request.validate(); err != nil {
+		return false, err
+	}
+	currentTime := s.clockNow()
+	revoked, err := txStore.RevokeTx(ctx, tx, RevokeCondition{
+		ID:      request.ID,
+		Purpose: request.Purpose,
+		Target:  request.Target,
+		AppID:   request.AppID,
+		Now:     currentTime,
+	})
+	if err != nil {
+		return false, s.storeFailure(ctx, "撤销凭证", err)
+	}
+	if revoked {
+		s.logger.Info("一次性凭证已在调用方事务内撤销",
+			"credential_id", request.ID,
+			"purpose", request.Purpose,
+			"app_id", request.AppID,
+		)
+	}
+	return revoked, nil
 }
 
 // Peek 只校验一次性凭证的绑定、状态、有效期与秘密是否匹配，**不消费、不记录

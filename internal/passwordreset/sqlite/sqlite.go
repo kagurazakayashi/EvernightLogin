@@ -8,6 +8,7 @@ package sqlite
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -183,11 +184,26 @@ func (s *Store) VerifiedEmail(ctx context.Context, userID string) (string, bool,
 
 // ListPending 列出用户 pending 找回请求。
 func (s *Store) ListPending(ctx context.Context, userID string) ([]passwordreset.ResetRequest, error) {
-	requests, err := s.listRequests(ctx, listPendingSQL, userID)
+	rows, err := s.store.QueryContext(ctx, listPendingSQL, userID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", passwordreset.ErrStoreUnavailable, err)
 	}
-	return requests, nil
+	defer rows.Close()
+	return scanRequests(rows)
+}
+
+// ListPendingTx 在调用方审计事务内列出用户 pending 找回请求；语义同 ListPending。
+func (s *Store) ListPendingTx(ctx context.Context, tx audit.Tx,
+	userID string) ([]passwordreset.ResetRequest, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("%w: 审计事务为空", passwordreset.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, listPendingSQL, userID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", passwordreset.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	return scanRequests(rows)
 }
 
 // CancelPendingTx 在审计事务内取消用户全部 pending 请求。
@@ -230,12 +246,8 @@ func (s *Store) GetResetTarget(ctx context.Context, userID string) (passwordrese
 	return candidate, true, nil
 }
 
-func (s *Store) listRequests(ctx context.Context, query string, args ...any) ([]passwordreset.ResetRequest, error) {
-	rows, err := s.store.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", passwordreset.ErrStoreUnavailable, err)
-	}
-	defer rows.Close()
+// scanRequests 把找回请求行扫描为领域快照；调用方负责关闭 rows。
+func scanRequests(rows *sql.Rows) ([]passwordreset.ResetRequest, error) {
 	requests := make([]passwordreset.ResetRequest, 0, 2)
 	for rows.Next() {
 		var request passwordreset.ResetRequest
@@ -251,6 +263,9 @@ func (s *Store) listRequests(ctx context.Context, query string, args ...any) ([]
 			request.ConsumedAt = time.UnixMilli(consumedAt).UTC()
 		}
 		requests = append(requests, request)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", passwordreset.ErrStoreUnavailable, err)
 	}
 	return requests, nil
 }

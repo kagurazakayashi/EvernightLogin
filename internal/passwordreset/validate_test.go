@@ -373,10 +373,23 @@ func TestValidateResetTokenFailsClosedOnCredentialStoreErrors(t *testing.T) {
 // flakyResetStore 是找回存储的故障注入包装：只让指定读取方法返回存储错误，其余
 // 委托真实 SQLite 存储。仅用于测试，不进入生产装配。
 type flakyResetStore struct {
-	inner         passwordreset.Store
-	mu            sync.Mutex
-	failGet       bool
-	failGetTarget bool
+	inner            passwordreset.Store
+	mu               sync.Mutex
+	failGet          bool
+	failGetTarget    bool
+	failInsertOutbox bool
+}
+
+func (s *flakyResetStore) setFailInsertOutbox(value bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failInsertOutbox = value
+}
+
+func (s *flakyResetStore) shouldFailInsertOutbox() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failInsertOutbox
 }
 
 func (s *flakyResetStore) setFailGetRequest(value bool) {
@@ -423,6 +436,9 @@ func (s *flakyResetStore) ConsumeRequestTx(ctx context.Context, tx audit.Tx, id 
 }
 
 func (s *flakyResetStore) InsertOutboxTx(ctx context.Context, tx audit.Tx, userID, reason string, now time.Time) (string, error) {
+	if s.shouldFailInsertOutbox() {
+		return "", errors.New("injected outbox store failure")
+	}
 	return s.inner.InsertOutboxTx(ctx, tx, userID, reason, now)
 }
 
@@ -432,6 +448,10 @@ func (s *flakyResetStore) VerifiedEmail(ctx context.Context, userID string) (str
 
 func (s *flakyResetStore) ListPending(ctx context.Context, userID string) ([]passwordreset.ResetRequest, error) {
 	return s.inner.ListPending(ctx, userID)
+}
+
+func (s *flakyResetStore) ListPendingTx(ctx context.Context, tx audit.Tx, userID string) ([]passwordreset.ResetRequest, error) {
+	return s.inner.ListPendingTx(ctx, tx, userID)
 }
 
 func (s *flakyResetStore) CancelPendingTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) (int64, error) {
@@ -445,11 +465,12 @@ func (s *flakyResetStore) GetResetTarget(ctx context.Context, userID string) (pa
 	return s.inner.GetResetTarget(ctx, userID)
 }
 
-// flakyCredentialStore 是一次性凭证存储的故障注入包装：只让 LoadByID 失败。
+// flakyCredentialStore 是一次性凭证存储的故障注入包装：可让独立读取与事务内撤销失败。
 type flakyCredentialStore struct {
-	inner      credential.Store
-	mu         sync.Mutex
-	failLoadBy bool
+	inner        credential.Store
+	mu           sync.Mutex
+	failLoadBy   bool
+	failRevokeTx bool
 }
 
 func (s *flakyCredentialStore) setFailLoadByID(value bool) {
@@ -494,6 +515,48 @@ func (s *flakyCredentialStore) Revoke(ctx context.Context, condition credential.
 func (s *flakyCredentialStore) DeleteExpired(ctx context.Context, cutoff time.Time) (int64, error) {
 	return s.inner.DeleteExpired(ctx, cutoff)
 }
+
+// transactionStore 返回内层存储的事务扩展；flakyCredentialStore 只在测试中包装真实
+// SQLite 存储，因此内层必然实现 credential.TransactionStore。
+func (s *flakyCredentialStore) transactionStore() credential.TransactionStore {
+	txStore, ok := s.inner.(credential.TransactionStore)
+	if !ok {
+		panic("测试包装的内层凭证存储必须实现 credential.TransactionStore")
+	}
+	return txStore
+}
+
+func (s *flakyCredentialStore) setFailRevokeTx(value bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failRevokeTx = value
+}
+
+func (s *flakyCredentialStore) shouldFailRevokeTx() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failRevokeTx
+}
+
+func (s *flakyCredentialStore) LoadByIDTx(ctx context.Context, tx credential.Transaction,
+	id string) (credential.Record, bool, error) {
+	return s.transactionStore().LoadByIDTx(ctx, tx, id)
+}
+
+func (s *flakyCredentialStore) ConsumeTx(ctx context.Context, tx credential.Transaction,
+	condition credential.ConsumeCondition) (bool, error) {
+	return s.transactionStore().ConsumeTx(ctx, tx, condition)
+}
+
+func (s *flakyCredentialStore) RevokeTx(ctx context.Context, tx credential.Transaction,
+	condition credential.RevokeCondition) (bool, error) {
+	if s.shouldFailRevokeTx() {
+		return false, errors.New("injected credential revoke failure")
+	}
+	return s.transactionStore().RevokeTx(ctx, tx, condition)
+}
+
+var _ credential.TransactionStore = (*flakyCredentialStore)(nil)
 
 // mutateSecret 翻转 token secret 的首字符，构造“格式合法但摘要错误”的 token。
 func mutateSecret(secret string) string {

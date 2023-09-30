@@ -424,6 +424,10 @@ var (
 	ErrSetupCompleted = errors.New("root 初始化已完成")
 	// ErrSetupStateConflict 表示 root 受限状态不允许该操作或已被并发修改。
 	ErrSetupStateConflict = errors.New("root 初始化状态不允许该操作")
+	// ErrRecoveryStateConflict 表示找回改密在“事务外准备”与“事务内提交”之间账户或
+	// 密码凭证状态已被并发修改（安全版本/凭据行版本变化、账户被禁用/删除/改为 root、
+	// 密码被移除等），本次提交被拒绝。令牌未被消费，调用方可重试；对外映射 CONFLICT。
+	ErrRecoveryStateConflict = errors.New("找回改密期间账户或密码凭证已被并发修改")
 	// ErrStoreUnavailable 表示认证存储暂时不可用。
 	ErrStoreUnavailable = errors.New("认证存储暂时不可用")
 	// ErrAuditUnavailable 表示安全审计未能可靠写入，操作被拒绝。
@@ -498,7 +502,7 @@ func CodeOf(err error) ErrorCode {
 		errors.Is(err, ErrNotInitialized):
 		return CodeReqInvalid
 	case errors.Is(err, ErrSetupVerificationRequired), errors.Is(err, ErrSetupCompleted),
-		errors.Is(err, ErrSetupStateConflict):
+		errors.Is(err, ErrSetupStateConflict), errors.Is(err, ErrRecoveryStateConflict):
 		return CodeConflict
 	case errors.Is(err, ErrAccessDenied):
 		return CodeAccessDenied

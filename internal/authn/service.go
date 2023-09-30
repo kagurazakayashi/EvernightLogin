@@ -1362,8 +1362,10 @@ func mapCriticalError(err error) error {
 		return nil
 	case errors.Is(err, audit.ErrAuditUnavailable):
 		return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
-	case errors.Is(err, ErrSetupStateConflict), errors.Is(err, ErrInvalidRequest),
-		errors.Is(err, ErrPasswordReused), errors.Is(err, ErrWeakPassword):
+	case errors.Is(err, ErrSetupStateConflict), errors.Is(err, ErrRecoveryStateConflict),
+		errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrPasswordReused),
+		errors.Is(err, ErrWeakPassword), errors.Is(err, ErrAccessDenied),
+		errors.Is(err, ErrUserNotFound):
 		return err
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err

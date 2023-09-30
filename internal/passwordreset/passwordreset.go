@@ -16,6 +16,11 @@
 //     同一组请求状态、一次性凭证状态/绑定、期限与账户可找回性判断，但预检查不
 //     消费、不改变状态，也不构成最终授权；过期、错误摘要、已消费/已撤销凭证、
 //     存储故障与不可找回账户在两层都按默认拒绝处理。
+//   - 找回完成（CompleteReset）采用“事务外昂贵准备 + 单事务提交”：密码策略、历史
+//     复用与 Argon2 派生在消费凭证之前完成，失败不会烧掉仍有效入口；凭证条件消费、
+//     请求终态、其他入口作废及其凭证撤销、密码/历史/安全版本写入、关键审计与
+//     OAuth 撤销 outbox 在同一数据库事务提交，任一步失败整体回滚（令牌未消费、可
+//     重试），不存在“先消费后改密”的双赢家或半提交，也不使用失败后恢复令牌的补丁。
 //   - 密码变更/找回后写入 OAuth 撤销 outbox 事件（后续 OAuth 步骤接入消费者），
 //     不宣称当前已撤销所有外部应用/Token。
 //   - 密码、找回 token、凭证明文与哈希绝不写入日志、审计、错误或通知；邮件与安全
@@ -45,11 +50,14 @@ import (
 
 // 领域错误哨兵；错误文本不包含账户存在性细节、密码或 token。
 var (
-	ErrOptionsInvalid   = errors.New("密码找回服务选项无效")
-	ErrInvalidRequest   = errors.New("密码找回请求无效")
-	ErrAccessDenied     = errors.New("未获准执行该密码操作")
-	ErrTokenInvalid     = errors.New("找回入口无效或已失效")
-	ErrTokenExpired     = errors.New("找回入口已过期")
+	ErrOptionsInvalid = errors.New("密码找回服务选项无效")
+	ErrInvalidRequest = errors.New("密码找回请求无效")
+	ErrAccessDenied   = errors.New("未获准执行该密码操作")
+	ErrTokenInvalid   = errors.New("找回入口无效或已失效")
+	ErrTokenExpired   = errors.New("找回入口已过期")
+	// ErrConflict 表示找回提交与并发的账户/密码状态变化冲突；本次提交整体回滚，
+	// 一次性凭证未被消费，调用方可用同一入口重试。
+	ErrConflict         = errors.New("找回操作与并发变更冲突")
 	ErrAccountDisabled  = errors.New("账户当前不可用")
 	ErrNoPassword       = errors.New("账户未设置密码，不能通过找回流程添加")
 	ErrMailFailed       = errors.New("找回邮件发送失败")
@@ -91,6 +99,8 @@ func CodeOf(err error) ErrorCode {
 		return CodeAccessDenied
 	case errors.Is(err, ErrTokenInvalid), errors.Is(err, ErrTokenExpired):
 		return CodeChallengeInvalid
+	case errors.Is(err, ErrConflict):
+		return CodeConflict
 	case errors.Is(err, ErrAccountDisabled):
 		return CodeUserDisabled
 	case errors.Is(err, ErrRateLimited):
@@ -145,9 +155,26 @@ func (c Caller) Actor() audit.Actor { return c.actor }
 func (c Caller) IsUser() bool { return c.actor.Type == audit.ActorUser }
 
 // PasswordService 是密码写入契约；生产实现为 *internal/authn.Service。
+//
+// 找回完成路径（CompleteReset）需要更严格的原子提交能力：生产实现还必须满足
+// RecoveryCommitter（PrepareRecoveryReset + ApplyRecoveryResetTx）。只在非完成路径
+// （ChangePassword）需要 SetPassword 的适配器可以只实现本接口，但 CompleteReset 对
+// 不满足 RecoveryCommitter 的实现在运行期 fail-closed（ErrOptionsInvalid），不存在
+// “先消费凭证、后改密”的非原子降级路径。
 type PasswordService interface {
 	SetPassword(ctx context.Context, caller authn.Caller, request authn.SetPasswordRequest) (authn.SetPasswordResult, error)
 	ResetPasswordForRecovery(ctx context.Context, caller authn.Caller, request authn.RecoveryResetRequest) (authn.SetPasswordResult, error)
+}
+
+// RecoveryCommitter 是找回改密的原子提交扩展（步骤 205）：PrepareRecoveryReset 在
+// 事务外完成账户/密码策略/历史复用校验与昂贵哈希派生（不消费凭证）；ApplyRecoveryResetTx
+// 在调用方事务内重新核对账户/凭证版本并写入密码、历史与安全版本。生产实现为
+// *internal/authn.Service。
+type RecoveryCommitter interface {
+	PrepareRecoveryReset(ctx context.Context, caller authn.Caller,
+		request authn.RecoveryResetRequest) (authn.PreparedRecoveryReset, error)
+	ApplyRecoveryResetTx(ctx context.Context, caller authn.Caller,
+		prepared authn.PreparedRecoveryReset, tx audit.Tx) (authn.SetPasswordResult, error)
 }
 
 // SessionRevoker 是账户级会话撤销契约；生产实现为 *internal/session.Service。
@@ -230,9 +257,11 @@ type Options struct {
 	Store       Store
 	Audit       AuditRecorder
 	Credentials *credential.Service
-	Passwords   PasswordService
-	Sessions    SessionRevoker
-	Mailer      mailer.Sender
+	// Passwords 是密码写入契约；找回完成路径要求实现同时满足 RecoveryCommitter
+	// （生产 *internal/authn.Service 满足）。缺失时 CompleteReset fail-closed。
+	Passwords PasswordService
+	Sessions  SessionRevoker
+	Mailer    mailer.Sender
 	// Deliveries 是可靠投递入队服务（步骤 197）：非空时找回邮件/安全告知改走队列，
 	// 失败由投递任务的有限重试承担；nil 时回退直接 Mailer（单测/嵌入式兼容）。
 	Deliveries  mailer.DeliveryEnqueuer
@@ -483,7 +512,8 @@ func mapCriticalError(err error) error {
 		return fmt.Errorf("%w: 审计事件无效", ErrOptionsInvalid)
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrAccessDenied),
 		errors.Is(err, ErrTokenInvalid), errors.Is(err, ErrTokenExpired),
-		errors.Is(err, ErrAccountDisabled), errors.Is(err, ErrNoPassword):
+		errors.Is(err, ErrConflict), errors.Is(err, ErrAccountDisabled),
+		errors.Is(err, ErrNoPassword):
 		return err
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err

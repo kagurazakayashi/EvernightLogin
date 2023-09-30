@@ -61,8 +61,23 @@ func New(store *storagesqlite.Store) (*Store, error) {
 	return &Store{store: store}, nil
 }
 
-// 编译期确认实现 credential.Store。
-var _ credential.Store = (*Store)(nil)
+// 编译期确认实现 credential.Store 与可选事务扩展。
+var (
+	_ credential.Store            = (*Store)(nil)
+	_ credential.TransactionStore = (*Store)(nil)
+)
+
+// rowQuerier 抽象“独立存储或调用方事务”的最小读取能力：*storage/sqlite.Store 与
+// credential.Transaction（生产上由 audit.Tx 满足）都实现，使同一份 SQL 与扫描逻辑
+// 同时服务独立路径与事务内路径，避免复制查询。
+type rowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// rowExecer 抽象“独立存储或调用方事务”的最小写入能力，用途同上。
+type rowExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
 
 // nullableAppID 把空应用绑定映射为 SQL NULL（系统范围）。
 func nullableAppID(appID string) any {
@@ -133,7 +148,19 @@ func (s *Store) ReplaceActiveAndInsert(ctx context.Context, record credential.Re
 
 // LoadByID 读取一条凭证记录；不存在时返回 (Record{}, false, nil)。
 func (s *Store) LoadByID(ctx context.Context, id string) (credential.Record, bool, error) {
-	rows, err := s.store.QueryContext(ctx, loadByIDSQL, id)
+	return s.loadByID(ctx, s.store, id)
+}
+
+// LoadByIDTx 在调用方事务内读取凭证记录，语义同 LoadByID。
+func (s *Store) LoadByIDTx(ctx context.Context, tx credential.Transaction,
+	id string) (credential.Record, bool, error) {
+	return s.loadByID(ctx, tx, id)
+}
+
+// loadByID 是独立与事务内路径共用的读取/扫描实现。
+func (s *Store) loadByID(ctx context.Context, querier rowQuerier,
+	id string) (credential.Record, bool, error) {
+	rows, err := querier.QueryContext(ctx, loadByIDSQL, id)
 	if err != nil {
 		return credential.Record{}, false, err
 	}
@@ -191,9 +218,22 @@ func (s *Store) LoadByID(ctx context.Context, id string) (credential.Record, boo
 // Consume 用一条条件 UPDATE 原子判断并消费凭证。返回 true 表示本次调用成功
 // 消费；false 表示记录已不满足活动、未过期、未达尝试上限或绑定一致等条件。
 func (s *Store) Consume(ctx context.Context, condition credential.ConsumeCondition) (bool, error) {
+	return s.consume(ctx, s.store, condition)
+}
+
+// ConsumeTx 在调用方事务内用同一条条件 UPDATE 原子判断并消费凭证；语义同 Consume。
+// 事务由调用方拥有：返回错误时调用方整体回滚，凭证不会被消费。
+func (s *Store) ConsumeTx(ctx context.Context, tx credential.Transaction,
+	condition credential.ConsumeCondition) (bool, error) {
+	return s.consume(ctx, tx, condition)
+}
+
+// consume 是独立与事务内路径共用的条件消费实现。
+func (s *Store) consume(ctx context.Context, execer rowExecer,
+	condition credential.ConsumeCondition) (bool, error) {
 	nowMS := condition.Now.UTC().UnixMilli()
 	appID := nullableAppID(condition.AppID)
-	result, err := s.store.ExecContext(ctx, consumeSQL,
+	result, err := execer.ExecContext(ctx, consumeSQL,
 		nowMS,
 		condition.ID,
 		condition.Purpose,
@@ -253,8 +293,20 @@ func (s *Store) RecordFailedAttempt(ctx context.Context, id string, now time.Tim
 
 // Revoke 用一条条件 UPDATE 撤销仍活动、未过期且绑定一致的凭证。
 func (s *Store) Revoke(ctx context.Context, condition credential.RevokeCondition) (bool, error) {
+	return s.revoke(ctx, s.store, condition)
+}
+
+// RevokeTx 在调用方事务内用同一条条件 UPDATE 撤销凭证；语义同 Revoke。
+func (s *Store) RevokeTx(ctx context.Context, tx credential.Transaction,
+	condition credential.RevokeCondition) (bool, error) {
+	return s.revoke(ctx, tx, condition)
+}
+
+// revoke 是独立与事务内路径共用的条件撤销实现。
+func (s *Store) revoke(ctx context.Context, execer rowExecer,
+	condition credential.RevokeCondition) (bool, error) {
 	appID := nullableAppID(condition.AppID)
-	result, err := s.store.ExecContext(ctx, revokeSQL,
+	result, err := execer.ExecContext(ctx, revokeSQL,
 		condition.Now.UTC().UnixMilli(),
 		condition.ID,
 		condition.Purpose,

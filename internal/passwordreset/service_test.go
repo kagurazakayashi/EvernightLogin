@@ -38,13 +38,28 @@ const otherUserID = "usr_00000000000000000000000000000002"
 var tokenPattern = regexp.MustCompile(`token=([^"&\s]+)`)
 
 type stubPasswords struct {
-	mu          sync.Mutex
-	changeCalls int
-	resetCalls  int
-	changeErr   error
-	resetErr    error
-	lastNew     string
-	lastUser    string
+	mu           sync.Mutex
+	changeCalls  int
+	resetCalls   int
+	prepareCalls int
+	changeErr    error
+	resetErr     error
+	prepareErr   error
+	lastNew      string
+	lastUser     string
+}
+
+// fakePreparedRecoveryReset 是测试用的 authn.PreparedRecoveryReset 实现：找回提交测试
+// 只需要透传 userID 与审计差异，不需要生产哈希材料。
+type fakePreparedRecoveryReset struct {
+	userID  string
+	changes []audit.FieldChange
+}
+
+func (f fakePreparedRecoveryReset) UserID() string { return f.userID }
+
+func (f fakePreparedRecoveryReset) AuditChanges() []audit.FieldChange {
+	return append([]audit.FieldChange(nil), f.changes...)
 }
 
 func (s *stubPasswords) SetPassword(ctx context.Context, caller authn.Caller, request authn.SetPasswordRequest) (authn.SetPasswordResult, error) {
@@ -70,6 +85,41 @@ func (s *stubPasswords) ResetPasswordForRecovery(ctx context.Context, caller aut
 		return authn.SetPasswordResult{}, s.resetErr
 	}
 	return authn.SetPasswordResult{UserID: request.UserID, SecurityVersion: 3,
+		PasswordChangedAt: seedTime}, nil
+}
+
+// PrepareRecoveryReset 实现 passwordreset.RecoveryCommitter：默认成功且不写状态；
+// prepareErr 用于注入弱密码/历史复用/哈希资源忙等等价故障点。
+func (s *stubPasswords) PrepareRecoveryReset(ctx context.Context, caller authn.Caller,
+	request authn.RecoveryResetRequest) (authn.PreparedRecoveryReset, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prepareCalls++
+	s.lastUser = request.UserID
+	s.lastNew = request.NewPassword
+	if s.prepareErr != nil {
+		return nil, s.prepareErr
+	}
+	return fakePreparedRecoveryReset{
+		userID: request.UserID,
+		changes: []audit.FieldChange{
+			{Field: "security_version_change", After: "password_recovery_reset"},
+		},
+	}, nil
+}
+
+// ApplyRecoveryResetTx 实现 passwordreset.RecoveryCommitter：resetCalls 表示“密码已被
+// 真实写入”的次数，供并发/重试断言使用。
+func (s *stubPasswords) ApplyRecoveryResetTx(ctx context.Context, caller authn.Caller,
+	prepared authn.PreparedRecoveryReset, tx audit.Tx) (authn.SetPasswordResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resetCalls++
+	s.lastUser = prepared.UserID()
+	if s.resetErr != nil {
+		return authn.SetPasswordResult{}, s.resetErr
+	}
+	return authn.SetPasswordResult{UserID: prepared.UserID(), SecurityVersion: 3,
 		PasswordChangedAt: seedTime}, nil
 }
 
@@ -101,6 +151,10 @@ type testEnv struct {
 	// options 保存本次构造服务时实际使用的依赖（含 mutate 后的替换），供定向测试
 	// 用同一依赖重建服务（例如注入故障存储）；不参与生产路径。
 	options passwordreset.Options
+	// realAuthn/systemCaller 仅在真实 authn 集成测试中设置（步骤 205）；用于覆盖
+	// 密码策略/历史复用/安全版本等真实行为。
+	realAuthn    *authn.Service
+	systemCaller authn.Caller
 }
 
 func newTestEnv(t *testing.T, mutate func(*passwordreset.Options)) *testEnv {

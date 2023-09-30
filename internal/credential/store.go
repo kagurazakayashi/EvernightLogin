@@ -2,6 +2,7 @@ package credential
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -88,4 +89,25 @@ type Store interface {
 	RecordFailedAttempt(ctx context.Context, id string, now time.Time) (FailedAttemptResult, error)
 	Revoke(ctx context.Context, condition RevokeCondition) (bool, error)
 	DeleteExpired(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// Transaction 是调用方提供的数据库事务视图，与 internal/audit.Tx 结构兼容（后者
+// 直接满足本接口）。凭证服务不拥有该事务的生命周期，也不在事务内开启子事务。
+type Transaction interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// TransactionStore 是 Store 的可选事务扩展，用于把“凭证条件消费/撤销”与调用方
+// 其他领域的写入放进同一提交边界（步骤 205 找回改密）。它不在 Store 中强制，
+// 以保持既有存储替身兼容；服务在需要事务内操作时做运行期断言，缺失能力一律
+// fail-closed，不会退化为独立事务或“先校验后消费”的非原子路径。
+//
+// 实现约定与 Store 对应方法一致：找不到记录返回 (Record{}, false, nil)；
+// ConsumeTx/RevokeTx 必须用一条带条件的 UPDATE 原子判断并更新，条件不满足返回
+// false；任何错误都不得被当作成功。
+type TransactionStore interface {
+	LoadByIDTx(ctx context.Context, tx Transaction, id string) (Record, bool, error)
+	ConsumeTx(ctx context.Context, tx Transaction, condition ConsumeCondition) (bool, error)
+	RevokeTx(ctx context.Context, tx Transaction, condition RevokeCondition) (bool, error)
 }

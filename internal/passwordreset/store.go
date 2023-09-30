@@ -49,6 +49,9 @@ type Store interface {
 	VerifiedEmail(ctx context.Context, userID string) (string, bool, error)
 	// ListPending 列出用户 pending 找回请求（用于作废旧入口与撤销凭证）。
 	ListPending(ctx context.Context, userID string) ([]ResetRequest, error)
+	// ListPendingTx 在审计事务内列出用户 pending 找回请求，用于把“作废其他入口
+	// 并撤销其凭证”与请求消费/密码写入放进同一提交边界（步骤 205）。
+	ListPendingTx(ctx context.Context, tx audit.Tx, userID string) ([]ResetRequest, error)
 	// CancelPendingTx 在审计事务内把用户所有 pending 请求标记 cancelled，返回行数。
 	CancelPendingTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) (int64, error)
 	// GetResetTarget 按用户 ID 重新确认账户可找回（active/非 root/有密码）。
