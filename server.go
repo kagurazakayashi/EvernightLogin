@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/listener"
-	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/tlscert"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
+	"github.com/kagurazakayashi/EvernightLogin/netpolicy"
 )
 
 // ServerOptions 是构造独立监听服务的显式依赖。

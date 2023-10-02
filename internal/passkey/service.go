@@ -92,7 +92,7 @@ func New(options Options) (*Service, error) {
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
 			ResidentKey:        protocol.ResidentKeyRequirementRequired,
 			RequireResidentKey: &requireResidentKey,
-			UserVerification:   config.UserVerification.protocolValue(),
+			UserVerification:   protocolValue(config.UserVerification),
 		},
 		AttestationPreference: protocol.PreferNoAttestation,
 	})

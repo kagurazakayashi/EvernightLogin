@@ -1,9 +1,10 @@
 package transport
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/kagurazakayashi/EvernightLogin/httppolicy"
 )
 
 // NormalizePrefix 校验并规范化固定路径前缀。合法形式只有空字符串或
@@ -11,38 +12,10 @@ import (
 // 点段、反斜杠、百分号编码、查询串或片段。空字符串表示挂在根路径。
 //
 // 前缀是路由权限的一部分：前缀不匹配的请求一律 404，绝不做“去掉多余斜杠后
-// 再匹配”的归一化。
+// 再匹配”的归一化。规则实现已提升到公共 httppolicy 包（单一实现）；本包装保持
+// internal/transport 既有调用方零改动。
 func NormalizePrefix(prefix string) (string, error) {
-	if prefix == "" {
-		return "", nil
-	}
-	if len(prefix) > MaxPrefixBytes {
-		return "", fmt.Errorf("路径前缀不能超过 %d 字节", MaxPrefixBytes)
-	}
-	if prefix[0] != '/' {
-		return "", fmt.Errorf("路径前缀必须以 / 开头")
-	}
-	if prefix == "/" {
-		return "", fmt.Errorf("路径前缀不能是单个斜杠；根路径请使用空字符串")
-	}
-	if strings.HasSuffix(prefix, "/") {
-		return "", fmt.Errorf("路径前缀不能以 / 结尾")
-	}
-	if strings.ContainsAny(prefix, "%?#\\") {
-		return "", fmt.Errorf("路径前缀不能包含百分号编码、查询串、片段或反斜杠")
-	}
-	for _, segment := range strings.Split(prefix[1:], "/") {
-		if segment == "" || segment == "." || segment == ".." {
-			return "", fmt.Errorf("路径前缀不能包含空段或点段")
-		}
-		for index := 0; index < len(segment); index++ {
-			character := segment[index]
-			if character < 0x21 || character > 0x7e {
-				return "", fmt.Errorf("路径前缀只能包含可见 ASCII 字符")
-			}
-		}
-	}
-	return prefix, nil
+	return httppolicy.NormalizePrefix(prefix)
 }
 
 // canonicalRequestPath 返回可用于路由匹配的严格路径。任何需要“清理”才能匹配

@@ -3,7 +3,7 @@
 //
 // 写入语义：
 //   - 只接受非秘密字段（秘密用 set-secret 写来源引用，永不写明文值）。
-//   - 先解析/校验目标 YAML，再把合并后的有效配置交给既有 login.Load 校验；校验
+//   - 先解析/校验目标 YAML，再把合并后的有效配置交给既有 config.Load 校验；校验
 //     失败不写文件，保证“预演/失败不写数据”。
 //   - 默认原子写（同目录临时文件 + rename）并为原文件保留一份备份；不跟随符号
 //     链接，不修改文件权限（新文件默认 0644）。
@@ -11,6 +11,8 @@
 package managecli
 
 import (
+	loginconfig "github.com/kagurazakayashi/EvernightLogin/config"
+
 	"bytes"
 	"errors"
 	"fmt"
@@ -21,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -201,7 +202,7 @@ func (r *runner) runConfigShow(args []string) int {
 
 // secretsResolved 用严格加载判断秘密来源是否全部可解析（不输出任何秘密）。
 func (r *runner) secretsResolved(values map[string]string) bool {
-	options := login.LoadOptions{LookupEnv: r.options.LookupEnv}
+	options := loginconfig.LoadOptions{LookupEnv: r.options.LookupEnv}
 	if path := stringFlag(values, "config"); path != "" {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
@@ -209,18 +210,18 @@ func (r *runner) secretsResolved(values map[string]string) bool {
 		}
 		options.YAMLFile = absolute
 	}
-	_, err := login.Load(options)
+	_, err := loginconfig.Load(options)
 	return err == nil
 }
 
 // configFieldsOutput 把有效配置投影为结构化输出。
-func configFieldsOutput(config login.Config) configShowOutput {
+func configFieldsOutput(config loginconfig.Config) configShowOutput {
 	values := config.FieldValues()
 	output := configShowOutput{Valid: true, FieldCount: len(values)}
 	for _, item := range values {
 		output.Fields = append(output.Fields, configFieldOutput{Field: item.Field,
 			Value: item.Value, Class: string(item.Class), Secret: item.Secret})
-		if item.Class == login.ReloadHotReloadable {
+		if item.Class == loginconfig.ReloadHotReloadable {
 			output.HotReloadable = append(output.HotReloadable, item.Field)
 		} else {
 			output.RestartRequired = append(output.RestartRequired, item.Field)
@@ -250,7 +251,7 @@ func (r *runner) runConfigGet(args []string) int {
 	}
 	r.json = boolFlag(values, "json")
 	field := strings.TrimSpace(positional[0])
-	info, ok := login.LookupField(field)
+	info, ok := loginconfig.LookupField(field)
 	if !ok {
 		return r.fail("CONFIG_FIELD_UNKNOWN", ExitUsage,
 			fmt.Sprintf("未知配置字段 %q（可用 loginctl config show 查看）", field), nil)
@@ -265,7 +266,7 @@ func (r *runner) runConfigGet(args []string) int {
 }
 
 // configValueString 从 FieldValues 中取出指定字段的脱敏值。
-func configValueString(config login.Config, field string) string {
+func configValueString(config loginconfig.Config, field string) string {
 	for _, item := range config.FieldValues() {
 		if item.Field == field {
 			return item.Value
@@ -348,7 +349,7 @@ func (r *runner) runConfigDiff(args []string) int {
 				continue
 			}
 		}
-		if item.Class == string(login.ReloadHotReloadable) {
+		if item.Class == string(loginconfig.ReloadHotReloadable) {
 			output.HotReloadable = append(output.HotReloadable, item.Field)
 		} else {
 			output.RestartRequired = append(output.RestartRequired, item.Field)
@@ -419,7 +420,7 @@ func (r *runner) runConfigSet(args []string, secretOnly bool) int {
 	if !secretOnly {
 		rawValue = positional[1]
 	}
-	info, ok := login.LookupField(field)
+	info, ok := loginconfig.LookupField(field)
 	if !ok {
 		return r.fail("CONFIG_FIELD_UNKNOWN", ExitUsage,
 			fmt.Sprintf("未知配置字段 %q", field), nil)
@@ -444,11 +445,11 @@ func (r *runner) runConfigSet(args []string, secretOnly bool) int {
 		if sourceSpec == "" {
 			return r.usage("config set-secret 必须用 --source 指定 env:NAME 或 file:绝对路径")
 		}
-		source, err := login.ParseSecretSource(sourceSpec)
+		source, err := loginconfig.ParseSecretSource(sourceSpec)
 		if err != nil {
 			return r.fail("CONFIG_SECRET_SOURCE_INVALID", ExitUsage, err.Error(), nil)
 		}
-		if source.Kind == login.SecretSourceFile && !filepath.IsAbs(source.Name) {
+		if source.Kind == loginconfig.SecretSourceFile && !filepath.IsAbs(source.Name) {
 			return r.fail("CONFIG_SECRET_SOURCE_INVALID", ExitUsage,
 				"秘密文件来源必须使用绝对路径", nil)
 		}
@@ -484,7 +485,7 @@ func (r *runner) runConfigSet(args []string, secretOnly bool) int {
 	// 用既有加载器校验写入后的完整配置；失败则不落盘，保证失败不留下半更新文件。
 	// 校验时对配置中引用的 env: 秘密来源使用占位值：写入来源引用本身不需要该
 	// 环境变量已设置，否则 set-secret 会因“当前进程未设置该变量”而无法写引用。
-	if _, err := login.Load(login.LoadOptions{YAML: encoded,
+	if _, err := loginconfig.Load(loginconfig.LoadOptions{YAML: encoded,
 		LookupEnv: lookupWithSecretPlaceholder(document, r.options.LookupEnv)}); err != nil {
 		details := configErrorDetails(err)
 		return r.fail("CONFIG_INVALID", ExitError, "写入后的配置未通过校验，未写入："+err.Error(), details)
@@ -496,7 +497,7 @@ func (r *runner) runConfigSet(args []string, secretOnly bool) int {
 	}
 	output := configWriteOutput{Field: field, OldValue: oldValue, NewValue: renderedValue,
 		Class: string(info.Class), DryRun: dryRun, File: absoluteFile,
-		NeedsRestart: info.Class == login.ReloadRestartRequired}
+		NeedsRestart: info.Class == loginconfig.ReloadRestartRequired}
 	if !dryRun {
 		backup, writeErr := writeConfigAtomic(absoluteFile, encoded)
 		if writeErr != nil {
@@ -819,7 +820,7 @@ func timeStampNow() time.Time { return time.Now() }
 
 // configErrorDetails 把配置错误转换为脱敏结构化详情（供 set 校验失败输出）。
 func configErrorDetails(err error) []configErrorDetail {
-	var configErrors login.ConfigErrors
+	var configErrors loginconfig.ConfigErrors
 	if !errors.As(err, &configErrors) {
 		return nil
 	}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin/internal/proxytrust"
 	"github.com/kagurazakayashi/EvernightLogin/internal/ratelimit"
+	"github.com/kagurazakayashi/EvernightLogin/proxytrust"
 )
 
 const (

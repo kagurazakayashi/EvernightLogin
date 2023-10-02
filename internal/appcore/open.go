@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
@@ -20,7 +20,7 @@ import (
 )
 
 // OpenStore 按配置打开 SQLite 存储；writeGuard 非 nil 时接入维护门闸。
-func OpenStore(ctx context.Context, cfg login.Config,
+func OpenStore(ctx context.Context, cfg config.Config,
 	writeGuard func(context.Context) (func(), error)) (*sqlite.Store, error) {
 	options := sqlite.DefaultOptions(cfg.Database.Path)
 	options.WAL = cfg.Database.WAL
@@ -38,7 +38,7 @@ func OpenStore(ctx context.Context, cfg login.Config,
 
 // LoadKeyring 解析主密钥环：配置中的 secrets.master_key 优先，其次显式文件路径；
 // allowCreate 为 true 时文件不存在则生成受保护主密钥环。
-func LoadKeyring(ctx context.Context, cfg login.Config, masterKeyFile string,
+func LoadKeyring(ctx context.Context, cfg config.Config, masterKeyFile string,
 	allowCreate bool, now func() time.Time) (*secrets.Keyring, string, error) {
 	if cfg.Secrets.MasterKey.IsSet() {
 		provider := secrets.ProviderFunc(func(context.Context) ([]byte, error) {

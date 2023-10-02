@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
-	"github.com/kagurazakayashi/EvernightLogin/internal/proxytrust"
+	"github.com/kagurazakayashi/EvernightLogin/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/proxytrust"
 )
 
 // hostRejectedStatus 是指定 Host 不在允许列表时的标准状态：421 Misdirected

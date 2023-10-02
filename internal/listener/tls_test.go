@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/netpolicy"
 )
 
 // newTestTLSCertificate 生成自签名服务器证书与信任它的客户端证书池。

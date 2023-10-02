@@ -2,6 +2,8 @@
 package managecli
 
 import (
+	loginconfig "github.com/kagurazakayashi/EvernightLogin/config"
+
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/migrate"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
@@ -31,30 +32,30 @@ type configErrorDetail struct {
 }
 
 // loadEffectiveConfig 读取有效配置。--config 指向 YAML 文件；其余来源（环境变量）
-// 由 login.Load 按既有优先级合并。配置文件里只允许秘密来源引用，不允许秘密值。
-func (r *runner) loadEffectiveConfig(values map[string]string) (login.Config, int) {
-	options := login.LoadOptions{LookupEnv: r.options.LookupEnv}
+// 由 config.Load 按既有优先级合并。配置文件里只允许秘密来源引用，不允许秘密值。
+func (r *runner) loadEffectiveConfig(values map[string]string) (loginconfig.Config, int) {
+	options := loginconfig.LoadOptions{LookupEnv: r.options.LookupEnv}
 	if path := stringFlag(values, "config"); path != "" {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
-			return login.Config{}, r.usage("--config 路径无效")
+			return loginconfig.Config{}, r.usage("--config 路径无效")
 		}
 		info, err := os.Stat(absolute)
 		if err != nil || !info.Mode().IsRegular() {
-			return login.Config{}, r.fail("CONFIG_FILE_INVALID", ExitError,
+			return loginconfig.Config{}, r.fail("CONFIG_FILE_INVALID", ExitError,
 				"配置文件不存在或不是普通文件", nil)
 		}
 		if info.Size() > maxConfigFileBytes {
-			return login.Config{}, r.fail("CONFIG_FILE_INVALID", ExitError,
+			return loginconfig.Config{}, r.fail("CONFIG_FILE_INVALID", ExitError,
 				"配置文件超过 1 MiB 上限", nil)
 		}
 		options.YAMLFile = absolute
 	}
-	config, err := login.Load(options)
+	config, err := loginconfig.Load(options)
 	if err == nil {
 		return config, ExitOK
 	}
-	var configErrors login.ConfigErrors
+	var configErrors loginconfig.ConfigErrors
 	if errors.As(err, &configErrors) {
 		details := make([]configErrorDetail, 0, len(configErrors))
 		for _, item := range configErrors {
@@ -62,15 +63,15 @@ func (r *runner) loadEffectiveConfig(values map[string]string) (login.Config, in
 				Source: item.Source, Field: item.Field, Line: item.Line,
 				Detail: item.Detail})
 		}
-		return login.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), details)
+		return loginconfig.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), details)
 	}
-	return login.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), nil)
+	return loginconfig.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), nil)
 }
 
 // loadEffectiveConfigTolerant 读取有效配置，但对未设置的秘密来源使用占位值，
 // 使 `config show/get/diff` 在秘密环境变量暂未设置时仍能展示其他已校验字段。
-// 它不改变真实启动路径：服务启动仍使用 login.Load 的严格行为。
-func (r *runner) loadEffectiveConfigTolerant(values map[string]string) (login.Config, int) {
+// 它不改变真实启动路径：服务启动仍使用 config.Load 的严格行为。
+func (r *runner) loadEffectiveConfigTolerant(values map[string]string) (loginconfig.Config, int) {
 	file := stringFlag(values, "config")
 	// 只对 YAML 中实际出现的 env: 秘密来源使用占位值；不能对所有已知秘密环境
 	// 变量名占位，否则会把“未设置的环境覆盖”伪造成已设置，改变配置含义。
@@ -85,28 +86,28 @@ func (r *runner) loadEffectiveConfigTolerant(values map[string]string) (login.Co
 		}
 		return value, ok
 	}
-	options := login.LoadOptions{LookupEnv: lookup}
+	options := loginconfig.LoadOptions{LookupEnv: lookup}
 	if file != "" {
 		absolute, err := filepath.Abs(file)
 		if err != nil {
-			return login.Config{}, r.usage("--config 路径无效")
+			return loginconfig.Config{}, r.usage("--config 路径无效")
 		}
 		if info, statErr := os.Stat(absolute); statErr != nil || !info.Mode().IsRegular() {
-			return login.Config{}, r.fail("CONFIG_FILE_INVALID", ExitError,
+			return loginconfig.Config{}, r.fail("CONFIG_FILE_INVALID", ExitError,
 				"配置文件不存在或不是普通文件", nil)
 		}
 		options.YAMLFile = absolute
 	}
-	config, err := login.Load(options)
+	config, err := loginconfig.Load(options)
 	if err == nil {
 		return config, ExitOK
 	}
-	var configErrors login.ConfigErrors
+	var configErrors loginconfig.ConfigErrors
 	if errors.As(err, &configErrors) {
 		details := configErrorDetails(err)
-		return login.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), details)
+		return loginconfig.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), details)
 	}
-	return login.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), nil)
+	return loginconfig.Config{}, r.fail("CONFIG_INVALID", ExitError, err.Error(), nil)
 }
 
 // secretEnvNamesFromYAMLFile 读取 YAML 配置文件中的 env: 秘密来源变量名；文件
@@ -134,7 +135,7 @@ func secretEnvNamesFromYAMLFile(path string) map[string]struct{} {
 // defaultDatabasePath 返回内置默认配置的数据库绝对路径（即 database/login.db）。
 // 未显式指定数据库路径时命令会拒绝使用它，避免误触真实/基线库。
 func defaultDatabasePath() string {
-	absolute, err := filepath.Abs(login.Default().Database.Path)
+	absolute, err := filepath.Abs(loginconfig.Default().Database.Path)
 	if err != nil {
 		return ""
 	}
@@ -158,7 +159,7 @@ func (r *runner) refuseImplicitDefaultDatabase(absolute string) int {
 // dataPath 返回有效配置中的 SQLite 数据库绝对路径；未配置、非 SQLite 驱动或隐式
 // 指向默认 database/login.db 时返回明确错误码。它是所有本地管理命令的唯一数据库
 // 入口，避免各命令各自拼路径。
-func (r *runner) dataPath(config login.Config) (string, int) {
+func (r *runner) dataPath(config loginconfig.Config) (string, int) {
 	path, code := r.tryDataPath(config)
 	if code != "" {
 		if code == "CONFIG_DEFAULT_DATABASE_REFUSED" {
@@ -178,7 +179,7 @@ func (r *runner) dataPath(config login.Config) (string, int) {
 
 // openDatabase 打开一个已迁移的 SQLite 数据库。它拒绝创建新数据库文件：诊断与
 // 管理命令对不存在的库返回 DATABASE_NOT_INITIALIZED，避免掩盖错误路径。
-func (r *runner) openDatabase(config login.Config) (*storagesqlite.Store, int) {
+func (r *runner) openDatabase(config loginconfig.Config) (*storagesqlite.Store, int) {
 	path, exit := r.dataPath(config)
 	if exit != ExitOK {
 		return nil, exit
@@ -199,8 +200,8 @@ func (r *runner) openDatabase(config login.Config) (*storagesqlite.Store, int) {
 
 // tryDataPath 与 dataPath 相同但不输出错误，供诊断命令自行聚合结果。返回值第二项
 // 是稳定错误码；返回的路径仅在错误码为空时有效（拒绝默认库时也返回该路径供报告）。
-func (r *runner) tryDataPath(config login.Config) (string, string) {
-	if !config.Database.Driver.Valid() || config.Database.Driver != login.DatabaseDriverSQLite {
+func (r *runner) tryDataPath(config loginconfig.Config) (string, string) {
+	if !config.Database.Driver.Valid() || config.Database.Driver != loginconfig.DatabaseDriverSQLite {
 		return "", "DATABASE_UNSUPPORTED"
 	}
 	path := strings.TrimSpace(config.Database.Path)
@@ -219,7 +220,7 @@ func (r *runner) tryDataPath(config login.Config) (string, string) {
 
 // tryDatabaseReadOnly 与 openDatabaseReadOnly 相同但只返回稳定错误码，不写输出；
 // 诊断命令据此把失败聚合进结构化检查列表，避免重复错误输出。
-func (r *runner) tryDatabaseReadOnly(config login.Config) (*storagesqlite.Store, string) {
+func (r *runner) tryDatabaseReadOnly(config loginconfig.Config) (*storagesqlite.Store, string) {
 	path, code := r.tryDataPath(config)
 	if code != "" {
 		return nil, code
@@ -239,7 +240,7 @@ func (r *runner) tryDatabaseReadOnly(config login.Config) (*storagesqlite.Store,
 // openDatabaseReadOnly 以不强制 WAL、不写入的意图打开数据库，供只读诊断/查询
 // 命令使用。它仍然使用既有 SQLite 连接实现（不复制连接参数），只是不主动切换
 // journal_mode；调用方只执行 SELECT/PRAGMA 查询。
-func (r *runner) openDatabaseReadOnly(config login.Config) (*storagesqlite.Store, int) {
+func (r *runner) openDatabaseReadOnly(config loginconfig.Config) (*storagesqlite.Store, int) {
 	path, exit := r.dataPath(config)
 	if exit != ExitOK {
 		return nil, exit

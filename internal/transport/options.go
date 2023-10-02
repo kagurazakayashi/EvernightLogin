@@ -31,6 +31,8 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/httppolicy"
 )
 
 const (
@@ -39,8 +41,8 @@ const (
 	// MinMaxBodyBytes/MaxMaxBodyBytes 是请求体上限允许范围（1 KiB～16 MiB）。
 	MinMaxBodyBytes int64 = 1 << 10
 	MaxMaxBodyBytes int64 = 16 << 20
-	// MaxPrefixBytes 是路径前缀最大长度。
-	MaxPrefixBytes = 128
+	// MaxPrefixBytes 是路径前缀最大长度；规则实现见公共 httppolicy 包。
+	MaxPrefixBytes = httppolicy.MaxPrefixBytes
 	// MaxQueryBytes 是原始查询串上限（8 KiB），超出返回 414，避免解析放大。
 	MaxQueryBytes = 8 << 10
 	// MaxPathBytes 是请求路径上限，超出返回 414。

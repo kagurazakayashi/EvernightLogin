@@ -9,6 +9,8 @@
 package managecli
 
 import (
+	loginconfig "github.com/kagurazakayashi/EvernightLogin/config"
+
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
@@ -21,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/maintenance"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 )
@@ -169,12 +170,12 @@ func (r *runner) runDiagCheck(subcommand string, args []string) int {
 }
 
 // diagConfig 检查配置是否有效（loadEffectiveConfig 已在调用前完成，这里只投影）。
-func (r *runner) diagConfig(_ login.Config) diagCheck {
+func (r *runner) diagConfig(_ loginconfig.Config) diagCheck {
 	return diagCheck{Name: "config", Status: "ok", Detail: "配置加载与校验通过"}
 }
 
 // diagDatabase 检查数据库是否存在、可打开、可查询与完整性。
-func (r *runner) diagDatabase(config login.Config) []diagCheck {
+func (r *runner) diagDatabase(config loginconfig.Config) []diagCheck {
 	checks := []diagCheck{}
 	store, code := r.tryDatabaseReadOnly(config)
 	if code != "" {
@@ -211,7 +212,7 @@ func (r *runner) diagDatabase(config login.Config) []diagCheck {
 }
 
 // diagMigration 检查迁移是否全部应用、校验和一致且无失败记录。
-func (r *runner) diagMigration(config login.Config) []diagCheck {
+func (r *runner) diagMigration(config loginconfig.Config) []diagCheck {
 	store, code := r.tryDatabaseReadOnly(config)
 	if code != "" {
 		return []diagCheck{{Name: "migration", Status: "unverified",
@@ -247,7 +248,7 @@ func (r *runner) diagMigration(config login.Config) []diagCheck {
 }
 
 // diagMaintenance 检查维护状态（health 用，维护中不算不可用但需报告）。
-func (r *runner) diagMaintenance(config login.Config,
+func (r *runner) diagMaintenance(config loginconfig.Config,
 	values map[string]string) diagCheck {
 	if err := r.ctx.Err(); err != nil {
 		return diagCheck{Name: "maintenance", Status: "unverified",
@@ -277,7 +278,7 @@ func (r *runner) diagMaintenance(config login.Config,
 }
 
 // diagMaintenanceReady 是 ready 用的维护检查：未验证即视为不通过。
-func (r *runner) diagMaintenanceReady(config login.Config,
+func (r *runner) diagMaintenanceReady(config loginconfig.Config,
 	values map[string]string) diagCheck {
 	check := r.diagMaintenance(config, values)
 	if check.Status == "unverified" {
@@ -287,7 +288,7 @@ func (r *runner) diagMaintenanceReady(config login.Config,
 }
 
 // maintenanceController 构造只读维护状态控制器；不传状态目录/密钥时返回 unverified。
-func (r *runner) maintenanceController(config login.Config,
+func (r *runner) maintenanceController(config loginconfig.Config,
 	values map[string]string) (*maintenance.Controller, *diagCheck) {
 	stateDir := stringFlag(values, "state-dir")
 	keyringFile := stringFlag(values, "keyring-file")
@@ -332,7 +333,7 @@ func (r *runner) maintenanceController(config login.Config,
 }
 
 // diagCertificate 检查本地 TLS 证书链与私钥匹配、有效期与到期告警。
-func (r *runner) diagCertificate(config login.Config) diagCheck {
+func (r *runner) diagCertificate(config loginconfig.Config) diagCheck {
 	if config.Server.TLSPFXFile != "" {
 		return diagCheck{Name: "certificate", Status: "unavailable",
 			Code:   "CERT_PFX_UNSUPPORTED",

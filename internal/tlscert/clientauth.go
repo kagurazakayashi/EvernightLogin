@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/netpolicy"
 )
 
 const (

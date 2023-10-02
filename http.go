@@ -248,8 +248,9 @@ func ClientServiceIdentityFromContext(ctx context.Context) (string, bool) {
 // transportErrorCodes 把错误码注册表投影为内部传输层只读结构，避免内部包反向
 // 依赖根包。
 func transportErrorCodes() []transport.ErrorCodeInfo {
-	infos := make([]transport.ErrorCodeInfo, 0, len(errorCodeDefinitions))
-	for _, definition := range errorCodeDefinitions {
+	registered := RegisteredErrorCodes()
+	infos := make([]transport.ErrorCodeInfo, 0, len(registered))
+	for _, definition := range registered {
 		infos = append(infos, transport.ErrorCodeInfo{
 			Code:       string(definition.Code),
 			Category:   string(definition.Category),

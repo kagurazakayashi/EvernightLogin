@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/netpolicy"
 )
 
 // mustAddress 解析允许临时端口的监听地址。

@@ -47,10 +47,11 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/kagurazakayashi/EvernightLogin/appids"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
-	"github.com/kagurazakayashi/EvernightLogin/internal/netpolicy"
+	"github.com/kagurazakayashi/EvernightLogin/netpolicy"
 )
 
 const (
@@ -70,8 +71,9 @@ const (
 	// MaxListOffset 限制列表偏移量，避免深分页放大数据库开销。
 	MaxListOffset = 1_000_000
 	// applicationIDPrefix/applicationIDRandomBytes 定义应用 ID 格式：app_ + 128 位随机数。
-	applicationIDPrefix      = "app_"
-	applicationIDRandomBytes = 16
+	// 格式与校验的单一实现在公共 appids 包；此处常量仅为本包生成/校验复用。
+	applicationIDPrefix      = appids.Prefix
+	applicationIDRandomBytes = appids.RandomBytes
 )
 
 // Status 是应用全局状态，与 applications 表 CHECK 约束一致。
@@ -324,14 +326,10 @@ func NewApplicationID(random io.Reader) (string, error) {
 	return applicationIDPrefix + hex.EncodeToString(buffer), nil
 }
 
-// ValidApplicationID 报告应用 ID 是否符合本包生成的固定格式。
+// ValidApplicationID 报告应用 ID 是否符合固定格式。格式规则由公共 appids 包提供
+// 单一实现；本包装保持内部调用方零改动。
 func ValidApplicationID(id string) bool {
-	if len(id) != len(applicationIDPrefix)+2*applicationIDRandomBytes ||
-		!strings.HasPrefix(id, applicationIDPrefix) {
-		return false
-	}
-	_, err := hex.DecodeString(id[len(applicationIDPrefix):])
-	return err == nil
+	return appids.ValidApplicationID(id)
 }
 
 // ScopeID 返回应用对应的作用范围 ID；当前约定与应用 ID 相同（1:1、稳定）。

@@ -507,9 +507,7 @@ func classifyLifecycleError(message string, err error, requestID string) *AppErr
 		if appError.RequestID() != "" {
 			return appError
 		}
-		cloned := *appError
-		cloned.requestID = requestID
-		return &cloned
+		return appError.CloneWithRequestID(requestID)
 	}
 	return NewAppError(CodeInternalError, message,
 		WithCause(err), WithRequestID(requestID))
