@@ -58,8 +58,10 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载迁移失败: %v", err)
 	}
-	if len(migrationSet) != 44 {
-		t.Fatalf("迁移数量 = %d，期望 42", len(migrationSet))
+	// 迁移数量随版本演进（0050 起已与旧硬编码值不同）：只校验至少有本测试升级所需的
+	// 前两条，避免每次新增迁移都改这里。全部数量/版本一致性由 internal/storage/migrate 覆盖。
+	if len(migrationSet) < 2 {
+		t.Fatalf("迁移集合过短: %d", len(migrationSet))
 	}
 	// 第一次只执行到 0001，模拟步骤 08 已部署的数据库。
 	if _, err := store.Migrate(ctx, migrationSet[:1]); err != nil {
@@ -86,8 +88,11 @@ func TestMigrationUpgradeFromCoreToCredentials(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 44 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" || versions[25] != "0026" || versions[26] != "0027" || versions[27] != "0028" || versions[28] != "0029" || versions[29] != "0030" || versions[30] != "0031" || versions[31] != "0032" || versions[32] != "0033" || versions[33] != "0034" || versions[34] != "0035" || versions[35] != "0036" || versions[36] != "0037" || versions[37] != "0038" || versions[38] != "0039" || versions[39] != "0040" || versions[40] != "0041" || versions[41] != "0042" || versions[42] != "0043" || versions[43] != "0044" {
-		t.Fatalf("升级后迁移历史 = %v", versions)
+	// 历史必须与加载到的迁移集合一致，并以 0001/0002 起始；不硬编码版本清单，
+	// 让新增迁移（如 0050/0051）不再打红本测试。
+	if len(versions) != len(migrationSet) || len(versions) < 2 ||
+		versions[0] != "0001" || versions[1] != "0002" {
+		t.Fatalf("升级后迁移历史 = %v（期望 %d 条，0001/0002 起始）", versions, len(migrationSet))
 	}
 }
 
@@ -115,8 +120,19 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 44 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" || versions[25] != "0026" || versions[26] != "0027" || versions[27] != "0028" || versions[28] != "0029" || versions[29] != "0030" || versions[30] != "0031" || versions[31] != "0032" || versions[32] != "0033" || versions[33] != "0034" || versions[34] != "0035" || versions[35] != "0036" || versions[36] != "0037" || versions[37] != "0038" || versions[38] != "0039" || versions[39] != "0040" || versions[40] != "0041" || versions[41] != "0042" || versions[42] != "0043" || versions[43] != "0044" {
-		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012]", versions)
+	// 迁移历史必须与加载到的内嵌迁移集合一一对应；不硬编码版本清单（0050 起
+	// 旧硬编码已随迁移演进漂移，这里改为动态比较）。
+	expectedMigrations, err := migrate.LoadMigrations(migrations.SQLite)
+	if err != nil {
+		t.Fatalf("加载迁移失败: %v", err)
+	}
+	if len(versions) != len(expectedMigrations) {
+		t.Fatalf("迁移历史条数 = %d，期望 %d", len(versions), len(expectedMigrations))
+	}
+	for index, migration := range expectedMigrations {
+		if versions[index] != migration.Version {
+			t.Fatalf("迁移历史 = %v，期望版本 %s 于第 %d 位", versions, migration.Version, index)
+		}
 	}
 
 	infoRows, err := env.sqliteStore.QueryContext(context.Background(),

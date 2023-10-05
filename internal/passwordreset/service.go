@@ -77,6 +77,11 @@ func (s *Service) ChangePassword(ctx context.Context, caller Caller, request Cha
 // 限流或邮件发送失败都返回相同的零值结果与 nil 错误；只有内部存储/审计失败向上
 // 返回。命中与未命中都会执行签发+取消一次性凭证等主要数据库工作，缩小可观测时延
 // 差异（发送邮件仍是命中路径独有，残余时序差与传输层限流待 HTTP 接线）。
+//
+// 步骤 206：只允许账户“当前最近已验证邮箱”签发，并在创建请求的审计事务内重新读取
+// 目标，把当次安全版本与已验证邮箱写入绑定；提交后、发送前再复核一次。预读后发生
+// 邮箱切换/禁用等变化时安全失败（统一响应、取消已签发凭证、不发送邮件），绝不向已
+// 失去资格的渠道签发可用入口。
 func (s *Service) BeginReset(ctx context.Context, request BeginResetRequest) (BeginResult, error) {
 	ctx = normalizeContext(ctx)
 	normalized := strings.ToLower(strings.TrimSpace(request.Identifier))
@@ -97,6 +102,15 @@ func (s *Service) BeginReset(ctx context.Context, request BeginResetRequest) (Be
 		return BeginResult{}, ErrStoreUnavailable
 	}
 	eligible := found && candidate.Active && !candidate.IsRoot && candidate.HasPassword
+	if eligible {
+		// 只允许账户“当前最近已验证邮箱”作为签发渠道：多已验证邮箱的过渡态或正在切换
+		// 邮箱时，非当前渠道按不可用统一处理，绝不向已失去资格的渠道签发可用入口。
+		current, currentFound, currentErr := s.opts.Store.GetResetTarget(ctx, candidate.UserID)
+		if currentErr != nil {
+			return BeginResult{}, ErrStoreUnavailable
+		}
+		eligible = currentFound && current.EmailNormalized == candidate.EmailNormalized
+	}
 	if !eligible {
 		// 统一响应：仍执行一次签发+取消的等量主要工作以缓解时序侧信道；发送邮件与
 		// 持久化找回请求仍是命中路径独有，残余差异已在 README 说明。
@@ -120,15 +134,9 @@ func (s *Service) BeginReset(ctx context.Context, request BeginResetRequest) (Be
 	}
 	secret := issued.Secret.Reveal()
 	tokenSha := sha256.Sum256([]byte(secret))
-	record := ResetRequest{
-		ID: resetID, UserID: candidate.UserID, MaskedEmail: candidate.MaskedEmail,
-		CredentialID: issued.ID, TokenSHA256: tokenSha[:], State: "pending",
-		CreatedAt: now, ExpiresAt: now.Add(s.opts.TokenTTL),
-	}
-	oldPending, listErr := s.opts.Store.ListPending(ctx, candidate.UserID)
-	if listErr != nil {
-		return BeginResult{}, ErrStoreUnavailable
-	}
+	// 事务外只准备与安全无关的脚手架；绑定值与收件人在事务内用 GetResetTargetTx 的
+	// 一致性快照决定（见 createBoundResetEntry）。
+	recordTemplate := ResetRequest{ID: resetID, CredentialID: issued.ID, TokenSHA256: tokenSha[:]}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
 			Actor:  audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
@@ -137,26 +145,42 @@ func (s *Service) BeginReset(ctx context.Context, request BeginResetRequest) (Be
 			RequestID: validRequestID(request.RequestID),
 			Changes: []audit.FieldChange{
 				{Field: "recipient", After: candidate.MaskedEmail},
-				{Field: "expires_at_ms", After: fmt.Sprint(record.ExpiresAt.UnixMilli())},
+				{Field: "expires_at_ms", After: fmt.Sprint(now.Add(s.opts.TokenTTL).UnixMilli())},
 			},
 		},
 		FailureReasonCode:   "password.reset_request_failed",
 		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
 	}
+	var boundTarget Candidate
 	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
-		// 新请求作废旧 pending（同一事务内状态迁移），避免多条入口同时有效。
-		if _, cancelErr := s.opts.Store.CancelPendingTx(txCtx, tx, candidate.UserID, now); cancelErr != nil {
-			return cancelErr
+		target, createErr := s.createBoundResetEntry(txCtx, tx, candidate.UserID, normalized,
+			recordTemplate, now)
+		if createErr != nil {
+			return createErr
 		}
-		return s.opts.Store.CreateRequestTx(txCtx, tx, record)
+		boundTarget = target
+		return nil
 	}); err != nil {
+		s.cancelIssuedCredential(ctx, issued.ID, candidate.UserID)
+		if errors.Is(err, errResetIssueChannelChanged) || errors.Is(err, errResetIssueTargetUnavailable) {
+			// 预读后提交边界前邮箱/账户状态已变化：安全失败，不发送邮件、统一响应。
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+				"password.reset_requested", "channel_changed", string(CodeAccessDenied), request.RequestID)
+			return BeginResult{}, nil
+		}
 		return BeginResult{}, mapCriticalError(err)
 	}
-	// 旧 pending 的凭证在状态迁移后尽力撤销（不存在/已消费时幂等忽略）。
-	s.revokeCredentials(ctx, oldPending)
+	// 提交后、发送前复核绑定：极端调度下邮箱切换/安全变更落在此窄窗口时不再发送。
+	// 即使已经发出，旧地址上的链接也会在完成时因绑定不符被拒绝（不产生可用入口）。
+	if !s.bindingStillCurrent(ctx, boundTarget) {
+		s.cancelIssuedCredential(ctx, issued.ID, candidate.UserID)
+		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+			"password.reset_requested", "channel_changed", string(CodeAccessDenied), request.RequestID)
+		return BeginResult{}, nil
+	}
 	token := resetID + "." + secret
 	resetURL := s.opts.ResetURLBase + "?token=" + url.QueryEscape(token)
-	if err := s.sendResetMail(ctx, candidate, resetURL, request.RequestID, resetID); err != nil {
+	if err := s.sendResetMail(ctx, boundTarget, resetURL, request.RequestID, resetID); err != nil {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
 			"password.reset_requested", "mail_failed", string(CodeMailDeliveryFailed), request.RequestID)
 		return BeginResult{}, nil
@@ -199,13 +223,155 @@ func (s *Service) revokeCredentials(ctx context.Context, requests []ResetRequest
 	}
 }
 
+// ===== 找回入口的安全代际/邮箱身份绑定（步骤 206） =====
+
+// 签发事务内的内部控制流：目标在提交边界已不可用，或请求标识对应的已验证邮箱已不是
+// 账户当前最近已验证邮箱。两者都包装 ErrAccessDenied，使关键审计的失败码保持
+// ACCESS_DENIED；调用方按各自公开语义安全失败（公开入口统一响应、客服通道显式错误）。
+var (
+	errResetIssueTargetUnavailable = fmt.Errorf("%w: 找回签发目标在提交边界不可用", ErrAccessDenied)
+	errResetIssueChannelChanged    = fmt.Errorf("%w: 找回签发渠道在提交边界已变化", ErrAccessDenied)
+)
+
+// createBoundResetEntry 在签发事务内完成“复核目标与绑定 → 作废旧 pending 及凭证 →
+// 写入带安全代际/邮箱身份绑定的新请求”。它返回事务内读取的绑定快照（收件人/版本），
+// 使收件人与绑定值来自同一一致性边界；任何失败由调用方回滚并取消已签发凭证。
+func (s *Service) createBoundResetEntry(txCtx context.Context, tx audit.Tx, userID,
+	expectedEmailNormalized string, template ResetRequest, now time.Time) (Candidate, error) {
+	target, found, err := s.opts.Store.GetResetTargetTx(txCtx, tx, userID)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if !found || !target.Active || target.IsRoot || !target.HasPassword ||
+		target.EmailNormalized == "" {
+		return Candidate{}, errResetIssueTargetUnavailable
+	}
+	if expectedEmailNormalized != "" && target.EmailNormalized != expectedEmailNormalized {
+		return Candidate{}, errResetIssueChannelChanged
+	}
+	oldPending, err := s.opts.Store.ListPendingTx(txCtx, tx, userID)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if _, err := s.opts.Store.CancelPendingTx(txCtx, tx, userID, now); err != nil {
+		return Candidate{}, err
+	}
+	for _, old := range oldPending {
+		if old.CredentialID == "" {
+			continue
+		}
+		// 旧入口凭证在同一事务内撤销；已消费/已撤销/过期返回 false（幂等忽略）。
+		if _, err := s.opts.Credentials.CancelTx(txCtx, tx, credential.CancelRequest{
+			ID: old.CredentialID, Purpose: resetPurpose, Target: userID,
+		}); err != nil {
+			return Candidate{}, err
+		}
+	}
+	record := template
+	record.UserID = target.UserID
+	record.MaskedEmail = target.MaskedEmail
+	record.State = "pending"
+	record.CreatedAt = now
+	record.ExpiresAt = now.Add(s.opts.TokenTTL)
+	record.SecurityVersion = target.SecurityVersion
+	record.BoundEmailNormalized = target.EmailNormalized
+	record.Bound = true
+	if err := s.opts.Store.CreateRequestTx(txCtx, tx, record); err != nil {
+		return Candidate{}, err
+	}
+	return target, nil
+}
+
+// bindingStillCurrent 在签发提交后、发送前复核绑定仍有效（邮箱/安全版本未变化）。
+// 存储故障按“不发送”处理（默认拒绝）；即使极端调度下已经发出，旧链接也会在完成时
+// 因绑定不符被拒绝，不产生可用入口。
+func (s *Service) bindingStillCurrent(ctx context.Context, bound Candidate) bool {
+	latest, found, err := s.opts.Store.GetResetTarget(ctx, bound.UserID)
+	if err != nil || !found {
+		return false
+	}
+	if !latest.Active || latest.IsRoot || !latest.HasPassword {
+		return false
+	}
+	return latest.SecurityVersion == bound.SecurityVersion &&
+		latest.EmailNormalized == bound.EmailNormalized
+}
+
+// cancelIssuedCredential 取消已签发但未交付/未持久化的凭证（事务回滚或渠道变化时
+// 尽力清理；失败只记录日志，凭证会自行过期）。
+func (s *Service) cancelIssuedCredential(ctx context.Context, credentialID, userID string) {
+	if credentialID == "" {
+		return
+	}
+	if err := s.opts.Credentials.Cancel(context.WithoutCancel(ctx), credential.CancelRequest{
+		ID: credentialID, Purpose: resetPurpose, Target: userID,
+	}); err != nil {
+		s.opts.Logger.Warn("取消未交付找回凭证失败", "error", err)
+	}
+}
+
+// verifyRequestBinding 核对签发时的安全代际与已验证邮箱身份是否仍是账户当前值。
+// 未绑定（迁移前旧行）或任一不一致一律返回 ErrTokenInvalid：这是确定性失效——旧链接
+// 在新安全代际/新邮箱身份下永不可用，不是可重试的并发冲突。
+func verifyRequestBinding(target Candidate, request ResetRequest) error {
+	if !request.Bound {
+		return ErrTokenInvalid
+	}
+	if target.SecurityVersion != request.SecurityVersion ||
+		target.EmailNormalized != request.BoundEmailNormalized {
+		return ErrTokenInvalid
+	}
+	return nil
+}
+
+// checkRecoverableRequest 统一确认请求对应的账户此刻仍可找回，并核对绑定。存储故障
+// 返回 ErrStoreUnavailable（默认拒绝）。
+func (s *Service) checkRecoverableRequest(ctx context.Context, request ResetRequest) error {
+	target, found, err := s.opts.Store.GetResetTarget(ctx, request.UserID)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if !found || !target.Active {
+		return ErrAccountDisabled
+	}
+	if target.IsRoot {
+		return ErrAccessDenied
+	}
+	if !target.HasPassword {
+		return ErrNoPassword
+	}
+	return verifyRequestBinding(target, request)
+}
+
+// checkRecoverableRequestTx 在审计事务内复核账户可找回性与请求绑定；用于完成的提交
+// 边界（与邮箱切换/改密/禁用等安全变更在 SQLite 写锁下串行）。
+func (s *Service) checkRecoverableRequestTx(ctx context.Context, tx audit.Tx,
+	request ResetRequest) error {
+	target, found, err := s.opts.Store.GetResetTargetTx(ctx, tx, request.UserID)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if !found || !target.Active {
+		return ErrAccountDisabled
+	}
+	if target.IsRoot {
+		return ErrAccessDenied
+	}
+	if !target.HasPassword {
+		return ErrNoPassword
+	}
+	return verifyRequestBinding(target, request)
+}
+
 // ValidateResetToken 是找回页面的只读预检查：不消费凭证、不建立会话、不改变任何
 // 状态，只确认“此刻用该链接提交是否有机会成功”。为保证预检查与 CompleteReset 的
 // 判断一致，这里复用同一组检查：
 //   - 请求维度：token secret 摘要、请求状态（pending）与有效期；
 //   - 凭证维度：复用 internal/credential 的非消费校验（Peek），覆盖用途/目标绑定、
 //     凭证已消费、已撤销与凭证自身过期；
-//   - 账户维度：token 发出后账户仍必须处于可找回状态（存在、启用、非 root、有密码）。
+//   - 账户维度：token 发出后账户仍必须处于可找回状态（存在、启用、非 root、有密码）；
+//   - 绑定维度：签发时的安全代际（users.security_version）与最近已验证邮箱身份必须
+//     仍是账户当前值，否则旧链接确定性失效（改密/MFA 变更/禁用/邮箱切换后不再可用）。
 //
 // 任何一项不满足或底层存储故障都按“默认拒绝”处理。本方法绝不把预检查结果当作
 // CompleteReset 的最终授权：最终提交会重新验证并原子消费同一凭证。无效 token
@@ -231,8 +397,9 @@ func (s *Service) ValidateResetToken(ctx context.Context, token string) error {
 	}); err != nil {
 		return mapCredentialPeekError(err)
 	}
-	// 账户维度：token 发出后账户可能被禁用、删除、改为 root 或移除密码。
-	return s.checkRecoverableTarget(ctx, request.UserID)
+	// 账户维度：token 发出后账户可能被禁用、删除、改为 root 或移除密码；同时核对
+	// 签发时的安全代际与已验证邮箱身份绑定（旧链接在新代际/新邮箱下失效）。
+	return s.checkRecoverableRequest(ctx, request)
 }
 
 // verifyPendingRequest 统一校验找回请求的状态、token secret 摘要与有效期；不消费
@@ -248,26 +415,6 @@ func (s *Service) verifyPendingRequest(request ResetRequest, secret string) erro
 	}
 	if !s.now().Before(request.ExpiresAt) {
 		return ErrTokenExpired
-	}
-	return nil
-}
-
-// checkRecoverableTarget 统一确认 token 对应的账户此刻仍可走找回：账户必须存在且
-// 启用、不是 root、仍持有密码。存储故障返回 ErrStoreUnavailable（默认拒绝，绝不
-// 把读取失败当作可找回）。
-func (s *Service) checkRecoverableTarget(ctx context.Context, userID string) error {
-	target, found, err := s.opts.Store.GetResetTarget(ctx, userID)
-	if err != nil {
-		return ErrStoreUnavailable
-	}
-	if !found || !target.Active {
-		return ErrAccountDisabled
-	}
-	if target.IsRoot {
-		return ErrAccessDenied
-	}
-	if !target.HasPassword {
-		return ErrNoPassword
 	}
 	return nil
 }
@@ -359,10 +506,16 @@ func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (R
 			"password.reset_completed", "consume_failed", string(CodeChallengeInvalid), request.RequestID)
 		return ResetResult{}, mapCredentialPeekError(err)
 	}
-	// 重新确认账户在 token 发出后仍可找回：禁用/删除/无密码/root 必须在完成层拒绝。
-	if err := s.checkRecoverableTarget(ctx, resetRequest.UserID); err != nil {
+	// 重新确认账户在 token 发出后仍可找回，并核对签发时的安全代际与邮箱身份绑定：
+	// 改密/MFA 变更/禁用/邮箱切换后旧链接确定性失效（不是可重试冲突）。
+	if err := s.checkRecoverableRequest(ctx, resetRequest); err != nil {
 		if errors.Is(err, ErrStoreUnavailable) {
 			return ResetResult{}, err
+		}
+		if errors.Is(err, ErrTokenInvalid) {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
+				"password.reset_completed", "binding_stale", string(CodeChallengeInvalid), request.RequestID)
+			return ResetResult{}, ErrTokenInvalid
 		}
 		reason, code := recoveryRejectionReason(err)
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
@@ -406,6 +559,11 @@ func (s *Service) CompleteReset(ctx context.Context, request CompleteRequest) (R
 	var applied authn.SetPasswordResult
 	var outboxID string
 	err = s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		// (0) 事务内复核账户可找回性与签发绑定：与密码/邮箱/账户状态的安全变更在
+		// 同一写锁下串行；任一不一致整体回滚，凭证不被消费。
+		if bindingErr := s.checkRecoverableRequestTx(txCtx, tx, resetRequest); bindingErr != nil {
+			return bindingErr
+		}
 		// (a) 事务内重新校验并条件消费一次性凭证：并发/重放只有一个赢家。
 		if _, consumeErr := s.opts.Credentials.VerifyAndConsumeTx(txCtx, tx, credential.VerifyRequest{
 			Kind: credential.KindToken, ID: resetRequest.CredentialID, Purpose: resetPurpose,

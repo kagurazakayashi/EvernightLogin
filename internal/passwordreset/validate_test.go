@@ -378,6 +378,8 @@ type flakyResetStore struct {
 	failGet          bool
 	failGetTarget    bool
 	failInsertOutbox bool
+	failGetTargetTx  bool
+	overrideTargetTx *passwordreset.Candidate
 }
 
 func (s *flakyResetStore) setFailInsertOutbox(value bool) {
@@ -390,6 +392,36 @@ func (s *flakyResetStore) shouldFailInsertOutbox() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.failInsertOutbox
+}
+
+// setFailGetTargetTx 让事务内可找回目标读取失败（默认拒绝路径）。
+func (s *flakyResetStore) setFailGetTargetTx(value bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failGetTargetTx = value
+}
+
+func (s *flakyResetStore) shouldFailGetTargetTx() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failGetTargetTx
+}
+
+// setOverrideTargetTx 让事务内可找回目标返回指定快照，模拟“预读后提交边界前邮箱
+// 切换/安全版本变化”的受控竞争窗口；传 nil 取消覆盖。
+func (s *flakyResetStore) setOverrideTargetTx(candidate *passwordreset.Candidate) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overrideTargetTx = candidate
+}
+
+func (s *flakyResetStore) targetTxOverride() (passwordreset.Candidate, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.overrideTargetTx == nil {
+		return passwordreset.Candidate{}, false
+	}
+	return *s.overrideTargetTx, true
 }
 
 func (s *flakyResetStore) setFailGetRequest(value bool) {
@@ -463,6 +495,17 @@ func (s *flakyResetStore) GetResetTarget(ctx context.Context, userID string) (pa
 		return passwordreset.Candidate{}, false, errors.New("injected store failure")
 	}
 	return s.inner.GetResetTarget(ctx, userID)
+}
+
+func (s *flakyResetStore) GetResetTargetTx(ctx context.Context, tx audit.Tx,
+	userID string) (passwordreset.Candidate, bool, error) {
+	if s.shouldFailGetTargetTx() {
+		return passwordreset.Candidate{}, false, errors.New("injected tx store failure")
+	}
+	if candidate, ok := s.targetTxOverride(); ok {
+		return candidate, true, nil
+	}
+	return s.inner.GetResetTargetTx(ctx, tx, userID)
 }
 
 // flakyCredentialStore 是一次性凭证存储的故障注入包装：可让独立读取与事务内撤销失败。

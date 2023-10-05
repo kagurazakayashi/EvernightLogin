@@ -3,6 +3,7 @@ package passwordreset
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/url"
 	"sync"
@@ -118,7 +119,7 @@ func (s *Service) SendResetForSupport(ctx context.Context, request SupportResetR
 		s.recordSupportFailure(ctx, request.TargetUserID, "no_password", string(CodeAccessDenied), request.RequestID)
 		return SupportResetResult{}, ErrNoPassword
 	}
-	if candidate.Email == "" {
+	if candidate.Email == "" || candidate.EmailNormalized == "" {
 		s.recordSupportFailure(ctx, request.TargetUserID, "no_verified_email", string(CodeAccessDenied), request.RequestID)
 		return SupportResetResult{}, ErrNoVerifiedEmail
 	}
@@ -135,15 +136,7 @@ func (s *Service) SendResetForSupport(ctx context.Context, request SupportResetR
 	}
 	secret := issued.Secret.Reveal()
 	tokenSha := sha256.Sum256([]byte(secret))
-	record := ResetRequest{
-		ID: resetID, UserID: candidate.UserID, MaskedEmail: candidate.MaskedEmail,
-		CredentialID: issued.ID, TokenSHA256: tokenSha[:], State: "pending",
-		CreatedAt: now, ExpiresAt: now.Add(s.opts.TokenTTL),
-	}
-	oldPending, listErr := s.opts.Store.ListPending(ctx, candidate.UserID)
-	if listErr != nil {
-		return SupportResetResult{}, ErrStoreUnavailable
-	}
+	recordTemplate := ResetRequest{ID: resetID, CredentialID: issued.ID, TokenSHA256: tokenSha[:]}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
 			Actor:  audit.Actor{Type: audit.ActorSystem, ID: "passwordreset"},
@@ -153,25 +146,41 @@ func (s *Service) SendResetForSupport(ctx context.Context, request SupportResetR
 			Changes: []audit.FieldChange{
 				{Field: "channel", After: "support_case"},
 				{Field: "recipient", After: candidate.MaskedEmail},
-				{Field: "expires_at_ms", After: fmt.Sprint(record.ExpiresAt.UnixMilli())},
+				{Field: "expires_at_ms", After: fmt.Sprint(now.Add(s.opts.TokenTTL).UnixMilli())},
 			},
 		},
 		FailureReasonCode:   "password.reset_request_failed",
 		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
 	}
+	var boundTarget Candidate
 	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
-		if _, cancelErr := s.opts.Store.CancelPendingTx(txCtx, tx, candidate.UserID, now); cancelErr != nil {
-			return cancelErr
+		target, createErr := s.createBoundResetEntry(txCtx, tx, candidate.UserID, "",
+			recordTemplate, now)
+		if createErr != nil {
+			return createErr
 		}
-		return s.opts.Store.CreateRequestTx(txCtx, tx, record)
+		boundTarget = target
+		return nil
 	}); err != nil {
+		s.cancelIssuedCredential(ctx, issued.ID, candidate.UserID)
+		if errors.Is(err, errResetIssueTargetUnavailable) || errors.Is(err, errResetIssueChannelChanged) {
+			s.recordSupportFailure(ctx, request.TargetUserID, "target_changed",
+				string(CodeUserDisabled), request.RequestID)
+			return SupportResetResult{}, ErrAccountDisabled
+		}
 		return SupportResetResult{}, mapCriticalError(err)
 	}
-	s.revokeCredentials(ctx, oldPending)
+	// 提交后、发送前复核绑定：目标邮箱/安全版本在窄窗口内变化则安全失败、不发送。
+	if !s.bindingStillCurrent(ctx, boundTarget) {
+		s.cancelIssuedCredential(ctx, issued.ID, candidate.UserID)
+		s.recordSupportFailure(ctx, request.TargetUserID, "channel_changed",
+			string(CodeUserDisabled), request.RequestID)
+		return SupportResetResult{}, ErrAccountDisabled
+	}
 	token := resetID + "." + secret
 	resetURL := s.opts.ResetURLBase + "?token=" + url.QueryEscape(token)
-	if err := s.sendResetMail(ctx, candidate, resetURL, request.RequestID, resetID); err != nil {
-		s.recordSupportFailure(ctx, candidate.UserID, "mail_failed", string(CodeMailDeliveryFailed), request.RequestID)
+	if err := s.sendResetMail(ctx, boundTarget, resetURL, request.RequestID, resetID); err != nil {
+		s.recordSupportFailure(ctx, boundTarget.UserID, "mail_failed", string(CodeMailDeliveryFailed), request.RequestID)
 		return SupportResetResult{}, err
 	}
 	return SupportResetResult{Delivered: true}, nil

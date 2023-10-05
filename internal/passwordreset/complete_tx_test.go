@@ -565,8 +565,10 @@ func (t rawAuditTx) QueryContext(ctx context.Context, query string, args ...any)
 	return t.tx.QueryContext(ctx, query, args...)
 }
 
-// racingRecoveryPasswords 在 PrepareRecoveryReset 成功后模拟并发安全状态变化
-// （安全版本 +1），用于验证事务内复核与 CONFLICT 语义。
+// racingRecoveryPasswords 在 PrepareRecoveryReset 成功后模拟并发“密码凭证行版本”
+// 变化（例如登录路径的哈希参数升级；不改变安全版本/邮箱绑定），用于验证 205 的事务内
+// 复核返回可重试 CONFLICT 且令牌未消费。安全代际/邮箱绑定的确定性失效由 206 的绑定
+// 测试覆盖（Binding 不符返回不可重试的 ErrTokenInvalid）。
 type racingRecoveryPasswords struct {
 	service   passwordreset.PasswordService
 	committer passwordreset.RecoveryCommitter
@@ -601,8 +603,11 @@ func (r *racingRecoveryPasswords) PrepareRecoveryReset(ctx context.Context, call
 	request authn.RecoveryResetRequest) (authn.PreparedRecoveryReset, error) {
 	prepared, err := r.committer.PrepareRecoveryReset(ctx, caller, request)
 	if err == nil && r.shouldFire() {
+		// 只改密码凭证行版本（模拟并发哈希升级），不改安全版本/邮箱绑定：
+		// 这样请求绑定仍有效，事务内 ApplyRecoveryResetTx 的快照复核返回可重试冲突。
 		if _, bumpErr := r.env.raw.DB().ExecContext(ctx,
-			`UPDATE users SET security_version=security_version+1 WHERE id=?`, request.UserID); bumpErr != nil {
+			`UPDATE password_credentials SET row_version=row_version+1 WHERE user_id=?`,
+			request.UserID); bumpErr != nil {
 			return nil, bumpErr
 		}
 	}

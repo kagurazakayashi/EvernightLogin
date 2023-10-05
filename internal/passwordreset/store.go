@@ -16,6 +16,11 @@ type Candidate struct {
 	HasPassword bool
 	Active      bool
 	IsRoot      bool
+	// EmailNormalized 是账户当前最近已验证邮箱的规范化值；签发绑定与完成复核使用。
+	EmailNormalized string
+	// SecurityVersion 是账户当前安全版本（统一安全代际）；密码/MFA/账户状态等安全
+	// 变更在各自事务内原子递增，旧找回入口据此失效。
+	SecurityVersion int64
 }
 
 // ResetRequest 是一次找回请求的持久化状态；不保存 token 明文。
@@ -30,6 +35,15 @@ type ResetRequest struct {
 	ConsumedAt   time.Time
 	// TokenSHA256 是找回入口秘密的 SHA-256（不含明文），用于不消费的预检查。
 	TokenSHA256 []byte
+	// SecurityVersion 是签发时账户的安全版本（统一安全代际）；完成/预检查必须与
+	// 账户当前值一致，否则说明签发后发生过密码/MFA/账户状态等安全变更。
+	SecurityVersion int64
+	// BoundEmailNormalized 是签发时账户的最近已验证邮箱（规范化）；完成/预检查必须
+	// 与账户当前最近已验证邮箱一致，否则说明验证邮箱已切换。
+	BoundEmailNormalized string
+	// Bound 表示该请求是否带有安全代际与邮箱身份绑定。迁移前旧行（两列为 NULL）为
+	// false，一律按失效处理（保守拒绝，不做回填）。
+	Bound bool
 }
 
 // Store 是找回请求与 OAuth 撤销 outbox 的持久化契约，由 internal/passwordreset/sqlite
@@ -54,6 +68,10 @@ type Store interface {
 	ListPendingTx(ctx context.Context, tx audit.Tx, userID string) ([]ResetRequest, error)
 	// CancelPendingTx 在审计事务内把用户所有 pending 请求标记 cancelled，返回行数。
 	CancelPendingTx(ctx context.Context, tx audit.Tx, userID string, now time.Time) (int64, error)
-	// GetResetTarget 按用户 ID 重新确认账户可找回（active/非 root/有密码）。
+	// GetResetTarget 按用户 ID 重新确认账户可找回（active/非 root/有密码），并返回
+	// 当前安全版本与最近已验证邮箱（用于核对签发绑定）。
 	GetResetTarget(ctx context.Context, userID string) (Candidate, bool, error)
+	// GetResetTargetTx 在审计事务内按用户 ID 重新确认账户可找回并读取当前安全版本与
+	// 最近已验证邮箱；用于把安全代际/邮箱绑定核对放进签发与完成的事务提交边界（步骤 206）。
+	GetResetTargetTx(ctx context.Context, tx audit.Tx, userID string) (Candidate, bool, error)
 }
