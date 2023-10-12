@@ -35,6 +35,8 @@ type ListQuery struct {
 	ScopeFilter string
 	Enabled     *bool
 	Builtin     *bool
+	Sort        SortField
+	Descending  bool
 }
 
 // PermissionRecord 是组合角色前读取的权限状态；只接受同范围、启用、非 root_only。
@@ -114,6 +116,12 @@ type Store interface {
 	AddGroupRole(ctx context.Context, tx audit.Tx, assignment GroupRoleAssignment) (bool, error)
 	RemoveGroupRole(ctx context.Context, tx audit.Tx, roleID, groupID string) (bool, error)
 	ListRoleAssignments(ctx context.Context, roleID string) (Assignments, error)
+	// ListRoleUserAssignments/ListRoleGroupAssignments 在数据源处分页读取角色分配；
+	// 授权与数据范围由服务层先行判定，分页参数由服务层规范化。
+	ListRoleUserAssignments(ctx context.Context, roleID string, limit, offset int,
+		sort AssignmentSortField, descending bool) ([]UserRoleAssignment, bool, error)
+	ListRoleGroupAssignments(ctx context.Context, roleID string, limit, offset int,
+		sort AssignmentSortField, descending bool) ([]GroupRoleAssignment, bool, error)
 }
 
 // AuditRecorder 是角色服务依赖的审计契约。
@@ -312,8 +320,16 @@ func (s *Service) ListRoles(ctx context.Context, caller Caller, request ListRequ
 	if request.Offset < 0 || request.Offset > MaxListOffset {
 		return ListResult{}, fmt.Errorf("%w: 分页偏移无效", ErrInvalidRequest)
 	}
+	sortField := request.Sort
+	if sortField == "" {
+		sortField = SortCreatedAt
+	}
+	if !sortField.Valid() {
+		return ListResult{}, fmt.Errorf("%w: 排序字段不在允许列表内", ErrInvalidRequest)
+	}
 	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all,
-		Enabled: request.Enabled, Builtin: request.Builtin}
+		Enabled: request.Enabled, Builtin: request.Builtin,
+		Sort: sortField, Descending: request.Descending}
 	filter := strings.TrimSpace(request.ScopeID)
 	if filter != "" {
 		if _, _, err := ParseScope(filter); err != nil {
@@ -694,6 +710,67 @@ func (s *Service) ListRolePermissions(ctx context.Context, caller Caller, roleID
 		return nil, err
 	}
 	return permissions, nil
+}
+
+// ListRoleAssignmentsPaged 在数据源处分页读取角色的用户与用户组分配：
+//   - 先按 ActionListRoleAssignments 判权（含作用范围/数据范围与 root 保护）；
+//   - 用户与组分配各自独立 Limit/Offset/HasMore；
+//   - 排序字段白名单：created_at（默认）或 target_id；同值时按稳定目标 ID 次序；
+//   - offset 在并发分配/撤销下不保证快照一致（可能重复/跳过），需要快照的导出应
+//     使用稳定游标或快照，而不是依赖 offset 分页。
+func (s *Service) ListRoleAssignmentsPaged(ctx context.Context, caller Caller,
+	request AssignmentListRequest) (AssignmentListResult, error) {
+	if !ValidRoleID(request.RoleID) {
+		return AssignmentListResult{}, fmt.Errorf("%w: 角色 ID 格式无效", ErrInvalidRequest)
+	}
+	current, err := s.getAuthorizedRole(ctx, caller, ActionListRoleAssignments, request.RoleID)
+	if err != nil {
+		return AssignmentListResult{}, err
+	}
+	userLimit, userOffset, err := normalizeAssignmentPage(request.UserLimit, request.UserOffset)
+	if err != nil {
+		return AssignmentListResult{}, err
+	}
+	groupLimit, groupOffset, err := normalizeAssignmentPage(request.GroupLimit, request.GroupOffset)
+	if err != nil {
+		return AssignmentListResult{}, err
+	}
+	sortField := request.Sort
+	if sortField == "" {
+		sortField = AssignmentSortCreatedAt
+	}
+	if !sortField.Valid() {
+		return AssignmentListResult{}, fmt.Errorf("%w: 分配排序字段不在允许列表内", ErrInvalidRequest)
+	}
+	users, usersHasMore, err := s.store.ListRoleUserAssignments(ctx, current.ID,
+		userLimit, userOffset, sortField, request.Descending)
+	if err != nil {
+		return AssignmentListResult{}, err
+	}
+	groups, groupsHasMore, err := s.store.ListRoleGroupAssignments(ctx, current.ID,
+		groupLimit, groupOffset, sortField, request.Descending)
+	if err != nil {
+		return AssignmentListResult{}, err
+	}
+	if err := s.recordRead(ctx, caller, ActionListRoleAssignments, current); err != nil {
+		return AssignmentListResult{}, err
+	}
+	return AssignmentListResult{Users: users, UsersHasMore: usersHasMore,
+		Groups: groups, GroupsHasMore: groupsHasMore}, nil
+}
+
+// normalizeAssignmentPage 规范化分配分页参数（0 用默认值；非法返回 ErrInvalidRequest）。
+func normalizeAssignmentPage(limit, offset int) (int, int, error) {
+	if limit == 0 {
+		limit = DefaultListLimit
+	}
+	if limit < 0 || limit > MaxListLimit {
+		return 0, 0, fmt.Errorf("%w: 每页数量必须在 1～%d 之间", ErrInvalidRequest, MaxListLimit)
+	}
+	if offset < 0 || offset > MaxListOffset {
+		return 0, 0, fmt.Errorf("%w: 分页偏移无效", ErrInvalidRequest)
+	}
+	return limit, offset, nil
 }
 
 // AssignUserRole 把角色分配给用户。角色必须启用；系统角色只能分配给 active 且

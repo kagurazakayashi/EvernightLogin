@@ -33,5 +33,6 @@
   </tr>{{else}}<tr><td colspan="6">{{t "page.admin.users.empty"}}</td></tr>{{end}}</tbody>
 </table>
 <p><a class="ln-button" href="{{route "admin.user_create"}}">{{t "page.admin.users.create"}}</a></p>
-{{if .Data.hasMore}}<p><a href="{{route "admin.users"}}?status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.users"}}?status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&desc={{if .Data.query.Descending}}1{{else}}0{{end}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
+{{if .Data.hasMore}}<p><a rel="next" href="{{route "admin.users"}}?status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&desc={{if .Data.query.Descending}}1{{else}}0{{end}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
 {{end}}

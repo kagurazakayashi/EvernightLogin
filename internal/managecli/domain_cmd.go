@@ -348,10 +348,40 @@ func (r *runner) runGroup(subcommand string, args []string) int {
 	}
 }
 
+// domainSortFlag 解析排序白名单参数（--sort），空值表示使用领域默认排序。
+func domainSortFlag(values map[string]string, allowed []string) (string, error) {
+	sortValue := strings.TrimSpace(values["sort"])
+	if sortValue == "" {
+		return "", nil
+	}
+	for _, candidate := range allowed {
+		if sortValue == candidate {
+			return sortValue, nil
+		}
+	}
+	return "", fmt.Errorf("--sort 只接受 %s", strings.Join(allowed, "/"))
+}
+
+// domainDescendingFlag 解析 --desc（值参数）：空/false/0 为升序，true/1 为降序。
+func domainDescendingFlag(values map[string]string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(values["desc"])) {
+	case "", "false", "0":
+		return false, nil
+	case "true", "1":
+		return true, nil
+	default:
+		return false, fmt.Errorf("--desc 只接受 true/false 或 1/0")
+	}
+}
+
+// domainNextOffset 计算下一页建议 offset（仅供 JSON 输出，帮助脚本翻页）。
+func domainNextOffset(offset, returned int) int { return offset + returned }
+
 func (r *runner) runGroupList(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "scope", value: true}, flagDef{name: "limit", value: true},
-		flagDef{name: "offset", value: true}))
+		flagDef{name: "offset", value: true}, flagDef{name: "sort", value: true},
+		flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -384,8 +414,17 @@ func (r *runner) runGroupList(args []string) int {
 	if err != nil {
 		return r.usage("--operator 本地管理员标识无效")
 	}
+	sortField, err := domainSortFlag(values, []string{"created_at", "updated_at", "name", "key"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
 	result, err := service.ListGroups(r.ctx, caller, group.ListRequest{ScopeID: scope,
-		Limit: limit, Offset: offset})
+		Limit: limit, Offset: offset, Sort: group.GroupSortField(sortField),
+		Descending: descending})
 	if err != nil {
 		return r.domainFailure("列出用户组", group.CodeOf(err), err)
 	}
@@ -394,7 +433,9 @@ func (r *runner) runGroupList(args []string) int {
 		items = append(items, newGroupOutput(item))
 	}
 	output := map[string]any{"scope_id": scope, "groups": items,
-		"has_more": result.HasMore, "limit": limit, "offset": offset}
+		"has_more": result.HasMore, "limit": limit, "offset": offset,
+		"next_offset": domainNextOffset(offset, len(items)), "sort": sortField,
+		"desc": descending}
 	if r.json {
 		return r.succeed(output)
 	}
@@ -445,12 +486,13 @@ func (r *runner) runGroupGet(args []string) int {
 
 func (r *runner) runGroupMembers(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
-		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true}))
+		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
+		flagDef{name: "sort", value: true}, flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
 	if len(positional) != 1 {
-		return r.usage("用法：loginctl group members <group_id> --operator <id> [--limit N] [--json]")
+		return r.usage("用法：loginctl group members <group_id> --operator <id> [--limit N] [--offset N] [--sort joined_at|user_id] [--desc true] [--json]")
 	}
 	r.json = boolFlag(values, "json")
 	operator, exit := r.requireOperator(values)
@@ -474,8 +516,17 @@ func (r *runner) runGroupMembers(args []string) int {
 	if err != nil {
 		return r.usage("--operator 本地管理员标识无效")
 	}
+	sortField, err := domainSortFlag(values, []string{"joined_at", "user_id"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
 	result, err := service.ListMembers(r.ctx, caller, group.MemberListRequest{
-		GroupID: strings.TrimSpace(positional[0]), Limit: limit, Offset: offset})
+		GroupID: strings.TrimSpace(positional[0]), Limit: limit, Offset: offset,
+		Sort: group.MemberSortField(sortField), Descending: descending})
 	if err != nil {
 		return r.domainFailure("读取组成员", group.CodeOf(err), err)
 	}
@@ -484,7 +535,9 @@ func (r *runner) runGroupMembers(args []string) int {
 		members = append(members, map[string]any{"group_id": item.GroupID,
 			"user_id": item.UserID, "created_at": formatTime(item.CreatedAt)})
 	}
-	output := map[string]any{"members": members, "has_more": result.HasMore}
+	output := map[string]any{"members": members, "has_more": result.HasMore,
+		"limit": limit, "offset": offset, "next_offset": domainNextOffset(offset, len(members)),
+		"sort": sortField, "desc": descending}
 	if r.json {
 		return r.succeed(output)
 	}
@@ -552,6 +605,8 @@ func (r *runner) runRole(subcommand string, args []string) int {
 		return r.runRoleGet(args)
 	case "permissions":
 		return r.runRolePermissions(args)
+	case "assignments":
+		return r.runRoleAssignments(args)
 	case "create", "update", "enable", "disable", "assign", "revoke", "delete":
 		return r.managementWriteNotExposed("角色", subcommand,
 			"角色变更/分配需要委派转授检查与敏感策略装配，CLI 不提供放宽替身")
@@ -563,7 +618,8 @@ func (r *runner) runRole(subcommand string, args []string) int {
 func (r *runner) runRoleList(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "scope", value: true}, flagDef{name: "limit", value: true},
-		flagDef{name: "offset", value: true}))
+		flagDef{name: "offset", value: true}, flagDef{name: "sort", value: true},
+		flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -596,8 +652,17 @@ func (r *runner) runRoleList(args []string) int {
 	if err != nil {
 		return r.usage("--operator 本地管理员标识无效")
 	}
+	sortField, err := domainSortFlag(values, []string{"created_at", "updated_at", "name", "key"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
 	result, err := service.ListRoles(r.ctx, caller, role.ListRequest{ScopeID: scope,
-		Limit: limit, Offset: offset})
+		Limit: limit, Offset: offset, Sort: role.SortField(sortField),
+		Descending: descending})
 	if err != nil {
 		return r.domainFailure("列出角色", role.CodeOf(err), err)
 	}
@@ -606,7 +671,9 @@ func (r *runner) runRoleList(args []string) int {
 		items = append(items, newRoleOutput(item))
 	}
 	output := map[string]any{"scope_id": scope, "roles": items,
-		"has_more": result.HasMore, "limit": limit, "offset": offset}
+		"has_more": result.HasMore, "limit": limit, "offset": offset,
+		"next_offset": domainNextOffset(offset, len(items)), "sort": sortField,
+		"desc": descending}
 	if r.json {
 		return r.succeed(output)
 	}
@@ -617,6 +684,92 @@ func (r *runner) runRoleList(args []string) int {
 	for _, item := range items {
 		fmt.Fprintf(r.stdout, "%s  %s  %s  enabled=%t  scope=%s\n", item.ID, item.Key,
 			item.Name, item.Enabled, item.ScopeID)
+	}
+	if result.HasMore {
+		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
+	}
+	return ExitOK
+}
+
+// runRoleAssignments 分页列出角色的用户/用户组分配（两类各自分页）。
+func (r *runner) runRoleAssignments(args []string) int {
+	values, positional, err := parseFlags(args, domainFlags(
+		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
+		flagDef{name: "sort", value: true}, flagDef{name: "desc", value: true}))
+	if err != nil {
+		return r.flagError(err)
+	}
+	if len(positional) != 1 {
+		return r.usage("用法：loginctl role assignments <role_id> --operator <id> [--limit N] [--offset N] [--sort created_at|target_id] [--desc true] [--json]")
+	}
+	r.json = boolFlag(values, "json")
+	operator, exit := r.requireOperator(values)
+	if exit != ExitOK {
+		return exit
+	}
+	limit, err := parseLimit(values, domainListDefaultLimit, domainListMaxLimit)
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	offset, err := parseIntFlag(values, "offset", 0)
+	if err != nil || offset < 0 || offset > 1_000_000 {
+		return r.usage("--offset 必须在 0～1000000 之间")
+	}
+	sortField, err := domainSortFlag(values, []string{"created_at", "target_id"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	base, service, exit := r.openRoleService(values, operator)
+	if exit != ExitOK {
+		return exit
+	}
+	defer base.close()
+	caller, err := role.LocalBootstrapCaller(operator)
+	if err != nil {
+		return r.usage("--operator 本地管理员标识无效")
+	}
+	result, err := service.ListRoleAssignmentsPaged(r.ctx, caller, role.AssignmentListRequest{
+		RoleID:    strings.TrimSpace(positional[0]),
+		UserLimit: limit, UserOffset: offset, GroupLimit: limit, GroupOffset: offset,
+		Sort: role.AssignmentSortField(sortField), Descending: descending})
+	if err != nil {
+		return r.domainFailure("读取角色分配", role.CodeOf(err), err)
+	}
+	users := make([]map[string]any, 0, len(result.Users))
+	for _, item := range result.Users {
+		users = append(users, map[string]any{"user_id": item.UserID,
+			"scope_id": item.ScopeID, "data_scope": item.DataScope,
+			"assigned_by": item.AssignedBy, "created_at": formatTime(item.CreatedAt)})
+	}
+	groups := make([]map[string]any, 0, len(result.Groups))
+	for _, item := range result.Groups {
+		groups = append(groups, map[string]any{"group_id": item.GroupID,
+			"scope_id": item.ScopeID, "data_scope": item.DataScope,
+			"created_at": formatTime(item.CreatedAt)})
+	}
+	output := map[string]any{"users": users, "users_has_more": result.UsersHasMore,
+		"groups": groups, "groups_has_more": result.GroupsHasMore,
+		"limit": limit, "offset": offset, "sort": sortField, "desc": descending}
+	if r.json {
+		return r.succeed(output)
+	}
+	for _, item := range users {
+		fmt.Fprintf(r.stdout, "user  %v  scope=%v data_scope=%v\n", item["user_id"],
+			item["scope_id"], item["data_scope"])
+	}
+	for _, item := range groups {
+		fmt.Fprintf(r.stdout, "group %v  scope=%v data_scope=%v\n", item["group_id"],
+			item["scope_id"], item["data_scope"])
+	}
+	if len(users) == 0 && len(groups) == 0 {
+		fmt.Fprintln(r.stdout, "该角色没有用户或用户组分配。")
+	}
+	if result.UsersHasMore || result.GroupsHasMore {
+		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
 	}
 	return ExitOK
 }
@@ -870,7 +1023,6 @@ func (r *runner) runAppMembers(args []string) int {
 	return ExitOK
 }
 
-// app delete：对已停用应用执行逻辑删除（步骤 190；本地受信管理员边界）。
 func (r *runner) runAppDelete(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "expected-version", value: true},

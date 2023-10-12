@@ -44,6 +44,24 @@
   {{else}}<tr><td colspan="9" class="ln-meta">{{t "page.admin.rbac.roles_empty"}}</td></tr>{{end}}
   </tbody>
 </table>
-{{if .Data.hasMore}}<p><a class="ln-button ln-button--secondary" rel="next" href="{{route "admin.roles"}}?scope_id={{.Data.scopeID}}&enabled={{.Data.enabled}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+<form method="get" action="{{route "admin.roles"}}" class="ln-actions" aria-label="{{t "common.sort.label"}}">
+  <input type="hidden" name="scope_id" value="{{.Data.scopeID}}">
+  <input type="hidden" name="enabled" value="{{.Data.enabled}}">
+  <label class="ln-field__label" for="roles-sort">{{t "common.sort.label"}}</label>
+  <select class="ln-input" id="roles-sort" name="sort">
+    <option value="created_at"{{if eq .Data.sort "created_at"}} selected{{end}}>{{t "common.sort.created_at"}}</option>
+    <option value="updated_at"{{if eq .Data.sort "updated_at"}} selected{{end}}>{{t "common.sort.updated_at"}}</option>
+    <option value="name"{{if eq .Data.sort "name"}} selected{{end}}>{{t "common.sort.name"}}</option>
+    <option value="key"{{if eq .Data.sort "key"}} selected{{end}}>{{t "common.sort.key"}}</option>
+  </select>
+  <label class="ln-field__label" for="roles-desc">{{t "common.sort.direction"}}</label>
+  <select class="ln-input" id="roles-desc" name="desc">
+    <option value="false"{{if not .Data.desc}} selected{{end}}>{{t "common.sort.asc"}}</option>
+    <option value="true"{{if .Data.desc}} selected{{end}}>{{t "common.sort.desc"}}</option>
+  </select>
+  <button class="ln-button ln-button--secondary" type="submit">{{t "common.sort.apply"}}</button>
+</form>
+{{if .Data.hasPrevious}}<p><a class="ln-button ln-button--secondary" rel="prev" href="{{route "admin.roles"}}?scope_id={{.Data.scopeID}}&enabled={{.Data.enabled}}&sort={{.Data.sort}}&desc={{.Data.desc}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
+{{if .Data.hasMore}}<p><a class="ln-button ln-button--secondary" rel="next" href="{{route "admin.roles"}}?scope_id={{.Data.scopeID}}&enabled={{.Data.enabled}}&sort={{.Data.sort}}&desc={{.Data.desc}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
 <p class="ln-meta">{{t "page.admin.rbac.filtered_no_results"}}</p>
 {{end}}

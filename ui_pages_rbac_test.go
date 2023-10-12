@@ -1029,3 +1029,41 @@ func TestRBACPermissionStateConfirmAndReauth(t *testing.T) {
 		t.Fatalf("启用权限 = %d", enabled.Code)
 	}
 }
+
+// TestRBACListSortAndPaginationParams 覆盖步骤 216 的角色/权限列表排序与分页参数：
+// 白名单排序、降序、上一页/下一页链接与非法参数拒绝（不静默纠正）。
+func TestRBACListSortAndPaginationParams(t *testing.T) {
+	env := newRBACPageEnv(t)
+
+	roles := env.get("/admin/roles?sort=name&desc=true&offset=20")
+	if roles.Code != http.StatusOK {
+		t.Fatalf("角色列表带排序 = %d", roles.Code)
+	}
+	body := roles.Body.String()
+	if !strings.Contains(body, `value="name" selected`) {
+		t.Fatal("角色列表未选中 name 排序")
+	}
+	if !strings.Contains(body, "上一页") || !strings.Contains(body, "下一页") {
+		t.Fatal("角色列表缺少上一页/下一页链接")
+	}
+	if strings.Contains(body, "http://") || strings.Contains(body, "https://") {
+		t.Fatal("角色列表引用了外部在线资源")
+	}
+	if invalid := env.get("/admin/roles?sort=password_hash"); invalid.Code != http.StatusBadRequest {
+		t.Fatalf("非法角色排序 = %d，期望 400", invalid.Code)
+	}
+	if invalid := env.get("/admin/roles?desc=yes"); invalid.Code != http.StatusBadRequest {
+		t.Fatalf("非法角色排序方向 = %d，期望 400", invalid.Code)
+	}
+
+	permissions := env.get("/admin/permissions?sort=key&desc=true")
+	if permissions.Code != http.StatusOK {
+		t.Fatalf("权限列表带排序 = %d", permissions.Code)
+	}
+	if !strings.Contains(permissions.Body.String(), `value="key" selected`) {
+		t.Fatal("权限列表未选中 key 排序")
+	}
+	if invalid := env.get("/admin/permissions?sort=bogus"); invalid.Code != http.StatusBadRequest {
+		t.Fatalf("非法权限排序 = %d，期望 400", invalid.Code)
+	}
+}

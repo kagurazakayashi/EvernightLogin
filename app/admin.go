@@ -29,6 +29,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
+	"github.com/kagurazakayashi/EvernightLogin/internal/group"
 	"github.com/kagurazakayashi/EvernightLogin/internal/permission"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
@@ -103,6 +104,16 @@ func (f *adminFacade) begin(ctx context.Context, caller AdminCaller,
 // configError 返回带本次请求编号的 CONFIG_INVALID 公开错误。
 func (a adminRequest) configError(message string) error {
 	return configError(message, a.requestID)
+}
+
+// page 规范化公开分页输入，并把非法值映射为带本次请求编号的 REQ_INVALID 错误
+// （请求编号贯穿调用、审计与返回错误）。
+func (a adminRequest) page(page AdminPage) (AdminPage, error) {
+	normalized, err := NormalizeAdminPage(page)
+	if err != nil {
+		return AdminPage{}, mapDomainError("分页参数无效", "REQ_INVALID", a.requestID)
+	}
+	return normalized, nil
 }
 
 // domainError 返回带本次请求编号的公开领域错误。
@@ -366,8 +377,12 @@ func (f *adminFacade) ListUsers(ctx context.Context,
 	if caller, err = bindCaller(caller, call.requestID); err != nil {
 		return AdminUserList{}, err
 	}
+	page, err := call.page(AdminPage{Limit: req.Limit, Offset: req.Offset})
+	if err != nil {
+		return AdminUserList{}, err
+	}
 	result, err := managed.Account.ListUsers(ctx, caller, account.ListRequest{
-		Limit: req.Limit, Offset: req.Offset, Status: account.Status(req.Status),
+		Limit: page.Limit, Offset: page.Offset, Status: account.Status(req.Status),
 		Sort: account.SortField(req.Sort), Descending: req.Descending,
 	})
 	if err != nil {
@@ -378,7 +393,16 @@ func (f *adminFacade) ListUsers(ctx context.Context,
 	for _, user := range result.Users {
 		users = append(users, adminUser(user))
 	}
-	return AdminUserList{Users: users, HasMore: result.HasMore}, nil
+	return AdminUserList{Users: users, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(users), result.HasMore)}, nil
+}
+
+// groupCaller 构造用户组服务可信调用者。
+func (f *adminFacade) groupCaller(id adminIdentity) (group.Caller, error) {
+	if id.local {
+		return group.LocalBootstrapCaller(id.actor.ID)
+	}
+	return group.UserCaller(id.userID)
 }
 
 // GetUserByUsername 按用户名读取脱敏用户记录（本机受信通道，或系统范围 users.read
@@ -911,3 +935,221 @@ func adminUserProfile(value profile.UserProfile) AdminUserProfile {
 }
 
 var _ AdminService = (*adminFacade)(nil)
+
+// ListGroups 分页查询用户组（作用范围筛选 + 白名单排序）。
+//
+// 授权与数据范围由用户组服务先行判定（只返回调用者可管理范围内的组），分页
+// 在数据库查询阶段执行；非法排序字段/分页参数返回 REQ_INVALID，不静默纠正。
+func (f *adminFacade) ListGroups(ctx context.Context,
+	req AdminListGroupsRequest) (AdminGroupList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminGroupList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.Group == nil {
+		return AdminGroupList{}, call.configError("用户组服务未装配")
+	}
+	caller, err := f.groupCaller(call.identity)
+	if err != nil {
+		return AdminGroupList{}, call.configError("用户组服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminGroupList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminGroupList{}, err
+	}
+	result, err := managed.Group.ListGroups(ctx, caller, group.ListRequest{
+		ScopeID: strings.TrimSpace(req.ScopeID), Limit: page.Limit, Offset: page.Offset,
+		Sort: group.GroupSortField(strings.TrimSpace(req.Sort)), Descending: req.Descending})
+	if err != nil {
+		return AdminGroupList{}, call.domainError("查询用户组列表失败", string(group.CodeOf(err)))
+	}
+	groups := make([]AdminGroup, 0, len(result.Groups))
+	for _, record := range result.Groups {
+		groups = append(groups, AdminGroup{ID: record.ID, ScopeID: record.ScopeID,
+			ApplicationID: record.ApplicationID, Key: record.GroupKey, Name: record.Name,
+			Description: record.Description, CreatedAt: record.CreatedAt,
+			UpdatedAt: record.UpdatedAt})
+	}
+	return AdminGroupList{Groups: groups, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(groups), result.HasMore)}, nil
+}
+
+// ListGroupMembers 分页查询组成员（只返回稳定用户 ID/加入时间，不携带跨域资料）。
+func (f *adminFacade) ListGroupMembers(ctx context.Context,
+	req AdminListGroupMembersRequest) (AdminGroupMemberList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminGroupMemberList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.Group == nil {
+		return AdminGroupMemberList{}, call.configError("用户组服务未装配")
+	}
+	caller, err := f.groupCaller(call.identity)
+	if err != nil {
+		return AdminGroupMemberList{}, call.configError("用户组服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminGroupMemberList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminGroupMemberList{}, err
+	}
+	result, err := managed.Group.ListMembers(ctx, caller, group.MemberListRequest{
+		GroupID: strings.TrimSpace(req.GroupID), Limit: page.Limit, Offset: page.Offset,
+		Sort: group.MemberSortField(strings.TrimSpace(req.Sort)), Descending: req.Descending})
+	if err != nil {
+		if replaced, ok := call.notFoundIfTargetMissing(err, group.ErrGroupNotFound, "group"); ok {
+			return AdminGroupMemberList{}, replaced
+		}
+		return AdminGroupMemberList{}, call.domainError("查询组成员失败", string(group.CodeOf(err)))
+	}
+	members := make([]AdminGroupMember, 0, len(result.Members))
+	for _, member := range result.Members {
+		members = append(members, AdminGroupMember{GroupID: member.GroupID,
+			UserID: member.UserID, JoinedAt: member.CreatedAt})
+	}
+	return AdminGroupMemberList{Members: members, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(members), result.HasMore)}, nil
+}
+
+// ListRoles 分页查询角色（作用范围/启停/内置筛选 + 白名单排序）。
+func (f *adminFacade) ListRoles(ctx context.Context,
+	req AdminListRolesRequest) (AdminRoleList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminRoleList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.Role == nil {
+		return AdminRoleList{}, call.configError("角色服务未装配")
+	}
+	caller, err := f.roleCaller(call.identity)
+	if err != nil {
+		return AdminRoleList{}, call.configError("角色服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminRoleList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminRoleList{}, err
+	}
+	result, err := managed.Role.ListRoles(ctx, caller, role.ListRequest{
+		ScopeID: strings.TrimSpace(req.ScopeID), Limit: page.Limit, Offset: page.Offset,
+		Enabled: req.Enabled, Builtin: req.Builtin,
+		Sort: role.SortField(strings.TrimSpace(req.Sort)), Descending: req.Descending})
+	if err != nil {
+		return AdminRoleList{}, call.domainError("查询角色列表失败", string(role.CodeOf(err)))
+	}
+	roles := make([]AdminRole, 0, len(result.Roles))
+	for _, record := range result.Roles {
+		roles = append(roles, AdminRole{ID: record.ID, ScopeID: record.ScopeID,
+			ApplicationID: record.ApplicationID, Key: record.Key, Name: record.Name,
+			Enabled: record.Enabled})
+	}
+	return AdminRoleList{Roles: roles, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(roles), result.HasMore)}, nil
+}
+
+// ListPermissions 分页查询权限目录（作用范围/启停筛选 + 白名单排序）。
+func (f *adminFacade) ListPermissions(ctx context.Context,
+	req AdminListPermissionsRequest) (AdminPermissionList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminPermissionList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.Permission == nil {
+		return AdminPermissionList{}, call.configError("权限目录服务未装配")
+	}
+	caller, err := f.permissionCaller(call.identity)
+	if err != nil {
+		return AdminPermissionList{}, call.configError("权限目录服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminPermissionList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminPermissionList{}, err
+	}
+	result, err := managed.Permission.ListPermissions(ctx, caller, permission.ListRequest{
+		ScopeID: strings.TrimSpace(req.ScopeID), Limit: page.Limit, Offset: page.Offset,
+		Enabled: req.Enabled, Sort: permission.SortField(strings.TrimSpace(req.Sort)),
+		Descending: req.Descending})
+	if err != nil {
+		return AdminPermissionList{}, call.domainError("查询权限目录失败",
+			string(permission.CodeOf(err)))
+	}
+	permissions := make([]AdminPermission, 0, len(result.Permissions))
+	for _, record := range result.Permissions {
+		permissions = append(permissions, AdminPermission{ID: record.ID, ScopeID: record.ScopeID,
+			Key: record.Key, Name: record.Name, Enabled: record.Enabled,
+			RootOnly: record.RootOnly})
+	}
+	return AdminPermissionList{Permissions: permissions, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(permissions), result.HasMore)}, nil
+}
+
+// ListRoleAssignments 在数据源处分页读取角色的用户/组分配；两类分配各自分页，
+// 避免一类增长把另一类挤出结果。权限检查与数据范围由角色服务先于分页判定。
+func (f *adminFacade) ListRoleAssignments(ctx context.Context,
+	req AdminListRoleAssignmentsRequest) (AdminRoleAssignmentList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminRoleAssignmentList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.Role == nil {
+		return AdminRoleAssignmentList{}, call.configError("角色服务未装配")
+	}
+	caller, err := f.roleCaller(call.identity)
+	if err != nil {
+		return AdminRoleAssignmentList{}, call.configError("角色服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminRoleAssignmentList{}, err
+	}
+	userPage, err := call.page(req.UserPage)
+	if err != nil {
+		return AdminRoleAssignmentList{}, err
+	}
+	groupPage, err := call.page(req.GroupPage)
+	if err != nil {
+		return AdminRoleAssignmentList{}, err
+	}
+	result, err := managed.Role.ListRoleAssignmentsPaged(ctx, caller, role.AssignmentListRequest{
+		RoleID:    strings.TrimSpace(req.RoleID),
+		UserLimit: userPage.Limit, UserOffset: userPage.Offset,
+		GroupLimit: groupPage.Limit, GroupOffset: groupPage.Offset,
+		Sort:       role.AssignmentSortField(strings.TrimSpace(req.Sort)),
+		Descending: req.Descending})
+	if err != nil {
+		if replaced, ok := call.notFoundIfTargetMissing(err, role.ErrRoleNotFound, "role"); ok {
+			return AdminRoleAssignmentList{}, replaced
+		}
+		return AdminRoleAssignmentList{}, call.roleError("查询角色分配失败", err)
+	}
+	users := make([]AdminRoleUserAssignment, 0, len(result.Users))
+	for _, assignment := range result.Users {
+		users = append(users, AdminRoleUserAssignment{UserID: assignment.UserID,
+			ScopeID: assignment.ScopeID, DataScope: assignment.DataScope,
+			AssignedBy: assignment.AssignedBy, AssignedAt: assignment.CreatedAt})
+	}
+	groups := make([]AdminRoleGroupAssignment, 0, len(result.Groups))
+	for _, assignment := range result.Groups {
+		groups = append(groups, AdminRoleGroupAssignment{GroupID: assignment.GroupID,
+			ScopeID: assignment.ScopeID, DataScope: assignment.DataScope,
+			AssignedAt: assignment.CreatedAt})
+	}
+	return AdminRoleAssignmentList{Users: users, UsersHasMore: result.UsersHasMore,
+		UserPage: NewAdminPageInfo(userPage, len(users), result.UsersHasMore),
+		Groups:   groups, GroupsHasMore: result.GroupsHasMore,
+		GroupPage: NewAdminPageInfo(groupPage, len(groups), result.GroupsHasMore)}, nil
+}

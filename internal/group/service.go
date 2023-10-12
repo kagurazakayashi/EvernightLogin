@@ -39,6 +39,8 @@ type ListQuery struct {
 	AllScopes   bool
 	ScopeIDs    []string
 	ScopeFilter string
+	Sort        GroupSortField
+	Descending  bool
 }
 
 // Store 是用户组持久化契约，由 internal/group/sqlite 提供生产实现。
@@ -51,7 +53,7 @@ type Store interface {
 	ListGroups(ctx context.Context, query ListQuery) ([]Group, bool, error)
 	UpdateGroup(ctx context.Context, tx audit.Tx, id, name, description string, now time.Time) error
 	DeleteGroup(ctx context.Context, tx audit.Tx, id string) error
-	ListMembers(ctx context.Context, groupID string, limit, offset int) ([]Member, bool, error)
+	ListMembers(ctx context.Context, query MemberListQuery) ([]Member, bool, error)
 	ExistingMembers(ctx context.Context, groupID string, userIDs []string) ([]string, error)
 	ValidateMembers(ctx context.Context, scope GroupScope, userIDs []string) (ineligible []string, err error)
 	AddMembers(ctx context.Context, tx audit.Tx, groupID string, scope GroupScope, userIDs []string, now time.Time) (added int, err error)
@@ -246,7 +248,15 @@ func (s *Service) ListGroups(ctx context.Context, caller Caller, request ListReq
 	if request.Offset < 0 || request.Offset > MaxMemberOffset {
 		return ListResult{}, fmt.Errorf("%w: 分页偏移无效", ErrInvalidRequest)
 	}
-	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all}
+	sortField := request.Sort
+	if sortField == "" {
+		sortField = GroupSortCreatedAt
+	}
+	if !sortField.Valid() {
+		return ListResult{}, fmt.Errorf("%w: 排序字段不在允许列表内", ErrInvalidRequest)
+	}
+	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all,
+		Sort: sortField, Descending: request.Descending}
 	filter := strings.TrimSpace(request.ScopeID)
 	if filter != "" {
 		if _, _, err := ParseScope(filter); err != nil {
@@ -570,7 +580,16 @@ func (s *Service) ListMembers(ctx context.Context, caller Caller, request Member
 	if request.Offset < 0 || request.Offset > MaxMemberOffset {
 		return MemberListResult{}, fmt.Errorf("%w: 分页偏移无效", ErrInvalidRequest)
 	}
-	members, hasMore, err := s.store.ListMembers(ctx, groupRecord.ID, limit, request.Offset)
+	sortField := request.Sort
+	if sortField == "" {
+		sortField = MemberSortJoinedAt
+	}
+	if !sortField.Valid() {
+		return MemberListResult{}, fmt.Errorf("%w: 成员排序字段不在允许列表内", ErrInvalidRequest)
+	}
+	members, hasMore, err := s.store.ListMembers(ctx, MemberListQuery{
+		GroupID: groupRecord.ID, Limit: limit, Offset: request.Offset,
+		Sort: sortField, Descending: request.Descending})
 	if err != nil {
 		return MemberListResult{}, err
 	}

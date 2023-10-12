@@ -275,7 +275,15 @@ LEFT JOIN applications a ON a.id=s.app_id`
 	if len(conditions) > 0 {
 		statement += ` WHERE ` + strings.Join(conditions, " AND ")
 	}
-	statement += ` ORDER BY r.created_at_ms ASC, r.id ASC LIMIT ? OFFSET ?`
+	column, ok := roleSortColumn(query.Sort)
+	if !ok {
+		return nil, false, fmt.Errorf("%w: 排序字段不在允许列表内", role.ErrInvalidRequest)
+	}
+	direction := "ASC"
+	if query.Descending {
+		direction = "DESC"
+	}
+	statement += ` ORDER BY ` + column + ` ` + direction + `, r.id ` + direction + ` LIMIT ? OFFSET ?`
 	args = append(args, query.Limit+1, query.Offset)
 	rows, err := s.store.QueryContext(ctx, statement, args...)
 	if err != nil {
@@ -680,6 +688,119 @@ func (s *Store) RemoveGroupRole(ctx context.Context, tx audit.Tx, roleID, groupI
 }
 
 // ListRoleAssignments 返回角色的用户与用户组分配快照。
+// roleSortColumn 把白名单排序字段映射为固定 SQL 列（不接受用户输入原文）。
+func roleSortColumn(field role.SortField) (string, bool) {
+	if field == "" {
+		return "r.created_at_ms", true
+	}
+	switch field {
+	case role.SortCreatedAt:
+		return "r.created_at_ms", true
+	case role.SortUpdatedAt:
+		return "r.updated_at_ms", true
+	case role.SortName:
+		return "r.name", true
+	case role.SortKey:
+		return "r.role_key", true
+	default:
+		return "", false
+	}
+}
+
+// assignmentSortColumn 把分配排序白名单映射为固定 SQL 列。
+func assignmentSortColumn(field role.AssignmentSortField, targetColumn string) (string, bool) {
+	switch field {
+	case role.AssignmentSortCreatedAt:
+		return "created_at_ms", true
+	case role.AssignmentSortTargetID:
+		return targetColumn, true
+	default:
+		return "", false
+	}
+}
+
+// ListRoleUserAssignments 分页读取角色的用户分配（LIMIT/OFFSET 在数据库执行）。
+func (s *Store) ListRoleUserAssignments(ctx context.Context, roleID string, limit, offset int,
+	sort role.AssignmentSortField, descending bool) ([]role.UserRoleAssignment, bool, error) {
+	column, ok := assignmentSortColumn(sort, "user_id")
+	if !ok {
+		return nil, false, fmt.Errorf("%w: 分配排序字段不在允许列表内", role.ErrInvalidRequest)
+	}
+	direction := "ASC"
+	if descending {
+		direction = "DESC"
+	}
+	statement := `SELECT user_id,role_id,scope_id,data_scope_json,assigned_by,created_at_ms
+FROM user_roles WHERE role_id=? ORDER BY ` + column + ` ` + direction +
+		`, user_id ` + direction + ` LIMIT ? OFFSET ?`
+	rows, err := s.store.QueryContext(ctx, statement, roleID, limit+1, offset)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	assignments := make([]role.UserRoleAssignment, 0, limit+1)
+	for rows.Next() {
+		var assignment role.UserRoleAssignment
+		var createdMS int64
+		if err := rows.Scan(&assignment.UserID, &assignment.RoleID, &assignment.ScopeID,
+			&assignment.DataScope, &assignment.AssignedBy, &createdMS); err != nil {
+			return nil, false, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+		}
+		assignment.CreatedAt = time.UnixMilli(createdMS).UTC()
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	hasMore := false
+	if len(assignments) > limit {
+		hasMore = true
+		assignments = assignments[:limit]
+	}
+	return assignments, hasMore, nil
+}
+
+// ListRoleGroupAssignments 分页读取角色的用户组分配（LIMIT/OFFSET 在数据库执行）。
+func (s *Store) ListRoleGroupAssignments(ctx context.Context, roleID string, limit, offset int,
+	sort role.AssignmentSortField, descending bool) ([]role.GroupRoleAssignment, bool, error) {
+	column, ok := assignmentSortColumn(sort, "group_id")
+	if !ok {
+		return nil, false, fmt.Errorf("%w: 分配排序字段不在允许列表内", role.ErrInvalidRequest)
+	}
+	direction := "ASC"
+	if descending {
+		direction = "DESC"
+	}
+	statement := `SELECT group_id,role_id,scope_id,data_scope_json,created_at_ms
+FROM group_roles WHERE role_id=? ORDER BY ` + column + ` ` + direction +
+		`, group_id ` + direction + ` LIMIT ? OFFSET ?`
+	rows, err := s.store.QueryContext(ctx, statement, roleID, limit+1, offset)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	assignments := make([]role.GroupRoleAssignment, 0, limit+1)
+	for rows.Next() {
+		var assignment role.GroupRoleAssignment
+		var createdMS int64
+		if err := rows.Scan(&assignment.GroupID, &assignment.RoleID, &assignment.ScopeID,
+			&assignment.DataScope, &createdMS); err != nil {
+			return nil, false, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+		}
+		assignment.CreatedAt = time.UnixMilli(createdMS).UTC()
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("%w: %w", role.ErrStoreUnavailable, err)
+	}
+	hasMore := false
+	if len(assignments) > limit {
+		hasMore = true
+		assignments = assignments[:limit]
+	}
+	return assignments, hasMore, nil
+}
+
 func (s *Store) ListRoleAssignments(ctx context.Context, roleID string) (role.Assignments, error) {
 	var result role.Assignments
 	userRows, err := s.store.QueryContext(ctx, listUserAssignmentsSQL, roleID)

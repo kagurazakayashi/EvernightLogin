@@ -82,20 +82,26 @@ type UIRBACScope struct {
 	Active          bool
 }
 
-// UIRBACRoleQuery 是角色列表筛选/分页。
+// UIRBACRoleQuery 是角色列表筛选/分页/排序。
+// Sort 允许值："created_at"（默认）、"updated_at"、"name"、"key"；Descending 控制方向。
 type UIRBACRoleQuery struct {
-	ScopeID string
-	Enabled *bool
-	Limit   int
-	Offset  int
+	ScopeID    string
+	Enabled    *bool
+	Limit      int
+	Offset     int
+	Sort       string
+	Descending bool
 }
 
-// UIRBACPermissionQuery 是权限目录筛选/分页。
+// UIRBACPermissionQuery 是权限目录筛选/分页/排序。
+// Sort 允许值："created_at"（默认）、"updated_at"、"name"、"key"；Descending 控制方向。
 type UIRBACPermissionQuery struct {
-	ScopeID string
-	Enabled *bool
-	Limit   int
-	Offset  int
+	ScopeID    string
+	Enabled    *bool
+	Limit      int
+	Offset     int
+	Sort       string
+	Descending bool
 }
 
 // UIRBACTextChange 是可修改的直白文本（名称/说明/明确限制）。
@@ -581,6 +587,17 @@ func (h *rbacPageHandlers) roles(ctx context.Context, request *http.Request,
 			ErrorSummary: text("page.admin.rbac.invalid")}, nil
 	}
 	query.Offset = offset
+	sortValue, descending, ok := parseRBACSort(request.URL.Query().Get("sort"),
+		request.URL.Query().Get("desc"))
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.rbac.invalid")}, nil
+	}
+	query.Sort, query.Descending = sortValue, descending
+	prevOffset := offset - query.Limit
+	if prevOffset < 0 {
+		prevOffset = 0
+	}
 	result, err := h.pages.options.Backend.ListRoles(ctx, page.Session.UserID, query)
 	if err != nil {
 		return rbacErrorOutcome(err, nil, "page.admin.rbac.roles_load_failed"), nil
@@ -591,6 +608,8 @@ func (h *rbacPageHandlers) roles(ctx context.Context, request *http.Request,
 	}
 	return UIPageOutcome{Data: map[string]any{"roles": result.Roles,
 		"hasMore": result.HasMore, "nextOffset": result.NextOffset,
+		"offset": offset, "hasPrevious": offset > 0, "prevOffset": prevOffset,
+		"sort": sortValue, "desc": descending,
 		"scopeID": query.ScopeID, "enabled": request.URL.Query().Get("enabled"),
 		"scopes": scopes}}, nil
 }
@@ -831,6 +850,17 @@ func (h *rbacPageHandlers) permissions(ctx context.Context, request *http.Reques
 			ErrorSummary: text("page.admin.rbac.invalid")}, nil
 	}
 	query.Offset = offset
+	sortValue, descending, ok := parseRBACSort(request.URL.Query().Get("sort"),
+		request.URL.Query().Get("desc"))
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.rbac.invalid")}, nil
+	}
+	query.Sort, query.Descending = sortValue, descending
+	prevOffset := offset - query.Limit
+	if prevOffset < 0 {
+		prevOffset = 0
+	}
 	result, err := h.pages.options.Backend.ListPermissions(ctx, page.Session.UserID, query)
 	if err != nil {
 		return rbacErrorOutcome(err, nil, "page.admin.rbac.permissions_load_failed"), nil
@@ -841,6 +871,8 @@ func (h *rbacPageHandlers) permissions(ctx context.Context, request *http.Reques
 	}
 	return UIPageOutcome{Data: map[string]any{"permissions": result.Permissions,
 		"hasMore": result.HasMore, "nextOffset": result.NextOffset,
+		"offset": offset, "hasPrevious": offset > 0, "prevOffset": prevOffset,
+		"sort": sortValue, "desc": descending,
 		"scopeID": query.ScopeID, "enabled": request.URL.Query().Get("enabled"),
 		// 步骤 189：只有后端实现可选权限登记扩展契约时才显示“创建自定义权限”入口。
 		"canCreate": h.permissionAdminAvailable(),
@@ -1277,6 +1309,35 @@ func (h *rbacPageHandlers) presetDiff(ctx context.Context, request *http.Request
 // ===== 辅助 =====
 
 // parseRBACOffset 解析深分页上限内的非负偏移。
+// rbacSortFields 是角色/权限列表页面允许的排序字段白名单（与领域排序白名单一致）。
+var rbacSortFields = []string{"created_at", "updated_at", "name", "key"}
+
+// parseRBACSort 解析页面 sort/desc 查询参数：sort 必须在白名单内，desc 只接受
+// ""/"0"/"false" 与 "1"/"true"；非法值返回 ok=false（页面按 400 拒绝，不静默纠正）。
+func parseRBACSort(rawSort, rawDesc string) (string, bool, bool) {
+	sortValue := strings.TrimSpace(rawSort)
+	if sortValue != "" {
+		allowed := false
+		for _, candidate := range rbacSortFields {
+			if sortValue == candidate {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", false, false
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(rawDesc)) {
+	case "", "0", "false":
+		return sortValue, false, true
+	case "1", "true":
+		return sortValue, true, true
+	default:
+		return "", false, false
+	}
+}
+
 func parseRBACOffset(raw string) (int, bool) {
 	if raw == "" {
 		return 0, true

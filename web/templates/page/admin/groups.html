@@ -15,5 +15,6 @@
 <tbody>{{range .Data.groups}}<tr><td>{{.Name}}</td><td><code>{{.GroupKey}}</code></td><td><code>{{.ScopeID}}</code></td>
 <td><a href="{{route "admin.group_detail"}}?group_id={{.ID}}">{{t "page.admin.groups.open"}}</a></td></tr>
 {{else}}<tr><td colspan="4">{{t "page.admin.groups.empty"}}</td></tr>{{end}}</tbody></table>
-{{if .Data.hasMore}}<p><a href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
+{{if .Data.hasMore}}<p><a rel="next" href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
 {{end}}

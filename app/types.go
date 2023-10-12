@@ -295,6 +295,8 @@ type AdminListUsersRequest struct {
 type AdminUserList struct {
 	Users   []AdminUser
 	HasMore bool
+	// Page 是统一分页元数据（默认值/非法输入语义见 AdminPage）。
+	Page AdminPageInfo
 }
 
 // AdminUserByUsernameRequest 按用户名读取脱敏用户记录。
@@ -528,6 +530,140 @@ type AdminDelegation struct {
 	GrantedBy       string
 }
 
+// AdminGroup 是用户组列表的管理视图（不含成员明细）。
+type AdminGroup struct {
+	ID            string
+	ScopeID       string
+	ApplicationID string
+	Key           string
+	Name          string
+	Description   string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// AdminListGroupsRequest 分页查询用户组（作用范围筛选 + 白名单排序）。
+// Sort 允许值："created_at"（默认）、"updated_at"、"name"、"key"；空字符串用默认值。
+type AdminListGroupsRequest struct {
+	Caller     AdminCaller
+	ScopeID    string
+	Sort       string
+	Descending bool
+	Page       AdminPage
+	RequestID  string
+}
+
+// AdminGroupList 是用户组列表结果。
+type AdminGroupList struct {
+	Groups  []AdminGroup
+	HasMore bool
+	Page    AdminPageInfo
+}
+
+// AdminGroupMember 是用户组成员的管理视图：只包含稳定用户 ID、作用域与加入时间，
+// 不携带邮箱、昵称等资料，避免成员列表成为跨域资料读取旁路。
+type AdminGroupMember struct {
+	GroupID  string
+	UserID   string
+	JoinedAt time.Time
+}
+
+// AdminListGroupMembersRequest 分页查询组成员。
+// Sort 允许值："joined_at"（默认）、"user_id"。
+type AdminListGroupMembersRequest struct {
+	Caller     AdminCaller
+	GroupID    string
+	Sort       string
+	Descending bool
+	Page       AdminPage
+	RequestID  string
+}
+
+// AdminGroupMemberList 是组成员列表结果。
+type AdminGroupMemberList struct {
+	Members []AdminGroupMember
+	HasMore bool
+	Page    AdminPageInfo
+}
+
+// AdminListRolesRequest 分页查询角色（作用范围/启停/内置筛选 + 白名单排序）。
+// Sort 允许值："created_at"（默认）、"updated_at"、"name"、"key"。
+type AdminListRolesRequest struct {
+	Caller     AdminCaller
+	ScopeID    string
+	Enabled    *bool
+	Builtin    *bool
+	Sort       string
+	Descending bool
+	Page       AdminPage
+	RequestID  string
+}
+
+// AdminRoleList 是角色列表结果。
+type AdminRoleList struct {
+	Roles   []AdminRole
+	HasMore bool
+	Page    AdminPageInfo
+}
+
+// AdminListPermissionsRequest 分页查询权限目录（作用范围/启停筛选 + 白名单排序）。
+// Sort 允许值："created_at"（默认）、"updated_at"、"name"、"key"。
+type AdminListPermissionsRequest struct {
+	Caller     AdminCaller
+	ScopeID    string
+	Enabled    *bool
+	Sort       string
+	Descending bool
+	Page       AdminPage
+	RequestID  string
+}
+
+// AdminPermissionList 是权限目录列表结果。
+type AdminPermissionList struct {
+	Permissions []AdminPermission
+	HasMore     bool
+	Page        AdminPageInfo
+}
+
+// AdminRoleUserAssignment 是角色的用户分配（数据范围为受控字符串）。
+type AdminRoleUserAssignment struct {
+	UserID     string
+	ScopeID    string
+	DataScope  string
+	AssignedBy string
+	AssignedAt time.Time
+}
+
+// AdminRoleGroupAssignment 是角色的用户组分配。
+type AdminRoleGroupAssignment struct {
+	GroupID    string
+	ScopeID    string
+	DataScope  string
+	AssignedAt time.Time
+}
+
+// AdminListRoleAssignmentsRequest 分页查询角色的用户/组分配；两类分配各自分页。
+// Sort 允许值："created_at"（默认）、"target_id"。
+type AdminListRoleAssignmentsRequest struct {
+	Caller     AdminCaller
+	RoleID     string
+	UserPage   AdminPage
+	GroupPage  AdminPage
+	Sort       string
+	Descending bool
+	RequestID  string
+}
+
+// AdminRoleAssignmentList 是角色分配的分页结果。
+type AdminRoleAssignmentList struct {
+	Users         []AdminRoleUserAssignment
+	UsersHasMore  bool
+	UserPage      AdminPageInfo
+	Groups        []AdminRoleGroupAssignment
+	GroupsHasMore bool
+	GroupPage     AdminPageInfo
+}
+
 // AdminService 是受信管理门面：用户/资料/应用/角色/权限的受控管理操作。
 //
 // 安全语义：
@@ -550,6 +686,15 @@ type AdminDelegation struct {
 type AdminService interface {
 	CreateUser(ctx context.Context, req AdminCreateUserRequest) (AdminUser, error)
 	ListUsers(ctx context.Context, req AdminListUsersRequest) (AdminUserList, error)
+	// ListGroups/ListGroupMembers 分页读取用户组与组成员（授权与数据范围由领域
+	// 服务先行判定；排序字段使用白名单，非法值返回 REQ_INVALID）。
+	ListGroups(ctx context.Context, req AdminListGroupsRequest) (AdminGroupList, error)
+	ListGroupMembers(ctx context.Context, req AdminListGroupMembersRequest) (AdminGroupMemberList, error)
+	// ListRoles/ListPermissions 分页读取角色与权限目录。
+	ListRoles(ctx context.Context, req AdminListRolesRequest) (AdminRoleList, error)
+	ListPermissions(ctx context.Context, req AdminListPermissionsRequest) (AdminPermissionList, error)
+	// ListRoleAssignments 在数据源处分页读取角色的用户/组分配（两类各自分页）。
+	ListRoleAssignments(ctx context.Context, req AdminListRoleAssignmentsRequest) (AdminRoleAssignmentList, error)
 	GetUserByUsername(ctx context.Context, req AdminUserByUsernameRequest) (AdminUser, error)
 	GetUserProfile(ctx context.Context, req AdminUserRequest) (AdminUserProfile, error)
 	UpdateUserProfile(ctx context.Context, req AdminUpdateProfileRequest) (AdminUserProfile, error)

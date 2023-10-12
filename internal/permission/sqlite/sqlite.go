@@ -186,6 +186,25 @@ func (s *Store) GetPermissionScope(ctx context.Context, id string) (string, erro
 }
 
 // ListPermissions 在可管理范围内分页查询；排序固定为创建时间与 ID。
+// permissionSortColumn 把白名单排序字段映射为固定 SQL 列（不接受用户输入原文）。
+func permissionSortColumn(field permission.SortField) (string, bool) {
+	if field == "" {
+		return "p.created_at_ms", true
+	}
+	switch field {
+	case permission.SortCreatedAt:
+		return "p.created_at_ms", true
+	case permission.SortUpdatedAt:
+		return "p.updated_at_ms", true
+	case permission.SortName:
+		return "p.name", true
+	case permission.SortKey:
+		return "p.permission_key", true
+	default:
+		return "", false
+	}
+}
+
 func (s *Store) ListPermissions(ctx context.Context, query permission.ListQuery) ([]permission.Permission, bool, error) {
 	statement := `SELECT ` + permissionColumns + ` FROM permissions p`
 	conditions := make([]string, 0, 3)
@@ -211,7 +230,15 @@ func (s *Store) ListPermissions(ctx context.Context, query permission.ListQuery)
 	if len(conditions) > 0 {
 		statement += ` WHERE ` + strings.Join(conditions, " AND ")
 	}
-	statement += ` ORDER BY p.created_at_ms ASC, p.id ASC LIMIT ? OFFSET ?`
+	column, ok := permissionSortColumn(query.Sort)
+	if !ok {
+		return nil, false, fmt.Errorf("%w: 排序字段不在允许列表内", permission.ErrInvalidRequest)
+	}
+	direction := "ASC"
+	if query.Descending {
+		direction = "DESC"
+	}
+	statement += ` ORDER BY ` + column + ` ` + direction + `, p.id ` + direction + ` LIMIT ? OFFSET ?`
 	args = append(args, query.Limit+1, query.Offset)
 	rows, err := s.store.QueryContext(ctx, statement, args...)
 	if err != nil {

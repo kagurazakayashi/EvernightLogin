@@ -138,6 +138,46 @@ type GroupRoleAssignment struct {
 	CreatedAt time.Time
 }
 
+// AssignmentSortField 是角色分配列表允许的排序字段（白名单）。两种分配列表共用：
+// created_at 按分配时间，target_id 按稳定目标 ID（用户 ID 或组 ID）。
+type AssignmentSortField string
+
+const (
+	// AssignmentSortCreatedAt 按分配时间排序（默认）。
+	AssignmentSortCreatedAt AssignmentSortField = "created_at"
+	// AssignmentSortTargetID 按目标稳定 ID 排序。
+	AssignmentSortTargetID AssignmentSortField = "target_id"
+)
+
+// Valid 报告分配排序字段是否在允许列表内。
+func (f AssignmentSortField) Valid() bool {
+	switch f {
+	case AssignmentSortCreatedAt, AssignmentSortTargetID:
+		return true
+	}
+	return false
+}
+
+// AssignmentListRequest 是角色分配分页请求：用户与用户组分配各自独立分页，
+// 避免其中一类增长把另一类挤出结果；授权与数据范围仍由角色服务重新判定。
+type AssignmentListRequest struct {
+	RoleID      string
+	UserLimit   int
+	UserOffset  int
+	GroupLimit  int
+	GroupOffset int
+	Sort        AssignmentSortField
+	Descending  bool
+}
+
+// AssignmentListResult 是角色分配分页结果。
+type AssignmentListResult struct {
+	Users         []UserRoleAssignment
+	UsersHasMore  bool
+	Groups        []GroupRoleAssignment
+	GroupsHasMore bool
+}
+
 // Assignments 是角色的用户/用户组分配快照。
 type Assignments struct {
 	Users  []UserRoleAssignment
@@ -163,6 +203,29 @@ type UpdateRequest struct {
 	Limits      string
 }
 
+// SortField 是角色列表允许的排序字段（白名单；存储层映射到固定 SQL 列）。
+type SortField string
+
+const (
+	// SortCreatedAt 按创建时间排序（默认）。
+	SortCreatedAt SortField = "created_at"
+	// SortUpdatedAt 按更新时间排序。
+	SortUpdatedAt SortField = "updated_at"
+	// SortName 按显示名称排序。
+	SortName SortField = "name"
+	// SortKey 按机器标识排序。
+	SortKey SortField = "key"
+)
+
+// Valid 报告排序字段是否在允许列表内。
+func (f SortField) Valid() bool {
+	switch f {
+	case SortCreatedAt, SortUpdatedAt, SortName, SortKey:
+		return true
+	}
+	return false
+}
+
 // ListRequest 是角色列表请求；ScopeID 为空表示可管理范围内全部角色。
 type ListRequest struct {
 	ScopeID string
@@ -170,6 +233,10 @@ type ListRequest struct {
 	Offset  int
 	Enabled *bool
 	Builtin *bool
+	// Sort 是白名单排序字段；空表示默认 created_at。Descending 控制方向；
+	// 同值时按稳定 ID 次序。
+	Sort       SortField
+	Descending bool
 }
 
 // ListResult 是角色列表结果。

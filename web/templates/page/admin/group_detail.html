@@ -17,7 +17,8 @@
 <table class="ln-table"><thead><tr><th>{{t "page.account.profile.stable_id"}}</th><th>{{t "page.admin.groups.joined"}}</th></tr></thead>
 <tbody>{{range .Data.members}}<tr><td><code>{{.UserID}}</code></td><td>{{format_time .CreatedAt "UTC"}}</td></tr>
 {{else}}<tr><td colspan="2">{{t "page.admin.groups.no_members"}}</td></tr>{{end}}</tbody></table>
-{{if .Data.hasMore}}<p><a href="{{route "admin.group_detail"}}?group_id={{.Data.group.ID}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.group_detail"}}?group_id={{.Data.group.ID}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
+{{if .Data.hasMore}}<p><a rel="next" href="{{route "admin.group_detail"}}?group_id={{.Data.group.ID}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
 <form method="post" action="{{route "admin.group_members"}}" data-ln-module="async-form" novalidate>
   {{csrf_field}}<input type="hidden" name="group_id" value="{{.Data.group.ID}}">
   <label class="ln-field__label" for="group-members-action">{{t "page.admin.groups.members_action"}}</label>

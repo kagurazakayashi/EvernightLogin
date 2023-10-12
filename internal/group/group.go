@@ -121,11 +121,57 @@ type MemberBatchResult struct {
 	Skipped int
 }
 
+// GroupSortField 是组列表允许的排序字段（白名单；存储层映射到固定 SQL 列）。
+type GroupSortField string
+
+const (
+	// GroupSortCreatedAt 按创建时间排序（默认）。
+	GroupSortCreatedAt GroupSortField = "created_at"
+	// GroupSortUpdatedAt 按更新时间排序。
+	GroupSortUpdatedAt GroupSortField = "updated_at"
+	// GroupSortName 按显示名称排序。
+	GroupSortName GroupSortField = "name"
+	// GroupSortKey 按机器键排序。
+	GroupSortKey GroupSortField = "key"
+)
+
+// Valid 报告排序字段是否在允许列表内。
+func (f GroupSortField) Valid() bool {
+	switch f {
+	case GroupSortCreatedAt, GroupSortUpdatedAt, GroupSortName, GroupSortKey:
+		return true
+	}
+	return false
+}
+
+// MemberSortField 是组成员列表允许的排序字段（白名单）。
+type MemberSortField string
+
+const (
+	// MemberSortJoinedAt 按加入时间排序（默认）。
+	MemberSortJoinedAt MemberSortField = "joined_at"
+	// MemberSortUserID 按稳定用户 ID 排序。
+	MemberSortUserID MemberSortField = "user_id"
+)
+
+// Valid 报告成员排序字段是否在允许列表内。
+func (f MemberSortField) Valid() bool {
+	switch f {
+	case MemberSortJoinedAt, MemberSortUserID:
+		return true
+	}
+	return false
+}
+
 // ListRequest 是组列表请求；ScopeID 为空表示可管理范围内全部组。
 type ListRequest struct {
 	ScopeID string
 	Limit   int
 	Offset  int
+	// Sort 是白名单排序字段；空表示默认 created_at。Descending 控制方向；
+	// 同值时按稳定 ID 次序，保证分页不重复/不跳行。
+	Sort       GroupSortField
+	Descending bool
 }
 
 // ListResult 是组列表结果。
@@ -136,9 +182,20 @@ type ListResult struct {
 
 // MemberListRequest 是组成员分页请求。
 type MemberListRequest struct {
-	GroupID string
-	Limit   int
-	Offset  int
+	GroupID    string
+	Limit      int
+	Offset     int
+	Sort       MemberSortField
+	Descending bool
+}
+
+// MemberListQuery 是规范化后的组成员查询（服务层校验后传给存储层）。
+type MemberListQuery struct {
+	GroupID    string
+	Limit      int
+	Offset     int
+	Sort       MemberSortField
+	Descending bool
 }
 
 // MemberListResult 是组成员列表结果。

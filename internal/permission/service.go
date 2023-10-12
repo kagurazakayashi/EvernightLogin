@@ -32,6 +32,8 @@ type ListQuery struct {
 	ScopeIDs    []string
 	ScopeFilter string
 	Enabled     *bool
+	Sort        SortField
+	Descending  bool
 }
 
 // Store 是权限目录持久化契约，由 internal/permission/sqlite 提供生产实现。
@@ -239,7 +241,15 @@ func (s *Service) ListPermissions(ctx context.Context, caller Caller, request Li
 	if request.Offset < 0 || request.Offset > MaxListOffset {
 		return ListResult{}, fmt.Errorf("%w: 分页偏移无效", ErrInvalidRequest)
 	}
-	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all, Enabled: request.Enabled}
+	sortField := request.Sort
+	if sortField == "" {
+		sortField = SortCreatedAt
+	}
+	if !sortField.Valid() {
+		return ListResult{}, fmt.Errorf("%w: 排序字段不在允许列表内", ErrInvalidRequest)
+	}
+	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all,
+		Enabled: request.Enabled, Sort: sortField, Descending: request.Descending}
 	filter := strings.TrimSpace(request.ScopeID)
 	if filter != "" {
 		if _, _, err := ParseScope(filter); err != nil {

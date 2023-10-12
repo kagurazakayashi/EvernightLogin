@@ -420,8 +420,14 @@ func (h *adminPageHandlers) users(ctx context.Context, request *http.Request,
 		return adminErrorOutcome(err, nil, "page.admin.users.load_failed"), nil
 	}
 	nextOffset := query.Offset + len(result.Users)
+	prevOffset := query.Offset - query.Limit
+	if prevOffset < 0 {
+		prevOffset = 0
+	}
 	return UIPageOutcome{Data: map[string]any{"users": result.Users,
-		"hasMore": result.HasMore, "query": query, "nextOffset": nextOffset}}, nil
+		"hasMore": result.HasMore, "query": query, "nextOffset": nextOffset,
+		"offset": query.Offset, "hasPrevious": query.Offset > 0,
+		"prevOffset": prevOffset}}, nil
 }
 
 // userCreate 创建账户资料（五字段白名单，不设密码/角色/成员）。
@@ -675,9 +681,14 @@ func (h *adminPageHandlers) groups(ctx context.Context, request *http.Request,
 	if err != nil {
 		return adminErrorOutcome(err, nil, "page.admin.groups.load_failed"), nil
 	}
+	prevOffset := offset - 20
+	if prevOffset < 0 {
+		prevOffset = 0
+	}
 	return UIPageOutcome{Data: map[string]any{"groups": result.Groups,
 		"hasMore": result.HasMore, "scopeID": scopeID,
-		"nextOffset": offset + len(result.Groups)}}, nil
+		"nextOffset": offset + len(result.Groups), "offset": offset,
+		"hasPrevious": offset > 0, "prevOffset": prevOffset}}, nil
 }
 
 // groupDetail 显示组详情、更新名称/说明、成员分页与增删。
@@ -751,9 +762,14 @@ func (h *adminPageHandlers) groupDetail(ctx context.Context, request *http.Reque
 	if err != nil {
 		return adminErrorOutcome(err, nil, "page.admin.groups.members_load_failed"), nil
 	}
+	prevOffset := offset - 20
+	if prevOffset < 0 {
+		prevOffset = 0
+	}
 	return UIPageOutcome{Data: map[string]any{"group": group, "members": members.Members,
 		"hasMore": members.HasMore, "status": request.URL.Query().Get("status"),
-		"nextOffset": offset + len(members.Members)}}, nil
+		"nextOffset": offset + len(members.Members), "offset": offset,
+		"hasPrevious": offset > 0, "prevOffset": prevOffset}}, nil
 }
 
 // groupDelete 删除组（硬删除，影响计数未知需明示）。

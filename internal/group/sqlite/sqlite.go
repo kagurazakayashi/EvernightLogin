@@ -199,7 +199,15 @@ func (s *Store) ListGroups(ctx context.Context, query group.ListQuery) ([]group.
 	if len(conditions) > 0 {
 		statement += ` WHERE ` + strings.Join(conditions, " AND ")
 	}
-	statement += ` ORDER BY g.created_at_ms ASC, g.id ASC LIMIT ? OFFSET ?`
+	column, ok := groupSortColumn(query.Sort)
+	if !ok {
+		return nil, false, fmt.Errorf("%w: 排序字段不在允许列表内", group.ErrInvalidRequest)
+	}
+	direction := "ASC"
+	if query.Descending {
+		direction = "DESC"
+	}
+	statement += ` ORDER BY ` + column + ` ` + direction + `, g.id ` + direction + ` LIMIT ? OFFSET ?`
 	args = append(args, query.Limit+1, query.Offset)
 	rows, err := s.store.QueryContext(ctx, statement, args...)
 	if err != nil {
@@ -251,8 +259,19 @@ func (s *Store) DeleteGroup(ctx context.Context, tx audit.Tx, id string) error {
 }
 
 // ListMembers 分页读取组成员（按 user_id 稳定排序）。
-func (s *Store) ListMembers(ctx context.Context, groupID string, limit, offset int) ([]group.Member, bool, error) {
-	rows, err := s.store.QueryContext(ctx, selectMembersSQL, groupID, limit+1, offset)
+func (s *Store) ListMembers(ctx context.Context, query group.MemberListQuery) ([]group.Member, bool, error) {
+	column, ok := memberSortColumn(query.Sort)
+	if !ok {
+		return nil, false, fmt.Errorf("%w: 排序字段不在允许列表内", group.ErrInvalidRequest)
+	}
+	direction := "ASC"
+	if query.Descending {
+		direction = "DESC"
+	}
+	statement := `SELECT group_id,user_id,created_at_ms FROM group_members WHERE group_id=?
+ORDER BY ` + column + ` ` + direction + `, user_id ` + direction + ` LIMIT ? OFFSET ?`
+	limit := query.Limit
+	rows, err := s.store.QueryContext(ctx, statement, query.GroupID, limit+1, query.Offset)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: %w", group.ErrStoreUnavailable, err)
 	}
@@ -279,6 +298,40 @@ func (s *Store) ListMembers(ctx context.Context, groupID string, limit, offset i
 }
 
 // ExistingMembers 返回请求用户中已属于该组的用户 ID；用于幂等语义。
+// groupSortColumn 把白名单排序字段映射为固定 SQL 列（不接受用户输入原文）。
+func groupSortColumn(field group.GroupSortField) (string, bool) {
+	if field == "" {
+		return "g.created_at_ms", true
+	}
+	switch field {
+	case group.GroupSortCreatedAt:
+		return "g.created_at_ms", true
+	case group.GroupSortUpdatedAt:
+		return "g.updated_at_ms", true
+	case group.GroupSortName:
+		return "g.name", true
+	case group.GroupSortKey:
+		return "g.group_key", true
+	default:
+		return "", false
+	}
+}
+
+// memberSortColumn 把成员排序白名单映射为固定 SQL 列。
+func memberSortColumn(field group.MemberSortField) (string, bool) {
+	if field == "" {
+		return "created_at_ms", true
+	}
+	switch field {
+	case group.MemberSortJoinedAt:
+		return "created_at_ms", true
+	case group.MemberSortUserID:
+		return "user_id", true
+	default:
+		return "", false
+	}
+}
+
 func (s *Store) ExistingMembers(ctx context.Context, groupID string, userIDs []string) ([]string, error) {
 	if len(userIDs) == 0 {
 		return nil, nil

@@ -141,12 +141,39 @@ type UpdateRequest struct {
 	Limits      string
 }
 
+// SortField 是权限目录列表允许的排序字段（白名单；存储层映射到固定 SQL 列）。
+type SortField string
+
+const (
+	// SortCreatedAt 按创建时间排序（默认）。
+	SortCreatedAt SortField = "created_at"
+	// SortUpdatedAt 按更新时间排序。
+	SortUpdatedAt SortField = "updated_at"
+	// SortName 按显示名称排序。
+	SortName SortField = "name"
+	// SortKey 按机器标识排序。
+	SortKey SortField = "key"
+)
+
+// Valid 报告排序字段是否在允许列表内。
+func (f SortField) Valid() bool {
+	switch f {
+	case SortCreatedAt, SortUpdatedAt, SortName, SortKey:
+		return true
+	}
+	return false
+}
+
 // ListRequest 是权限目录列表请求；ScopeID 为空表示可管理范围内全部权限。
 type ListRequest struct {
 	ScopeID string
 	Limit   int
 	Offset  int
 	Enabled *bool
+	// Sort 是白名单排序字段；空表示默认 created_at。Descending 控制方向；
+	// 同值时按稳定 ID 次序。
+	Sort       SortField
+	Descending bool
 }
 
 // ListResult 是权限列表结果。

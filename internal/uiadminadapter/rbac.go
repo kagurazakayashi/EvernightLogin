@@ -226,9 +226,16 @@ func (a *RBACAdapter) ListRoles(ctx context.Context, adminUserID string,
 	if query.Offset < 0 || query.Offset > role.MaxListOffset {
 		return login.UIRBACRolePage{}, rbacErr("REQ_INVALID")
 	}
+	sortField := role.SortField(strings.TrimSpace(query.Sort))
+	if sortField == "" {
+		sortField = role.SortCreatedAt
+	}
+	if !sortField.Valid() {
+		return login.UIRBACRolePage{}, rbacErr("REQ_INVALID")
+	}
 	result, err := a.opts.Roles.ListRoles(ctx, caller, role.ListRequest{
 		ScopeID: strings.TrimSpace(query.ScopeID), Limit: limit, Offset: query.Offset,
-		Enabled: query.Enabled})
+		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending})
 	if err != nil {
 		return login.UIRBACRolePage{}, mapRBACError(err)
 	}
@@ -524,9 +531,16 @@ func (a *RBACAdapter) ListPermissions(ctx context.Context, adminUserID string,
 	if query.Offset < 0 || query.Offset > permission.MaxListOffset {
 		return login.UIRBACPermissionPage{}, rbacErr("REQ_INVALID")
 	}
+	sortField := permission.SortField(strings.TrimSpace(query.Sort))
+	if sortField == "" {
+		sortField = permission.SortCreatedAt
+	}
+	if !sortField.Valid() {
+		return login.UIRBACPermissionPage{}, rbacErr("REQ_INVALID")
+	}
 	result, err := a.opts.Permissions.ListPermissions(ctx, caller, permission.ListRequest{
 		ScopeID: strings.TrimSpace(query.ScopeID), Limit: limit, Offset: query.Offset,
-		Enabled: query.Enabled})
+		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending})
 	if err != nil {
 		return login.UIRBACPermissionPage{}, mapRBACError(err)
 	}
