@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kagurazakayashi/EvernightLogin/httpapi"
 )
 
 // maxMultipartCSRFBodyBytes 是 multipart CSRF 读取的硬上限（请求体仍受 MaxBytesReader
@@ -21,12 +23,12 @@ const maxMultipartCSRFBodyBytes = 8 << 20
 const maxCSRFFormFieldBytes = 64 << 10
 
 const (
-	// DefaultCSRFCookieName 是未来 Cookie 会话使用的默认会话 Cookie 名。__Host-
+	// DefaultCSRFCookieName 是 Cookie 会话使用的默认会话 Cookie 名。__Host-
 	// 前缀要求 Secure、Path=/ 且无 Domain；当前步骤不创建会话 Cookie，此名称是
-	// CSRF 中间件识别“Cookie 会话请求”的契约。
-	DefaultCSRFCookieName = "__Host-login_session"
+	// CSRF 中间件识别“Cookie 会话请求”的契约。公开默认值单一来源为 httpapi。
+	DefaultCSRFCookieName = httpapi.DefaultHTTPCSRFCookieName
 	// DefaultCSRFTokenHeader 是默认 CSRF 令牌请求头。
-	DefaultCSRFTokenHeader = "X-CSRF-Token"
+	DefaultCSRFTokenHeader = httpapi.DefaultHTTPCSRFTokenHeader
 	// maxCSRFTokenBytes 是 CSRF 令牌长度上限，避免超长头放大处理开销。
 	maxCSRFTokenBytes = 512
 	// DefaultCSRFFormField 是服务端渲染 HTML 表单的默认 CSRF 隐藏字段名；

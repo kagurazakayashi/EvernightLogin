@@ -32,15 +32,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/httpapi"
 	"github.com/kagurazakayashi/EvernightLogin/httppolicy"
 )
 
 const (
-	// DefaultMaxBodyBytes 是请求体默认上限（1 MiB）。
-	DefaultMaxBodyBytes int64 = 1 << 20
+	// DefaultMaxBodyBytes 是请求体默认上限（1 MiB）；公开默认值单一来源为 httpapi。
+	DefaultMaxBodyBytes int64 = httpapi.DefaultHTTPMaxBodyBytes
 	// MinMaxBodyBytes/MaxMaxBodyBytes 是请求体上限允许范围（1 KiB～16 MiB）。
-	MinMaxBodyBytes int64 = 1 << 10
-	MaxMaxBodyBytes int64 = 16 << 20
+	MinMaxBodyBytes int64 = httpapi.MinHTTPMaxBodyBytes
+	MaxMaxBodyBytes int64 = httpapi.MaxHTTPMaxBodyBytes
 	// MaxPrefixBytes 是路径前缀最大长度；规则实现见公共 httppolicy 包。
 	MaxPrefixBytes = httppolicy.MaxPrefixBytes
 	// MaxQueryBytes 是原始查询串上限（8 KiB），超出返回 414，避免解析放大。

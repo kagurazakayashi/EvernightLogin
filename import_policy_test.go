@@ -24,6 +24,7 @@ const policyModulePath = "github.com/kagurazakayashi/EvernightLogin"
 // policyLeafPackages 是已迁出的公共叶子包目录（相对仓库根）。
 var policyLeafPackages = []string{
 	"config", "errs", "netpolicy", "proxytrust", "passkeypolicy", "appids", "httppolicy",
+	"httpapi", "correlation",
 }
 
 // policyParseImports 解析 dir 下非测试 Go 文件的 import 路径。

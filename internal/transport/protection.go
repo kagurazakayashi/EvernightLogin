@@ -7,39 +7,47 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/httpapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/ratelimit"
 	"github.com/kagurazakayashi/EvernightLogin/proxytrust"
 )
 
 const (
 	// DefaultRateLimitMaxEntries/DefaultRateLimitCleanupAfter 是限流器默认容量与
-	// 机会式清理最小间隔。
-	DefaultRateLimitMaxEntries   = 4096
-	DefaultRateLimitCleanupAfter = 30 * time.Second
+	// 机会式清理最小间隔；公开默认值单一来源为 httpapi。
+	DefaultRateLimitMaxEntries   = httpapi.DefaultHTTPRateLimitMaxEntries
+	DefaultRateLimitCleanupAfter = httpapi.DefaultHTTPRateLimitCleanupInterval
 
 	// DefaultRequestTimeout 是单个 HTTP 请求的处理期限；超时返回 504。
-	DefaultRequestTimeout = 30 * time.Second
+	DefaultRequestTimeout = httpapi.DefaultHTTPRequestTimeout
 	// MinRequestTimeout/MaxRequestTimeout 是请求期限范围（测试可使用短期限）。
-	MinRequestTimeout = 10 * time.Millisecond
-	MaxRequestTimeout = 5 * time.Minute
+	MinRequestTimeout = httpapi.MinHTTPRequestTimeout
+	MaxRequestTimeout = httpapi.MaxHTTPRequestTimeout
 	// DefaultMaxConcurrentRequests 是同时处理的 HTTP 请求上限。
-	DefaultMaxConcurrentRequests = 256
+	DefaultMaxConcurrentRequests = httpapi.DefaultHTTPMaxConcurrentRequests
 	// MinConcurrentRequests/MaxConcurrentRequests 是并发上限范围。
-	MinConcurrentRequests = 1
-	MaxConcurrentRequests = 1024
+	MinConcurrentRequests = httpapi.MinHTTPMaxConcurrentRequests
+	MaxConcurrentRequests = httpapi.MaxHTTPMaxConcurrentRequests
 	// MaxTrustedProxies 是可信代理配置条目上限，避免代理列表无限增长。
-	MaxTrustedProxies = proxytrust.MaxTrustedProxies
+	MaxTrustedProxies = httpapi.MaxHTTPTrustedProxies
 )
 
 // 默认固定窗口限流：地址 600/分钟、已认证用户 300/分钟、应用 300/分钟、
-// 接口 1200/分钟、昂贵请求 30/分钟。这些值在 nil 防护配置或零值限流配置时使用。
+// 接口 1200/分钟、昂贵请求 30/分钟。这些值在 nil 防护配置或零值限流配置时使用；
+// 数值由公开契约 httpapi.DefaultRateLimitOptions 单一来源派生，避免两套默认值。
 var (
-	DefaultClientIPRateLimit    = ratelimit.Policy{Limit: 600, Window: time.Minute}
-	DefaultUserRateLimit        = ratelimit.Policy{Limit: 300, Window: time.Minute}
-	DefaultApplicationRateLimit = ratelimit.Policy{Limit: 300, Window: time.Minute}
-	DefaultEndpointRateLimit    = ratelimit.Policy{Limit: 1200, Window: time.Minute}
-	DefaultExpensiveRateLimit   = ratelimit.Policy{Limit: 30, Window: time.Minute}
+	defaultPublicRateLimits     = httpapi.DefaultRateLimitOptions()
+	DefaultClientIPRateLimit    = publicRateLimitPolicy(defaultPublicRateLimits.ClientIP)
+	DefaultUserRateLimit        = publicRateLimitPolicy(defaultPublicRateLimits.User)
+	DefaultApplicationRateLimit = publicRateLimitPolicy(defaultPublicRateLimits.Application)
+	DefaultEndpointRateLimit    = publicRateLimitPolicy(defaultPublicRateLimits.Endpoint)
+	DefaultExpensiveRateLimit   = publicRateLimitPolicy(defaultPublicRateLimits.Expensive)
 )
+
+// publicRateLimitPolicy 把公开限流策略转换为内部限流策略。
+func publicRateLimitPolicy(policy httpapi.RateLimitPolicy) ratelimit.Policy {
+	return ratelimit.Policy{Limit: policy.Limit, Window: policy.Window}
+}
 
 // RateLimitRule 是单维限流规则；零值表示该维度禁用。
 type RateLimitRule struct {
