@@ -471,6 +471,49 @@ type SessionPage struct {
 	HasMore  bool
 }
 
+// ListPageOptions 是设备/会话列表的统一 Limit/Offset 分页参数（步骤 217）。
+// Limit 为 0 使用默认值 20，必须在 1～100 之间；Offset 必须在 0～1_000_000 之间。
+// 与页面 Page/PageSize 语义等价，但允许门面、HTTP 与 CLI 使用同一套 offset 分页
+// 元数据；offset 在并发登录/退出下不保证快照一致。
+type ListPageOptions struct {
+	Limit  int
+	Offset int
+}
+
+// SessionListPageResult 是设备列表按 Limit/Offset 分页的结果元数据。
+type SessionListPageResult struct {
+	Sessions   []SessionSummary
+	Limit      int
+	Offset     int
+	Returned   int
+	Total      int64
+	HasMore    bool
+	NextOffset int
+}
+
+// AdminSessionListPageRequest 是管理员按作用范围查询目标用户活动会话的
+// Limit/Offset 分页请求；授权与保护判定与 AdminSessionListRequest 相同。
+type AdminSessionListPageRequest struct {
+	ScopeAppID   string
+	TargetUserID string
+	Limit        int
+	Offset       int
+	RequestID    string
+}
+
+// AdminSessionListPageResult 是管理员会话查询的 Limit/Offset 分页结果。
+type AdminSessionListPageResult struct {
+	TargetUserID string
+	ScopeAppID   string
+	Sessions     []SessionSummary
+	Limit        int
+	Offset       int
+	Returned     int
+	Total        int64
+	HasMore      bool
+	NextOffset   int
+}
+
 // AdminRevokeRequest 是管理员强制下线请求。
 //
 // ScopeAppID 为空表示系统范围（依据系统权限会话强制退出）；非空表示仅在该应用

@@ -1190,45 +1190,65 @@ func (s *Service) emitSessionEvent(ctx context.Context, event securityevent.Even
 // 秘密、CSRF 令牌、验证摘要或 Cookie；Client 字段只是参考描述（UserAgent 由
 // 客户端自称、Address 来自可信边界），不是可信设备身份或地理位置。
 func (s *Service) ListSessions(ctx context.Context, secret string, options ListOptions) (SessionPage, error) {
-	ctx = normalizeContext(ctx)
-	if err := ctx.Err(); err != nil {
-		return SessionPage{}, err
-	}
-	current, err := s.Validate(ctx, secret)
-	if err != nil {
-		return SessionPage{}, err
-	}
-	if !current.CanAccessBusiness() {
-		return SessionPage{}, ErrRestrictedSession
-	}
-	currentID, _, parsed := parseSessionSecret(secret)
-	if !parsed {
-		return SessionPage{}, ErrSessionInvalid
-	}
 	page, pageSize, err := normalizeListOptions(options)
 	if err != nil {
 		return SessionPage{}, err
 	}
+	result, err := s.listSessionsPageInternal(ctx, secret, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return SessionPage{}, err
+	}
+	return SessionPage{Sessions: result.Sessions, Page: page, PageSize: pageSize,
+		Total: result.Total, HasMore: result.HasMore}, nil
+}
+
+// ListSessionsPage 与 ListSessions 相同，但按统一 Limit/Offset 分页（步骤 217），
+// 供公开门面/HTTP/CLI 使用；查询在存储层 LIMIT/OFFSET，不整读后再切页。
+func (s *Service) ListSessionsPage(ctx context.Context, secret string,
+	options ListPageOptions) (SessionListPageResult, error) {
+	limit, offset, err := normalizeListPageOptions(options)
+	if err != nil {
+		return SessionListPageResult{}, err
+	}
+	return s.listSessionsPageInternal(ctx, secret, limit, offset)
+}
+
+// listSessionsPageInternal 是本人设备列表的共用实现（Limit/Offset 已校验）。
+func (s *Service) listSessionsPageInternal(ctx context.Context, secret string,
+	limit, offset int) (SessionListPageResult, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return SessionListPageResult{}, err
+	}
+	current, err := s.Validate(ctx, secret)
+	if err != nil {
+		return SessionListPageResult{}, err
+	}
+	if !current.CanAccessBusiness() {
+		return SessionListPageResult{}, ErrRestrictedSession
+	}
+	currentID, _, parsed := parseSessionSecret(secret)
+	if !parsed {
+		return SessionListPageResult{}, ErrSessionInvalid
+	}
 	result, err := s.store.ListUserSessions(ctx, UserSessionQuery{
 		UserID:   current.UserID,
 		Now:      s.clockNow(),
-		Offset:   (page - 1) * pageSize,
-		PageSize: pageSize,
+		Offset:   offset,
+		PageSize: limit,
 	})
 	if err != nil {
-		return SessionPage{}, s.storeFailure(ctx, "读取设备列表", err)
+		return SessionListPageResult{}, s.storeFailure(ctx, "读取设备列表", err)
 	}
 	summaries := make([]SessionSummary, 0, len(result.Records))
 	for _, record := range result.Records {
 		summaries = append(summaries, record.summary(record.ID == currentID))
 	}
-	consumed := int64((page-1)*pageSize + len(summaries))
-	return SessionPage{
-		Sessions: summaries,
-		Page:     page,
-		PageSize: pageSize,
-		Total:    result.Total,
-		HasMore:  consumed < result.Total,
+	consumed := int64(offset + len(summaries))
+	return SessionListPageResult{
+		Sessions: summaries, Limit: limit, Offset: offset, Returned: len(summaries),
+		Total: result.Total, HasMore: consumed < result.Total,
+		NextOffset: offset + len(summaries),
 	}, nil
 }
 
@@ -1244,87 +1264,123 @@ func (s *Service) ListSessions(ctx context.Context, secret string, options ListO
 //   - 只返回展示摘要，不含会话秘密、CSRF 令牌或验证摘要；成功后写
 //     session.admin_list 读取审计，审计不可用时拒绝（管理读取必须留痕）。
 func (s *Service) AdminListSessions(ctx context.Context, adminSecret string, request AdminSessionListRequest) (AdminSessionListResult, error) {
-	ctx = normalizeContext(ctx)
-	if err := ctx.Err(); err != nil {
-		return AdminSessionListResult{}, err
-	}
-	scopeAppID := strings.TrimSpace(request.ScopeAppID)
-	targetUserID := strings.TrimSpace(request.TargetUserID)
-	if scopeAppID != "" && !validAppID(scopeAppID) {
-		return AdminSessionListResult{}, fmt.Errorf("%w: 作用范围应用 ID 格式无效", ErrInvalidRequest)
-	}
-	if !account.ValidUserID(targetUserID) {
-		return AdminSessionListResult{}, fmt.Errorf("%w: 目标用户 ID 格式无效", ErrInvalidRequest)
-	}
-	if request.RequestID != "" && !validRequestID(request.RequestID) {
-		return AdminSessionListResult{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
-	}
-	admin, err := s.Validate(ctx, adminSecret)
+	page, pageSize, err := normalizeListOptions(ListOptions{
+		Page: request.Page, PageSize: request.PageSize})
 	if err != nil {
 		return AdminSessionListResult{}, err
 	}
+	result, err := s.adminListSessionsPageInternal(ctx, adminSecret, request.ScopeAppID,
+		request.TargetUserID, request.RequestID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return AdminSessionListResult{}, err
+	}
+	return AdminSessionListResult{
+		TargetUserID: result.TargetUserID,
+		ScopeAppID:   result.ScopeAppID,
+		Sessions:     result.Sessions,
+		Page:         page,
+		PageSize:     pageSize,
+		Total:        result.Total,
+		HasMore:      result.HasMore,
+	}, nil
+}
+
+// AdminListSessionsPage 与 AdminListSessions 相同，但按统一 Limit/Offset 分页
+// （步骤 217）。授权、强认证、作用范围、root/受保护目标与读审计均由服务端重新
+// 判定；查询在存储层 LIMIT/OFFSET。
+func (s *Service) AdminListSessionsPage(ctx context.Context, adminSecret string,
+	request AdminSessionListPageRequest) (AdminSessionListPageResult, error) {
+	limit, offset, err := normalizeListPageOptions(ListPageOptions{
+		Limit: request.Limit, Offset: request.Offset})
+	if err != nil {
+		return AdminSessionListPageResult{}, err
+	}
+	return s.adminListSessionsPageInternal(ctx, adminSecret, request.ScopeAppID,
+		request.TargetUserID, request.RequestID, limit, offset)
+}
+
+// adminListSessionsPageInternal 是管理员会话查询的共用实现（Limit/Offset 已校验）。
+func (s *Service) adminListSessionsPageInternal(ctx context.Context, adminSecret,
+	scopeAppIDRaw, targetUserIDRaw, requestID string, limit, offset int) (AdminSessionListPageResult, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return AdminSessionListPageResult{}, err
+	}
+	scopeAppID := strings.TrimSpace(scopeAppIDRaw)
+	targetUserID := strings.TrimSpace(targetUserIDRaw)
+	if scopeAppID != "" && !validAppID(scopeAppID) {
+		return AdminSessionListPageResult{}, fmt.Errorf("%w: 作用范围应用 ID 格式无效", ErrInvalidRequest)
+	}
+	if !account.ValidUserID(targetUserID) {
+		return AdminSessionListPageResult{}, fmt.Errorf("%w: 目标用户 ID 格式无效", ErrInvalidRequest)
+	}
+	if requestID != "" && !validRequestID(requestID) {
+		return AdminSessionListPageResult{}, fmt.Errorf("%w: 请求编号格式无效", ErrInvalidRequest)
+	}
+	admin, err := s.Validate(ctx, adminSecret)
+	if err != nil {
+		return AdminSessionListPageResult{}, err
+	}
 	if !admin.CanAccessManagement() {
-		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "strong_auth_required")
+		return AdminSessionListPageResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, requestID, "strong_auth_required")
 	}
 	if s.authorizer == nil {
-		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "authorizer_missing")
+		return AdminSessionListPageResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, requestID, "authorizer_missing")
 	}
 	actor := audit.Actor{Type: audit.ActorUser, ID: admin.UserID}
 	// 先授权（不读取目标状态），再读取目标用户状态做 root 保护与存在性判定。
 	if err := s.authorizeAdmin(ctx, actor, scopeAppID, targetUserID); err != nil {
-		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "authorization_denied")
+		return AdminSessionListPageResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, requestID, "authorization_denied")
 	}
 	state, found, err := s.store.LoadUserState(ctx, targetUserID)
 	if err != nil {
-		return AdminSessionListResult{}, s.storeFailure(ctx, "读取目标账户状态", err)
+		return AdminSessionListPageResult{}, s.storeFailure(ctx, "读取目标账户状态", err)
 	}
 	if found && state.IsRoot {
-		return AdminSessionListResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, request.RequestID, "root_protected")
-	}
-	page, pageSize, err := normalizeListOptions(ListOptions{Page: request.Page, PageSize: request.PageSize})
-	if err != nil {
-		return AdminSessionListResult{}, err
+		return AdminSessionListPageResult{}, s.denyAdminList(ctx, admin, scopeAppID, targetUserID, requestID, "root_protected")
 	}
 	result, err := s.store.ListUserSessions(ctx, UserSessionQuery{
 		UserID:   targetUserID,
 		AppID:    scopeAppID,
 		Now:      s.clockNow(),
-		Offset:   (page - 1) * pageSize,
-		PageSize: pageSize,
+		Offset:   offset,
+		PageSize: limit,
 	})
 	if err != nil {
-		return AdminSessionListResult{}, s.storeFailure(ctx, "读取目标会话列表", err)
+		return AdminSessionListPageResult{}, s.storeFailure(ctx, "读取目标会话列表", err)
 	}
 	currentID, _, _ := parseSessionSecret(adminSecret)
 	summaries := make([]SessionSummary, 0, len(result.Records))
 	for _, record := range result.Records {
 		summaries = append(summaries, record.summary(record.ID == currentID))
 	}
-	consumed := int64((page-1)*pageSize + len(summaries))
+	consumed := int64(offset + len(summaries))
 	if err := s.audit.Record(ctx, audit.Event{
 		Actor:     actor,
 		AppID:     scopeAppID,
 		Action:    string(ActionSessionAdminList),
 		Outcome:   audit.OutcomeSuccess,
 		Target:    audit.Target{Type: "user", ID: targetUserID},
-		RequestID: request.RequestID,
+		RequestID: requestID,
 		Changes: []audit.FieldChange{
 			{Field: "scope_app_id", After: scopeAppID},
-			{Field: "page", After: strconv.Itoa(page)},
-			{Field: "page_size", After: strconv.Itoa(pageSize)},
+			{Field: "limit", After: strconv.Itoa(limit)},
+			{Field: "offset", After: strconv.Itoa(offset)},
 			{Field: "total", After: strconv.FormatInt(result.Total, 10)},
 		},
 	}); err != nil {
-		return AdminSessionListResult{}, fmt.Errorf("%w: 读取审计写入失败", ErrAuditUnavailable)
+		return AdminSessionListPageResult{}, fmt.Errorf("%w: 读取审计写入失败", ErrAuditUnavailable)
 	}
-	return AdminSessionListResult{
+	return AdminSessionListPageResult{
 		TargetUserID: targetUserID,
 		ScopeAppID:   scopeAppID,
 		Sessions:     summaries,
-		Page:         page,
-		PageSize:     pageSize,
+		Limit:        limit,
+		Offset:       offset,
+		Returned:     len(summaries),
 		Total:        result.Total,
 		HasMore:      consumed < result.Total,
+		NextOffset:   offset + len(summaries),
 	}, nil
 }
 
@@ -2293,6 +2349,25 @@ func normalizeListOptions(options ListOptions) (page, pageSize int, err error) {
 		pageSize = MaxListPageSize
 	}
 	return page, pageSize, nil
+}
+
+// normalizeListPageOptions 规范化统一 Limit/Offset 分页参数（步骤 217）：Limit=0
+// 使用默认 20，必须在 1～100；Offset 必须在 0～1_000_000。非法值返回
+// ErrInvalidRequest（不静默截断/放大），仓储层不会执行超出该范围的扫描。
+func normalizeListPageOptions(options ListPageOptions) (limit, offset int, err error) {
+	limit = options.Limit
+	if limit == 0 {
+		limit = DefaultListPageSize
+	}
+	if limit < 1 || limit > MaxListPageSize {
+		return 0, 0, fmt.Errorf("%w: 每页数量必须在 1～%d 之间（0 使用默认 %d）",
+			ErrInvalidRequest, MaxListPageSize, DefaultListPageSize)
+	}
+	offset = options.Offset
+	if offset < 0 || offset > 1_000_000 {
+		return 0, 0, fmt.Errorf("%w: 分页偏移必须在 0～1000000 之间", ErrInvalidRequest)
+	}
+	return limit, offset, nil
 }
 
 // sessionMaterial 是新生会话的随机材料。

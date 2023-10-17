@@ -203,3 +203,40 @@ func normalizeSessionPermissions(permissions []string) []string {
 	}
 	return normalized
 }
+
+// ListDevices 分页列出当前会话所属用户的本人活动会话（设备列表），供嵌入宿主在
+// 自己的安全中心页面展示；只返回展示所需字段，不包含会话秘密/CSRF 令牌/验证摘要。
+// offset 在并发登录/退出下不保证快照一致；需要稳定导出应使用稳定游标或快照。
+func (f *sessionFacade) ListDevices(ctx context.Context, req SessionDeviceRequest) (SessionDeviceList, error) {
+	r := f.r
+	services := r.coreServices()
+	if services == nil || services.Sessions == nil {
+		return SessionDeviceList{}, configError("会话服务未装配")
+	}
+	if len(req.SessionSecret) == 0 {
+		return SessionDeviceList{}, login.NewAppError(login.CodeAccessDenied, "缺少会话秘密")
+	}
+	page, err := NormalizeAdminPage(req.Page)
+	if err != nil {
+		return SessionDeviceList{}, err
+	}
+	result, err := services.Sessions.ListSessionsPage(ctx, string(req.SessionSecret),
+		session.ListPageOptions{Limit: page.Limit, Offset: page.Offset})
+	if err != nil {
+		return SessionDeviceList{}, mapDomainError("读取设备列表失败",
+			string(session.CodeOf(err)))
+	}
+	devices := make([]SessionDevice, 0, len(result.Sessions))
+	for _, record := range result.Sessions {
+		devices = append(devices, SessionDevice{ID: record.ID, AppID: record.AppID,
+			Kind: string(record.Kind), Reason: string(record.Reason),
+			CreatedAt: record.CreatedAt, LastSeenAt: record.LastSeenAt,
+			IdleExpiresAt:     record.IdleExpiresAt,
+			AbsoluteExpiresAt: record.AbsoluteExpiresAt,
+			RememberMe:        record.RememberMe, Current: record.Current,
+			ClientUserAgent: record.Client.UserAgent, ClientAddress: record.Client.Address})
+	}
+	return SessionDeviceList{Devices: devices, Total: result.Total,
+		HasMore: result.HasMore,
+		Page:    NewAdminPageInfo(page, len(devices), result.HasMore)}, nil
+}

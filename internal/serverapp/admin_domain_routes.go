@@ -234,12 +234,23 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 	})
 
 	add(http.MethodGet, "applications", "applications.read", func(ctx context.Context, caller account.Caller, request *http.Request) (any, error) {
-		limit, offset := adminQueryPage(request)
+		page, err := parseAdminListQuery(request, "created_at", "updated_at", "name", "id")
+		if err != nil {
+			return nil, err
+		}
 		appCaller, err := app.UserCaller(caller.Actor().ID)
 		if err != nil {
 			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
 		}
-		result, err := managed.App.ListApplications(ctx, appCaller, app.ListRequest{Limit: limit, Offset: offset})
+		status := app.Status(strings.TrimSpace(request.URL.Query().Get("status")))
+		if status != "" && !status.Valid() {
+			return nil, &adminapi.DomainError{Code: "REQ_INVALID", Message: "应用状态无效"}
+		}
+		includeDeleted := strings.TrimSpace(request.URL.Query().Get("include_deleted")) == "true"
+		result, err := managed.App.ListApplications(ctx, appCaller, app.ListRequest{
+			Limit: page.Limit, Offset: page.Offset, Status: status,
+			Sort: app.SortField(page.Sort), Descending: page.Descending,
+			IncludeDeleted: includeDeleted})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(app.CodeOf(e)) })
 		}
@@ -251,7 +262,7 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 				"scope_id": item.ScopeID, "row_version": item.RowVersion,
 				"created_at": item.CreatedAt, "updated_at": item.UpdatedAt})
 		}
-		return map[string]any{"items": items, "has_more": result.HasMore}, nil
+		return page.result(items, result.HasMore), nil
 	})
 	add(http.MethodGet, "applications/{application_id}", "applications.read", func(ctx context.Context, caller account.Caller, request *http.Request) (any, error) {
 		appCaller, err := app.UserCaller(caller.Actor().ID)
@@ -278,18 +289,78 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 		if len(parts) >= 2 {
 			applicationID = parts[len(parts)-2]
 		}
-		limit, offset := adminQueryPage(request)
+		page, err := parseAdminListQuery(request, "created_at", "updated_at", "user_id")
+		if err != nil {
+			return nil, err
+		}
+		status := app.MembershipStatus(strings.TrimSpace(request.URL.Query().Get("status")))
+		if status != "" && !status.Valid() {
+			return nil, &adminapi.DomainError{Code: "REQ_INVALID", Message: "成员状态无效"}
+		}
 		result, err := managed.App.ListApplicationMembers(ctx, appCaller, app.MemberListRequest{
-			ApplicationID: applicationID, Limit: limit, Offset: offset})
+			ApplicationID: applicationID, Limit: page.Limit, Offset: page.Offset,
+			Status: status, Sort: app.MemberSortField(page.Sort), Descending: page.Descending})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(app.CodeOf(e)) })
 		}
 		items := make([]map[string]any, 0, len(result.Members))
 		for _, item := range result.Members {
 			items = append(items, map[string]any{"user_id": item.UserID, "status": string(item.Status),
+				"row_version": item.RowVersion,
+				"created_at":  item.CreatedAt, "updated_at": item.UpdatedAt})
+		}
+		return page.result(items, result.HasMore), nil
+	})
+	// 步骤 217：应用范围的角色/用户组列表。作用范围固定为路径中的应用 ID，调用方
+	// 不能通过查询参数读取系统/其他应用范围；授权仍由领域服务重新判定。
+	add(http.MethodGet, "applications/{application_id}/roles", "roles.read", func(ctx context.Context, caller account.Caller, request *http.Request) (any, error) {
+		page, err := parseAdminListQuery(request, "created_at", "updated_at", "name", "key")
+		if err != nil {
+			return nil, err
+		}
+		roleCaller, err := role.UserCaller(caller.Actor().ID)
+		if err != nil {
+			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
+		}
+		applicationID := strings.TrimSpace(adminApplicationPathParam(request))
+		result, err := managed.Role.ListRoles(ctx, roleCaller, role.ListRequest{
+			ScopeID: applicationID, Limit: page.Limit, Offset: page.Offset,
+			Sort: role.SortField(page.Sort), Descending: page.Descending})
+		if err != nil {
+			return nil, adminDomainError(err, func(e error) string { return string(role.CodeOf(e)) })
+		}
+		items := make([]map[string]any, 0, len(result.Roles))
+		for _, item := range result.Roles {
+			items = append(items, map[string]any{"id": item.ID, "scope_id": item.ScopeID,
+				"key": item.Key, "name": item.Name, "description": item.Description,
+				"is_builtin": item.IsBuiltin, "enabled": item.Enabled,
 				"created_at": item.CreatedAt, "updated_at": item.UpdatedAt})
 		}
-		return map[string]any{"items": items, "has_more": result.HasMore}, nil
+		return page.result(items, result.HasMore), nil
+	})
+	add(http.MethodGet, "applications/{application_id}/groups", "groups.read", func(ctx context.Context, caller account.Caller, request *http.Request) (any, error) {
+		page, err := parseAdminListQuery(request, "created_at", "updated_at", "name", "key")
+		if err != nil {
+			return nil, err
+		}
+		groupCaller, err := group.UserCaller(caller.Actor().ID)
+		if err != nil {
+			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
+		}
+		applicationID := strings.TrimSpace(adminApplicationPathParam(request))
+		result, err := managed.Group.ListGroups(ctx, groupCaller, group.ListRequest{
+			ScopeID: applicationID, Limit: page.Limit, Offset: page.Offset,
+			Sort: group.GroupSortField(page.Sort), Descending: page.Descending})
+		if err != nil {
+			return nil, adminDomainError(err, func(e error) string { return string(group.CodeOf(e)) })
+		}
+		items := make([]map[string]any, 0, len(result.Groups))
+		for _, item := range result.Groups {
+			items = append(items, map[string]any{"id": item.ID, "scope_id": item.ScopeID,
+				"key": item.GroupKey, "name": item.Name, "description": item.Description,
+				"created_at": item.CreatedAt, "updated_at": item.UpdatedAt})
+		}
+		return page.result(items, result.HasMore), nil
 	})
 
 	if managed.Support != nil {
@@ -477,6 +548,22 @@ func adminPathParam(request *http.Request) string {
 		return ""
 	}
 	return parts[len(parts)-1]
+}
+
+// adminApplicationPathParam 读取 applications/{application_id}/... 路由中的应用 ID
+// （倒数第二段），用于应用范围的角色/用户组列表。路径不足三段（只有
+// applications/{id}）时返回空字符串，避免把固定段 applications 当成应用 ID；
+// 非法应用 ID 最终仍由领域服务按 REQ_INVALID/ACCESS_DENIED 拒绝。
+func adminApplicationPathParam(request *http.Request) string {
+	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	applicationID := parts[len(parts)-2]
+	if applicationID == "applications" {
+		return ""
+	}
+	return applicationID
 }
 
 // adminDomainError 把领域错误映射为 adminapi 稳定错误。未识别错误只返回

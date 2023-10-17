@@ -35,6 +35,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
+	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
 // adminFacade 实现 AdminService。
@@ -51,6 +52,10 @@ type adminIdentity struct {
 	actor  audit.Actor
 	local  bool
 	userID string
+	// sessionSecret 是普通管理会话调用者出示的会话秘密副本；仅用于会话领域内需要
+	// “真实管理会话”参与判定的读取（如管理员按范围查询目标会话）。LocalAdmin 没有
+	// 会话秘密，不能用于这类入口。秘密只在本次调用内使用，不写入日志/错误/结果。
+	sessionSecret []byte
 }
 
 // adminRequest 是一次受信管理调用的可信上下文：可信身份与本次调用的请求编号。
@@ -191,7 +196,9 @@ func (r *Runtime) resolveAdmin(ctx context.Context, caller AdminCaller,
 	if err := actor.Validate(); err != nil {
 		return adminIdentity{}, mapDomainError("管理会话主体无效", "ACCESS_DENIED", requestID)
 	}
-	return adminIdentity{actor: actor, userID: record.UserID}, nil
+	secretCopy := make([]byte, len(caller.sessionSecret))
+	copy(secretCopy, caller.sessionSecret)
+	return adminIdentity{actor: actor, userID: record.UserID, sessionSecret: secretCopy}, nil
 }
 
 // accountCaller 按身份构造账户服务可信调用者。
@@ -1152,4 +1159,240 @@ func (f *adminFacade) ListRoleAssignments(ctx context.Context,
 		UserPage: NewAdminPageInfo(userPage, len(users), result.UsersHasMore),
 		Groups:   groups, GroupsHasMore: result.GroupsHasMore,
 		GroupPage: NewAdminPageInfo(groupPage, len(groups), result.GroupsHasMore)}, nil
+}
+
+// ===== 应用/成员/应用角色组/会话列表（步骤 217） =====
+
+// toAdminApplication 把领域应用快照投影为公开管理视图（不含客户端秘密）。
+func toAdminApplication(record app.Application) AdminApplication {
+	return AdminApplication{ID: record.ID, Name: record.Name, Description: record.Description,
+		OwnerUserID: record.OwnerUserID, Status: string(record.Status),
+		RowVersion: record.RowVersion, CreatedAt: record.CreatedAt}
+}
+
+// ListApplications 分页查询应用列表。授权与应用可见范围由应用服务先于分页判定
+// （应用管理员只能看到被分配应用），门面只负责统一分页/筛选/排序参数与脱敏投影。
+func (f *adminFacade) ListApplications(ctx context.Context,
+	req AdminListApplicationsRequest) (AdminApplicationList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminApplicationList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.App == nil {
+		return AdminApplicationList{}, call.configError("应用服务未装配")
+	}
+	caller, err := f.appCaller(call.identity)
+	if err != nil {
+		return AdminApplicationList{}, call.configError("应用服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminApplicationList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminApplicationList{}, err
+	}
+	status := app.Status(strings.TrimSpace(req.Status))
+	if status != "" && !status.Valid() {
+		return AdminApplicationList{}, call.domainError("应用状态无效", "REQ_INVALID")
+	}
+	result, err := managed.App.ListApplications(ctx, caller, app.ListRequest{
+		Limit: page.Limit, Offset: page.Offset, Status: status,
+		Sort:       app.SortField(strings.TrimSpace(req.Sort)),
+		Descending: req.Descending, IncludeDeleted: req.IncludeDeleted})
+	if err != nil {
+		return AdminApplicationList{}, call.domainError("查询应用列表失败", string(app.CodeOf(err)))
+	}
+	applications := make([]AdminApplication, 0, len(result.Applications))
+	for _, record := range result.Applications {
+		applications = append(applications, toAdminApplication(record))
+	}
+	return AdminApplicationList{Applications: applications, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(applications), result.HasMore)}, nil
+}
+
+// ListApplicationMembers 分页查询应用成员（状态筛选 + 白名单排序）。应用范围由应用
+// 服务在查询中作为约束执行；一个用户属于两个应用时只返回目标应用的成员关系。
+func (f *adminFacade) ListApplicationMembers(ctx context.Context,
+	req AdminListApplicationMembersRequest) (AdminApplicationMemberList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminApplicationMemberList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.App == nil {
+		return AdminApplicationMemberList{}, call.configError("应用服务未装配")
+	}
+	applicationID := strings.TrimSpace(req.ApplicationID)
+	if applicationID == "" {
+		return AdminApplicationMemberList{}, call.domainError("应用 ID 必填", "REQ_INVALID")
+	}
+	caller, err := f.appCaller(call.identity)
+	if err != nil {
+		return AdminApplicationMemberList{}, call.configError("应用服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminApplicationMemberList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminApplicationMemberList{}, err
+	}
+	status := app.MembershipStatus(strings.TrimSpace(req.Status))
+	if status != "" && !status.Valid() {
+		return AdminApplicationMemberList{}, call.domainError("成员状态无效", "REQ_INVALID")
+	}
+	result, err := managed.App.ListApplicationMembers(ctx, caller, app.MemberListRequest{
+		ApplicationID: applicationID, Limit: page.Limit, Offset: page.Offset,
+		Status: status, Sort: app.MemberSortField(strings.TrimSpace(req.Sort)),
+		Descending: req.Descending})
+	if err != nil {
+		if replaced, ok := call.notFoundIfTargetMissing(err, app.ErrApplicationNotFound, "application"); ok {
+			return AdminApplicationMemberList{}, replaced
+		}
+		return AdminApplicationMemberList{}, call.domainError("查询应用成员失败", string(app.CodeOf(err)))
+	}
+	members := make([]AdminApplicationMember, 0, len(result.Members))
+	for _, member := range result.Members {
+		members = append(members, AdminApplicationMember{
+			ApplicationID: member.ApplicationID, UserID: member.UserID,
+			Status: string(member.Status), RowVersion: member.RowVersion,
+			CreatedAt: member.CreatedAt, UpdatedAt: member.UpdatedAt})
+	}
+	return AdminApplicationMemberList{Members: members, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(members), result.HasMore)}, nil
+}
+
+// ListApplicationRoles 分页查询指定应用范围的角色。作用范围固定为请求的应用 ID，
+// 调用方不能借此读取系统或其他应用角色；授权由角色服务先于分页判定。
+func (f *adminFacade) ListApplicationRoles(ctx context.Context,
+	req AdminListApplicationRolesRequest) (AdminRoleList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminRoleList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.Role == nil {
+		return AdminRoleList{}, call.configError("角色服务未装配")
+	}
+	applicationID := strings.TrimSpace(req.ApplicationID)
+	if applicationID == "" {
+		return AdminRoleList{}, call.domainError("应用 ID 必填", "REQ_INVALID")
+	}
+	caller, err := f.roleCaller(call.identity)
+	if err != nil {
+		return AdminRoleList{}, call.configError("角色服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminRoleList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminRoleList{}, err
+	}
+	result, err := managed.Role.ListRoles(ctx, caller, role.ListRequest{
+		ScopeID: applicationID, Limit: page.Limit, Offset: page.Offset,
+		Enabled: req.Enabled, Builtin: req.Builtin,
+		Sort: role.SortField(strings.TrimSpace(req.Sort)), Descending: req.Descending})
+	if err != nil {
+		return AdminRoleList{}, call.roleError("查询应用角色失败", err)
+	}
+	roles := make([]AdminRole, 0, len(result.Roles))
+	for _, record := range result.Roles {
+		roles = append(roles, AdminRole{ID: record.ID, ScopeID: record.ScopeID,
+			ApplicationID: record.ApplicationID, Key: record.Key, Name: record.Name,
+			Enabled: record.Enabled})
+	}
+	return AdminRoleList{Roles: roles, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(roles), result.HasMore)}, nil
+}
+
+// ListApplicationGroups 分页查询指定应用范围的用户组。作用范围固定为请求的应用 ID；
+// 授权由用户组服务先于分页判定。
+func (f *adminFacade) ListApplicationGroups(ctx context.Context,
+	req AdminListApplicationGroupsRequest) (AdminGroupList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminGroupList{}, err
+	}
+	managed := f.r.managedServices()
+	if managed == nil || managed.Group == nil {
+		return AdminGroupList{}, call.configError("用户组服务未装配")
+	}
+	applicationID := strings.TrimSpace(req.ApplicationID)
+	if applicationID == "" {
+		return AdminGroupList{}, call.domainError("应用 ID 必填", "REQ_INVALID")
+	}
+	caller, err := f.groupCaller(call.identity)
+	if err != nil {
+		return AdminGroupList{}, call.configError("用户组服务调用者无效")
+	}
+	if caller, err = bindCaller(caller, call.requestID); err != nil {
+		return AdminGroupList{}, err
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminGroupList{}, err
+	}
+	result, err := managed.Group.ListGroups(ctx, caller, group.ListRequest{
+		ScopeID: applicationID, Limit: page.Limit, Offset: page.Offset,
+		Sort: group.GroupSortField(strings.TrimSpace(req.Sort)), Descending: req.Descending})
+	if err != nil {
+		return AdminGroupList{}, call.domainError("查询应用用户组失败", string(group.CodeOf(err)))
+	}
+	groups := make([]AdminGroup, 0, len(result.Groups))
+	for _, record := range result.Groups {
+		groups = append(groups, AdminGroup{ID: record.ID, ScopeID: record.ScopeID,
+			ApplicationID: record.ApplicationID, Key: record.GroupKey, Name: record.Name,
+			Description: record.Description, CreatedAt: record.CreatedAt,
+			UpdatedAt: record.UpdatedAt})
+	}
+	return AdminGroupList{Groups: groups, HasMore: result.HasMore,
+		Page: NewAdminPageInfo(page, len(groups), result.HasMore)}, nil
+}
+
+// ListUserSessions 管理员按作用范围分页读取目标用户活动会话。只有真实 AdminSession
+// 调用者可用（强认证/范围/root 保护/读审计在会话服务内重新判定）；LocalAdmin 没有
+// 管理会话秘密，无法通过该入口读取会话（明确拒绝，不伪造授权）。
+func (f *adminFacade) ListUserSessions(ctx context.Context,
+	req AdminListUserSessionsRequest) (AdminUserSessionList, error) {
+	call, err := f.begin(ctx, req.Caller, req.RequestID)
+	if err != nil {
+		return AdminUserSessionList{}, err
+	}
+	services := f.r.coreServices()
+	if services == nil || services.Sessions == nil {
+		return AdminUserSessionList{}, call.configError("会话服务未装配")
+	}
+	if call.identity.local || len(call.identity.sessionSecret) == 0 {
+		return AdminUserSessionList{}, call.domainError(
+			"读取会话列表需要真实管理会话", "ACCESS_DENIED")
+	}
+	page, err := call.page(req.Page)
+	if err != nil {
+		return AdminUserSessionList{}, err
+	}
+	result, err := services.Sessions.AdminListSessionsPage(ctx,
+		string(call.identity.sessionSecret), session.AdminSessionListPageRequest{
+			ScopeAppID:   strings.TrimSpace(req.ScopeApplicationID),
+			TargetUserID: strings.TrimSpace(req.TargetUserID),
+			Limit:        page.Limit, Offset: page.Offset, RequestID: call.requestID})
+	if err != nil {
+		return AdminUserSessionList{}, call.domainError("查询用户会话失败", string(session.CodeOf(err)))
+	}
+	sessions := make([]AdminSessionView, 0, len(result.Sessions))
+	for _, record := range result.Sessions {
+		sessions = append(sessions, AdminSessionView{
+			ID: record.ID, AppID: record.AppID, Kind: string(record.Kind),
+			Reason: string(record.Reason), CreatedAt: record.CreatedAt,
+			LastSeenAt: record.LastSeenAt, IdleExpiresAt: record.IdleExpiresAt,
+			AbsoluteExpiresAt: record.AbsoluteExpiresAt, RememberMe: record.RememberMe,
+			Current: record.Current, ClientUserAgent: record.Client.UserAgent,
+			ClientAddress: record.Client.Address})
+	}
+	return AdminUserSessionList{TargetUserID: result.TargetUserID,
+		ScopeApplicationID: result.ScopeAppID, Sessions: sessions, Total: result.Total,
+		HasMore: result.HasMore,
+		Page:    NewAdminPageInfo(page, len(sessions), result.HasMore)}, nil
 }

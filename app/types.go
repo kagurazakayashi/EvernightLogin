@@ -378,6 +378,153 @@ type AdminSetApplicationEnabledRequest struct {
 	RequestID          string
 }
 
+// AdminListApplicationsRequest 分页查询应用列表（状态筛选 + 白名单排序，步骤 217）。
+// Sort 允许值："created_at"（默认）、"updated_at"、"name"、"id"；IncludeDeleted 为
+// true 时同时返回已逻辑删除应用（审计查看）。应用管理员只能看到被分配应用，范围由
+// 领域服务先于分页判定，不能靠参数扩大。
+type AdminListApplicationsRequest struct {
+	Caller         AdminCaller
+	Status         string
+	IncludeDeleted bool
+	Sort           string
+	Descending     bool
+	Page           AdminPage
+	RequestID      string
+}
+
+// AdminApplicationList 是应用列表结果。
+type AdminApplicationList struct {
+	Applications []AdminApplication
+	HasMore      bool
+	Page         AdminPageInfo
+}
+
+// AdminApplicationMember 是应用成员的管理视图：只包含本应用成员关系字段，不含
+// 令牌、客户端秘密或其他应用的成员/资料。
+type AdminApplicationMember struct {
+	ApplicationID string
+	UserID        string
+	Status        string
+	RowVersion    int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// AdminListApplicationMembersRequest 分页查询应用成员（状态筛选 + 白名单排序）。
+// Sort 允许值："created_at"（默认）、"updated_at"、"user_id"；Status 为空表示不过滤。
+// 授权与应用范围由应用服务先于分页判定；一个用户属于两个应用时只返回目标应用的记录。
+type AdminListApplicationMembersRequest struct {
+	Caller        AdminCaller
+	ApplicationID string
+	Status        string
+	Sort          string
+	Descending    bool
+	Page          AdminPage
+	RequestID     string
+}
+
+// AdminApplicationMemberList 是应用成员列表结果。
+type AdminApplicationMemberList struct {
+	Members []AdminApplicationMember
+	HasMore bool
+	Page    AdminPageInfo
+}
+
+// AdminListApplicationRolesRequest 分页查询某个应用范围的角色（步骤 217）。
+// 作用范围固定为请求的 ApplicationID，调用方不能借此读取其他应用角色；
+// Sort 允许值："created_at"（默认）、"updated_at"、"name"、"key"。
+type AdminListApplicationRolesRequest struct {
+	Caller        AdminCaller
+	ApplicationID string
+	Enabled       *bool
+	Builtin       *bool
+	Sort          string
+	Descending    bool
+	Page          AdminPage
+	RequestID     string
+}
+
+// AdminListApplicationGroupsRequest 分页查询某个应用范围的用户组（步骤 217）。
+// 作用范围固定为请求的 ApplicationID；Sort 允许值："created_at"（默认）、
+// "updated_at"、"name"、"key"。
+type AdminListApplicationGroupsRequest struct {
+	Caller        AdminCaller
+	ApplicationID string
+	Sort          string
+	Descending    bool
+	Page          AdminPage
+	RequestID     string
+}
+
+// AdminSessionView 是管理员会话列表的一条脱敏摘要：不含会话秘密、CSRF 令牌、
+// 验证摘要或 Cookie；客户端字段只作展示参考，不是可信设备身份。
+type AdminSessionView struct {
+	ID                string
+	AppID             string
+	Kind              string
+	Reason            string
+	CreatedAt         time.Time
+	LastSeenAt        time.Time
+	IdleExpiresAt     time.Time
+	AbsoluteExpiresAt time.Time
+	RememberMe        bool
+	Current           bool
+	ClientUserAgent   string
+	ClientAddress     string
+}
+
+// AdminListUserSessionsRequest 分页查询目标用户的活动会话（步骤 217）。
+// 仅 AdminSession 调用者可用（必需真实管理会话做强认证/范围判定）；ScopeApplicationID
+// 为空表示系统范围，非空只返回绑定该应用的会话；root 目标一律拒绝。
+type AdminListUserSessionsRequest struct {
+	Caller             AdminCaller
+	TargetUserID       string
+	ScopeApplicationID string
+	Page               AdminPage
+	RequestID          string
+}
+
+// AdminUserSessionList 是管理员会话列表结果。
+type AdminUserSessionList struct {
+	TargetUserID       string
+	ScopeApplicationID string
+	Sessions           []AdminSessionView
+	Total              int64
+	HasMore            bool
+	Page               AdminPageInfo
+}
+
+// SessionDeviceRequest 是本人设备列表请求；SessionSecret 必须是仍有效且可访问普通
+// 业务的会话秘密。
+type SessionDeviceRequest struct {
+	SessionSecret []byte
+	Page          AdminPage
+}
+
+// SessionDevice 是设备列表的一条脱敏会话摘要（不含秘密/CSRF/验证摘要）。
+type SessionDevice struct {
+	ID                string
+	AppID             string
+	Kind              string
+	Reason            string
+	CreatedAt         time.Time
+	LastSeenAt        time.Time
+	IdleExpiresAt     time.Time
+	AbsoluteExpiresAt time.Time
+	RememberMe        bool
+	Current           bool
+	ClientUserAgent   string
+	ClientAddress     string
+}
+
+// SessionDeviceList 是本人设备列表结果。
+type SessionDeviceList struct {
+	Devices []SessionDevice
+	Total   int64
+	HasMore bool
+	Page    AdminPageInfo
+}
+
 // AdminRole 是角色登记信息。
 type AdminRole struct {
 	ID            string
@@ -701,6 +848,17 @@ type AdminService interface {
 	AddApplicationMember(ctx context.Context, req AdminAddMemberRequest) error
 	CreateApplication(ctx context.Context, req AdminCreateApplicationRequest) (AdminApplication, error)
 	SetApplicationEnabled(ctx context.Context, req AdminSetApplicationEnabledRequest) (AdminApplication, error)
+	// ListApplications/ListApplicationMembers 分页读取应用与应用成员（授权与应用范围
+	// 由领域服务先于分页判定；非法排序/分页返回 REQ_INVALID）。
+	ListApplications(ctx context.Context, req AdminListApplicationsRequest) (AdminApplicationList, error)
+	ListApplicationMembers(ctx context.Context, req AdminListApplicationMembersRequest) (AdminApplicationMemberList, error)
+	// ListApplicationRoles/ListApplicationGroups 分页读取指定应用范围的角色与用户组；
+	// 作用范围固定为请求的应用 ID，不能跨应用读取。
+	ListApplicationRoles(ctx context.Context, req AdminListApplicationRolesRequest) (AdminRoleList, error)
+	ListApplicationGroups(ctx context.Context, req AdminListApplicationGroupsRequest) (AdminGroupList, error)
+	// ListUserSessions 管理员按作用范围分页读取目标用户活动会话（仅 AdminSession
+	// 调用者；强认证、范围、root 保护与读审计由会话服务重新判定）。
+	ListUserSessions(ctx context.Context, req AdminListUserSessionsRequest) (AdminUserSessionList, error)
 	CreateRole(ctx context.Context, req AdminCreateRoleRequest) (AdminRole, error)
 	CreatePermission(ctx context.Context, req AdminCreatePermissionRequest) (AdminPermission, error)
 	AddRolePermission(ctx context.Context, req AdminRolePermissionRequest) error
@@ -772,6 +930,9 @@ type SessionService interface {
 	// 只有会话无效、输入非法或内部故障才返回 error。
 	Authorize(ctx context.Context, req SessionAccessRequest) (SessionAccessDecision, error)
 	Revoke(ctx context.Context, sessionSecret []byte) error
+	// ListDevices 分页列出当前会话所属用户的本人活动会话（设备列表）；不包含会话
+	// 秘密/CSRF/验证摘要，offset 在并发登录/退出下不保证快照一致。
+	ListDevices(ctx context.Context, req SessionDeviceRequest) (SessionDeviceList, error)
 }
 
 // SessionAccessRequest 是“会话 + 应用绑定 + 所需权限”的联合检查请求。

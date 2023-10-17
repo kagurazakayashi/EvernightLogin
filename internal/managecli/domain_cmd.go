@@ -41,9 +41,11 @@ const domainCommandUsage = `用法：
   loginctl role list --operator <id> [--scope system|<app_id>] [--limit N] [--json]
   loginctl role get <role_id> --operator <id> [--json]
   loginctl role permissions <role_id> --operator <id> [--json]
-  loginctl app list --operator <id> [--status active|disabled|pending] [--limit N] [--json]
+  loginctl app list --operator <id> [--status active|disabled|pending] [--sort created_at|updated_at|name|id] [--desc true] [--limit N] [--offset N] [--json]
   loginctl app get <application_id> --operator <id> [--json]
-  loginctl app members <application_id> --operator <id> [--limit N] [--json]
+  loginctl app members <application_id> --operator <id> [--status active|disabled] [--sort created_at|updated_at|user_id] [--desc true] [--limit N] [--offset N] [--json]
+  loginctl app roles <application_id> --operator <id> [--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]
+  loginctl app groups <application_id> --operator <id> [--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]
   loginctl app delete <application_id> --operator <id> --expected-version <n> --confirm DELETE [--json]
   loginctl app purge <application_id> --operator <id> --confirm PURGE [--json]（仅限已逻辑删除且超过保留期）
   loginctl permission list [--scope system|application] [--json]（只读预设目录）
@@ -861,6 +863,10 @@ func (r *runner) runApp(subcommand string, args []string) int {
 		return r.runAppGet(args)
 	case "members":
 		return r.runAppMembers(args)
+	case "roles":
+		return r.runAppRoles(args)
+	case "groups":
+		return r.runAppGroups(args)
 	case "delete":
 		return r.runAppDelete(args)
 	case "purge":
@@ -870,14 +876,15 @@ func (r *runner) runApp(subcommand string, args []string) int {
 		return r.managementWriteNotExposed("应用", subcommand,
 			"应用变更/成员/凭证需要委派转授、敏感策略与 OAuth 凭证装配，CLI 不提供放宽替身")
 	default:
-		return r.usage("未知的 app 子命令 %q（可用：list/get/members/delete/purge）", subcommand)
+		return r.usage("未知的 app 子命令 %q（可用：list/get/members/roles/groups/delete/purge）", subcommand)
 	}
 }
 
 func (r *runner) runAppList(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "status", value: true}, flagDef{name: "limit", value: true},
-		flagDef{name: "offset", value: true}))
+		flagDef{name: "offset", value: true}, flagDef{name: "sort", value: true},
+		flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -901,6 +908,14 @@ func (r *runner) runAppList(args []string) int {
 	if status != "" && !status.Valid() {
 		return r.usage("--status 不是已定义的应用状态")
 	}
+	sortField, err := domainSortFlag(values, []string{"created_at", "updated_at", "name", "id"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
 	base, service, exit := r.openAppService(values, operator)
 	if exit != ExitOK {
 		return exit
@@ -911,7 +926,8 @@ func (r *runner) runAppList(args []string) int {
 		return r.usage("--operator 本地管理员标识无效")
 	}
 	result, err := service.ListApplications(r.ctx, caller, app.ListRequest{
-		Limit: limit, Offset: offset, Status: status})
+		Limit: limit, Offset: offset, Status: status, Sort: app.SortField(sortField),
+		Descending: descending})
 	if err != nil {
 		return r.domainFailure("列出应用", app.CodeOf(err), err)
 	}
@@ -920,7 +936,8 @@ func (r *runner) runAppList(args []string) int {
 		items = append(items, newAppOutput(item))
 	}
 	output := map[string]any{"applications": items, "has_more": result.HasMore,
-		"limit": limit, "offset": offset}
+		"limit": limit, "offset": offset, "next_offset": domainNextOffset(offset, len(items)),
+		"sort": sortField, "desc": descending}
 	if r.json {
 		return r.succeed(output)
 	}
@@ -931,6 +948,9 @@ func (r *runner) runAppList(args []string) int {
 	for _, item := range items {
 		fmt.Fprintf(r.stdout, "%s  %s  %s  client_type=%s\n", item.ID, item.Name,
 			item.Status, item.ClientType)
+	}
+	if result.HasMore {
+		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
 	}
 	return ExitOK
 }
@@ -968,13 +988,16 @@ func (r *runner) runAppGet(args []string) int {
 
 func (r *runner) runAppMembers(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
-		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true}))
+		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
+		flagDef{name: "status", value: true}, flagDef{name: "sort", value: true},
+		flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
 	if len(positional) != 1 {
 		return r.usage("用法：loginctl app members <application_id> --operator <id> " +
-			"[--limit N] [--json]")
+			"[--status active|disabled] [--sort created_at|updated_at|user_id] " +
+			"[--desc true] [--limit N] [--offset N] [--json]")
 	}
 	r.json = boolFlag(values, "json")
 	operator, exit := r.requireOperator(values)
@@ -989,6 +1012,18 @@ func (r *runner) runAppMembers(args []string) int {
 	if err != nil || offset < 0 || offset > 1_000_000 {
 		return r.usage("--offset 必须在 0～1000000 之间")
 	}
+	status := app.MembershipStatus(stringFlag(values, "status"))
+	if status != "" && !status.Valid() {
+		return r.usage("--status 不是已定义的成员状态")
+	}
+	sortField, err := domainSortFlag(values, []string{"created_at", "updated_at", "user_id"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
 	base, service, exit := r.openAppService(values, operator)
 	if exit != ExitOK {
 		return exit
@@ -999,7 +1034,8 @@ func (r *runner) runAppMembers(args []string) int {
 		return r.usage("--operator 本地管理员标识无效")
 	}
 	result, err := service.ListApplicationMembers(r.ctx, caller, app.MemberListRequest{
-		ApplicationID: strings.TrimSpace(positional[0]), Limit: limit, Offset: offset})
+		ApplicationID: strings.TrimSpace(positional[0]), Limit: limit, Offset: offset,
+		Status: status, Sort: app.MemberSortField(sortField), Descending: descending})
 	if err != nil {
 		return r.domainFailure("读取应用成员", app.CodeOf(err), err)
 	}
@@ -1009,8 +1045,11 @@ func (r *runner) runAppMembers(args []string) int {
 			"user_id": item.UserID, "status": string(item.Status),
 			"row_version": item.RowVersion, "created_at": formatTime(item.CreatedAt)})
 	}
+	output := map[string]any{"members": members, "has_more": result.HasMore,
+		"limit": limit, "offset": offset, "next_offset": domainNextOffset(offset, len(members)),
+		"sort": sortField, "desc": descending}
 	if r.json {
-		return r.succeed(map[string]any{"members": members, "has_more": result.HasMore})
+		return r.succeed(output)
 	}
 	if len(members) == 0 {
 		fmt.Fprintln(r.stdout, "没有应用成员。")
@@ -1020,9 +1059,159 @@ func (r *runner) runAppMembers(args []string) int {
 		fmt.Fprintf(r.stdout, "%v  %v  row_version=%v\n", item["user_id"], item["status"],
 			item["row_version"])
 	}
+	if result.HasMore {
+		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
+	}
 	return ExitOK
 }
 
+// runAppRoles 分页列出指定应用范围的角色（作用范围固定为路径中的应用 ID）。
+func (r *runner) runAppRoles(args []string) int {
+	values, positional, err := parseFlags(args, domainFlags(
+		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
+		flagDef{name: "sort", value: true}, flagDef{name: "desc", value: true}))
+	if err != nil {
+		return r.flagError(err)
+	}
+	if len(positional) != 1 {
+		return r.usage("用法：loginctl app roles <application_id> --operator <id> " +
+			"[--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]")
+	}
+	r.json = boolFlag(values, "json")
+	operator, exit := r.requireOperator(values)
+	if exit != ExitOK {
+		return exit
+	}
+	limit, err := parseLimit(values, domainListDefaultLimit, domainListMaxLimit)
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	offset, err := parseIntFlag(values, "offset", 0)
+	if err != nil || offset < 0 || offset > 1_000_000 {
+		return r.usage("--offset 必须在 0～1000000 之间")
+	}
+	sortField, err := domainSortFlag(values, []string{"created_at", "updated_at", "name", "key"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	base, service, exit := r.openRoleService(values, operator)
+	if exit != ExitOK {
+		return exit
+	}
+	defer base.close()
+	caller, err := role.LocalBootstrapCaller(operator)
+	if err != nil {
+		return r.usage("--operator 本地管理员标识无效")
+	}
+	applicationID := strings.TrimSpace(positional[0])
+	result, err := service.ListRoles(r.ctx, caller, role.ListRequest{
+		ScopeID: applicationID, Limit: limit, Offset: offset,
+		Sort: role.SortField(sortField), Descending: descending})
+	if err != nil {
+		return r.domainFailure("读取应用角色", role.CodeOf(err), err)
+	}
+	items := make([]roleOutput, 0, len(result.Roles))
+	for _, item := range result.Roles {
+		items = append(items, newRoleOutput(item))
+	}
+	output := map[string]any{"scope_id": applicationID, "roles": items,
+		"has_more": result.HasMore, "limit": limit, "offset": offset,
+		"next_offset": domainNextOffset(offset, len(items)), "sort": sortField,
+		"desc": descending}
+	if r.json {
+		return r.succeed(output)
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(r.stdout, "该应用没有角色。")
+		return ExitOK
+	}
+	for _, item := range items {
+		fmt.Fprintf(r.stdout, "%s  %s  %s  enabled=%t\n", item.ID, item.Key, item.Name, item.Enabled)
+	}
+	if result.HasMore {
+		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
+	}
+	return ExitOK
+}
+
+// runAppGroups 分页列出指定应用范围的用户组（作用范围固定为路径中的应用 ID）。
+func (r *runner) runAppGroups(args []string) int {
+	values, positional, err := parseFlags(args, domainFlags(
+		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
+		flagDef{name: "sort", value: true}, flagDef{name: "desc", value: true}))
+	if err != nil {
+		return r.flagError(err)
+	}
+	if len(positional) != 1 {
+		return r.usage("用法：loginctl app groups <application_id> --operator <id> " +
+			"[--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]")
+	}
+	r.json = boolFlag(values, "json")
+	operator, exit := r.requireOperator(values)
+	if exit != ExitOK {
+		return exit
+	}
+	limit, err := parseLimit(values, domainListDefaultLimit, domainListMaxLimit)
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	offset, err := parseIntFlag(values, "offset", 0)
+	if err != nil || offset < 0 || offset > 1_000_000 {
+		return r.usage("--offset 必须在 0～1000000 之间")
+	}
+	sortField, err := domainSortFlag(values, []string{"created_at", "updated_at", "name", "key"})
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	descending, err := domainDescendingFlag(values)
+	if err != nil {
+		return r.usage("%v", err)
+	}
+	base, service, exit := r.openGroupService(values, operator)
+	if exit != ExitOK {
+		return exit
+	}
+	defer base.close()
+	caller, err := group.LocalBootstrapCaller(operator)
+	if err != nil {
+		return r.usage("--operator 本地管理员标识无效")
+	}
+	applicationID := strings.TrimSpace(positional[0])
+	result, err := service.ListGroups(r.ctx, caller, group.ListRequest{
+		ScopeID: applicationID, Limit: limit, Offset: offset,
+		Sort: group.GroupSortField(sortField), Descending: descending})
+	if err != nil {
+		return r.domainFailure("读取应用用户组", group.CodeOf(err), err)
+	}
+	items := make([]groupOutput, 0, len(result.Groups))
+	for _, item := range result.Groups {
+		items = append(items, newGroupOutput(item))
+	}
+	output := map[string]any{"scope_id": applicationID, "groups": items,
+		"has_more": result.HasMore, "limit": limit, "offset": offset,
+		"next_offset": domainNextOffset(offset, len(items)), "sort": sortField,
+		"desc": descending}
+	if r.json {
+		return r.succeed(output)
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(r.stdout, "该应用没有用户组。")
+		return ExitOK
+	}
+	for _, item := range items {
+		fmt.Fprintf(r.stdout, "%s  %s  %s\n", item.ID, item.GroupKey, item.Name)
+	}
+	if result.HasMore {
+		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
+	}
+	return ExitOK
+}
+
+// app delete：对已停用应用执行逻辑删除（步骤 190；本地受信管理员边界）。
 func (r *runner) runAppDelete(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "expected-version", value: true},
