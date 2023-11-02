@@ -338,6 +338,11 @@ func (r *Runtime) Sessions() SessionService { return &sessionFacade{r: r} }
 // Security 返回认证/安全设置门面（TOTP 绑定、恢复代码、能力状态）。
 func (r *Runtime) Security() SecurityService { return &securityFacade{r: r} }
 
+// MFA 返回认证因素管理门面（步骤 222）：脱敏因素清单、邮件因素启用/移除、Passkey
+// 注册/列表/重命名/撤销与免密码登录、TOTP 绑定撤销、恢复代码概览。所有敏感操作
+// 仍由领域服务重新判定会话完整性与近期认证，本门面不发放“已通过 MFA”标记。
+func (r *Runtime) MFA() MFAService { return &mfaPublicFacade{r: r} }
+
 // PasswordReset 返回找回密码门面（邮件 token 发起/校验/完成）。
 func (r *Runtime) PasswordReset() PasswordResetService { return &passwordResetFacade{r: r} }
 

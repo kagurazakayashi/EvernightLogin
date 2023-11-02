@@ -315,6 +315,7 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 	strongSetupAuthorizer := rootStrongSetupAuthorizer{
 		store: services.BootstrapStore, roots: managed.Roots, rebind: rebindStore,
 		rebindMethods: rebindMethods, passkeyEnabled: deps.Config.Passkey.Enabled,
+		checker: managed.Checker, protectedStore: deps.Store,
 	}
 	mfaService, err := mfa.New(mfa.Options{
 		Store: mfaStore, Audit: deps.Audit, Credentials: services.Credential,
@@ -510,6 +511,11 @@ type rootStrongSetupAuthorizer struct {
 	store  *bootstrapsqlite.Store
 	roots  *hostRootChecker
 	rebind mfaRebindRequirementStore
+	// checker/protectedStore 用于对非 root 用户复算 protectedRecoveryTarget（R10-11 /
+	// 步骤 222）：MFA 重置执行时是普通用户、重绑完成前被提升为高权限的过渡态，
+	// 也必须按“高权限 → 仅 Passkey 或拒绝”处理，不能沿用重置时的普通用户类别。
+	checker        *permissionChecker
+	protectedStore *storagesqlite.Store
 	// rebindMethods 是人工恢复重绑允许的强因素类别（已按真实可用性过滤）。
 	rebindMethods []authfact.Method
 	// passkeyEnabled 表示 Passkey 服务真实启用；root 初始化在没有 Passkey 时
@@ -555,6 +561,11 @@ func (a rootStrongSetupAuthorizer) authorizeRoot(ctx context.Context, userID str
 // AllowedStrongSetupMethods 实现 mfa.StrongSetupMethodSource：root/高权限固定
 // Passkey-only（未启用 Passkey 时拒绝，不降级 TOTP）；人工恢复重绑用户返回配置
 // 允许且真实可用的类别；其他用户拒绝。
+//
+// R10-11（步骤 222）：非 root 用户也要复算 protectedRecoveryTarget。人工恢复 MFA
+// 重置执行时目标可能仍是普通用户，但在重绑完成前被授予高权限的过渡态下，必须按
+// 高权限策略只允许抗钓鱼的 Passkey（Passkey 未启用则拒绝），不能继续返回重置时
+// 配置的 TOTP 类别；判定失败 fail-closed。
 func (a rootStrongSetupAuthorizer) AllowedStrongSetupMethods(ctx context.Context,
 	userID string) ([]authfact.Method, error) {
 	if a.roots == nil || a.store == nil {
@@ -568,6 +579,17 @@ func (a rootStrongSetupAuthorizer) AllowedStrongSetupMethods(ctx context.Context
 		if !a.passkeyEnabled {
 			// 抗钓鱼初始化没有 Passkey：不降级到 TOTP，明确拒绝。
 			return nil, errors.New("root 强认证初始化需要 Passkey")
+		}
+		return []authfact.Method{authfact.MethodPasskey}, nil
+	}
+	// 非 root 复算受保护目标：覆盖“重置后、重绑前被提升为高权限”的过渡态。
+	protected, err := protectedRecoveryTarget(ctx, a.checker, a.protectedStore, a.roots, userID)
+	if err != nil {
+		return nil, errors.New("受保护目标判定失败")
+	}
+	if protected {
+		if !a.passkeyEnabled {
+			return nil, errors.New("高权限强认证初始化需要 Passkey")
 		}
 		return []authfact.Method{authfact.MethodPasskey}, nil
 	}
