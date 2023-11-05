@@ -86,12 +86,16 @@ type appSymbol struct {
 	Kind    string   `json:"kind"`
 	Fields  []string `json:"fields,omitempty"`
 	Methods []string `json:"methods,omitempty"`
+	// FieldTypes 记录导出字段的类型文本（如 AdminPage、[]AdminUser、bool），供
+	// 分页审计判断请求边界/结果继续字段与可增长列表，不做类型推断。
+	FieldTypes map[string]string `json:"field_types,omitempty"`
 }
 
 // inventory 是一次源码盘点的结果。
 type inventory struct {
 	AppTypes        map[string]*appSymbol
 	AppFuncs        []string
+	AppVars         []string
 	RootTypes       []string
 	RootFuncs       []string
 	AdminRoutes     []routeEntry
@@ -359,6 +363,7 @@ func scanAppPackage(root string, inv *inventory) error {
 	}
 	fset := token.NewFileSet()
 	funcSeen := map[string]bool{}
+	varSeen := map[string]bool{}
 	for _, path := range files {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -372,6 +377,21 @@ func scanAppPackage(root string, inv *inventory) error {
 		for _, decl := range file.Decls {
 			switch typed := decl.(type) {
 			case *ast.GenDecl:
+				if typed.Tok == token.VAR {
+					for _, spec := range typed.Specs {
+						valueSpec, ok := spec.(*ast.ValueSpec)
+						if !ok {
+							continue
+						}
+						for _, name := range valueSpec.Names {
+							if name.IsExported() && !varSeen[name.Name] {
+								varSeen[name.Name] = true
+								inv.AppVars = append(inv.AppVars, name.Name)
+							}
+						}
+					}
+					continue
+				}
 				if typed.Tok != token.TYPE {
 					continue
 				}
@@ -390,10 +410,15 @@ func scanAppPackage(root string, inv *inventory) error {
 						if symbol.Kind != "interface" {
 							symbol.Kind = "struct"
 						}
+						if symbol.FieldTypes == nil {
+							symbol.FieldTypes = map[string]string{}
+						}
 						for _, field := range underlying.Fields.List {
+							fieldType := exprText(fset, field.Type)
 							for _, name := range field.Names {
 								if name.IsExported() {
 									symbol.Fields = append(symbol.Fields, name.Name)
+									symbol.FieldTypes[name.Name] = fieldType
 								}
 							}
 						}
@@ -439,6 +464,7 @@ func scanAppPackage(root string, inv *inventory) error {
 		sort.Strings(symbol.Methods)
 	}
 	sort.Strings(inv.AppFuncs)
+	sort.Strings(inv.AppVars)
 	return nil
 }
 

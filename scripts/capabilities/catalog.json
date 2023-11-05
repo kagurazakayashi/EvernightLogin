@@ -83,7 +83,7 @@
       "title": "自助密码找回",
       "domain": "恢复",
       "internal_services": ["internal/passwordreset"],
-      "app_api": ["PasswordResetService", "RequestPasswordResetRequest", "CompletePasswordResetRequest", "PasswordResetResult"],
+      "app_api": ["PasswordResetService", "RequestPasswordResetRequest", "CompletePasswordResetRequest", "PasswordResetResult", "ValidatePasswordResetTokenRequest"],
       "permissions": ["recovery.request"],
       "tests": [
         {"package": "./internal/passwordreset", "run": "TestBeginResetUniformResponse"},
@@ -97,7 +97,7 @@
       "title": "令牌与当前权限联合校验",
       "domain": "授权",
       "internal_services": ["internal/authz", "internal/tokenauthz"],
-      "app_api": ["AccessService", "AccessRequest", "AccessDecision"],
+      "app_api": ["AccessService", "AccessRequest", "AccessDecision", "SessionAccessRequest", "SessionAccessDecision", "SessionService", "SessionService.Authorize"],
       "protocol_paths": ["PathTokenAuthorize"],
       "permissions": ["authorization.check"],
       "tests": [
@@ -128,9 +128,9 @@
       "id": "admin.facade_api",
       "title": "受信管理 Go 门面（用户/资料/应用/角色/权限）",
       "domain": "管理",
-      "app_api": ["AdminService", "AdminCaller", "AdminUser", "AdminUserProfile", "AdminUserList", "AdminListUsersRequest", "AdminUserByUsernameRequest", "AdminUserRequest", "AdminCreateUserRequest", "AdminUpdateProfileRequest"],
+      "app_api": ["AdminService", "AdminCaller", "AdminUser", "AdminUserProfile", "AdminUserList", "AdminListUsersRequest", "AdminUserByUsernameRequest", "AdminUserRequest", "AdminCreateUserRequest", "AdminUpdateProfileRequest", "AdminPage", "AdminPageInfo", "AdminListGroupsRequest", "AdminGroup", "AdminGroupList", "AdminListGroupMembersRequest", "AdminGroupMember", "AdminGroupMemberList", "AdminListRolesRequest", "AdminRole", "AdminRoleList", "AdminListPermissionsRequest", "AdminPermissionList", "AdminListRoleAssignmentsRequest", "AdminRoleAssignmentList", "AdminRoleUserAssignment", "AdminRoleGroupAssignment", "AdminListApplicationsRequest", "AdminApplicationList", "AdminApplicationMember", "AdminApplicationMemberList", "AdminListApplicationMembersRequest", "AdminListApplicationRolesRequest", "AdminListApplicationGroupsRequest", "AdminListUserSessionsRequest", "AdminUserSessionList", "AdminSessionView", "AdminService.ListGroups", "AdminService.ListGroupMembers", "AdminService.ListRoles", "AdminService.ListPermissions", "AdminService.ListRoleAssignments", "AdminService.ListApplications", "AdminService.ListApplicationMembers", "AdminService.ListApplicationRoles", "AdminService.ListApplicationGroups", "AdminService.ListUserSessions"],
       "permissions": ["users.read"],
-      "pagination": {"mode": "offset", "evidence": ["AdminListUsersRequest.Limit", "AdminListUsersRequest.Offset", "AdminUserList.HasMore"]},
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["AdminListUsersRequest.Limit", "AdminListUsersRequest.Offset", "AdminUserList.HasMore", "AdminPage.Limit", "AdminPage.Offset", "AdminPageInfo.HasMore", "AdminPageInfo.NextOffset", "AdminGroupList.HasMore", "AdminRoleList.HasMore", "AdminApplicationList.HasMore", "AdminUserSessionList.HasMore"]},
       "tests": [
         {"package": "./app", "run": "TestAdminFacadeBootstrapAndApplicationRoleAssignment"},
         {"package": "./app", "run": "TestAdminQueryRequestIDCorrelation"},
@@ -143,9 +143,10 @@
       "title": "管理员会话查询与强制下线",
       "domain": "认证与会话",
       "internal_services": ["internal/session"],
+      "app_api": ["SessionService", "SessionService.ListDevices", "SessionDeviceRequest", "SessionDevice", "SessionDeviceList", "AdminListUserSessionsRequest", "AdminSessionView", "AdminUserSessionList", "AdminService.ListUserSessions"],
       "admin_routes": ["GET sessions", "POST sessions/revoke"],
       "permissions": ["sessions.revoke"],
-      "pagination": {"mode": "offset", "evidence": ["internal/session/service.go:Limit"]},
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["internal/session/service.go:Limit", "internal/session/service.go:HasMore", "SessionDeviceRequest.Page", "SessionDeviceList.HasMore", "AdminListUserSessionsRequest.Page", "AdminUserSessionList.HasMore"]},
       "tests": [
         {"package": "./internal/session", "run": "TestAdminListSessionsScopeAndAudit"},
         {"package": "./internal/session", "run": "TestListSessionsPaginationAndScope"},
@@ -180,7 +181,7 @@
         {"package": "./internal/audit", "run": "TestRedactChanges"},
         {"package": "./internal/adminapi", "run": "TestAuditQueryPermissionsAndDataScope"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["internal/auditops/auditops.go:Limit"]}
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["internal/auditops/auditops.go:Limit", "internal/auditops/query.go:HasMore"]}
     },
     {
       "id": "reports.generate",
@@ -194,7 +195,7 @@
         {"package": "./internal/reports", "run": "TestPlanCreateListGet"},
         {"package": "./internal/adminapi", "run": "TestReportEndpointsWiring"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["internal/reports/history_query.go:Limit"]}
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["internal/reports/history_query.go:Limit", "internal/reports/history_query.go:HasMore"]}
     },
     {
       "id": "backup.restore",
@@ -210,7 +211,7 @@
         {"package": "./internal/maintenance", "run": "TestEnterMaintenanceBlocksWritesAndExitRestores"},
         {"package": "./internal/adminapi", "run": "TestBackupEndpointsWiring"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["internal/backupadmin/jobs.go:Limit"]}
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["internal/backupadmin/jobs.go:Limit", "internal/backupadmin/jobs.go:hasMore"]}
     },
     {
       "id": "support.recovery",
@@ -227,7 +228,7 @@
         {"package": "./internal/rootrecovery", "run": "TestPasswordAndMFAReset"},
         {"package": "./internal/support", "run": "TestStrongAuthGateAndMissingDependencies"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["internal/support/service.go:Limit"]},
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["internal/support/service.go:Limit", "internal/support/service.go:HasMore"]},
       "notes": "root 应急只允许本地受控 CLI（loginctl root-recover），不开放远程 HTTP 入口。"
     },
     {
@@ -245,7 +246,7 @@
         {"package": "./internal/managedapi/httpapi", "run": "TestHandlerAuthVersionAndEnvelope"},
         {"package": "./internal/appsupport", "run": "TestAppSupportCreateAndIsolation"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["AdminPermissionQuery.Limit", "AdminPermissionQuery.Offset"]}
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["AdminListApplicationsRequest.Page", "AdminApplicationList.HasMore", "AdminGroupList.HasMore", "AdminPage.Limit", "AdminPage.Offset"]}
     },
     {
       "id": "rbac.roles_permissions",
@@ -261,7 +262,7 @@
         {"package": "./internal/permission", "run": "TestCrossScopeIsolationAndList"},
         {"package": "./internal/delegation", "run": "TestGrantIssuanceAndValidation"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["AdminPermissionQuery.Limit", "AdminPermissionQuery.Offset"]}
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["AdminPermissionQuery.Limit", "AdminPermissionQuery.Offset", "AdminRoleList.HasMore", "AdminGroupList.HasMore", "AdminPermissionList.HasMore", "AdminRoleAssignmentList.UsersHasMore"]}
     },
     {
       "id": "oauth_oidc.protocol",
@@ -329,7 +330,7 @@
         {"package": "./internal/uiadminadapter", "run": "TestAuditAdapterQueryAndDetail"},
         {"package": ".", "run": "TestUIPageManageRoutesContract"}
       ],
-      "pagination": {"mode": "fixed", "reason": "页面命名路由是固定集合；页面内列表使用领域 API 分页。"}
+      "pagination": {"mode": "fixed", "reason": "页面命名路由是固定集合；页面内列表使用领域 API 分页：列表页固定每页 20（与 app 默认一致）并仅接受 offset 参数（上限 1000000，与 app 契约一致），不提供 limit 参数（明确例外），由分页审计自动核对这些参数。"}
     },
     {
       "id": "cli.loginctl",
@@ -343,7 +344,7 @@
         {"package": "./internal/managecli", "run": "TestUserListAndGet"},
         {"package": "./internal/managecli", "run": "TestOnlineTransportUnreachableAndTimeout"}
       ],
-      "pagination": {"mode": "none", "reason": "CLI 是命令入口；列表分页由服务端 API 契约承担，CLI 不自行定义第二套分页。"}
+      "pagination": {"mode": "none", "reason": "CLI 是命令入口；列表分页由服务端 API 契约承担，CLI 使用统一 --limit/--offset（默认 20、最大 100、offset 上限 1000000）与可选 --all 有界遍历，不自行定义第二套分页；分页审计自动核对 CLI 常量与 app 契约一致。"}
     },
     {
       "id": "config.load",
@@ -352,9 +353,9 @@
       "root_api": ["Config", "Default", "Load", "LoadOptions", "ConfigError"],
       "cli": ["loginctl:config"],
       "tests": [
-        {"package": ".", "run": "TestDefaultConfig"},
-        {"package": ".", "run": "TestConfigValidateForProgrammaticConfig"},
-        {"package": ".", "run": "TestServerNetworkConfigYAMLParsing"}
+        {"package": "./config", "run": "TestDefaultConfig", "files": ["config/config_test.go"]},
+        {"package": "./config", "run": "TestConfigValidateForProgrammaticConfig", "files": ["config/config_test.go"]},
+        {"package": "./config", "run": "TestServerNetworkConfigYAMLParsing", "files": ["config/config_server_test.go"]}
       ],
       "pagination": {"mode": "none", "reason": "配置是单文档，不是列表。"}
     },
@@ -368,7 +369,7 @@
         {"package": "./internal/mailer", "run": "TestSMTPStartTLSWithAuth"},
         {"package": "./internal/mailtest", "run": "TestStartSendAndWaitMessage"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["internal/mailer/delivery.go:Limit"]},
+      "pagination": {"mode": "offset", "continuation": "gap", "reason": "投递查询当前只有 Limit 单页上限，没有 HasMore/游标/总数继续语义；完整投递记录分页在后续邮件列表步骤补齐，CLI/页面不得据此声称可完整翻页。", "evidence": ["internal/mailer/delivery.go:Limit"]},
       "notes": "真实外发邮件在测试中不启用；本地 EvernightMail 测试服务按需拉起。"
     },
     {
@@ -404,7 +405,7 @@
         {"package": "./internal/onboarding", "run": "TestInviteCreateAcceptNewUser"},
         {"package": "./internal/onboarding", "run": "TestReviewApproveRejectAndConcurrency"}
       ],
-      "pagination": {"mode": "offset", "evidence": ["internal/onboarding/service.go:Limit"]}
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["internal/onboarding/service.go:Limit", "internal/onboarding/types.go:HasMore"]}
     },
     {
       "id": "token.jwt_keys",
@@ -423,7 +424,7 @@
       "id": "transport.http_security",
       "title": "HTTP 传输安全链（限流/CSRF/CORS/边界/错误信封/OpenAPI）",
       "domain": "传输",
-      "internal_services": ["internal/transport", "internal/netguard", "internal/netpolicy", "internal/proxytrust", "internal/listener"],
+      "internal_services": ["internal/transport", "internal/netguard", "netpolicy", "proxytrust", "internal/listener"],
       "root_api": ["Identity", "IdentityKind", "IdentityResolver", "CSRFPolicy", "RateLimitOptions", "OpenAPIDocument", "NewHTTPHandler"],
       "tests": [
         {"package": "./internal/transport", "run": "TestProductionRoutesOnly"},
@@ -469,6 +470,32 @@
       "pagination": {"mode": "none", "reason": "Webhook 是单次投递事件，不是列表接口。"}
     },
     {
+      "id": "mfa.public_facade",
+      "title": "认证因素与安全中心公开 Go 门面（步骤 222）",
+      "domain": "认证与会话",
+      "internal_services": ["internal/mfa", "internal/totp", "internal/passkey", "internal/recovery", "internal/session"],
+      "app_api": ["MFAService", "Runtime.MFA", "MFAFactorListRequest", "MFATOTPFactor", "MFAEmailFactor", "MFAPasskeyCredential", "MFAFactorList", "MFATOTPRemoveRequest", "MFAEmailEnrollBeginRequest", "MFAEmailEnrollStart", "MFAEmailEnrollConfirmRequest", "MFAEmailRemoveRequest", "MFAPasskeyListRequest", "MFAPasskeyRegisterBeginRequest", "MFAPasskeyRegisterStart", "MFAPasskeyRegisterFinishRequest", "MFAPasskeyRenameRequest", "MFAPasskeyRemoveRequest", "MFAPasskeyLoginBeginRequest", "MFAPasskeyLoginStart", "MFAPasskeyLoginFinishRequest", "MFAPasskeyLoginResult", "MFARecoveryCodesRequest", "MFARecoveryCodesStatus"],
+      "permissions": ["self.credentials.manage"],
+      "tests": [
+        {"package": "./app", "run": "TestMFAPublicFactorListAndTOTPRemoval", "files": ["app/mfa_public_test.go"]},
+        {"package": "./app", "run": "TestMFAPublicPasskeyCeremonyAndEmailFailClosed", "files": ["app/mfa_public_test.go"]},
+        {"package": "./app", "run": "TestMFAPublicWebAuthnRegistrationAndPasswordlessLogin", "files": ["app/mfa_public_webauthn_test.go"]},
+        {"package": "./internal/serverapp", "run": "TestStep222AllowedStrongSetupMethodsProtectedTransition", "files": ["internal/serverapp/step222_strongsetup_test.go"]}
+      ],
+      "pagination": {"mode": "fixed", "reason": "TOTP 每账户至多一条、邮件因素单一、Passkey/恢复代码为固定少量集合；List 一次返回脱敏因素清单，不分页（AGENTS 固定少量枚举例外）。"},
+      "notes": "所有敏感操作仍由领域服务复核会话完整性与近期认证；门面不提供“直接标记已通过 MFA”的入口。"
+    },    {
+      "id": "pagination.iteration",
+      "title": "有界分页遍历辅助（宿主/CLI 可选）",
+      "domain": "分页与列表",
+      "app_api": ["IterationOptions", "IterationResult", "IterateAdminPages", "ErrPageNotAdvancing"],
+      "tests": [
+        {"package": "./app", "run": "TestIterateAdminPages", "files": ["app/iterate_test.go", "app/iterate_runtime_test.go"]},
+        {"package": "./app", "run": "TestPublicAPISurfacePaginationHelpers", "files": ["app/api_surface_pagination_test.go"]}
+      ],
+      "pagination": {"mode": "none", "reason": "遍历辅助工具不定义新的列表端点；复用 216/217 的 AdminPage/AdminPageInfo 契约，默认有界（10 页/1000 项），支持取消、最大页/项、防重复 offset 与明确部分结果语义。"},
+      "notes": "单页列表 API 不强制使用迭代器；跨应用范围/授权仍由调用方 fetch 的具体领域列表服务判定。"
+    },    {
       "id": "gap.unimplemented_permissions",
       "title": "已知未实现权限键（settings.manage / diagnostics.read）",
       "domain": "已知缺口",

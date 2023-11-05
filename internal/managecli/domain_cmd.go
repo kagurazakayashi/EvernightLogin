@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 
+	appapi "github.com/kagurazakayashi/EvernightLogin/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -33,7 +34,7 @@ import (
 
 // domainCommandUsage 是组/角色/应用/通知命令帮助。
 const domainCommandUsage = `用法：
-  loginctl group list --operator <id> [--scope system|<app_id>] [--limit N] [--offset N] [--json]
+  loginctl group list --operator <id> [--scope system|<app_id>] [--limit N] [--offset N] [--all [--max-pages N] [--max-items N]] [--json]
   loginctl group get <group_id> --operator <id> [--json]
   loginctl group members <group_id> --operator <id> [--limit N] [--json]
   loginctl group create --operator <id> --scope <system|<app_id>> --key <key> --name <名称> \
@@ -41,7 +42,7 @@ const domainCommandUsage = `用法：
   loginctl role list --operator <id> [--scope system|<app_id>] [--limit N] [--json]
   loginctl role get <role_id> --operator <id> [--json]
   loginctl role permissions <role_id> --operator <id> [--json]
-  loginctl app list --operator <id> [--status active|disabled|pending] [--sort created_at|updated_at|name|id] [--desc true] [--limit N] [--offset N] [--json]
+  loginctl app list --operator <id> [--status active|disabled|pending] [--sort created_at|updated_at|name|id] [--desc true] [--limit N] [--offset N] [--all [--max-pages N] [--max-items N]] [--json]
   loginctl app get <application_id> --operator <id> [--json]
   loginctl app members <application_id> --operator <id> [--status active|disabled] [--sort created_at|updated_at|user_id] [--desc true] [--limit N] [--offset N] [--json]
   loginctl app roles <application_id> --operator <id> [--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]
@@ -380,10 +381,13 @@ func domainDescendingFlag(values map[string]string) (bool, error) {
 func domainNextOffset(offset, returned int) int { return offset + returned }
 
 func (r *runner) runGroupList(args []string) int {
-	values, positional, err := parseFlags(args, domainFlags(
-		flagDef{name: "scope", value: true}, flagDef{name: "limit", value: true},
-		flagDef{name: "offset", value: true}, flagDef{name: "sort", value: true},
-		flagDef{name: "desc", value: true}))
+	flags := []flagDef{
+		{name: "scope", value: true}, {name: "limit", value: true},
+		{name: "offset", value: true}, {name: "sort", value: true},
+		{name: "desc", value: true},
+	}
+	flags = append(flags, listIterationFlagDefs()...)
+	values, positional, err := parseFlags(args, domainFlags(flags...))
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -402,6 +406,10 @@ func (r *runner) runGroupList(args []string) int {
 	offset, err := parseIntFlag(values, "offset", 0)
 	if err != nil || offset < 0 || offset > 1_000_000 {
 		return r.usage("--offset 必须在 0～1000000 之间")
+	}
+	iteration, err := parseListIterationOptions(values)
+	if err != nil {
+		return r.usage("%v", err)
 	}
 	scope := stringFlag(values, "scope")
 	if scope == "" {
@@ -424,20 +432,52 @@ func (r *runner) runGroupList(args []string) int {
 	if err != nil {
 		return r.usage("%v", err)
 	}
-	result, err := service.ListGroups(r.ctx, caller, group.ListRequest{ScopeID: scope,
-		Limit: limit, Offset: offset, Sort: group.GroupSortField(sortField),
-		Descending: descending})
-	if err != nil {
-		return r.domainFailure("列出用户组", group.CodeOf(err), err)
+	fetch := func(page appapi.AdminPage) ([]groupOutput, appapi.AdminPageInfo, error) {
+		result, listErr := service.ListGroups(r.ctx, caller, group.ListRequest{ScopeID: scope,
+			Limit: page.Limit, Offset: page.Offset, Sort: group.GroupSortField(sortField),
+			Descending: descending})
+		if listErr != nil {
+			return nil, appapi.AdminPageInfo{}, listErr
+		}
+		items := make([]groupOutput, 0, len(result.Groups))
+		for _, item := range result.Groups {
+			items = append(items, newGroupOutput(item))
+		}
+		return items, appapi.NewAdminPageInfo(page, len(items), result.HasMore), nil
 	}
-	items := make([]groupOutput, 0, len(result.Groups))
-	for _, item := range result.Groups {
-		items = append(items, newGroupOutput(item))
+	if iteration.All {
+		items, iterationResult, iterErr := iterateCommandList(r, iteration, limit, fetch)
+		if iterErr != nil {
+			return r.listIterationFailure("用户组", func(err error) any { return group.CodeOf(err) }, iterErr)
+		}
+		output := map[string]any{"scope_id": scope, "groups": items,
+			"sort": sortField, "desc": descending}
+		for key, value := range listIterationMetadata(iterationResult, limit) {
+			output[key] = value
+		}
+		output["next_offset"] = iterationResult.LastPage.NextOffset
+		if r.json {
+			return r.succeed(output)
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(r.stdout, "没有匹配的用户组。")
+			return ExitOK
+		}
+		for _, item := range items {
+			fmt.Fprintf(r.stdout, "%s  %s  %s  scope=%s\n", item.ID, item.GroupKey,
+				item.Name, item.ScopeID)
+		}
+		r.listIterationFooter(iterationResult)
+		return ExitOK
+	}
+	page := appapi.AdminPage{Limit: limit, Offset: offset}
+	items, info, listErr := fetch(page)
+	if listErr != nil {
+		return r.domainFailure("列出用户组", group.CodeOf(listErr), listErr)
 	}
 	output := map[string]any{"scope_id": scope, "groups": items,
-		"has_more": result.HasMore, "limit": limit, "offset": offset,
-		"next_offset": domainNextOffset(offset, len(items)), "sort": sortField,
-		"desc": descending}
+		"has_more": info.HasMore, "limit": limit, "offset": offset,
+		"next_offset": info.NextOffset, "sort": sortField, "desc": descending}
 	if r.json {
 		return r.succeed(output)
 	}
@@ -449,12 +489,11 @@ func (r *runner) runGroupList(args []string) int {
 		fmt.Fprintf(r.stdout, "%s  %s  %s  scope=%s\n", item.ID, item.GroupKey,
 			item.Name, item.ScopeID)
 	}
-	if result.HasMore {
+	if info.HasMore {
 		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
 	}
 	return ExitOK
 }
-
 func (r *runner) runGroupGet(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags())
 	if err != nil {
@@ -881,10 +920,13 @@ func (r *runner) runApp(subcommand string, args []string) int {
 }
 
 func (r *runner) runAppList(args []string) int {
-	values, positional, err := parseFlags(args, domainFlags(
-		flagDef{name: "status", value: true}, flagDef{name: "limit", value: true},
-		flagDef{name: "offset", value: true}, flagDef{name: "sort", value: true},
-		flagDef{name: "desc", value: true}))
+	flags := []flagDef{
+		{name: "status", value: true}, {name: "limit", value: true},
+		{name: "offset", value: true}, {name: "sort", value: true},
+		{name: "desc", value: true},
+	}
+	flags = append(flags, listIterationFlagDefs()...)
+	values, positional, err := parseFlags(args, domainFlags(flags...))
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -903,6 +945,10 @@ func (r *runner) runAppList(args []string) int {
 	offset, err := parseIntFlag(values, "offset", 0)
 	if err != nil || offset < 0 || offset > 1_000_000 {
 		return r.usage("--offset 必须在 0～1000000 之间")
+	}
+	iteration, err := parseListIterationOptions(values)
+	if err != nil {
+		return r.usage("%v", err)
 	}
 	status := app.Status(stringFlag(values, "status"))
 	if status != "" && !status.Valid() {
@@ -925,18 +971,50 @@ func (r *runner) runAppList(args []string) int {
 	if err != nil {
 		return r.usage("--operator 本地管理员标识无效")
 	}
-	result, err := service.ListApplications(r.ctx, caller, app.ListRequest{
-		Limit: limit, Offset: offset, Status: status, Sort: app.SortField(sortField),
-		Descending: descending})
-	if err != nil {
-		return r.domainFailure("列出应用", app.CodeOf(err), err)
+	fetch := func(page appapi.AdminPage) ([]appOutput, appapi.AdminPageInfo, error) {
+		result, listErr := service.ListApplications(r.ctx, caller, app.ListRequest{
+			Limit: page.Limit, Offset: page.Offset, Status: status,
+			Sort: app.SortField(sortField), Descending: descending})
+		if listErr != nil {
+			return nil, appapi.AdminPageInfo{}, listErr
+		}
+		items := make([]appOutput, 0, len(result.Applications))
+		for _, item := range result.Applications {
+			items = append(items, newAppOutput(item))
+		}
+		return items, appapi.NewAdminPageInfo(page, len(items), result.HasMore), nil
 	}
-	items := make([]appOutput, 0, len(result.Applications))
-	for _, item := range result.Applications {
-		items = append(items, newAppOutput(item))
+	if iteration.All {
+		items, iterationResult, iterErr := iterateCommandList(r, iteration, limit, fetch)
+		if iterErr != nil {
+			return r.listIterationFailure("应用", func(err error) any { return app.CodeOf(err) }, iterErr)
+		}
+		output := map[string]any{"applications": items, "sort": sortField, "desc": descending}
+		for key, value := range listIterationMetadata(iterationResult, limit) {
+			output[key] = value
+		}
+		output["next_offset"] = iterationResult.LastPage.NextOffset
+		if r.json {
+			return r.succeed(output)
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(r.stdout, "没有匹配的应用。")
+			return ExitOK
+		}
+		for _, item := range items {
+			fmt.Fprintf(r.stdout, "%s  %s  %s  client_type=%s\n", item.ID, item.Name,
+				item.Status, item.ClientType)
+		}
+		r.listIterationFooter(iterationResult)
+		return ExitOK
 	}
-	output := map[string]any{"applications": items, "has_more": result.HasMore,
-		"limit": limit, "offset": offset, "next_offset": domainNextOffset(offset, len(items)),
+	page := appapi.AdminPage{Limit: limit, Offset: offset}
+	items, info, listErr := fetch(page)
+	if listErr != nil {
+		return r.domainFailure("列出应用", app.CodeOf(listErr), listErr)
+	}
+	output := map[string]any{"applications": items, "has_more": info.HasMore,
+		"limit": limit, "offset": offset, "next_offset": info.NextOffset,
 		"sort": sortField, "desc": descending}
 	if r.json {
 		return r.succeed(output)
@@ -949,12 +1027,11 @@ func (r *runner) runAppList(args []string) int {
 		fmt.Fprintf(r.stdout, "%s  %s  %s  client_type=%s\n", item.ID, item.Name,
 			item.Status, item.ClientType)
 	}
-	if result.HasMore {
+	if info.HasMore {
 		fmt.Fprintln(r.stdout, "（还有更多结果，请使用 --offset）")
 	}
 	return ExitOK
 }
-
 func (r *runner) runAppGet(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags())
 	if err != nil {

@@ -32,6 +32,10 @@ type paginationClaim struct {
 	Mode     string   `json:"mode"`
 	Reason   string   `json:"reason,omitempty"`
 	Evidence []string `json:"evidence,omitempty"`
+	// Continuation 声明结果继续语义（has_more/total/cursor）；gap 表示当前只有
+	// 单页上限、没有继续游标的明确例外，必须写 reason。空值要求证据中同时包含
+	// 结果继续字段（HasMore/NextOffset/NextCursor/Total）。
+	Continuation string `json:"continuation,omitempty"`
 }
 
 // testClaim 是一个定向测试证据：包路径 + 测试函数名前缀。
@@ -182,6 +186,11 @@ func resolveAppAPI(inv *inventory, ref string) bool {
 	}
 	if len(parts) == 1 {
 		for _, name := range inv.AppFuncs {
+			if name == ref {
+				return true
+			}
+		}
+		for _, name := range inv.AppVars {
 			if name == ref {
 				return true
 			}
@@ -338,20 +347,15 @@ func validateCapability(root string, capability capability, inv *inventory) capa
 	}
 	addSurface("unimplemented_permission", len(capability.UnimplementedPermissions), unimplementedProblems)
 
-	// 9) 分页契约：mode 必须已定义；offset/cursor 必须有字段证据；
-	// fixed/none 必须写明理由（固定枚举不分页需有理由，见 AGENTS.md §4）。
+	// 9) 分页契约：mode 必须已定义；offset/cursor 必须“请求边界 + 结果继续”成对
+	// 证据；fixed/none 必须写明理由；continuation=gap 是当前只有单页上限的显式
+	// 例外（需 reason，并作为已知限制暴露）。
 	var paginationProblem string
 	if capability.Pagination != nil {
 		claim := capability.Pagination
 		switch claim.Mode {
-		case "offset", "cursor":
-			if len(claim.Evidence) == 0 {
-				paginationProblem = "分页模式 " + claim.Mode + " 缺少字段证据"
-			}
+		case paginationModeOffset, paginationModeCursor:
 			for _, ref := range claim.Evidence {
-				// 分页证据支持两种形式：
-				//   Type.Field           app 包公开结构的分页字段；
-				//   internal/...go:token 内部服务实现中的分页标记（limit/has_more 等）。
 				if strings.Contains(ref, ":") {
 					if _, _, found := checkTokenEvidence(root, ref); !found {
 						paginationProblem = "分页证据不存在: " + ref
@@ -366,7 +370,10 @@ func validateCapability(root string, capability capability, inv *inventory) capa
 					break
 				}
 			}
-		case "fixed", "none":
+			if paginationProblem == "" {
+				paginationProblem = paginationEvidenceProblem(inv, claim)
+			}
+		case paginationModeFixed, paginationModeNone:
 			if strings.TrimSpace(claim.Reason) == "" {
 				paginationProblem = "固定/不分页能力必须写明理由"
 			}
@@ -377,7 +384,6 @@ func validateCapability(root string, capability capability, inv *inventory) capa
 			missing = append(missing, "pagination: "+paginationProblem)
 		}
 	}
-
 	// 10) 定向测试：包路径 + 测试函数前缀必须真实存在。
 	var matchedTests []string
 	var missingTests []string

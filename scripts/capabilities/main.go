@@ -115,6 +115,11 @@ func run(args []string, stdout, stderr *os.File) int {
 		fmt.Fprintf(stdout, "  %-22s %d\n", status, report.Summary.ByStatus[status])
 	}
 	fmt.Fprintf(stdout, "未覆盖生产面: %d\n", report.Coverage.UnmappedCount())
+	fmt.Fprintf(stdout, "分页候选列表: %d（有界 %d）\n",
+		len(report.PaginationAudit.GrowableLists), report.PaginationAudit.BoundedLists)
+	fmt.Fprintf(stdout, "分页未覆盖: %d；分页参数不一致: %d\n",
+		len(report.PaginationAudit.UncoveredLists),
+		len(report.PaginationAudit.ContractMismatches))
 	fmt.Fprintf(stdout, "输出: %s\n", opts.OutJSON)
 	fmt.Fprintf(stdout, "      %s\n", opts.OutMarkdown)
 	for _, warning := range report.Warnings {
@@ -132,6 +137,20 @@ func run(args []string, stdout, stderr *os.File) int {
 				fmt.Fprintf(stderr, "严格模式：能力 %s 存在未核实缺口证据，退出码 3\n", result.ID)
 				return 3
 			}
+		}
+		if len(report.PaginationAudit.UncoveredLists) > 0 {
+			fmt.Fprintln(stderr, "严格模式：存在未覆盖/无界的可增长列表，退出码 3")
+			for _, item := range report.PaginationAudit.UncoveredLists {
+				fmt.Fprintln(stderr, "  -", item)
+			}
+			return 3
+		}
+		if len(report.PaginationAudit.ContractMismatches) > 0 {
+			fmt.Fprintln(stderr, "严格模式：跨入口分页参数不一致，退出码 3")
+			for _, item := range report.PaginationAudit.ContractMismatches {
+				fmt.Fprintln(stderr, "  -", item)
+			}
+			return 3
 		}
 	}
 	return 0

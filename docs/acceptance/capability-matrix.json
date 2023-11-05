@@ -2,12 +2,12 @@
   "schema": "evernight.capability-matrix/v1",
   "description": "EvernightLogin 本轮机器可读能力清单：由 scripts/capabilities 扫描源码生成，状态由声明面是否真实解析决定，禁止手写全绿。",
   "metadata": {
-    "generated_at": "2026-11-24T17:51:26Z",
+    "generated_at": "2026-11-24T19:45:43Z",
     "generator": "go run ./scripts/capabilities",
     "repo_root": ".",
-    "git_head": "7557646fd586463ee127c926573e7d8c8eba0648",
-    "git_branch": "main",
-    "git_dirty": true,
+    "git_head": "",
+    "git_branch": "",
+    "git_dirty": false,
     "go_version": "go1.27.4",
     "platform": "windows",
     "arch": "amd64",
@@ -21,19 +21,19 @@
       "internal/",
       "测试函数（根、app、internal、cmd 的 *_test.go）"
     ],
-    "files_scanned": 582
+    "files_scanned": 610
   },
   "summary": {
-    "total": 34,
-    "implemented": 33,
+    "total": 36,
+    "implemented": 35,
     "implemented_untested": 0,
     "missing": 0,
     "unimplemented": 1,
     "by_status": {
-      "implemented": 33,
+      "implemented": 35,
       "unimplemented": 1
     },
-    "matched_tests_total": 111
+    "matched_tests_total": 128
   },
   "capabilities": [
     {
@@ -134,7 +134,11 @@
       "app_api": [
         "AccessService",
         "AccessRequest",
-        "AccessDecision"
+        "AccessDecision",
+        "SessionAccessRequest",
+        "SessionAccessDecision",
+        "SessionService",
+        "SessionService.Authorize"
       ],
       "protocol_paths": [
         "PathTokenAuthorize"
@@ -165,8 +169,8 @@
         },
         {
           "kind": "app_api",
-          "total": 3,
-          "found": 3
+          "total": 7,
+          "found": 7
         },
         {
           "kind": "root_api",
@@ -353,7 +357,44 @@
         "AdminUserByUsernameRequest",
         "AdminUserRequest",
         "AdminCreateUserRequest",
-        "AdminUpdateProfileRequest"
+        "AdminUpdateProfileRequest",
+        "AdminPage",
+        "AdminPageInfo",
+        "AdminListGroupsRequest",
+        "AdminGroup",
+        "AdminGroupList",
+        "AdminListGroupMembersRequest",
+        "AdminGroupMember",
+        "AdminGroupMemberList",
+        "AdminListRolesRequest",
+        "AdminRole",
+        "AdminRoleList",
+        "AdminListPermissionsRequest",
+        "AdminPermissionList",
+        "AdminListRoleAssignmentsRequest",
+        "AdminRoleAssignmentList",
+        "AdminRoleUserAssignment",
+        "AdminRoleGroupAssignment",
+        "AdminListApplicationsRequest",
+        "AdminApplicationList",
+        "AdminApplicationMember",
+        "AdminApplicationMemberList",
+        "AdminListApplicationMembersRequest",
+        "AdminListApplicationRolesRequest",
+        "AdminListApplicationGroupsRequest",
+        "AdminListUserSessionsRequest",
+        "AdminUserSessionList",
+        "AdminSessionView",
+        "AdminService.ListGroups",
+        "AdminService.ListGroupMembers",
+        "AdminService.ListRoles",
+        "AdminService.ListPermissions",
+        "AdminService.ListRoleAssignments",
+        "AdminService.ListApplications",
+        "AdminService.ListApplicationMembers",
+        "AdminService.ListApplicationRoles",
+        "AdminService.ListApplicationGroups",
+        "AdminService.ListUserSessions"
       ],
       "permissions": [
         "users.read"
@@ -363,8 +404,17 @@
         "evidence": [
           "AdminListUsersRequest.Limit",
           "AdminListUsersRequest.Offset",
-          "AdminUserList.HasMore"
-        ]
+          "AdminUserList.HasMore",
+          "AdminPage.Limit",
+          "AdminPage.Offset",
+          "AdminPageInfo.HasMore",
+          "AdminPageInfo.NextOffset",
+          "AdminGroupList.HasMore",
+          "AdminRoleList.HasMore",
+          "AdminApplicationList.HasMore",
+          "AdminUserSessionList.HasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -393,8 +443,8 @@
         },
         {
           "kind": "app_api",
-          "total": 10,
-          "found": 10
+          "total": 47,
+          "found": 47
         },
         {
           "kind": "root_api",
@@ -579,9 +629,13 @@
       "pagination": {
         "mode": "offset",
         "evidence": [
-          "AdminPermissionQuery.Limit",
-          "AdminPermissionQuery.Offset"
-        ]
+          "AdminListApplicationsRequest.Page",
+          "AdminApplicationList.HasMore",
+          "AdminGroupList.HasMore",
+          "AdminPage.Limit",
+          "AdminPage.Offset"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -687,8 +741,10 @@
       "pagination": {
         "mode": "offset",
         "evidence": [
-          "internal/auditops/auditops.go:Limit"
-        ]
+          "internal/auditops/auditops.go:Limit",
+          "internal/auditops/query.go:HasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -918,8 +974,10 @@
       "pagination": {
         "mode": "offset",
         "evidence": [
-          "internal/backupadmin/jobs.go:Limit"
-        ]
+          "internal/backupadmin/jobs.go:Limit",
+          "internal/backupadmin/jobs.go:hasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -1134,7 +1192,7 @@
       ],
       "pagination": {
         "mode": "none",
-        "reason": "CLI 是命令入口；列表分页由服务端 API 契约承担，CLI 不自行定义第二套分页。"
+        "reason": "CLI 是命令入口；列表分页由服务端 API 契约承担，CLI 使用统一 --limit/--offset（默认 20、最大 100、offset 上限 1000000）与可选 --all 有界遍历，不自行定义第二套分页；分页审计自动核对 CLI 常量与 app 契约一致。"
       },
       "tests": [
         {
@@ -1234,16 +1292,25 @@
       },
       "tests": [
         {
-          "package": ".",
-          "run": "TestDefaultConfig"
+          "package": "./config",
+          "run": "TestDefaultConfig",
+          "files": [
+            "config/config_test.go"
+          ]
         },
         {
-          "package": ".",
-          "run": "TestConfigValidateForProgrammaticConfig"
+          "package": "./config",
+          "run": "TestConfigValidateForProgrammaticConfig",
+          "files": [
+            "config/config_test.go"
+          ]
         },
         {
-          "package": ".",
-          "run": "TestServerNetworkConfigYAMLParsing"
+          "package": "./config",
+          "run": "TestServerNetworkConfigYAMLParsing",
+          "files": [
+            "config/config_server_test.go"
+          ]
         }
       ],
       "status": "implemented",
@@ -1300,9 +1367,9 @@
         }
       ],
       "matched_tests": [
-        ".:TestDefaultConfig",
-        ".:TestConfigValidateForProgrammaticConfig",
-        ".:TestServerNetworkConfigYAMLParsing"
+        "./config:TestDefaultConfig",
+        "./config:TestConfigValidateForProgrammaticConfig",
+        "./config:TestServerNetworkConfigYAMLParsing"
       ]
     },
     {
@@ -1399,9 +1466,11 @@
       ],
       "pagination": {
         "mode": "offset",
+        "reason": "投递查询当前只有 Limit 单页上限，没有 HasMore/游标/总数继续语义；完整投递记录分页在后续邮件列表步骤补齐，CLI/页面不得据此声称可完整翻页。",
         "evidence": [
           "internal/mailer/delivery.go:Limit"
-        ]
+        ],
+        "continuation": "gap"
       },
       "tests": [
         {
@@ -1475,6 +1544,141 @@
         "./internal/mailer:TestDeliveryHandlerSuccessAndRestartRecovery",
         "./internal/mailer:TestSMTPStartTLSWithAuth",
         "./internal/mailtest:TestStartSendAndWaitMessage"
+      ]
+    },
+    {
+      "id": "mfa.public_facade",
+      "title": "认证因素与安全中心公开 Go 门面（步骤 222）",
+      "domain": "认证与会话",
+      "internal_services": [
+        "internal/mfa",
+        "internal/totp",
+        "internal/passkey",
+        "internal/recovery",
+        "internal/session"
+      ],
+      "app_api": [
+        "MFAService",
+        "Runtime.MFA",
+        "MFAFactorListRequest",
+        "MFATOTPFactor",
+        "MFAEmailFactor",
+        "MFAPasskeyCredential",
+        "MFAFactorList",
+        "MFATOTPRemoveRequest",
+        "MFAEmailEnrollBeginRequest",
+        "MFAEmailEnrollStart",
+        "MFAEmailEnrollConfirmRequest",
+        "MFAEmailRemoveRequest",
+        "MFAPasskeyListRequest",
+        "MFAPasskeyRegisterBeginRequest",
+        "MFAPasskeyRegisterStart",
+        "MFAPasskeyRegisterFinishRequest",
+        "MFAPasskeyRenameRequest",
+        "MFAPasskeyRemoveRequest",
+        "MFAPasskeyLoginBeginRequest",
+        "MFAPasskeyLoginStart",
+        "MFAPasskeyLoginFinishRequest",
+        "MFAPasskeyLoginResult",
+        "MFARecoveryCodesRequest",
+        "MFARecoveryCodesStatus"
+      ],
+      "permissions": [
+        "self.credentials.manage"
+      ],
+      "pagination": {
+        "mode": "fixed",
+        "reason": "TOTP 每账户至多一条、邮件因素单一、Passkey/恢复代码为固定少量集合；List 一次返回脱敏因素清单，不分页（AGENTS 固定少量枚举例外）。"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestMFAPublicFactorListAndTOTPRemoval",
+          "files": [
+            "app/mfa_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestMFAPublicPasskeyCeremonyAndEmailFailClosed",
+          "files": [
+            "app/mfa_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestMFAPublicWebAuthnRegistrationAndPasswordlessLogin",
+          "files": [
+            "app/mfa_public_webauthn_test.go"
+          ]
+        },
+        {
+          "package": "./internal/serverapp",
+          "run": "TestStep222AllowedStrongSetupMethodsProtectedTransition",
+          "files": [
+            "internal/serverapp/step222_strongsetup_test.go"
+          ]
+        }
+      ],
+      "notes": "所有敏感操作仍由领域服务复核会话完整性与近期认证；门面不提供“直接标记已通过 MFA”的入口。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 5,
+          "found": 5
+        },
+        {
+          "kind": "app_api",
+          "total": 24,
+          "found": 24
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 4,
+          "found": 4
+        }
+      ],
+      "matched_tests": [
+        "./app:TestMFAPublicFactorListAndTOTPRemoval",
+        "./app:TestMFAPublicPasskeyCeremonyAndEmailFailClosed",
+        "./app:TestMFAPublicWebAuthnRegistrationAndPasswordlessLogin",
+        "./internal/serverapp:TestStep222AllowedStrongSetupMethodsProtectedTransition"
       ]
     },
     {
@@ -1709,8 +1913,10 @@
       "pagination": {
         "mode": "offset",
         "evidence": [
-          "internal/onboarding/service.go:Limit"
-        ]
+          "internal/onboarding/service.go:Limit",
+          "internal/onboarding/types.go:HasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -1778,6 +1984,107 @@
       "matched_tests": [
         "./internal/onboarding:TestInviteCreateAcceptNewUser",
         "./internal/onboarding:TestReviewApproveRejectAndConcurrency"
+      ]
+    },
+    {
+      "id": "pagination.iteration",
+      "title": "有界分页遍历辅助（宿主/CLI 可选）",
+      "domain": "分页与列表",
+      "app_api": [
+        "IterationOptions",
+        "IterationResult",
+        "IterateAdminPages",
+        "ErrPageNotAdvancing"
+      ],
+      "pagination": {
+        "mode": "none",
+        "reason": "遍历辅助工具不定义新的列表端点；复用 216/217 的 AdminPage/AdminPageInfo 契约，默认有界（10 页/1000 项），支持取消、最大页/项、防重复 offset 与明确部分结果语义。"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestIterateAdminPages",
+          "files": [
+            "app/iterate_test.go",
+            "app/iterate_runtime_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestPublicAPISurfacePaginationHelpers",
+          "files": [
+            "app/api_surface_pagination_test.go"
+          ]
+        }
+      ],
+      "notes": "单页列表 API 不强制使用迭代器；跨应用范围/授权仍由调用方 fetch 的具体领域列表服务判定。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "app_api",
+          "total": 4,
+          "found": 4
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 2,
+          "found": 2
+        }
+      ],
+      "matched_tests": [
+        "./app:TestIterateAdminPagesRealRuntimeDomains",
+        "./app:TestIterateAdminPagesSuccess",
+        "./app:TestIterateAdminPagesEmptyList",
+        "./app:TestIterateAdminPagesDefaultBounds",
+        "./app:TestIterateAdminPagesMaxPages",
+        "./app:TestIterateAdminPagesMaxItemsTruncation",
+        "./app:TestIterateAdminPagesMaxItemsExactEnd",
+        "./app:TestIterateAdminPagesInvalidOptions",
+        "./app:TestIterateAdminPagesPageContractViolations",
+        "./app:TestIterateAdminPagesFetchAndVisitErrors",
+        "./app:TestIterateAdminPagesCancelStopsFetching",
+        "./app:TestIterateAdminPagesNormalizesPageLimit",
+        "./app:TestPublicAPISurfacePaginationHelpers"
       ]
     },
     {
@@ -1875,7 +2182,8 @@
         "PasswordResetService",
         "RequestPasswordResetRequest",
         "CompletePasswordResetRequest",
-        "PasswordResetResult"
+        "PasswordResetResult",
+        "ValidatePasswordResetTokenRequest"
       ],
       "permissions": [
         "recovery.request"
@@ -1907,8 +2215,8 @@
         },
         {
           "kind": "app_api",
-          "total": 4,
-          "found": 4
+          "total": 5,
+          "found": 5
         },
         {
           "kind": "root_api",
@@ -2098,8 +2406,13 @@
         "mode": "offset",
         "evidence": [
           "AdminPermissionQuery.Limit",
-          "AdminPermissionQuery.Offset"
-        ]
+          "AdminPermissionQuery.Offset",
+          "AdminRoleList.HasMore",
+          "AdminGroupList.HasMore",
+          "AdminPermissionList.HasMore",
+          "AdminRoleAssignmentList.UsersHasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -2204,8 +2517,10 @@
       "pagination": {
         "mode": "offset",
         "evidence": [
-          "internal/reports/history_query.go:Limit"
-        ]
+          "internal/reports/history_query.go:Limit",
+          "internal/reports/history_query.go:HasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -2493,6 +2808,17 @@
       "internal_services": [
         "internal/session"
       ],
+      "app_api": [
+        "SessionService",
+        "SessionService.ListDevices",
+        "SessionDeviceRequest",
+        "SessionDevice",
+        "SessionDeviceList",
+        "AdminListUserSessionsRequest",
+        "AdminSessionView",
+        "AdminUserSessionList",
+        "AdminService.ListUserSessions"
+      ],
       "admin_routes": [
         "GET sessions",
         "POST sessions/revoke"
@@ -2503,8 +2829,14 @@
       "pagination": {
         "mode": "offset",
         "evidence": [
-          "internal/session/service.go:Limit"
-        ]
+          "internal/session/service.go:Limit",
+          "internal/session/service.go:HasMore",
+          "SessionDeviceRequest.Page",
+          "SessionDeviceList.HasMore",
+          "AdminListUserSessionsRequest.Page",
+          "AdminUserSessionList.HasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -2529,8 +2861,8 @@
         },
         {
           "kind": "app_api",
-          "total": 0,
-          "found": 0
+          "total": 9,
+          "found": 9
         },
         {
           "kind": "root_api",
@@ -2779,8 +3111,10 @@
       "pagination": {
         "mode": "offset",
         "evidence": [
-          "internal/support/service.go:Limit"
-        ]
+          "internal/support/service.go:Limit",
+          "internal/support/service.go:HasMore"
+        ],
+        "continuation": "has_more"
       },
       "tests": [
         {
@@ -3036,8 +3370,8 @@
       "internal_services": [
         "internal/transport",
         "internal/netguard",
-        "internal/netpolicy",
-        "internal/proxytrust",
+        "netpolicy",
+        "proxytrust",
         "internal/listener"
       ],
       "root_api": [
@@ -3145,7 +3479,7 @@
       ],
       "pagination": {
         "mode": "fixed",
-        "reason": "页面命名路由是固定集合；页面内列表使用领域 API 分页。"
+        "reason": "页面命名路由是固定集合；页面内列表使用领域 API 分页：列表页固定每页 20（与 app 默认一致）并仅接受 offset 参数（上限 1000000，与 app 契约一致），不提供 limit 参数（明确例外），由分页审计自动核对这些参数。"
       },
       "tests": [
         {
@@ -3413,12 +3747,274 @@
     }
   ],
   "coverage": {
-    "app_types_total": 68,
-    "admin_routes_total": 108,
+    "app_types_total": 125,
+    "admin_routes_total": 112,
     "protocol_paths_total": 17,
     "pages_total": 241,
     "cli_commands_total": 40,
     "permissions_total": 51
+  },
+  "pagination_audit": {
+    "growable_lists": [
+      {
+        "name": "AdminApplicationList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminApplicationMemberList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminGroupList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminGroupMemberList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListApplicationGroupsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListApplicationMembersRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListApplicationRolesRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListApplicationsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListGroupMembersRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListGroupsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListPermissionsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListRolesRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListUserSessionsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListUsersRequest",
+        "kind": "request",
+        "bounded": true,
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminPermissionList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminPermissionQuery",
+        "kind": "request",
+        "bounded": true,
+        "capability": "rbac.roles_permissions",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminRoleAssignmentList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "GroupPage",
+          "GroupsHasMore",
+          "UserPage",
+          "UsersHasMore"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminRoleList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminUserList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminUserSessionList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page",
+          "Total"
+        ],
+        "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "IterationOptions",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "pagination.iteration",
+        "claim_mode": "none"
+      },
+      {
+        "name": "MFAFactorList",
+        "kind": "result",
+        "bounded": false,
+        "capability": "mfa.public_facade",
+        "claim_mode": "fixed"
+      },
+      {
+        "name": "MFAFactorListRequest",
+        "kind": "request",
+        "bounded": false,
+        "capability": "mfa.public_facade",
+        "claim_mode": "fixed"
+      },
+      {
+        "name": "MFAPasskeyListRequest",
+        "kind": "request",
+        "bounded": false,
+        "capability": "mfa.public_facade",
+        "claim_mode": "fixed"
+      },
+      {
+        "name": "SessionDeviceList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page",
+          "Total"
+        ],
+        "capability": "session.admin",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "SessionDeviceRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "session.admin",
+        "claim_mode": "offset"
+      }
+    ],
+    "bounded_lists": 23,
+    "exceptions": [
+      "IterationOptions -\u003e pagination.iteration（none：由能力声明理由承担）",
+      "MFAFactorList -\u003e mfa.public_facade（fixed：由能力声明理由承担）",
+      "MFAFactorListRequest -\u003e mfa.public_facade（fixed：由能力声明理由承担）",
+      "MFAPasskeyListRequest -\u003e mfa.public_facade（fixed：由能力声明理由承担）"
+    ],
+    "contract": {
+      "app_default_limit": 20,
+      "app_max_limit": 100,
+      "app_max_offset": 1000000,
+      "session_default_limit": 20,
+      "session_max_limit": 100,
+      "authz_default_limit": 20,
+      "authz_max_limit": 100,
+      "cli_default_limit": 20,
+      "cli_max_limit": 100,
+      "cli_offset_cap": 1000000,
+      "page_offset_cap": 1000000,
+      "page_fixed_limit": 20
+    }
   },
   "inventories": {
     "app_types": {
@@ -3431,7 +4027,14 @@
           "Code",
           "Reason",
           "RequestID"
-        ]
+        ],
+        "field_types": {
+          "Allowed": "bool",
+          "Application": "string",
+          "Code": "string",
+          "Reason": "string",
+          "RequestID": "string"
+        }
       },
       "AccessRequest": {
         "name": "AccessRequest",
@@ -3443,7 +4046,15 @@
           "RequestID",
           "ResourceID",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "AppID": "string",
+          "Mode": "string",
+          "Permission": "string",
+          "RequestID": "string",
+          "ResourceID": "string",
+          "UserID": "string"
+        }
       },
       "AccessService": {
         "name": "AccessService",
@@ -3460,7 +4071,13 @@
           "Caller",
           "RequestID",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "UserID": "string"
+        }
       },
       "AdminApplication": {
         "name": "AdminApplication",
@@ -3473,7 +4090,64 @@
           "OwnerUserID",
           "RowVersion",
           "Status"
-        ]
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "Description": "string",
+          "ID": "string",
+          "Name": "string",
+          "OwnerUserID": "string",
+          "RowVersion": "int64",
+          "Status": "string"
+        }
+      },
+      "AdminApplicationList": {
+        "name": "AdminApplicationList",
+        "kind": "struct",
+        "fields": [
+          "Applications",
+          "HasMore",
+          "Page"
+        ],
+        "field_types": {
+          "Applications": "[]AdminApplication",
+          "HasMore": "bool",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminApplicationMember": {
+        "name": "AdminApplicationMember",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "CreatedAt",
+          "RowVersion",
+          "Status",
+          "UpdatedAt",
+          "UserID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "CreatedAt": "time.Time",
+          "RowVersion": "int64",
+          "Status": "string",
+          "UpdatedAt": "time.Time",
+          "UserID": "string"
+        }
+      },
+      "AdminApplicationMemberList": {
+        "name": "AdminApplicationMemberList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Members",
+          "Page"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Members": "[]AdminApplicationMember",
+          "Page": "AdminPageInfo"
+        }
       },
       "AdminApplicationRequest": {
         "name": "AdminApplicationRequest",
@@ -3482,7 +4156,12 @@
           "ApplicationID",
           "Caller",
           "RequestID"
-        ]
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
       },
       "AdminCaller": {
         "name": "AdminCaller",
@@ -3498,7 +4177,15 @@
           "Name",
           "OwnerUserID",
           "RequestID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ClientType": "string",
+          "Description": "string",
+          "Name": "string",
+          "OwnerUserID": "string",
+          "RequestID": "string"
+        }
       },
       "AdminCreatePermissionRequest": {
         "name": "AdminCreatePermissionRequest",
@@ -3511,7 +4198,16 @@
           "Name",
           "RequestID",
           "ScopeID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Description": "string",
+          "Key": "string",
+          "Limits": "string",
+          "Name": "string",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
       },
       "AdminCreateRoleRequest": {
         "name": "AdminCreateRoleRequest",
@@ -3524,7 +4220,16 @@
           "Name",
           "RequestID",
           "ScopeID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Description": "string",
+          "Key": "string",
+          "Limits": "string",
+          "Name": "string",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
       },
       "AdminCreateUserRequest": {
         "name": "AdminCreateUserRequest",
@@ -3536,7 +4241,15 @@
           "Nickname",
           "RequestID",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "ApplicationIDs": "[]string",
+          "Biography": "string",
+          "Caller": "AdminCaller",
+          "Nickname": "string",
+          "RequestID": "string",
+          "Username": "string"
+        }
       },
       "AdminDelegation": {
         "name": "AdminDelegation",
@@ -3547,7 +4260,14 @@
           "ID",
           "PermissionKey",
           "ScopeID"
-        ]
+        ],
+        "field_types": {
+          "DelegatorUserID": "string",
+          "GrantedBy": "string",
+          "ID": "string",
+          "PermissionKey": "string",
+          "ScopeID": "string"
+        }
       },
       "AdminDelegationGrantRequest": {
         "name": "AdminDelegationGrantRequest",
@@ -3559,7 +4279,15 @@
           "PermissionKey",
           "RequestID",
           "ScopeID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "DelegatorUserID": "string",
+          "MaxDataScope": "string",
+          "PermissionKey": "string",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
       },
       "AdminEffectivePermissions": {
         "name": "AdminEffectivePermissions",
@@ -3569,7 +4297,293 @@
           "Permissions",
           "ScopeID",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "DeniedCode": "string",
+          "Permissions": "[]AdminPermission",
+          "ScopeID": "string",
+          "UserID": "string"
+        }
+      },
+      "AdminGroup": {
+        "name": "AdminGroup",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "CreatedAt",
+          "Description",
+          "ID",
+          "Key",
+          "Name",
+          "ScopeID",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "CreatedAt": "time.Time",
+          "Description": "string",
+          "ID": "string",
+          "Key": "string",
+          "Name": "string",
+          "ScopeID": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "AdminGroupList": {
+        "name": "AdminGroupList",
+        "kind": "struct",
+        "fields": [
+          "Groups",
+          "HasMore",
+          "Page"
+        ],
+        "field_types": {
+          "Groups": "[]AdminGroup",
+          "HasMore": "bool",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminGroupMember": {
+        "name": "AdminGroupMember",
+        "kind": "struct",
+        "fields": [
+          "GroupID",
+          "JoinedAt",
+          "UserID"
+        ],
+        "field_types": {
+          "GroupID": "string",
+          "JoinedAt": "time.Time",
+          "UserID": "string"
+        }
+      },
+      "AdminGroupMemberList": {
+        "name": "AdminGroupMemberList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Members",
+          "Page"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Members": "[]AdminGroupMember",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminListApplicationGroupsRequest": {
+        "name": "AdminListApplicationGroupsRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "Descending",
+          "Page",
+          "RequestID",
+          "Sort"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "Sort": "string"
+        }
+      },
+      "AdminListApplicationMembersRequest": {
+        "name": "AdminListApplicationMembersRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "Descending",
+          "Page",
+          "RequestID",
+          "Sort",
+          "Status"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "Sort": "string",
+          "Status": "string"
+        }
+      },
+      "AdminListApplicationRolesRequest": {
+        "name": "AdminListApplicationRolesRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Builtin",
+          "Caller",
+          "Descending",
+          "Enabled",
+          "Page",
+          "RequestID",
+          "Sort"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Builtin": "*bool",
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "Enabled": "*bool",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "Sort": "string"
+        }
+      },
+      "AdminListApplicationsRequest": {
+        "name": "AdminListApplicationsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Descending",
+          "IncludeDeleted",
+          "Page",
+          "RequestID",
+          "Sort",
+          "Status"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "IncludeDeleted": "bool",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "Sort": "string",
+          "Status": "string"
+        }
+      },
+      "AdminListGroupMembersRequest": {
+        "name": "AdminListGroupMembersRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Descending",
+          "GroupID",
+          "Page",
+          "RequestID",
+          "Sort"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "GroupID": "string",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "Sort": "string"
+        }
+      },
+      "AdminListGroupsRequest": {
+        "name": "AdminListGroupsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Descending",
+          "Page",
+          "RequestID",
+          "ScopeID",
+          "Sort"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "Sort": "string"
+        }
+      },
+      "AdminListPermissionsRequest": {
+        "name": "AdminListPermissionsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Descending",
+          "Enabled",
+          "Page",
+          "RequestID",
+          "ScopeID",
+          "Sort"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "Enabled": "*bool",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "Sort": "string"
+        }
+      },
+      "AdminListRoleAssignmentsRequest": {
+        "name": "AdminListRoleAssignmentsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Descending",
+          "GroupPage",
+          "RequestID",
+          "RoleID",
+          "Sort",
+          "UserPage"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "GroupPage": "AdminPage",
+          "RequestID": "string",
+          "RoleID": "string",
+          "Sort": "string",
+          "UserPage": "AdminPage"
+        }
+      },
+      "AdminListRolesRequest": {
+        "name": "AdminListRolesRequest",
+        "kind": "struct",
+        "fields": [
+          "Builtin",
+          "Caller",
+          "Descending",
+          "Enabled",
+          "Page",
+          "RequestID",
+          "ScopeID",
+          "Sort"
+        ],
+        "field_types": {
+          "Builtin": "*bool",
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "Enabled": "*bool",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "Sort": "string"
+        }
+      },
+      "AdminListUserSessionsRequest": {
+        "name": "AdminListUserSessionsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID",
+          "ScopeApplicationID",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScopeApplicationID": "string",
+          "TargetUserID": "string"
+        }
       },
       "AdminListUsersRequest": {
         "name": "AdminListUsersRequest",
@@ -3582,7 +4596,46 @@
           "RequestID",
           "Sort",
           "Status"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Descending": "bool",
+          "Limit": "int",
+          "Offset": "int",
+          "RequestID": "string",
+          "Sort": "string",
+          "Status": "string"
+        }
+      },
+      "AdminPage": {
+        "name": "AdminPage",
+        "kind": "struct",
+        "fields": [
+          "Limit",
+          "Offset"
+        ],
+        "field_types": {
+          "Limit": "int",
+          "Offset": "int"
+        }
+      },
+      "AdminPageInfo": {
+        "name": "AdminPageInfo",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Limit",
+          "NextOffset",
+          "Offset",
+          "Returned"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Limit": "int",
+          "NextOffset": "int",
+          "Offset": "int",
+          "Returned": "int"
+        }
       },
       "AdminPermission": {
         "name": "AdminPermission",
@@ -3594,7 +4647,15 @@
           "Name",
           "RootOnly",
           "ScopeID"
-        ]
+        ],
+        "field_types": {
+          "Enabled": "bool",
+          "ID": "string",
+          "Key": "string",
+          "Name": "string",
+          "RootOnly": "bool",
+          "ScopeID": "string"
+        }
       },
       "AdminPermissionCheck": {
         "name": "AdminPermissionCheck",
@@ -3606,7 +4667,15 @@
           "RequestID",
           "ScopeID",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Mode": "string",
+          "Permission": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "UserID": "string"
+        }
       },
       "AdminPermissionDecision": {
         "name": "AdminPermissionDecision",
@@ -3615,7 +4684,26 @@
           "Allowed",
           "Code",
           "Reason"
-        ]
+        ],
+        "field_types": {
+          "Allowed": "bool",
+          "Code": "string",
+          "Reason": "string"
+        }
+      },
+      "AdminPermissionList": {
+        "name": "AdminPermissionList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Page",
+          "Permissions"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Permissions": "[]AdminPermission"
+        }
       },
       "AdminPermissionQuery": {
         "name": "AdminPermissionQuery",
@@ -3627,7 +4715,15 @@
           "RequestID",
           "ScopeID",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Limit": "int",
+          "Offset": "int",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "UserID": "string"
+        }
       },
       "AdminRole": {
         "name": "AdminRole",
@@ -3639,7 +4735,65 @@
           "Key",
           "Name",
           "ScopeID"
-        ]
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Enabled": "bool",
+          "ID": "string",
+          "Key": "string",
+          "Name": "string",
+          "ScopeID": "string"
+        }
+      },
+      "AdminRoleAssignmentList": {
+        "name": "AdminRoleAssignmentList",
+        "kind": "struct",
+        "fields": [
+          "GroupPage",
+          "Groups",
+          "GroupsHasMore",
+          "UserPage",
+          "Users",
+          "UsersHasMore"
+        ],
+        "field_types": {
+          "GroupPage": "AdminPageInfo",
+          "Groups": "[]AdminRoleGroupAssignment",
+          "GroupsHasMore": "bool",
+          "UserPage": "AdminPageInfo",
+          "Users": "[]AdminRoleUserAssignment",
+          "UsersHasMore": "bool"
+        }
+      },
+      "AdminRoleGroupAssignment": {
+        "name": "AdminRoleGroupAssignment",
+        "kind": "struct",
+        "fields": [
+          "AssignedAt",
+          "DataScope",
+          "GroupID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "AssignedAt": "time.Time",
+          "DataScope": "string",
+          "GroupID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "AdminRoleList": {
+        "name": "AdminRoleList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Page",
+          "Roles"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Roles": "[]AdminRole"
+        }
       },
       "AdminRolePermissionRequest": {
         "name": "AdminRolePermissionRequest",
@@ -3651,7 +4805,15 @@
           "RequestID",
           "RoleID",
           "TOTPCode"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "PermissionID": "string",
+          "RequestID": "string",
+          "RoleID": "string",
+          "TOTPCode": "string"
+        }
       },
       "AdminRoleRequest": {
         "name": "AdminRoleRequest",
@@ -3660,7 +4822,30 @@
           "Caller",
           "RequestID",
           "RoleID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "RoleID": "string"
+        }
+      },
+      "AdminRoleUserAssignment": {
+        "name": "AdminRoleUserAssignment",
+        "kind": "struct",
+        "fields": [
+          "AssignedAt",
+          "AssignedBy",
+          "DataScope",
+          "ScopeID",
+          "UserID"
+        ],
+        "field_types": {
+          "AssignedAt": "time.Time",
+          "AssignedBy": "string",
+          "DataScope": "string",
+          "ScopeID": "string",
+          "UserID": "string"
+        }
       },
       "AdminService": {
         "name": "AdminService",
@@ -3678,12 +4863,54 @@
           "GetUserProfile",
           "GrantApplicationRole",
           "GrantDelegation",
+          "ListApplicationGroups",
+          "ListApplicationMembers",
+          "ListApplicationRoles",
+          "ListApplications",
+          "ListGroupMembers",
+          "ListGroups",
+          "ListPermissions",
+          "ListRoleAssignments",
           "ListRolePermissions",
+          "ListRoles",
+          "ListUserSessions",
           "ListUsers",
           "RevokeApplicationRole",
           "SetApplicationEnabled",
           "UpdateUserProfile"
         ]
+      },
+      "AdminSessionView": {
+        "name": "AdminSessionView",
+        "kind": "struct",
+        "fields": [
+          "AbsoluteExpiresAt",
+          "AppID",
+          "ClientAddress",
+          "ClientUserAgent",
+          "CreatedAt",
+          "Current",
+          "ID",
+          "IdleExpiresAt",
+          "Kind",
+          "LastSeenAt",
+          "Reason",
+          "RememberMe"
+        ],
+        "field_types": {
+          "AbsoluteExpiresAt": "time.Time",
+          "AppID": "string",
+          "ClientAddress": "string",
+          "ClientUserAgent": "string",
+          "CreatedAt": "time.Time",
+          "Current": "bool",
+          "ID": "string",
+          "IdleExpiresAt": "time.Time",
+          "Kind": "string",
+          "LastSeenAt": "time.Time",
+          "Reason": "string",
+          "RememberMe": "bool"
+        }
       },
       "AdminSetApplicationEnabledRequest": {
         "name": "AdminSetApplicationEnabledRequest",
@@ -3694,7 +4921,14 @@
           "Enabled",
           "ExpectedRowVersion",
           "RequestID"
-        ]
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "Enabled": "bool",
+          "ExpectedRowVersion": "int64",
+          "RequestID": "string"
+        }
       },
       "AdminUpdateProfileRequest": {
         "name": "AdminUpdateProfileRequest",
@@ -3708,7 +4942,17 @@
           "RequestID",
           "Timezone",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "Biography": "*string",
+          "Caller": "AdminCaller",
+          "ExpectedRowVersion": "int64",
+          "Language": "*string",
+          "Nickname": "*string",
+          "RequestID": "string",
+          "Timezone": "*string",
+          "UserID": "string"
+        }
       },
       "AdminUser": {
         "name": "AdminUser",
@@ -3719,7 +4963,14 @@
           "Nickname",
           "Status",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "ID": "string",
+          "Nickname": "string",
+          "Status": "string",
+          "Username": "string"
+        }
       },
       "AdminUserByUsernameRequest": {
         "name": "AdminUserByUsernameRequest",
@@ -3728,15 +4979,26 @@
           "Caller",
           "RequestID",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "Username": "string"
+        }
       },
       "AdminUserList": {
         "name": "AdminUserList",
         "kind": "struct",
         "fields": [
           "HasMore",
+          "Page",
           "Users"
-        ]
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Users": "[]AdminUser"
+        }
       },
       "AdminUserProfile": {
         "name": "AdminUserProfile",
@@ -3752,7 +5014,19 @@
           "UpdatedAt",
           "UserID",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "Biography": "string",
+          "CreatedAt": "time.Time",
+          "IsRoot": "bool",
+          "Language": "string",
+          "Nickname": "string",
+          "RowVersion": "int64",
+          "Timezone": "string",
+          "UpdatedAt": "time.Time",
+          "UserID": "string",
+          "Username": "string"
+        }
       },
       "AdminUserRequest": {
         "name": "AdminUserRequest",
@@ -3761,7 +5035,32 @@
           "Caller",
           "RequestID",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "UserID": "string"
+        }
+      },
+      "AdminUserSessionList": {
+        "name": "AdminUserSessionList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Page",
+          "ScopeApplicationID",
+          "Sessions",
+          "TargetUserID",
+          "Total"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "ScopeApplicationID": "string",
+          "Sessions": "[]AdminSessionView",
+          "TargetUserID": "string",
+          "Total": "int64"
+        }
       },
       "AuthService": {
         "name": "AuthService",
@@ -3782,7 +5081,14 @@
           "RecoveryCode",
           "RequestID",
           "SessionSecret"
-        ]
+        ],
+        "field_types": {
+          "AttemptToken": "[]byte",
+          "ChallengeID": "string",
+          "RecoveryCode": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
       },
       "BootstrapService": {
         "name": "BootstrapService",
@@ -3795,10 +5101,17 @@
         "name": "CompletePasswordResetRequest",
         "kind": "struct",
         "fields": [
+          "ClientIP",
           "NewPassword",
           "RequestID",
           "Token"
-        ]
+        ],
+        "field_types": {
+          "ClientIP": "string",
+          "NewPassword": "string",
+          "RequestID": "string",
+          "Token": "string"
+        }
       },
       "CreateUserRequest": {
         "name": "CreateUserRequest",
@@ -3811,7 +5124,16 @@
           "RequestID",
           "Timezone",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "Email": "string",
+          "Language": "string",
+          "Nickname": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "Timezone": "string",
+          "Username": "string"
+        }
       },
       "GrantRoleRequest": {
         "name": "GrantRoleRequest",
@@ -3823,7 +5145,15 @@
           "RoleID",
           "TOTPCode",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "RequestID": "string",
+          "RoleID": "string",
+          "TOTPCode": "string",
+          "UserID": "string"
+        }
       },
       "HTTPOptions": {
         "name": "HTTPOptions",
@@ -3840,7 +5170,54 @@
           "ManagedAPIPrefix",
           "PageOverrides",
           "Prefix"
-        ]
+        ],
+        "field_types": {
+          "AccessLog": "io.Writer",
+          "AdminAPIPrefix": "string",
+          "AppSupportAudience": "string",
+          "AppSupportPrefix": "string",
+          "EnableAdminAPI": "bool",
+          "EnableAppSupport": "bool",
+          "EnableManagedAPI": "bool",
+          "EnableProtocol": "bool",
+          "ManagedAPIPrefix": "string",
+          "PageOverrides": "*PageOverrides",
+          "Prefix": "string"
+        }
+      },
+      "IterationOptions": {
+        "name": "IterationOptions",
+        "kind": "struct",
+        "fields": [
+          "MaxItems",
+          "MaxPages",
+          "Page"
+        ],
+        "field_types": {
+          "MaxItems": "int",
+          "MaxPages": "int",
+          "Page": "AdminPage"
+        }
+      },
+      "IterationResult": {
+        "name": "IterationResult",
+        "kind": "struct",
+        "fields": [
+          "Complete",
+          "Items",
+          "LastPage",
+          "Pages",
+          "StopReason",
+          "Stopped"
+        ],
+        "field_types": {
+          "Complete": "bool",
+          "Items": "int",
+          "LastPage": "AdminPageInfo",
+          "Pages": "int",
+          "StopReason": "string",
+          "Stopped": "bool"
+        }
       },
       "LoginRequest": {
         "name": "LoginRequest",
@@ -3853,7 +5230,16 @@
           "RequestID",
           "UserAgent",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "AppID": "string",
+          "ClientIP": "string",
+          "Password": "string",
+          "RememberMe": "bool",
+          "RequestID": "string",
+          "UserAgent": "string",
+          "Username": "string"
+        }
       },
       "LoginResult": {
         "name": "LoginResult",
@@ -3868,7 +5254,405 @@
           "SessionSecret",
           "UserID",
           "Username"
+        ],
+        "field_types": {
+          "CSRFSecret": "[]byte",
+          "ExpiresAt": "time.Time",
+          "RequiredSteps": "[]string",
+          "Restricted": "bool",
+          "SecondFactor": "*SecondFactorChallenge",
+          "SessionID": "string",
+          "SessionSecret": "[]byte",
+          "UserID": "string",
+          "Username": "string"
+        }
+      },
+      "MFAEmailEnrollBeginRequest": {
+        "name": "MFAEmailEnrollBeginRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFAEmailEnrollConfirmRequest": {
+        "name": "MFAEmailEnrollConfirmRequest",
+        "kind": "struct",
+        "fields": [
+          "AttemptToken",
+          "ChallengeID",
+          "Code",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "AttemptToken": "[]byte",
+          "ChallengeID": "string",
+          "Code": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFAEmailEnrollStart": {
+        "name": "MFAEmailEnrollStart",
+        "kind": "struct",
+        "fields": [
+          "AttemptToken",
+          "ChallengeID",
+          "ExpiresAt",
+          "MaskedEmail"
+        ],
+        "field_types": {
+          "AttemptToken": "[]byte",
+          "ChallengeID": "string",
+          "ExpiresAt": "time.Time",
+          "MaskedEmail": "string"
+        }
+      },
+      "MFAEmailFactor": {
+        "name": "MFAEmailFactor",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "ID",
+          "State",
+          "Type"
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "ID": "string",
+          "State": "string",
+          "Type": "string"
+        }
+      },
+      "MFAEmailRemoveRequest": {
+        "name": "MFAEmailRemoveRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFAFactorList": {
+        "name": "MFAFactorList",
+        "kind": "struct",
+        "fields": [
+          "EmailActive",
+          "EmailFactors",
+          "Passkeys",
+          "RecoveryCodesActive",
+          "RecoveryCodesRemaining",
+          "StrongFactorBound",
+          "TOTP"
+        ],
+        "field_types": {
+          "EmailActive": "bool",
+          "EmailFactors": "[]MFAEmailFactor",
+          "Passkeys": "[]MFAPasskeyCredential",
+          "RecoveryCodesActive": "bool",
+          "RecoveryCodesRemaining": "int",
+          "StrongFactorBound": "bool",
+          "TOTP": "[]MFATOTPFactor"
+        }
+      },
+      "MFAFactorListRequest": {
+        "name": "MFAFactorListRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFAPasskeyCredential": {
+        "name": "MFAPasskeyCredential",
+        "kind": "struct",
+        "fields": [
+          "BackedUp",
+          "BackupEligible",
+          "CreatedAt",
+          "ID",
+          "LastUsedAt",
+          "Name",
+          "Transports"
+        ],
+        "field_types": {
+          "BackedUp": "bool",
+          "BackupEligible": "bool",
+          "CreatedAt": "time.Time",
+          "ID": "string",
+          "LastUsedAt": "time.Time",
+          "Name": "string",
+          "Transports": "[]string"
+        }
+      },
+      "MFAPasskeyListRequest": {
+        "name": "MFAPasskeyListRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFAPasskeyLoginBeginRequest": {
+        "name": "MFAPasskeyLoginBeginRequest",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "ClientIP",
+          "RememberMe",
+          "RequestID",
+          "UserAgent",
+          "Username"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "ClientIP": "string",
+          "RememberMe": "bool",
+          "RequestID": "string",
+          "UserAgent": "string",
+          "Username": "string"
+        }
+      },
+      "MFAPasskeyLoginFinishRequest": {
+        "name": "MFAPasskeyLoginFinishRequest",
+        "kind": "struct",
+        "fields": [
+          "CeremonyID",
+          "ExistingSession",
+          "RequestID",
+          "Response"
+        ],
+        "field_types": {
+          "CeremonyID": "string",
+          "ExistingSession": "[]byte",
+          "RequestID": "string",
+          "Response": "[]byte"
+        }
+      },
+      "MFAPasskeyLoginResult": {
+        "name": "MFAPasskeyLoginResult",
+        "kind": "struct",
+        "fields": [
+          "CSRFSecret",
+          "Credential",
+          "ExpiresAt",
+          "Method",
+          "SessionID",
+          "SessionSecret",
+          "Strength",
+          "UserID"
+        ],
+        "field_types": {
+          "CSRFSecret": "[]byte",
+          "Credential": "MFAPasskeyCredential",
+          "ExpiresAt": "time.Time",
+          "Method": "string",
+          "SessionID": "string",
+          "SessionSecret": "[]byte",
+          "Strength": "string",
+          "UserID": "string"
+        }
+      },
+      "MFAPasskeyLoginStart": {
+        "name": "MFAPasskeyLoginStart",
+        "kind": "struct",
+        "fields": [
+          "CeremonyID",
+          "ExpiresAt",
+          "PublicKey",
+          "RPID"
+        ],
+        "field_types": {
+          "CeremonyID": "string",
+          "ExpiresAt": "time.Time",
+          "PublicKey": "[]byte",
+          "RPID": "string"
+        }
+      },
+      "MFAPasskeyRegisterBeginRequest": {
+        "name": "MFAPasskeyRegisterBeginRequest",
+        "kind": "struct",
+        "fields": [
+          "Purpose",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "Purpose": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFAPasskeyRegisterFinishRequest": {
+        "name": "MFAPasskeyRegisterFinishRequest",
+        "kind": "struct",
+        "fields": [
+          "CeremonyID",
+          "Name",
+          "Password",
+          "RequestID",
+          "Response",
+          "SessionSecret",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "CeremonyID": "string",
+          "Name": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "Response": "[]byte",
+          "SessionSecret": "[]byte",
+          "TOTPCode": "string"
+        }
+      },
+      "MFAPasskeyRegisterStart": {
+        "name": "MFAPasskeyRegisterStart",
+        "kind": "struct",
+        "fields": [
+          "CeremonyID",
+          "ExpiresAt",
+          "PublicKey",
+          "Purpose",
+          "RPID"
+        ],
+        "field_types": {
+          "CeremonyID": "string",
+          "ExpiresAt": "time.Time",
+          "PublicKey": "[]byte",
+          "Purpose": "string",
+          "RPID": "string"
+        }
+      },
+      "MFAPasskeyRemoveRequest": {
+        "name": "MFAPasskeyRemoveRequest",
+        "kind": "struct",
+        "fields": [
+          "CredentialID",
+          "Password",
+          "RequestID",
+          "SessionSecret",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "CredentialID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "TOTPCode": "string"
+        }
+      },
+      "MFAPasskeyRenameRequest": {
+        "name": "MFAPasskeyRenameRequest",
+        "kind": "struct",
+        "fields": [
+          "CredentialID",
+          "Name",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "CredentialID": "string",
+          "Name": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFARecoveryCodesRequest": {
+        "name": "MFARecoveryCodesRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "MFARecoveryCodesStatus": {
+        "name": "MFARecoveryCodesStatus",
+        "kind": "struct",
+        "fields": [
+          "CodesRemaining",
+          "CreatedAt",
+          "Generation",
+          "HasActiveGroup"
+        ],
+        "field_types": {
+          "CodesRemaining": "int",
+          "CreatedAt": "time.Time",
+          "Generation": "int64",
+          "HasActiveGroup": "bool"
+        }
+      },
+      "MFAService": {
+        "name": "MFAService",
+        "kind": "interface",
+        "methods": [
+          "BeginEmailEnrollment",
+          "BeginPasskeyLogin",
+          "BeginPasskeyRegistration",
+          "ConfirmEmailEnrollment",
+          "FinishPasskeyLogin",
+          "FinishPasskeyRegistration",
+          "List",
+          "ListPasskeys",
+          "RecoveryCodes",
+          "RemoveEmail",
+          "RemovePasskey",
+          "RemoveTOTP",
+          "RenamePasskey"
         ]
+      },
+      "MFATOTPFactor": {
+        "name": "MFATOTPFactor",
+        "kind": "struct",
+        "fields": [
+          "ActivatedAt",
+          "CreatedAt",
+          "Digits",
+          "ID",
+          "PeriodSeconds",
+          "Status"
+        ],
+        "field_types": {
+          "ActivatedAt": "time.Time",
+          "CreatedAt": "time.Time",
+          "Digits": "int",
+          "ID": "string",
+          "PeriodSeconds": "int",
+          "Status": "string"
+        }
+      },
+      "MFATOTPRemoveRequest": {
+        "name": "MFATOTPRemoveRequest",
+        "kind": "struct",
+        "fields": [
+          "Code",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "Code": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
       },
       "NotFoundError": {
         "name": "NotFoundError",
@@ -3883,7 +5667,11 @@
           "HTTPStatus",
           "Message",
           "Unwrap"
-        ]
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "Resource": "string"
+        }
       },
       "Options": {
         "name": "Options",
@@ -3901,7 +5689,21 @@
           "Notifier",
           "Now",
           "OperatorID"
-        ]
+        ],
+        "field_types": {
+          "Config": "*login.Config",
+          "ConfigPath": "string",
+          "CreateMasterKey": "bool",
+          "Database": "login.Database",
+          "DatabasePath": "string",
+          "HTTP": "*HTTPOptions",
+          "Logger": "*slog.Logger",
+          "MasterKeyFile": "string",
+          "Migrate": "bool",
+          "Notifier": "login.Notifier",
+          "Now": "func() time.Time",
+          "OperatorID": "string"
+        }
       },
       "PageOverrides": {
         "name": "PageOverrides",
@@ -3913,7 +5715,15 @@
           "HostRenderer",
           "HostTemplates",
           "Translations"
-        ]
+        ],
+        "field_types": {
+          "AssetOverlays": "[]fs.FS",
+          "Brand": "*login.UIBrand",
+          "DisableBuiltinPages": "bool",
+          "HostRenderer": "login.UIPageRenderer",
+          "HostTemplates": "*login.UIHostTemplates",
+          "Translations": "login.UICatalogProvider"
+        }
       },
       "PasswordResetResult": {
         "name": "PasswordResetResult",
@@ -3924,7 +5734,14 @@
           "SecurityVersion",
           "SessionsRevoked",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "RequiresRelogin": "bool",
+          "ResetAt": "time.Time",
+          "SecurityVersion": "int64",
+          "SessionsRevoked": "int64",
+          "UserID": "string"
+        }
       },
       "PasswordResetService": {
         "name": "PasswordResetService",
@@ -3932,7 +5749,8 @@
         "methods": [
           "Complete",
           "Request",
-          "ValidateToken"
+          "ValidateToken",
+          "ValidateTokenWithSource"
         ]
       },
       "RecoveryCodes": {
@@ -3942,7 +5760,12 @@
           "Codes",
           "CreatedAt",
           "Generation"
-        ]
+        ],
+        "field_types": {
+          "Codes": "[]string",
+          "CreatedAt": "time.Time",
+          "Generation": "int64"
+        }
       },
       "RecoveryCodesRequest": {
         "name": "RecoveryCodesRequest",
@@ -3952,7 +5775,13 @@
           "RequestID",
           "SessionSecret",
           "TOTPCode"
-        ]
+        ],
+        "field_types": {
+          "Password": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "TOTPCode": "string"
+        }
       },
       "RecoverySession": {
         "name": "RecoverySession",
@@ -3965,7 +5794,16 @@
           "SessionID",
           "SessionSecret",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "AllowedMethods": "[]string",
+          "CodesRemaining": "int",
+          "ExpiresAt": "time.Time",
+          "RequiredStrength": "string",
+          "SessionID": "string",
+          "SessionSecret": "[]byte",
+          "UserID": "string"
+        }
       },
       "RecoveryStatus": {
         "name": "RecoveryStatus",
@@ -3976,14 +5814,26 @@
           "ExpiresAt",
           "HasActiveGroup",
           "RequiredStrength"
-        ]
+        ],
+        "field_types": {
+          "AllowedMethods": "[]string",
+          "CodesRemaining": "int",
+          "ExpiresAt": "time.Time",
+          "HasActiveGroup": "bool",
+          "RequiredStrength": "string"
+        }
       },
       "RecoveryStatusRequest": {
         "name": "RecoveryStatusRequest",
         "kind": "struct",
         "fields": [
+          "RequestID",
           "SessionSecret"
-        ]
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
       },
       "RequestPasswordResetRequest": {
         "name": "RequestPasswordResetRequest",
@@ -3992,7 +5842,12 @@
           "ClientIP",
           "Identifier",
           "RequestID"
-        ]
+        ],
+        "field_types": {
+          "ClientIP": "string",
+          "Identifier": "string",
+          "RequestID": "string"
+        }
       },
       "RevokeRoleRequest": {
         "name": "RevokeRoleRequest",
@@ -4002,7 +5857,13 @@
           "RequestID",
           "RoleID",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "RoleID": "string",
+          "UserID": "string"
+        }
       },
       "RootRequest": {
         "name": "RootRequest",
@@ -4012,7 +5873,13 @@
           "Password",
           "RequestID",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "DisplayName": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "Username": "string"
+        }
       },
       "RootResult": {
         "name": "RootResult",
@@ -4022,7 +5889,13 @@
           "State",
           "StrongAuthRequired",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "SecurityVersion": "int64",
+          "State": "string",
+          "StrongAuthRequired": "bool",
+          "UserID": "string"
+        }
       },
       "Runtime": {
         "name": "Runtime",
@@ -4040,6 +5913,7 @@
           "Handler",
           "Instance",
           "LocalAdmin",
+          "MFA",
           "Mount",
           "PasswordReset",
           "Ready",
@@ -4063,7 +5937,18 @@
           "PasskeyCeremonyID",
           "PasskeyOptions",
           "SetupRequired"
-        ]
+        ],
+        "field_types": {
+          "AllowedSetupMethods": "[]string",
+          "AttemptToken": "[]byte",
+          "ChallengeID": "string",
+          "ExpiresAt": "time.Time",
+          "FactorType": "string",
+          "MaskedEmail": "string",
+          "PasskeyCeremonyID": "string",
+          "PasskeyOptions": "[]byte",
+          "SetupRequired": "bool"
+        }
       },
       "SecurityService": {
         "name": "SecurityService",
@@ -4085,14 +5970,129 @@
           "RecoveryCodesRemaining",
           "StrongFactorBound",
           "TOTPActive"
-        ]
+        ],
+        "field_types": {
+          "EmailFactorActive": "bool",
+          "PasskeyCount": "int",
+          "PasskeyEnabled": "bool",
+          "RecoveryCodesRemaining": "int",
+          "StrongFactorBound": "bool",
+          "TOTPActive": "bool"
+        }
       },
       "SecurityStatusRequest": {
         "name": "SecurityStatusRequest",
         "kind": "struct",
         "fields": [
+          "RequestID",
           "SessionSecret"
-        ]
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "SessionAccessDecision": {
+        "name": "SessionAccessDecision",
+        "kind": "struct",
+        "fields": [
+          "Allowed",
+          "AppID",
+          "Code",
+          "Reason",
+          "RequestID",
+          "SessionID",
+          "UserID"
+        ],
+        "field_types": {
+          "Allowed": "bool",
+          "AppID": "string",
+          "Code": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "SessionID": "string",
+          "UserID": "string"
+        }
+      },
+      "SessionAccessRequest": {
+        "name": "SessionAccessRequest",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "CSRFToken",
+          "Mode",
+          "Permissions",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "CSRFToken": "string",
+          "Mode": "string",
+          "Permissions": "[]string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "SessionDevice": {
+        "name": "SessionDevice",
+        "kind": "struct",
+        "fields": [
+          "AbsoluteExpiresAt",
+          "AppID",
+          "ClientAddress",
+          "ClientUserAgent",
+          "CreatedAt",
+          "Current",
+          "ID",
+          "IdleExpiresAt",
+          "Kind",
+          "LastSeenAt",
+          "Reason",
+          "RememberMe"
+        ],
+        "field_types": {
+          "AbsoluteExpiresAt": "time.Time",
+          "AppID": "string",
+          "ClientAddress": "string",
+          "ClientUserAgent": "string",
+          "CreatedAt": "time.Time",
+          "Current": "bool",
+          "ID": "string",
+          "IdleExpiresAt": "time.Time",
+          "Kind": "string",
+          "LastSeenAt": "time.Time",
+          "Reason": "string",
+          "RememberMe": "bool"
+        }
+      },
+      "SessionDeviceList": {
+        "name": "SessionDeviceList",
+        "kind": "struct",
+        "fields": [
+          "Devices",
+          "HasMore",
+          "Page",
+          "Total"
+        ],
+        "field_types": {
+          "Devices": "[]SessionDevice",
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Total": "int64"
+        }
+      },
+      "SessionDeviceRequest": {
+        "name": "SessionDeviceRequest",
+        "kind": "struct",
+        "fields": [
+          "Page",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "Page": "AdminPage",
+          "SessionSecret": "[]byte"
+        }
       },
       "SessionInfo": {
         "name": "SessionInfo",
@@ -4107,12 +6107,25 @@
           "SessionID",
           "StrongAuthVerifiedAt",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "AppID": "string",
+          "AuthMethods": "[]string",
+          "CreatedAt": "time.Time",
+          "ExpiresAt": "time.Time",
+          "IdleExpiresAt": "time.Time",
+          "SecurityVersion": "int64",
+          "SessionID": "string",
+          "StrongAuthVerifiedAt": "time.Time",
+          "UserID": "string"
+        }
       },
       "SessionService": {
         "name": "SessionService",
         "kind": "interface",
         "methods": [
+          "Authorize",
+          "ListDevices",
           "Revoke",
           "Validate",
           "ValidateCSRF"
@@ -4126,7 +6139,13 @@
           "BindingID",
           "CreatedAt",
           "Status"
-        ]
+        ],
+        "field_types": {
+          "ActivatedAt": "time.Time",
+          "BindingID": "string",
+          "CreatedAt": "time.Time",
+          "Status": "string"
+        }
       },
       "TOTPBindingBeginRequest": {
         "name": "TOTPBindingBeginRequest",
@@ -4135,7 +6154,12 @@
           "Password",
           "RequestID",
           "SessionSecret"
-        ]
+        ],
+        "field_types": {
+          "Password": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
       },
       "TOTPBindingConfirmRequest": {
         "name": "TOTPBindingConfirmRequest",
@@ -4145,7 +6169,13 @@
           "Code",
           "RequestID",
           "SessionSecret"
-        ]
+        ],
+        "field_types": {
+          "BindingID": "string",
+          "Code": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
       },
       "TOTPBindingStart": {
         "name": "TOTPBindingStart",
@@ -4157,7 +6187,15 @@
           "OTPAuthURL",
           "PeriodSeconds",
           "Secret"
-        ]
+        ],
+        "field_types": {
+          "BindingID": "string",
+          "Digits": "int",
+          "ExpiresAt": "time.Time",
+          "OTPAuthURL": "string",
+          "PeriodSeconds": "int",
+          "Secret": "string"
+        }
       },
       "User": {
         "name": "User",
@@ -4169,7 +6207,15 @@
           "Nickname",
           "Status",
           "Username"
-        ]
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "Email": "string",
+          "ID": "string",
+          "Nickname": "string",
+          "Status": "string",
+          "Username": "string"
+        }
       },
       "UserService": {
         "name": "UserService",
@@ -4177,6 +6223,20 @@
         "methods": [
           "Create"
         ]
+      },
+      "ValidatePasswordResetTokenRequest": {
+        "name": "ValidatePasswordResetTokenRequest",
+        "kind": "struct",
+        "fields": [
+          "ClientIP",
+          "RequestID",
+          "Token"
+        ],
+        "field_types": {
+          "ClientIP": "string",
+          "RequestID": "string",
+          "Token": "string"
+        }
       },
       "VerifiedSession": {
         "name": "VerifiedSession",
@@ -4189,7 +6249,16 @@
           "SessionSecret",
           "Strength",
           "UserID"
-        ]
+        ],
+        "field_types": {
+          "CSRFSecret": "[]byte",
+          "ExpiresAt": "time.Time",
+          "Method": "string",
+          "SessionID": "string",
+          "SessionSecret": "[]byte",
+          "Strength": "string",
+          "UserID": "string"
+        }
       },
       "VerifySecondFactorRequest": {
         "name": "VerifySecondFactorRequest",
@@ -4202,7 +6271,16 @@
           "PasskeyResponse",
           "RequestID",
           "SessionSecret"
-        ]
+        ],
+        "field_types": {
+          "AttemptToken": "[]byte",
+          "ChallengeID": "string",
+          "Code": "string",
+          "PasskeyCeremonyID": "string",
+          "PasskeyResponse": "[]byte",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
       }
     },
     "app_funcs": [
@@ -4213,6 +6291,10 @@
       "AdminSession",
       "AsNotFound",
       "Auth",
+      "Authorize",
+      "BeginEmailEnrollment",
+      "BeginPasskeyLogin",
+      "BeginPasskeyRegistration",
       "BeginRecovery",
       "BeginTOTPBinding",
       "Bootstrap",
@@ -4222,6 +6304,7 @@
       "Code",
       "Complete",
       "Config",
+      "ConfirmEmailEnrollment",
       "ConfirmTOTPBinding",
       "Create",
       "CreateApplication",
@@ -4231,6 +6314,8 @@
       "EffectivePermissions",
       "EnsureRoot",
       "Error",
+      "FinishPasskeyLogin",
+      "FinishPasskeyRegistration",
       "GenerateRecoveryCodes",
       "GetUserByUsername",
       "GetUserProfile",
@@ -4242,16 +6327,38 @@
       "Handler",
       "Instance",
       "IsNotFound",
+      "IterateAdminPages",
+      "List",
+      "ListApplicationGroups",
+      "ListApplicationMembers",
+      "ListApplicationRoles",
+      "ListApplications",
+      "ListDevices",
+      "ListGroupMembers",
+      "ListGroups",
+      "ListPasskeys",
+      "ListPermissions",
+      "ListRoleAssignments",
       "ListRolePermissions",
+      "ListRoles",
+      "ListUserSessions",
       "ListUsers",
       "LocalAdmin",
       "Login",
+      "MFA",
       "Message",
       "Mount",
+      "NewAdminPageInfo",
+      "NormalizeAdminPage",
       "Open",
       "PasswordReset",
       "Ready",
+      "RecoveryCodes",
       "RecoveryStatus",
+      "RemoveEmail",
+      "RemovePasskey",
+      "RemoveTOTP",
+      "RenamePasskey",
       "Request",
       "Revoke",
       "RevokeApplicationRole",
@@ -4267,7 +6374,12 @@
       "Validate",
       "ValidateCSRF",
       "ValidateToken",
+      "ValidateTokenWithSource",
       "VerifySecondFactor"
+    ],
+    "app_vars": [
+      "ErrNotFound",
+      "ErrPageNotAdvancing"
     ],
     "root_types": [
       "AccessController",
@@ -4722,6 +6834,7 @@
       "NewServer",
       "NewWebUI",
       "NormalizeSecurityPolicyChange",
+      "NormalizeTLSClientAuthMode",
       "OpenAPIDocument",
       "PageMFARouteNames",
       "PageOAuthRouteNames",
@@ -4753,6 +6866,7 @@
       "UIStatsMetricValues",
       "UIStatsSortValues",
       "UIStatsTimeZones",
+      "ValidateCorrelationID",
       "ValidateRequestID",
       "ValidateTaskID",
       "WithCause",
@@ -4794,12 +6908,22 @@
       },
       {
         "method": "GET",
+        "pattern": "applications/{application_id}/groups",
+        "source": "internal/serverapp/admin_domain_routes.go"
+      },
+      {
+        "method": "GET",
         "pattern": "applications/{application_id}/managed-policy",
         "source": "internal/serverapp/admin_domain_writes2.go"
       },
       {
         "method": "GET",
         "pattern": "applications/{application_id}/members",
+        "source": "internal/serverapp/admin_domain_routes.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "applications/{application_id}/roles",
         "source": "internal/serverapp/admin_domain_routes.go"
       },
       {
@@ -4904,6 +7028,11 @@
       },
       {
         "method": "GET",
+        "pattern": "groups/{group_id}/members",
+        "source": "internal/serverapp/admin_domain_routes.go"
+      },
+      {
+        "method": "GET",
         "pattern": "meta",
         "source": "internal/adminapi/handler.go"
       },
@@ -4960,6 +7089,11 @@
       {
         "method": "GET",
         "pattern": "roles/{role_id}",
+        "source": "internal/serverapp/admin_domain_routes.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "roles/{role_id}/assignments",
         "source": "internal/serverapp/admin_domain_routes.go"
       },
       {
@@ -7331,87 +9465,6 @@
     ],
     "tests_by_package": {
       ".": [
-        "TestApplicationErrorCodesRegistered",
-        "TestAuthnErrorCodesRegistered",
-        "TestAuthorizationErrorCodesRegistered",
-        "TestAvatarErrorCodesRegistered",
-        "TestBackupErrorCodesReuseRegisteredCodes",
-        "TestBootstrapErrorCodesRegistered",
-        "TestAppQRLoginConfigDefaults",
-        "TestAppQRLoginConfigYAMLAndEnv",
-        "TestAppQRLoginConfigValidation",
-        "TestAppQRLoginConfigEnvParsing",
-        "TestDeviceCodeRequiresPublicBaseURL",
-        "TestDeviceCodeWithPublicBaseURLLoads",
-        "TestMailConfigLoadValid",
-        "TestMailConfigInvalid",
-        "TestMailDisabledDoesNotReadSecrets",
-        "TestMailEnvOverrides",
-        "TestManualRecoveryConfigDefaultDisabled",
-        "TestManualRecoveryConfigLoadValid",
-        "TestManualRecoveryConfigInvalid",
-        "TestMTLSConfigYAMLParsing",
-        "TestMTLSConfigEnvAndOverrides",
-        "TestMTLSConfigYAMLStructureErrors",
-        "TestMTLSConfigEnvParseErrors",
-        "TestMTLSConfigCombinationValidation",
-        "TestMTLSConfigIdentityValueValidation",
-        "TestMTLSConfigHostBuildValidation",
-        "TestPasskeyConfigDefaults",
-        "TestPasskeyConfigYAMLAndEnv",
-        "TestPasskeyConfigRejectsInvalid",
-        "TestRegistrationConfigDefaults",
-        "TestRegistrationConfigYAMLAndEnv",
-        "TestRegistrationConfigOverridesAndValidation",
-        "TestLoadResourceServicesYAML",
-        "TestResourceServicesRequireProtocolEnabled",
-        "TestResourceServicesRejectInvalidAudience",
-        "TestResourceServicesRejectDuplicateServiceID",
-        "TestIntrospectionRequiresResourceService",
-        "TestSecretRedaction",
-        "TestSecretValueReturnsCopy",
-        "TestParseSecretSource",
-        "TestSecretFromYAMLFileSource",
-        "TestSecretFromYAMLEnvSource",
-        "TestSecretInlineYAMLRejected",
-        "TestSecretEnvDirectOverridesYAMLSource",
-        "TestSecretOptionsOverrideEnv",
-        "TestSecretSourceErrors",
-        "TestSecretOptionsInvalid",
-        "TestServerNetworkConfigYAMLParsing",
-        "TestServerNetworkConfigEnv",
-        "TestServerNetworkConfigOverrides",
-        "TestServerNetworkConfigTypeErrors",
-        "TestServerNetworkConfigValues",
-        "TestListenAddressesMergeAndDedup",
-        "TestServerNetworkConfigDiagnosticAndDiff",
-        "TestDefaultConfig",
-        "TestLoadPrecedence",
-        "TestExplicitFalseAndZero",
-        "TestEmptyAndNullValues",
-        "TestUnknownFields",
-        "TestDuplicateKeys",
-        "TestYAMLTypeErrors",
-        "TestRangeAndEnumErrors",
-        "TestPublicBaseURLValidation",
-        "TestPublicURLAndListenConflict",
-        "TestYAMLSyntaxErrors",
-        "TestInvalidConfigHasNoSideEffects",
-        "TestEnvFieldMetadataStable",
-        "TestAllEnvFieldsApplied",
-        "TestLookupEnvInjection",
-        "TestErrorsAggregation",
-        "TestConfigValidateForProgrammaticConfig",
-        "TestDiffReload",
-        "TestExampleConfigLoads",
-        "TestTLSConfigYAMLParsing",
-        "TestTLSConfigPFXSecretSource",
-        "TestTLSConfigEnvAndOverrides",
-        "TestTLSConfigTypeErrors",
-        "TestTLSConfigCombinationValidation",
-        "TestTLSConfigDiagnosticRedaction",
-        "TestDelegationErrorCodesRegistered",
-        "TestEmailChangeErrorCodesRegistered",
         "TestNewAssemblesAndMountsHTTPHandler",
         "TestAssemblyValidation",
         "TestMountWithoutHandlerFails",
@@ -7421,23 +9474,6 @@
         "TestCheckAccessFailsClosed",
         "TestNewDoesNotStartInjectedDependencies",
         "TestDatabasePingCancellationDoesNotReportReady",
-        "TestErrorCodeGuidanceMatchesManual",
-        "TestErrorCodeRegistryUnique",
-        "TestLookupErrorCode",
-        "TestRegisteredErrorCodesReturnsCopy",
-        "TestErrorCodeDocumentationMatches",
-        "TestNoOAuthProtocolCodesRegistered",
-        "TestAppErrorClassification",
-        "TestNewAppErrorUnknownCodeFallback",
-        "TestAppErrorMessageSanitization",
-        "TestRequestIDGenerationAndValidation",
-        "TestAppErrorCauseSeparation",
-        "TestAppErrorWrappingChain",
-        "TestFromError",
-        "TestAppErrorJSONFields",
-        "TestAppErrorSlogRedaction",
-        "TestWithInternalReasonCodeRestricted",
-        "TestNewlineInjectionDoesNotBreakLogLines",
         "TestExtensionRegistrationValidation",
         "TestExtensionLifecycleOrder",
         "TestExtensionStartFailureRollsBack",
@@ -7448,7 +9484,6 @@
         "TestExtensionHostResourceNotClosed",
         "TestMultiInstanceExtensionIsolation",
         "TestExtensionsSnapshotCopied",
-        "TestGroupErrorCodesRegistered",
         "TestMountDuplicateAndConflictPatternReturnError",
         "TestHandlerAndMountUsableBeforeStart",
         "TestNotifierBoundedAndNonBlocking",
@@ -7474,6 +9509,9 @@
         "TestOpenAPIDocumentRegistrySync",
         "TestIdentityPublicContract",
         "TestHTTPHandlerRejectsOversizedBody",
+        "TestPublicLeafPackagesStayLeaf",
+        "TestRootPackageImportsNoCycle",
+        "TestMigratedRootImplementationStaysOut",
         "TestInstanceConfigErrorIsAppError",
         "TestInstanceLifecycleErrorsAreAppErrors",
         "TestInstanceCloseErrorsAreAppErrors",
@@ -7498,23 +9536,6 @@
         "TestConcurrentStart",
         "TestConcurrentClose",
         "TestNoGoroutineLeak",
-        "TestManagedAPIErrorCodesRegistered",
-        "TestManualRecoveryErrorCodesRegistered",
-        "TestMFAErrorCodesRegistered",
-        "TestOAuthFlowErrorCodesRegistered",
-        "TestOnboardingErrorCodesRegistered",
-        "TestPasskeyErrorCodesRegistered",
-        "TestPasswordResetErrorCodesRegistered",
-        "TestPermissionErrorCodesRegistered",
-        "TestPolicyErrorCodesRegistered",
-        "TestPresetErrorCodesRegistered",
-        "TestProfileErrorCodesRegistered",
-        "TestQRLoginErrorCodesRegistered",
-        "TestReauthErrorCodesRegistered",
-        "TestRecoveryErrorCodesRegistered",
-        "TestRegistrationErrorCodesRegistered",
-        "TestRoleErrorCodesRegistered",
-        "TestRootRecoveryErrorCodesRegistered",
         "TestServerMTLSRequiredEndToEnd",
         "TestServerMTLSOptionalEndToEnd",
         "TestServerMTLSDisabledKeepsAnonymous",
@@ -7538,8 +9559,6 @@
         "TestServerTLSPFXConfig",
         "TestSessionErrorCodesRegistered",
         "TestSessionCookieAndCSRFContract",
-        "TestStatsErrorClassifierCoversRegisteredCodes",
-        "TestStatsClassifierSeparatesFlowStates",
         "TestStep91AccountLifecycleAndSessionInvalidation",
         "TestStep91RegistrationInviteAndReview",
         "TestStep91ProfileAndEmailChange",
@@ -7556,9 +9575,6 @@
         "TestStep95PerfIdentifierNormalization",
         "TestStep95PerfSQLiteStartupAndAccess",
         "TestStep95PerfSecretEnvelope",
-        "TestTokenErrorCodesRegistered",
-        "TestTokenAuthorizationErrorCodesRegistered",
-        "TestTOTPErrorCodesRegistered",
         "TestWebUIIntegrationWithRealSession",
         "TestWebUIDisabledKeepsAPIAvailable",
         "TestAccountIntegrationProfileUpdateAndConflict",
@@ -7682,6 +9698,7 @@
         "TestRBACPermissionCreatePage",
         "TestRBACPermissionImpactAndDelete",
         "TestRBACPermissionStateConfirmAndReauth",
+        "TestRBACListSortAndPaginationParams",
         "TestReportTemplateI18nKeysRegistered",
         "TestReportsPagesRenderAndStates",
         "TestReportsDownloadHeaders",
@@ -7743,12 +9760,14 @@
         "TestWebUIAssetsAndI18n",
         "TestWebUIConstantsAndValidation",
         "TestUIHTTPOptionsValidation",
-        "TestAccountErrorCodesRegistered",
         "TestBuildInfoString",
         "TestCurrentBuildInfo"
       ],
       "./app": [
+        "TestAdminApplicationListsPagination",
         "TestPublicNotFoundContractFromExternalModule",
+        "TestAdminPaginatedListFacades",
+        "TestNormalizeAdminPage",
         "TestAdminQueryRequestIDCorrelation",
         "TestAdminAuthorizedQueryNotFoundContract",
         "TestAdminQueryNFKCAndCaseFolding",
@@ -7756,20 +9775,44 @@
         "TestAdminSessionPermissionCheckedBeforeQuery",
         "TestAdminQueryAuditFailureFailsClosed",
         "TestAdminWriteRequestIDCorrelation",
+        "TestAdminRoleQueryHidesOtherApplicationExistence",
         "TestAdminFacadeBootstrapAndApplicationRoleAssignment",
+        "TestPublicAPISurfacePaginationHelpers",
         "TestPublicAPISurfaceHasNoInternalTypes",
         "TestExampleOnlyImportsPublicPackages",
         "TestRootPackageDoesNotImportApp",
         "TestAppPackageHasNoInitSideEffects",
+        "TestHostServerAndReverseProxyTrustedSource",
         "TestEmbeddedHTTPPagesMountAndSecurity",
         "TestEmbeddedHTTPMissingDependenciesFailStartup",
         "TestEmbeddedHTTPPageOverrides",
         "TestEmbeddedHTTPAdminAPIMount",
         "TestHTTPHandlerAbsentWithoutOptions",
+        "TestIterateAdminPagesRealRuntimeDomains",
+        "TestIterateAdminPagesSuccess",
+        "TestIterateAdminPagesEmptyList",
+        "TestIterateAdminPagesDefaultBounds",
+        "TestIterateAdminPagesMaxPages",
+        "TestIterateAdminPagesMaxItemsTruncation",
+        "TestIterateAdminPagesMaxItemsExactEnd",
+        "TestIterateAdminPagesInvalidOptions",
+        "TestIterateAdminPagesPageContractViolations",
+        "TestIterateAdminPagesFetchAndVisitErrors",
+        "TestIterateAdminPagesCancelStopsFetching",
+        "TestIterateAdminPagesNormalizesPageLimit",
         "TestMailConfigAssembledWithoutNetworkOnOpen",
+        "TestMFAPublicFactorListAndTOTPRemoval",
+        "TestMFAPublicPasskeyCeremonyAndEmailFailClosed",
+        "TestMFAPublicWebAuthnRegistrationAndPasswordlessLogin",
         "TestPasswordLoginTOTPSecondFactorAndSensitiveReauth",
         "TestRecoveryCodesRequireStrongAuthAndRestrictedRecovery",
         "TestConfigVariantsKeepTOTPAndRejectRegistration",
+        "TestPasswordResetValidateSourceLimit",
+        "TestPasswordResetCompleteSourceLimit",
+        "TestPasswordResetSourceKeyTrustBoundary",
+        "TestPasswordResetValidateTokenRequestID",
+        "TestPasswordResetLimiterCancelAndCapacity",
+        "TestPasswordResetFacadeLogsNoSecrets",
         "TestPasswordResetRequiresMailAndRejectsInvalidToken",
         "TestPasswordResetValidateTokenMatchesServiceJudgment",
         "TestOpenEnsureRootUsersLoginAccessRevokeStartClose",
@@ -7779,6 +9822,9 @@
         "TestStartCancelFailsClosedAndCloseIsIdempotent",
         "TestHostResourcesAreNotClosedByRuntime",
         "TestOpenRejectsNonSQLiteDriver",
+        "TestSessionAuthorizeBindsApplicationAndPermission",
+        "TestSessionAuthorizeRejectsRestrictedSessionDespiteCSRF",
+        "TestSessionAuthorizeRequestIDPlumbing",
         "TestSessionServiceValidateAndCSRF",
         "TestSessionServiceValidateExpiry",
         "TestSessionServiceValidateRejectsRestricted",
@@ -7814,6 +9860,139 @@
         "TestRunRestoreStateCommandsWithRealKeyring",
         "TestLocalManageCLIDispatch",
         "TestOnlineManageCLIDispatch"
+      ],
+      "./config": [
+        "TestAppQRLoginConfigDefaults",
+        "TestAppQRLoginConfigYAMLAndEnv",
+        "TestAppQRLoginConfigValidation",
+        "TestAppQRLoginConfigEnvParsing",
+        "TestDeviceCodeRequiresPublicBaseURL",
+        "TestDeviceCodeWithPublicBaseURLLoads",
+        "TestMailConfigLoadValid",
+        "TestMailConfigInvalid",
+        "TestMailDisabledDoesNotReadSecrets",
+        "TestMailEnvOverrides",
+        "TestMailPlaintextLoopbackAccepted",
+        "TestManualRecoveryConfigDefaultDisabled",
+        "TestManualRecoveryConfigLoadValid",
+        "TestManualRecoveryConfigInvalid",
+        "TestMTLSConfigYAMLParsing",
+        "TestMTLSConfigEnvAndOverrides",
+        "TestMTLSConfigYAMLStructureErrors",
+        "TestMTLSConfigEnvParseErrors",
+        "TestMTLSConfigCombinationValidation",
+        "TestMTLSConfigIdentityValueValidation",
+        "TestMTLSConfigHostBuildValidation",
+        "TestPasskeyConfigDefaults",
+        "TestPasskeyConfigYAMLAndEnv",
+        "TestPasskeyConfigRejectsInvalid",
+        "TestRegistrationConfigDefaults",
+        "TestRegistrationConfigYAMLAndEnv",
+        "TestRegistrationConfigOverridesAndValidation",
+        "TestLoadResourceServicesYAML",
+        "TestResourceServicesRequireProtocolEnabled",
+        "TestResourceServicesRejectInvalidAudience",
+        "TestResourceServicesRejectDuplicateServiceID",
+        "TestIntrospectionRequiresResourceService",
+        "TestSecretRedaction",
+        "TestSecretValueReturnsCopy",
+        "TestParseSecretSource",
+        "TestSecretFromYAMLFileSource",
+        "TestSecretFromYAMLEnvSource",
+        "TestSecretInlineYAMLRejected",
+        "TestSecretEnvDirectOverridesYAMLSource",
+        "TestSecretOptionsOverrideEnv",
+        "TestSecretSourceErrors",
+        "TestSecretOptionsInvalid",
+        "TestServerNetworkConfigYAMLParsing",
+        "TestServerNetworkConfigEnv",
+        "TestServerNetworkConfigOverrides",
+        "TestServerNetworkConfigTypeErrors",
+        "TestServerNetworkConfigValues",
+        "TestListenAddressesMergeAndDedup",
+        "TestServerNetworkConfigDiagnosticAndDiff",
+        "TestDefaultConfig",
+        "TestLoadPrecedence",
+        "TestExplicitFalseAndZero",
+        "TestEmptyAndNullValues",
+        "TestUnknownFields",
+        "TestDuplicateKeys",
+        "TestYAMLTypeErrors",
+        "TestRangeAndEnumErrors",
+        "TestPublicBaseURLValidation",
+        "TestPublicURLAndListenConflict",
+        "TestYAMLSyntaxErrors",
+        "TestInvalidConfigHasNoSideEffects",
+        "TestEnvFieldMetadataStable",
+        "TestAllEnvFieldsApplied",
+        "TestLookupEnvInjection",
+        "TestErrorsAggregation",
+        "TestConfigValidateForProgrammaticConfig",
+        "TestDiffReload",
+        "TestExampleConfigLoads",
+        "TestTLSConfigYAMLParsing",
+        "TestTLSConfigPFXSecretSource",
+        "TestTLSConfigEnvAndOverrides",
+        "TestTLSConfigTypeErrors",
+        "TestTLSConfigCombinationValidation",
+        "TestTLSConfigDiagnosticRedaction"
+      ],
+      "./errs": [
+        "TestApplicationErrorCodesRegistered",
+        "TestAuthnErrorCodesRegistered",
+        "TestAuthorizationErrorCodesRegistered",
+        "TestAvatarErrorCodesRegistered",
+        "TestBackupErrorCodesReuseRegisteredCodes",
+        "TestBootstrapErrorCodesRegistered",
+        "TestDelegationErrorCodesRegistered",
+        "TestEmailChangeErrorCodesRegistered",
+        "TestErrorCodeGuidanceMatchesManual",
+        "TestErrorCodeRegistryUnique",
+        "TestLookupErrorCode",
+        "TestRegisteredErrorCodesReturnsCopy",
+        "TestErrorCodeDocumentationMatches",
+        "TestNoOAuthProtocolCodesRegistered",
+        "TestAppErrorClassification",
+        "TestNewAppErrorUnknownCodeFallback",
+        "TestAppErrorMessageSanitization",
+        "TestRequestIDGenerationAndValidation",
+        "TestAppErrorCauseSeparation",
+        "TestAppErrorWrappingChain",
+        "TestFromError",
+        "TestAppErrorJSONFields",
+        "TestAppErrorSlogRedaction",
+        "TestWithInternalReasonCodeRestricted",
+        "TestNewlineInjectionDoesNotBreakLogLines",
+        "TestGroupErrorCodesRegistered",
+        "TestManagedAPIErrorCodesRegistered",
+        "TestManualRecoveryErrorCodesRegistered",
+        "TestMFAErrorCodesRegistered",
+        "TestOAuthFlowErrorCodesRegistered",
+        "TestOnboardingErrorCodesRegistered",
+        "TestPasskeyErrorCodesRegistered",
+        "TestPasswordResetErrorCodesRegistered",
+        "TestPermissionErrorCodesRegistered",
+        "TestPolicyErrorCodesRegistered",
+        "TestPresetErrorCodesRegistered",
+        "TestProfileErrorCodesRegistered",
+        "TestQRLoginErrorCodesRegistered",
+        "TestReauthErrorCodesRegistered",
+        "TestRecoveryErrorCodesRegistered",
+        "TestRegistrationErrorCodesRegistered",
+        "TestRoleErrorCodesRegistered",
+        "TestRootRecoveryErrorCodesRegistered",
+        "TestStatsErrorClassifierCoversRegisteredCodes",
+        "TestStatsClassifierSeparatesFlowStates",
+        "TestTokenErrorCodesRegistered",
+        "TestTokenAuthorizationErrorCodesRegistered",
+        "TestTOTPErrorCodesRegistered",
+        "TestAccountErrorCodesRegistered"
+      ],
+      "./httpapi": [
+        "TestIdentityContract",
+        "TestDefaultValuesContract",
+        "TestCookiePolicyContract",
+        "TestCSRFValidatorFunc"
       ],
       "./internal/account": [
         "TestCreateUserStoresWhitelistedFields",
@@ -7990,6 +10169,7 @@
         "TestVerifyPasswordRejectsMalformedHash",
         "TestPasswordPolicy",
         "TestResetPasswordForRecoveryRealPath",
+        "TestPrepareAndApplyRecoveryResetTx",
         "TestSetPasswordFailsClosedWithoutSensitiveRunner",
         "TestSetPasswordSensitivePolicyAndNotify",
         "TestAuthenticateSuccessAndUniformFailure",
@@ -8259,12 +10439,26 @@
         "TestMemberRemoveIdempotentAndPagination",
         "TestConcurrentDuplicateMembers",
         "TestDeleteGroupCascadesAssociationsNotUsers",
-        "TestValidationAndAuthorization"
+        "TestValidationAndAuthorization",
+        "TestGroupListSortWhitelistAndStableOrder",
+        "TestGroupMemberListSortAndPagination"
       ],
       "./internal/group/sqlite": [
         "TestNewValidation",
         "TestScopeAndGroupQueries",
         "TestMemberEligibilityQueries"
+      ],
+      "./internal/httpassemble": [
+        "TestNewHTTPHandlerEndpoints",
+        "TestNewHTTPHandlerConfigErrors",
+        "TestNormalizeProtectionMapping",
+        "TestIdentityAdapterMapping",
+        "TestContextRoundtrip"
+      ],
+      "./internal/httpsrv": [
+        "TestNewValidationMessages",
+        "TestNewValidAndReloadWithoutTLS",
+        "TestPublicTLSStatusProjection"
       ],
       "./internal/listener": [
         "TestNewValidation",
@@ -8418,6 +10612,10 @@
         "TestSessionInvalidSecretReturnsUnauthenticated",
         "TestSessionMissingFlagsUsage",
         "TestSessionUnprotectedFileRejected",
+        "TestAppScopedListCommandsPagination",
+        "TestStep220GroupListAll",
+        "TestStep220AppListAll",
+        "TestStep220IterationFlagValidation",
         "TestTaskListAndGet",
         "TestTaskWaitSucceeds",
         "TestTaskWaitLocalTimeout",
@@ -8510,6 +10708,8 @@
         "TestStrongAuthSetupRequiresControlledAuthorization",
         "TestStrongAuthInitializationClosure",
         "TestStrongSetupTOTPRebindClosure",
+        "TestStrongSetupConcurrentCompleteSingleWinner",
+        "TestStrongSetupCompleteRebindClearFailureFailClosed",
         "TestStrongSetupMethodPolicyFailClosed",
         "TestAvailableSecondFactorMethodsOnlyReturnsEnabled",
         "TestTOTPStrongAuthGatedByPolicy",
@@ -8519,15 +10719,6 @@
         "TestIPClassification",
         "TestValidateURL",
         "TestDialRejectsRepeatedResolution"
-      ],
-      "./internal/netpolicy": [
-        "TestParseListenAddressValid",
-        "TestParseListenAddressInvalid",
-        "TestParseRequestHostValid",
-        "TestParseRequestHostInvalid",
-        "TestHostSetMatching",
-        "TestLoopbackHostSet",
-        "TestHostSetWithHostAndDuplicates"
       ],
       "./internal/oauthclient": [
         "TestDeviceOnlyClientWithoutRedirectURI",
@@ -8647,6 +10838,24 @@
         "TestRevokeInvalidatesExistingSessions"
       ],
       "./internal/passwordreset": [
+        "TestResetRequestBindsSecurityGenerationAndEmail",
+        "TestLegacyUnboundResetRequestRejected",
+        "TestResetLinkInvalidAfterPasswordChange",
+        "TestResetLinkInvalidAfterEmailSwitch",
+        "TestResetLinkInvalidAfterDisableAndEnable",
+        "TestResetLinkInvalidAfterUserDeletion",
+        "TestBeginResetRaceChannelChangedFailsSafely",
+        "TestCompleteResetRaceBindingChangedRollsBack",
+        "TestSupportResetRaceTargetChangedFailsClosed",
+        "TestCompleteResetPreservesMFAFactors",
+        "TestCompleteResetWeakPasswordRetryKeepsToken",
+        "TestCompleteResetHistoryReuseRetryKeepsToken",
+        "TestCompleteResetHashWorkBusyKeepsToken",
+        "TestCompleteResetOutboxFailureRollsBack",
+        "TestCompleteResetOtherPendingRevokeFailureRollsBack",
+        "TestCompleteResetAuditFailureRollsBack",
+        "TestCompleteResetConcurrentSingleWinnerAndResponseLossRetry",
+        "TestCompleteResetConflictKeepsToken",
         "TestQueueResetRealMail",
         "TestQueueResetMailAndNotice",
         "TestQueueResetMailEnqueueFailure",
@@ -8679,7 +10888,8 @@
         "TestUpdateStateAndDeleteReferences",
         "TestConcurrentCreateAndDuplicateKey",
         "TestAuditFailureFailClosed",
-        "TestOptionsAuthorizationAndErrors"
+        "TestOptionsAuthorizationAndErrors",
+        "TestPermissionListSortWhitelistAndPagination"
       ],
       "./internal/permission/sqlite": [
         "TestNewValidation",
@@ -8764,14 +10974,6 @@
         "TestRouterRecoversPanicAfterWrite",
         "TestRouterUnmatchedPathCarriesRequestID"
       ],
-      "./internal/proxytrust": [
-        "TestParseTrusted",
-        "TestPeer",
-        "TestUntrustedPeerIgnoresForwardingHeaders",
-        "TestXForwardedChain",
-        "TestForwardedHeader",
-        "TestForwardedLimits"
-      ],
       "./internal/qrlogin": [
         "TestNewRequiresDependencies",
         "TestQRPayloadStrictParsing",
@@ -8798,6 +11000,12 @@
         "TestPeekDoesNotConsume"
       ],
       "./internal/reauth": [
+        "TestNotificationIntentWriteFailureBlocksEnqueueAndSuccessAudit",
+        "TestNotificationDeliveryLifecycleAndIdempotentRetry",
+        "TestNotificationDeliveryLinkWriteFailureRecoverable",
+        "TestNotificationDeliveryFailureAndCancelledNotSuccess",
+        "TestNotificationQueryScopeIsolation",
+        "TestNotificationRealMailFaultsProjection",
         "TestNotifyOutcomeQueueRealMail",
         "TestNotifyOutcomeQueue",
         "TestAuthorizeFreshStaleWeakAndConfirmed",
@@ -8812,6 +11020,10 @@
         "TestApprovalConcurrentConsumeSingleWinner",
         "TestBeginChallengeRejectsUnknownOperationFailClosed",
         "TestApprovalCrossBindingDirectionAndMemberSet"
+      ],
+      "./internal/reauth/sqlite": [
+        "TestUpsertNotificationIdempotentAndPreservesDelivery",
+        "TestUpsertNotificationConstraintFailureIsFailClosed"
       ],
       "./internal/recovery": [
         "TestGenerateCodesLifecycle",
@@ -8954,7 +11166,9 @@
         "TestRoleAuditFailClosedAndRootBoundaries",
         "TestRoleDisabledCleanupAndBuiltinAssignment",
         "TestRoleGroupWithRootCannotReceiveRole",
-        "TestRoleListPaginationAndFilters"
+        "TestRoleListPaginationAndFilters",
+        "TestRoleListSortWhitelistAndPagination",
+        "TestRoleAssignmentsPagedInDataSource"
       ],
       "./internal/role/sqlite": [
         "TestNewValidation",
@@ -9054,6 +11268,8 @@
         "TestOtherStrongFactorAdapters"
       ],
       "./internal/serverapp": [
+        "TestParseAdminListQueryDefaultsAndValid",
+        "TestParseAdminListQueryRejectsInvalid",
         "TestAdminSessionsPageIntegrationRealServices",
         "TestApplicationDeleteReauthFailClosed",
         "TestAppSupportCrossChainManualRecovery",
@@ -9138,7 +11354,10 @@
         "TestServeWithLocalTLS",
         "TestLazySessionScopeAuthorizerFailClosed",
         "TestStep209TOTPRebindAfterManualRecovery",
-        "TestStep209MFAResetFailClosedWithoutRebindMethod"
+        "TestStep209MFAResetFailClosedWithoutRebindMethod",
+        "TestAdminApplicationPathParam",
+        "TestParseAdminListQueryApplicationSortWhitelist",
+        "TestStep222AllowedStrongSetupMethodsProtectedTransition"
       ],
       "./internal/session": [
         "TestAdminListSessionsScopeAndAudit",
@@ -9161,6 +11380,8 @@
         "TestIssueLoginGrantSessionRejectsInvalidFields",
         "TestVerifyActiveSession",
         "TestIssuePageCSRFToken",
+        "TestListSessionsOffsetPagination",
+        "TestAdminListSessionsOffsetPaginationAndScope",
         "TestIssueRecoverySessionRequiresGate",
         "TestIssueRecoverySessionCreatesShortLivedRestrictedSession",
         "TestIssueRecoverySessionRejectsRootAndStaleVersion",
@@ -9521,6 +11742,7 @@
         "TestBoundaryInjectsVerifiedClientServiceIdentity",
         "TestBoundaryClientServiceIdentityRequiresPeerCertificate",
         "TestClientServiceIdentityContextIsolation",
+        "TestPublicDefaultsParity",
         "TestOpenAPIDocumentMatchesRegistry",
         "TestOpenAPIServedByHandler",
         "TestOpenAPIRejectsInvalidPrefix",
@@ -9581,6 +11803,8 @@
         "TestAuditAdapterErrorCatalogAuthorization",
         "TestAuditAdapterRelatedTaskSummary",
         "TestReportsAdapterRealServices",
+        "TestNotificationNoticeStateMapping",
+        "TestNotificationNoticeErrorCodeMapping",
         "TestStatsDashboardCountsMatchAuditDetails",
         "TestStatsErrorSortingShareAndGrowth",
         "TestStatsCrossAppVisibilityAndDenied",
@@ -9618,6 +11842,23 @@
         "TestDeliveryRequestTimeoutRetryAndControlledRetry",
         "TestDeliveryWallClockDeadlineNotCancelled",
         "TestDeliveryTrueCancelIsCancelled"
+      ],
+      "./netpolicy": [
+        "TestParseListenAddressValid",
+        "TestParseListenAddressInvalid",
+        "TestParseRequestHostValid",
+        "TestParseRequestHostInvalid",
+        "TestHostSetMatching",
+        "TestLoopbackHostSet",
+        "TestHostSetWithHostAndDuplicates"
+      ],
+      "./proxytrust": [
+        "TestParseTrusted",
+        "TestPeer",
+        "TestUntrustedPeerIgnoresForwardingHeaders",
+        "TestXForwardedChain",
+        "TestForwardedHeader",
+        "TestForwardedLimits"
       ]
     }
   }

@@ -48,6 +48,7 @@ type summary struct {
 type inventories struct {
 	AppTypes          map[string]*appSymbol `json:"app_types"`
 	AppFuncs          []string              `json:"app_funcs"`
+	AppVars           []string              `json:"app_vars"`
 	RootTypes         []string              `json:"root_types"`
 	RootFuncs         []string              `json:"root_funcs"`
 	AdminRoutes       []routeEntry          `json:"admin_routes"`
@@ -63,14 +64,15 @@ type inventories struct {
 
 // matrixReport 是 capability-matrix.json 的顶层结构。
 type matrixReport struct {
-	Schema       string             `json:"schema"`
-	Description  string             `json:"description"`
-	Metadata     metadata           `json:"metadata"`
-	Summary      summary            `json:"summary"`
-	Capabilities []capabilityResult `json:"capabilities"`
-	Coverage     coverageReport     `json:"coverage"`
-	Inventories  inventories        `json:"inventories"`
-	Warnings     []string           `json:"warnings,omitempty"`
+	Schema          string             `json:"schema"`
+	Description     string             `json:"description"`
+	Metadata        metadata           `json:"metadata"`
+	Summary         summary            `json:"summary"`
+	Capabilities    []capabilityResult `json:"capabilities"`
+	Coverage        coverageReport     `json:"coverage"`
+	PaginationAudit paginationAudit    `json:"pagination_audit"`
+	Inventories     inventories        `json:"inventories"`
+	Warnings        []string           `json:"warnings,omitempty"`
 }
 
 // buildSummary 汇总能力状态。
@@ -127,12 +129,14 @@ func buildReport(root, catalogPath string, catalog *catalogFile, inv *inventory,
 			},
 			FilesScanned: inv.FilesScanned,
 		},
-		Summary:      buildSummary(results),
-		Capabilities: results,
-		Coverage:     computeCoverage(catalog, inv),
+		Summary:         buildSummary(results),
+		Capabilities:    results,
+		Coverage:        computeCoverage(catalog, inv),
+		PaginationAudit: buildPaginationAudit(root, catalog, inv),
 		Inventories: inventories{
 			AppTypes:          inv.AppTypes,
 			AppFuncs:          inv.AppFuncs,
+			AppVars:           inv.AppVars,
 			RootTypes:         inv.RootTypes,
 			RootFuncs:         inv.RootFuncs,
 			AdminRoutes:       inv.AdminRoutes,
@@ -291,6 +295,55 @@ func writeMarkdown(path string, report matrixReport) error {
 	appendList("CLI 子命令", coverage.UnmappedCLI)
 	appendList("内置权限键", coverage.UnmappedPermissions)
 
+	builder.WriteString("## 分页审计\n\n")
+	builder.WriteString("自动盘点 app 公开可增长列表的请求/结果边界，并核对各入口分页参数。")
+	builder.WriteString("`offset`/`cursor` 能力必须有“请求边界 + 结果继续”成对证据；")
+	builder.WriteString("`fixed`/`none` 与 `continuation=gap` 例外必须写明理由。\n\n")
+	audit := report.PaginationAudit
+	builder.WriteString("### 跨入口分页参数\n\n")
+	builder.WriteString("| 入口 | 默认页大小 | 最大页大小 | offset 上限 | 备注 |\n|---|---|---|---|---|\n")
+	fmt.Fprintf(&builder, "| app 公开契约 | %d | %d | %d | 权威值 |\n",
+		audit.Contract.AppDefaultLimit, audit.Contract.AppMaxLimit, audit.Contract.AppMaxOffset)
+	fmt.Fprintf(&builder, "| internal/session | %d | %d | - | 领域列表 |\n",
+		audit.Contract.SessionDefaultLimit, audit.Contract.SessionMaxLimit)
+	fmt.Fprintf(&builder, "| internal/authz | %d | %d | - | 授权列表 |\n",
+		audit.Contract.AuthzDefaultLimit, audit.Contract.AuthzMaxLimit)
+	fmt.Fprintf(&builder, "| loginctl 列表 | %d | %d | %d | CLI 帮助/参数 |\n",
+		audit.Contract.CLIDefaultLimit, audit.Contract.CLIMaxLimit, audit.Contract.CLIOffsetCap)
+	fmt.Fprintf(&builder, "| 管理页面列表 | %d（固定） | - | %d | 页面固定每页，无 limit 参数 |\n\n",
+		audit.Contract.PageFixedLimit, audit.Contract.PageOffsetCap)
+	builder.WriteString("### 可增长列表盘点\n\n")
+	builder.WriteString("| 类型 | 类别 | 有界 | 能力 | 声明模式 | 继续字段 |\n|---|---|---|---|---|---|\n")
+	for _, list := range audit.GrowableLists {
+		bounded := "否"
+		if list.Bounded {
+			bounded = "是"
+		}
+		capability := list.Capability
+		if capability == "" {
+			capability = "-"
+		}
+		continuation := strings.Join(list.ContinuationFields, ",")
+		if continuation == "" {
+			continuation = "-"
+		}
+		fmt.Fprintf(&builder, "| `%s` | %s | %s | %s | %s | %s |\n",
+			list.Name, list.Kind, bounded, capability, list.ClaimMode, continuation)
+	}
+	builder.WriteString("\n")
+	appendPaginationList := func(title string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		fmt.Fprintf(&builder, "### %s\n\n", title)
+		for _, value := range values {
+			fmt.Fprintf(&builder, "- %s\n", value)
+		}
+		builder.WriteString("\n")
+	}
+	appendPaginationList("分页例外（fixed/none 或 continuation=gap，需理由）", audit.Exceptions)
+	appendPaginationList("未覆盖/无界可增长列表（-strict 失败）", audit.UncoveredLists)
+	appendPaginationList("跨入口分页参数不一致（-strict 失败）", audit.ContractMismatches)
 	builder.WriteString("## 扫描口径与限制\n\n")
 	builder.WriteString("- 扫描范围见 JSON `metadata.scan_scope`；跳过 `.ai/`、`docs/`、`scripts/`、")
 	builder.WriteString("`web/`、`migrations/`、`dist/`、`data/`，以及 `EvernightMail/`、`go-build-all/`、")
