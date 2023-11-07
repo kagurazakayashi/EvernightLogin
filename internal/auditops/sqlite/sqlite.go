@@ -759,6 +759,21 @@ func eventWhere(query auditops.EventQuery) (string, []any, error) {
 		clauses = append(clauses, "target_id=?")
 		args = append(args, filter.TargetID)
 	}
+	// keyset 游标：按稳定排序方向只取严格位于该位置之后的记录。位置由服务层在
+	// 校验游标与当前 scope/filter/order 匹配后写入；存储层不做授权判断。
+	if query.AfterID != "" {
+		addKeyset := func(comparison string) {
+			clauses = append(clauses, "(occurred_at_ms "+comparison+" ? OR "+
+				"(occurred_at_ms = ? AND id "+comparison+" ?))")
+			occurredMS := query.AfterOccurredAt.UTC().UnixMilli()
+			args = append(args, occurredMS, occurredMS, query.AfterID)
+		}
+		if query.Order == auditops.SortOldestFirst {
+			addKeyset(">")
+		} else {
+			addKeyset("<")
+		}
+	}
 	if len(clauses) == 0 {
 		return "", args, nil
 	}

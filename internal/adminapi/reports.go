@@ -268,9 +268,13 @@ func (s *Server) handleReportHistoryList(c *callContext) error {
 	if err != nil {
 		return err
 	}
+	cursor, err := queryString(c.request, "cursor", 4096)
+	if err != nil {
+		return err
+	}
 	result, err := s.reports.HistoryList(c.request.Context(), reports.HistoryListRequest{
 		Caller: c.caller, PlanID: planID, State: state, Limit: limit,
-		BeforeCreatedAt: beforeCreatedAt, BeforeID: beforeID})
+		BeforeCreatedAt: beforeCreatedAt, BeforeID: beforeID, Cursor: cursor})
 	if err != nil {
 		return s.reportProblem(err)
 	}
@@ -278,9 +282,13 @@ func (s *Server) handleReportHistoryList(c *callContext) error {
 	for _, record := range result.Records {
 		records = append(records, toReportHistoryDTO(record))
 	}
-	s.writeSuccess(c.writer, c.requestID, map[string]any{
+	payload := map[string]any{
 		"reports": records, "has_more": result.HasMore,
-		"scope_trimmed": result.ScopeTrimmed})
+		"scope_trimmed": result.ScopeTrimmed}
+	if result.NextCursor != "" {
+		payload["next_cursor"] = result.NextCursor
+	}
+	s.writeSuccess(c.writer, c.requestID, payload)
 	return nil
 }
 
@@ -502,17 +510,24 @@ func (s *Server) handleReportCleanupExecute(c *callContext) error {
 	return nil
 }
 
-// handlePlanList 处理 GET /report-plans：只读列表，每次重新授权。
+// handlePlanList 处理 GET /report-plans：只读分页列表，每次重新授权。
 func (s *Server) handlePlanList(c *callContext) error {
-	plans, err := s.plans.List(c.request.Context(), c.caller)
+	limit, offset, err := pageParams(c.request)
+	if err != nil {
+		return err
+	}
+	result, err := s.plans.ListPage(c.request.Context(), reports.PlanListRequest{
+		Caller: c.caller, Limit: limit, Offset: offset})
 	if err != nil {
 		return s.reportProblem(err)
 	}
-	items := make([]planDTO, 0, len(plans))
-	for _, plan := range plans {
+	items := make([]planDTO, 0, len(result.Plans))
+	for _, plan := range result.Plans {
 		items = append(items, toPlanDTO(plan))
 	}
-	s.writeSuccess(c.writer, c.requestID, map[string]any{"plans": items})
+	s.writeSuccess(c.writer, c.requestID, map[string]any{
+		"plans": items, "has_more": result.HasMore, "limit": result.Limit,
+		"offset": result.Offset, "next_offset": result.NextOffset})
 	return nil
 }
 

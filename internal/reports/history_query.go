@@ -40,6 +40,9 @@ type HistoryListRequest struct {
 	Limit           int
 	BeforeCreatedAt time.Time
 	BeforeID        string
+	// Cursor 是服务端上一页返回的不透明稳定游标；与 BeforeCreatedAt/BeforeID
+	// 互斥。游标绑定 plan_id/state 筛选，不匹配会被拒绝。
+	Cursor string
 }
 
 // ReportHistoryView 是历史报告公开视图（受控元数据 + 产物可用性，无宿主路径）。
@@ -76,6 +79,8 @@ type HistoryListView struct {
 	HasMore bool
 	// ScopeTrimmed 表示列表已按当前权限裁剪，不代表全系统总量。
 	ScopeTrimmed bool
+	// NextCursor 是下一页稳定游标；HasMore=false 时为空。
+	NextCursor string
 }
 
 // authorizeQuiet 执行一次不写拒绝审计的授权探测，用于“能力判断”（例如判断是否
@@ -127,6 +132,18 @@ func (s *Service) HistoryList(ctx context.Context,
 	beforeID := request.BeforeID
 	if beforeAt.IsZero() != (beforeID == "") {
 		return HistoryListView{}, fmt.Errorf("%w: 历史分页游标不完整", ErrInvalidRequest)
+	}
+	if request.Cursor != "" {
+		if !beforeAt.IsZero() || beforeID != "" {
+			return HistoryListView{}, fmt.Errorf("%w: 游标与旧分页参数不能同时使用",
+				ErrInvalidRequest)
+		}
+		cursorAt, cursorID, cursorErr := decodeHistoryCursor(request.Cursor,
+			request.PlanID, request.State)
+		if cursorErr != nil {
+			return HistoryListView{}, cursorErr
+		}
+		beforeAt, beforeID = cursorAt, cursorID
 	}
 	root := s.isRoot(ctx, request.Caller)
 	readerScopes := make([]string, 0, 8)
@@ -206,7 +223,16 @@ func (s *Service) HistoryList(ctx context.Context,
 		}
 		views = append(views, view)
 	}
-	return HistoryListView{Records: views, HasMore: hasMore, ScopeTrimmed: true}, nil
+	view := HistoryListView{Records: views, HasMore: hasMore, ScopeTrimmed: true}
+	if hasMore && len(records) > 0 {
+		nextCursor, cursorErr := encodeHistoryCursor(request.PlanID, request.State,
+			records[len(records)-1])
+		if cursorErr != nil {
+			return HistoryListView{}, cursorErr
+		}
+		view.NextCursor = nextCursor
+	}
+	return view, nil
 }
 
 // validHistoryState 校验历史状态白名单（与迁移 CHECK 一致）。

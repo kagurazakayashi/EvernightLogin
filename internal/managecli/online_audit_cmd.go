@@ -19,7 +19,8 @@ import (
 
 // auditCommandUsage 是 audit 组帮助。
 const auditCommandUsage = `用法：
-  loginctl audit events list [--scope-id system] [--limit 20] [--offset 0] [--order newest|oldest] \
+  loginctl audit events list [--scope-id system] [--limit 20] [--offset 0] \
+[--cursor <上一页返回的 next_cursor>] [--order newest|oldest] \
 [--from RFC3339] [--to RFC3339] [--app-id <id>] [--system-only] [--actor-type <t>] \
 [--actor-id <id>] [--action <a>] [--outcome success|failure|denied] [--error-code <c>] \
 [--request-id <id>] [--task-id <id>] [--target-type <t>] [--target-id <id>] <在线公共参数>
@@ -119,7 +120,7 @@ func auditEventListFlags() []flagDef {
 	defs := onlineFlagDefs(auditFilterFlags()...)
 	return append(defs, flagDef{name: "scope-id", value: true},
 		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
-		flagDef{name: "order", value: true})
+		flagDef{name: "order", value: true}, flagDef{name: "cursor", value: true})
 }
 
 // runAudit 分派 audit 子命令。
@@ -181,6 +182,14 @@ func (r *runner) runAuditEventsList(args []string) int {
 	query := queryValues()
 	if err := addPageQuery(values, query); err != nil {
 		return r.usage("%v", err)
+	}
+	cursor := strings.TrimSpace(values["cursor"])
+	if cursor != "" && strings.TrimSpace(values["offset"]) != "" {
+		return r.usage("--cursor 不能与 --offset 同时使用")
+	}
+	if cursor != "" {
+		query.Del("offset")
+		query.Set("cursor", cursor)
 	}
 	query.Set("scope_id", onlineScopeID(values))
 	if order != "" {

@@ -231,14 +231,16 @@ func (a *AuditAdapter) ListAudit(ctx context.Context, userID string,
 	}
 	result, err := a.opts.Audit.Query(ctx, auditops.QueryRequest{
 		Caller: caller, ScopeID: query.ScopeID, Filter: toAuditFilter(query.Filter),
-		Order: toAuditOrder(query.Order), Limit: query.Limit, Offset: query.Offset})
+		Order: toAuditOrder(query.Order), Limit: query.Limit, Offset: query.Offset,
+		Cursor: query.Cursor})
 	if err != nil {
 		return login.UIAuditPage{}, mapAuditError(err)
 	}
 	page := login.UIAuditPage{
 		Events:  make([]login.UIAuditEventView, 0, len(result.Events)),
 		HasMore: result.HasMore, Limit: result.Limit, Offset: result.Offset,
-		Order: string(result.Order), ScopeID: result.Scope.ID, ScopeKind: result.Scope.Kind,
+		NextCursor: result.NextCursor,
+		Order:      string(result.Order), ScopeID: result.Scope.ID, ScopeKind: result.Scope.Kind,
 		RetentionDays:       result.Retention.Days,
 		RetentionConfigured: result.Retention.Configured,
 		RetentionCutoff:     result.Retention.Cutoff,
@@ -336,14 +338,16 @@ func (a *AuditAdapter) QueryOwnActivity(ctx context.Context, userID string,
 	}
 	result, err := a.opts.Audit.QueryOwnActivity(ctx, auditops.OwnQueryRequest{
 		Caller: caller, Filter: toAuditFilter(query.Filter),
-		Order: toAuditOrder(query.Order), Limit: query.Limit, Offset: query.Offset})
+		Order: toAuditOrder(query.Order), Limit: query.Limit, Offset: query.Offset,
+		Cursor: query.Cursor})
 	if err != nil {
 		return login.UIAuditPage{}, mapAuditError(err)
 	}
 	page := login.UIAuditPage{
 		Events:  make([]login.UIAuditEventView, 0, len(result.Events)),
 		HasMore: result.HasMore, Limit: result.Limit, Offset: result.Offset,
-		Order: string(result.Order), ScopeID: result.Scope.ID, ScopeKind: result.Scope.Kind,
+		NextCursor: result.NextCursor,
+		Order:      string(result.Order), ScopeID: result.Scope.ID, ScopeKind: result.Scope.Kind,
 		RetentionDays:       result.Retention.Days,
 		RetentionConfigured: result.Retention.Configured,
 		RetentionCutoff:     result.Retention.Cutoff,

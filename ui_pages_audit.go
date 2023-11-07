@@ -84,13 +84,14 @@ func (f UIAuditFilter) Empty() bool {
 		f.TargetID == ""
 }
 
-// UIAuditQuery 是审计列表查询请求。
+// UIAuditQuery 是审计列表查询请求。Cursor 非空时使用稳定游标分页，Offset 必须为 0。
 type UIAuditQuery struct {
 	ScopeID string
 	Filter  UIAuditFilter
 	Order   string
 	Limit   int
 	Offset  int
+	Cursor  string
 }
 
 // UIAuditEventView 是列表与详情共用的审计事件稳定字段（无原始 detail_json）。
@@ -186,6 +187,8 @@ type UIAuditPage struct {
 	// DataScope 是服务端授权结果对应的可见数据范围摘要（真实事实；无法得知时为空，
 	// 页面显示“以服务端判定为准”，不推断跨应用记录）。
 	DataScope string
+	// NextCursor 是服务端返回的下一页稳定游标；HasMore=false 时为空。
+	NextCursor string
 }
 
 // UIErrorQuery 是错误码检索请求。

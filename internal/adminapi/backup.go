@@ -314,9 +314,14 @@ func (s *Server) handleBackupJobGet(c *callContext) error {
 	return nil
 }
 
-// handleBackupScheduleList 处理 GET /backups/schedules（只读；计划写入本轮未开放）。
+// handleBackupScheduleList 处理 GET /backups/schedules（只读，步骤 218 分页）。
 func (s *Server) handleBackupScheduleList(c *callContext) error {
-	views, err := s.backups.ListSchedules(c.request.Context(), c.caller)
+	limit, offset, err := pageParams(c.request)
+	if err != nil {
+		return err
+	}
+	views, hasMore, err := s.backups.ListSchedulesPage(c.request.Context(), c.caller,
+		limit, offset)
 	if err != nil {
 		return s.backupProblem(err)
 	}
@@ -324,7 +329,9 @@ func (s *Server) handleBackupScheduleList(c *callContext) error {
 	for _, view := range views {
 		items = append(items, toBackupScheduleDTO(view))
 	}
-	s.writeSuccess(c.writer, c.requestID, map[string]any{"schedules": items})
+	s.writeSuccess(c.writer, c.requestID, map[string]any{
+		"schedules": items, "has_more": hasMore, "limit": limit, "offset": offset,
+		"next_offset": offset + len(items)})
 	return nil
 }
 

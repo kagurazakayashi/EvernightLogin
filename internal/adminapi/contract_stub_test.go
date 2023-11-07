@@ -155,6 +155,29 @@ func (s *stubPlanService) List(ctx context.Context, caller account.Caller) ([]re
 	return s.list(ctx, caller)
 }
 
+// ListPage 默认从 List 结果切页，保持既有契约测试的替身行为。
+func (s *stubPlanService) ListPage(ctx context.Context,
+	request reports.PlanListRequest) (reports.PlanListResult, error) {
+	plans, err := s.List(ctx, request.Caller)
+	if err != nil {
+		return reports.PlanListResult{}, err
+	}
+	limit := request.Limit
+	if limit == 0 {
+		limit = 20
+	}
+	offset := request.Offset
+	if offset < 0 || offset > len(plans) {
+		offset = 0
+	}
+	end := offset + limit
+	if end > len(plans) {
+		end = len(plans)
+	}
+	return reports.PlanListResult{Plans: plans[offset:end], HasMore: end < len(plans),
+		Limit: limit, Offset: offset, NextOffset: end}, nil
+}
+
 func (s *stubPlanService) Get(ctx context.Context, caller account.Caller, id string) (reports.PlanView, error) {
 	if s.get == nil {
 		return reports.PlanView{}, unexpectedErr()
@@ -285,6 +308,29 @@ func (s *stubBackupService) ListSchedules(ctx context.Context, caller account.Ca
 	return s.listSchedules(ctx, caller)
 }
 
+// ListSchedulesPage 默认从 ListSchedules 结果切页，保持既有契约测试的替身行为。
+func (s *stubBackupService) ListSchedulesPage(ctx context.Context, caller account.Caller,
+	limit, offset int) ([]backupadmin.ScheduleView, bool, error) {
+	views, err := s.ListSchedules(ctx, caller)
+	if err != nil {
+		return nil, false, err
+	}
+	if limit == 0 {
+		limit = 20
+	}
+	if offset < 0 || offset >= len(views) {
+		return []backupadmin.ScheduleView{}, false, nil
+	}
+	end := offset + limit
+	hasMore := false
+	if end < len(views) {
+		hasMore = true
+	} else {
+		end = len(views)
+	}
+	return views[offset:end], hasMore, nil
+}
+
 func (s *stubBackupService) GetSchedule(ctx context.Context, caller account.Caller, id string) (backupadmin.ScheduleView, error) {
 	if s.getSchedule == nil {
 		return backupadmin.ScheduleView{}, unexpectedErr()
@@ -321,12 +367,15 @@ func (s *stubBackupService) DeleteSchedule(ctx context.Context, caller account.C
 	return s.deleteSchedule(ctx, caller, id, reason, requestID)
 }
 
-// stubTaskReader 是任务只读契约替身，同时实现 TaskAuthorizer（默认拒绝）。
+// stubTaskReader 是任务只读契约替身，同时实现 TaskAuthorizer（默认拒绝）与
+// 步骤 218 的 TaskLister/TaskListAuthorizer 可选契约。
 type stubTaskReader struct {
-	job       task.Job
-	attempts  []task.Attempt
-	err       error
-	authorize func(context.Context, account.Caller, task.Job) error
+	job           task.Job
+	attempts      []task.Attempt
+	err           error
+	authorize     func(context.Context, account.Caller, task.Job) error
+	listJobs      func(context.Context, task.ListJobsRequest) (task.JobListPage, error)
+	listAuthorize func(context.Context, account.Caller) (TaskListScope, error)
 }
 
 // AuthorizeTaskRead 默认拒绝，测试必须显式配置允许回调。
@@ -336,6 +385,27 @@ func (s *stubTaskReader) AuthorizeTaskRead(ctx context.Context, caller account.C
 		return errors.New("测试替身未配置任务授权")
 	}
 	return s.authorize(ctx, caller, job)
+}
+
+// ListJobs 是任务列表替身；未配置时返回单条任务页。
+func (s *stubTaskReader) ListJobs(ctx context.Context,
+	request task.ListJobsRequest) (task.JobListPage, error) {
+	if s.listJobs != nil {
+		return s.listJobs(ctx, request)
+	}
+	if s.err != nil {
+		return task.JobListPage{}, s.err
+	}
+	return task.JobListPage{Jobs: []task.Job{s.job}, Limit: request.Limit}, nil
+}
+
+// AuthorizeTaskList 是列表范围替身；默认允许全部（测试可覆盖为拒绝）。
+func (s *stubTaskReader) AuthorizeTaskList(ctx context.Context,
+	caller account.Caller) (TaskListScope, error) {
+	if s.listAuthorize != nil {
+		return s.listAuthorize(ctx, caller)
+	}
+	return TaskListScope{All: true}, nil
 }
 
 func (s *stubTaskReader) Get(context.Context, string) (task.Job, error) {

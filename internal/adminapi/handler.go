@@ -114,6 +114,11 @@ func (s *Server) buildRoutes() []route {
 	if s.tasks != nil && s.taskAuthorizer != nil {
 		add(http.MethodGet, "tasks/{task_id}", s.handleTaskGet)
 	}
+	// 任务列表同时要求分页查询与列表级可见范围判定；任一缺失不挂载，避免用
+	// “可管理会话”读取全量任务元数据。
+	if s.taskLister != nil && s.taskListAuth != nil {
+		add(http.MethodGet, "tasks", s.handleTaskList)
+	}
 	for _, domainRoute := range s.domainRoutes {
 		domainRoute := domainRoute
 		add(domainRoute.Method, domainRoute.Pattern, func(c *callContext) error {

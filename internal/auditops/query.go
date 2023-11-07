@@ -71,6 +71,9 @@ type QueryRequest struct {
 	Order   SortOrder
 	Limit   int
 	Offset  int
+	// Cursor 是服务端上一页返回的不透明稳定游标；非空时 Offset 必须为 0。
+	// 游标绑定作用范围、筛选与排序，不匹配会被拒绝（REQ_INVALID）。
+	Cursor string
 }
 
 // QueryResult 是审计列表结果。HasMore 由多取一条判定；不提供伪造的总条数。
@@ -82,6 +85,8 @@ type QueryResult struct {
 	Order     SortOrder
 	Scope     ScopeInfo
 	Retention RetentionInfo
+	// NextCursor 是下一页稳定游标；HasMore=false 时为空。
+	NextCursor string
 }
 
 // OwnQueryRequest 是“我的安全活动”查询；操作者固定为调用者本人，不接受他人筛选。
@@ -91,6 +96,7 @@ type OwnQueryRequest struct {
 	Order  SortOrder
 	Limit  int
 	Offset int
+	Cursor string
 }
 
 // GetRequest 是审计详情查询。OccurredAtHint 可选：调用方从列表带来发生时，服务可
@@ -166,8 +172,8 @@ func (s *Service) QueryOwnActivity(ctx context.Context, request OwnQueryRequest)
 	filter.ActorType = audit.ActorUser
 	filter.ActorID = actor.ID
 	return s.query(ctx, filter, SortNewestFirst, request.Order, request.Limit,
-		request.Offset, queryScope{kind: "system", scopeID: ScopeSystem, allData: true,
-			includeSystem: true}, ScopeInfo{ID: ScopeSystem, Kind: "system"})
+		request.Offset, request.Cursor, queryScope{kind: "system", scopeID: ScopeSystem,
+			allData: true, includeSystem: true}, ScopeInfo{ID: ScopeSystem, Kind: "system"})
 }
 
 // Query 查询管理审计列表。调用者必须在 scopeID 作用范围内拥有 audit.read，且数据
@@ -186,12 +192,14 @@ func (s *Service) Query(ctx context.Context, request QueryRequest) (QueryResult,
 		return QueryResult{}, err
 	}
 	return s.query(ctx, request.Filter, SortNewestFirst, request.Order, request.Limit,
-		request.Offset, constraint, scope)
+		request.Offset, request.Cursor, constraint, scope)
 }
 
-// query 校验筛选/分页并从存储层读取一页。
+// query 校验筛选/分页并从存储层读取一页。cursor 非空时使用 keyset 位置分页，
+// offset 必须为 0；游标绑定 scope/filter/order，不匹配直接 REQ_INVALID。
 func (s *Service) query(ctx context.Context, filter Filter, defaultOrder, order SortOrder,
-	limit, offset int, constraint queryScope, scope ScopeInfo) (QueryResult, error) {
+	limit, offset int, cursor string, constraint queryScope,
+	scope ScopeInfo) (QueryResult, error) {
 	normalizedOrder, err := normalizeOrder(order, defaultOrder)
 	if err != nil {
 		return QueryResult{}, err
@@ -200,7 +208,14 @@ func (s *Service) query(ctx context.Context, filter Filter, defaultOrder, order 
 	if err != nil {
 		return QueryResult{}, err
 	}
+	if cursor != "" && offset != 0 {
+		return QueryResult{}, fmt.Errorf("%w: 游标分页不能同时指定偏移", ErrInvalidRequest)
+	}
 	if err := s.validateFilter(filter, constraint); err != nil {
+		return QueryResult{}, err
+	}
+	position, err := decodeCursor(cursor, scope, filter, normalizedOrder)
+	if err != nil {
 		return QueryResult{}, err
 	}
 	retention, err := s.retentionInfo(ctx)
@@ -211,6 +226,7 @@ func (s *Service) query(ctx context.Context, filter Filter, defaultOrder, order 
 		Filter: filter, AllData: constraint.allData, AppIDs: constraint.appIDs,
 		IncludeSystem: constraint.includeSystem, Order: normalizedOrder,
 		Limit: limit, Offset: offset,
+		AfterOccurredAt: position.OccurredAt, AfterID: position.EventID,
 	})
 	if err != nil {
 		return QueryResult{}, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
@@ -219,9 +235,20 @@ func (s *Service) query(ctx context.Context, filter Filter, defaultOrder, order 
 	if events == nil {
 		events = []audit.Event{}
 	}
-	return QueryResult{Events: events, HasMore: page.HasMore, Limit: limit,
-		Offset: offset, Order: normalizedOrder, Scope: scope,
-		Retention: retention}, nil
+	result := QueryResult{Events: events, HasMore: page.HasMore, Limit: limit,
+		Offset: offset, Order: normalizedOrder, Scope: scope, Retention: retention}
+	if page.HasMore && len(events) > 0 {
+		last := events[len(events)-1]
+		nextCursor, cursorErr := encodeCursor(scope, filter, normalizedOrder,
+			CursorPosition{OccurredAt: last.OccurredAt, EventID: last.ID})
+		if cursorErr != nil {
+			// 游标编码失败不能静默返回“无下一页”：按内部错误 fail-closed，避免
+			// 调用方把部分结果当成完整结果。
+			return QueryResult{}, fmt.Errorf("%w: 生成下一页游标失败", ErrStoreUnavailable)
+		}
+		result.NextCursor = nextCursor
+	}
+	return result, nil
 }
 
 // GetOwnEvent 读取调用者本人的单条安全活动；读取他人事件统一按不存在处理，

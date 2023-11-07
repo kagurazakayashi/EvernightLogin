@@ -328,9 +328,13 @@ func (s *Server) handleAuditEventList(c *callContext) error {
 	if filter.To, err = queryTime(c.request, "to"); err != nil {
 		return err
 	}
+	cursor, err := queryString(c.request, "cursor", 4096)
+	if err != nil {
+		return err
+	}
 	result, err := s.audit.Query(c.request.Context(), auditops.QueryRequest{
 		Caller: c.caller, ScopeID: scopeID, Filter: filter, Order: order,
-		Limit: limit, Offset: offset})
+		Limit: limit, Offset: offset, Cursor: cursor})
 	if err != nil {
 		return s.auditProblem(err)
 	}
@@ -338,12 +342,16 @@ func (s *Server) handleAuditEventList(c *callContext) error {
 	for _, event := range result.Events {
 		events = append(events, toAuditEventDTO(event, false))
 	}
-	s.writeSuccess(c.writer, c.requestID, map[string]any{
+	payload := map[string]any{
 		"events": events, "has_more": result.HasMore,
 		"limit": result.Limit, "offset": result.Offset,
 		"order": string(result.Order), "scope": toScopeDTO(result.Scope),
 		"retention": toRetentionDTO(result.Retention),
-	})
+	}
+	if result.NextCursor != "" {
+		payload["next_cursor"] = result.NextCursor
+	}
+	s.writeSuccess(c.writer, c.requestID, payload)
 	return nil
 }
 

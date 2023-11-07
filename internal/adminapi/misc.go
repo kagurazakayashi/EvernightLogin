@@ -165,5 +165,95 @@ func (s *Server) handleTaskGet(c *callContext) error {
 	return nil
 }
 
+// taskListDTO 是任务列表条目：与详情共用可公开字段，但不含 payload。
+type taskListDTO struct {
+	ID            string    `json:"id"`
+	Kind          string    `json:"kind"`
+	State         string    `json:"state"`
+	Initiator     actorDTO  `json:"initiator"`
+	ExecutorID    string    `json:"executor_id,omitempty"`
+	Attempt       int       `json:"attempt"`
+	MaxAttempts   int       `json:"max_attempts"`
+	ErrorCode     string    `json:"error_code,omitempty"`
+	FailureReason string    `json:"failure_reason,omitempty"`
+	RequestID     string    `json:"request_id,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	StartedAt     time.Time `json:"started_at,omitempty"`
+	FinishedAt    time.Time `json:"finished_at,omitempty"`
+}
+
+// handleTaskList 处理 GET /tasks：分页列出任务（步骤 218）。列表级授权由
+// TaskListAuthorizer 返回可见范围：普通用户只能看本人发起的任务，受信主体可看
+// 全部；范围直接作为查询约束传入领域服务，不先取全量再过滤。响应不含 payload。
+func (s *Server) handleTaskList(c *callContext) error {
+	limit, offset, err := pageParams(c.request)
+	if err != nil {
+		return err
+	}
+	if offset != 0 {
+		return fmt.Errorf("%w: 任务列表使用稳定游标，不接受非零 offset", ErrInvalidRequest)
+	}
+	cursor, err := queryString(c.request, "cursor", 4096)
+	if err != nil {
+		return err
+	}
+	kind, err := queryString(c.request, "kind", 64)
+	if err != nil {
+		return err
+	}
+	state, err := queryString(c.request, "state", 32)
+	if err != nil {
+		return err
+	}
+	requestID, err := queryString(c.request, "request_id", 128)
+	if err != nil {
+		return err
+	}
+	from, err := queryTime(c.request, "from")
+	if err != nil {
+		return err
+	}
+	to, err := queryTime(c.request, "to")
+	if err != nil {
+		return err
+	}
+	scope, authErr := s.taskListAuth.AuthorizeTaskList(c.request.Context(), c.caller)
+	if authErr != nil {
+		return fmt.Errorf("%w: %w", ErrAccessDenied, authErr)
+	}
+	request := task.ListJobsRequest{
+		State: task.State(state), Kind: kind, RequestID: requestID,
+		From: from, To: to, Limit: limit, Cursor: cursor,
+	}
+	if !scope.All {
+		request.InitiatorType = scope.InitiatorType
+		request.InitiatorID = scope.InitiatorID
+	}
+	page, listErr := s.taskLister.ListJobs(c.request.Context(), request)
+	if listErr != nil {
+		if errors.Is(listErr, task.ErrInvalidRequest) {
+			return fmt.Errorf("%w: 任务列表参数无效", ErrInvalidRequest)
+		}
+		return s.codeProblem(string(codeInternalError), listErr)
+	}
+	items := make([]taskListDTO, 0, len(page.Jobs))
+	for _, job := range page.Jobs {
+		items = append(items, taskListDTO{
+			ID: job.ID, Kind: job.Kind, State: string(job.State),
+			Initiator: toActorDTO(job.Initiator), ExecutorID: job.ExecutorID,
+			Attempt: job.Attempt, MaxAttempts: job.MaxAttempts,
+			ErrorCode: job.ErrorCode, FailureReason: job.FailureReason,
+			RequestID: job.RequestID, CreatedAt: job.CreatedAt,
+			StartedAt: job.StartedAt, FinishedAt: job.FinishedAt,
+		})
+	}
+	payload := map[string]any{"tasks": items, "has_more": page.HasMore, "limit": page.Limit}
+	if page.NextCursor != "" {
+		payload["next_cursor"] = page.NextCursor
+	}
+	s.writeSuccess(c.writer, c.requestID, payload)
+	return nil
+}
+
 // 编译期确认 task.Job 状态字段被使用（避免未来重构时误删导入）。
 var _ = task.Job{}

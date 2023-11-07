@@ -21,9 +21,14 @@ type EventQuery struct {
 	IncludeSystem bool
 	// Order 是稳定排序：时间 + 事件 ID 并列决胜。
 	Order SortOrder
-	// Limit 是单页条数；Offset 是偏移（稳定排序下的受控深分页）。
+	// Limit 是单页条数；Offset 是偏移（稳定排序下的受控深分页）。Cursor 非空时
+	// 由服务层把位置写入 AfterOccurredAt/AfterID，Offset 必须为 0（keyset 分页）。
 	Limit  int
 	Offset int
+	// AfterOccurredAt/AfterID 是 keyset 游标位置：只返回严格位于该位置之后
+	// （按 Order 方向）的记录；空 EventID 表示未使用游标。
+	AfterOccurredAt time.Time
+	AfterID         string
 }
 
 // EventPage 是存储层查询结果；HasMore 通过多取一条判定，不伪造总数。

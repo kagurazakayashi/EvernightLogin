@@ -725,6 +725,57 @@ func (p *PlanService) List(ctx context.Context, caller account.Caller) ([]PlanVi
 	return views, nil
 }
 
+// PlanListRequest 是报告计划列表分页请求（步骤 218）。Limit=0 使用默认 20，
+// 最大 100；Offset 上限 1_000_000。可见性由服务端逐计划重新授权后过滤。
+type PlanListRequest struct {
+	Caller account.Caller
+	Limit  int
+	Offset int
+}
+
+// PlanListResult 是报告计划分页结果；不返回伪造总数。
+type PlanListResult struct {
+	Plans      []PlanView
+	HasMore    bool
+	Limit      int
+	Offset     int
+	NextOffset int
+}
+
+// ListPage 分页列出当前调用者可见的报告计划。计划投影来自调度事实，服务层先按
+// 当前授权过滤再切页；调用方不能用 offset 越过不可见计划（不可见计划不占结果位）。
+func (p *PlanService) ListPage(ctx context.Context,
+	request PlanListRequest) (PlanListResult, error) {
+	limit := request.Limit
+	if limit == 0 {
+		limit = 20
+	}
+	if limit < 1 || limit > 100 {
+		return PlanListResult{}, fmt.Errorf("%w: 每页条数必须在 1～100 之间",
+			ErrInvalidRequest)
+	}
+	if request.Offset < 0 || request.Offset > 1_000_000 {
+		return PlanListResult{}, fmt.Errorf("%w: 分页偏移超出范围", ErrInvalidRequest)
+	}
+	all, err := p.List(ctx, request.Caller)
+	if err != nil {
+		return PlanListResult{}, err
+	}
+	result := PlanListResult{Limit: limit, Offset: request.Offset,
+		NextOffset: request.Offset}
+	if request.Offset >= len(all) {
+		return result, nil
+	}
+	end := request.Offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	result.Plans = all[request.Offset:end]
+	result.HasMore = end < len(all)
+	result.NextOffset = end
+	return result, nil
+}
+
 // Get 查询单个报告计划；不可见或不存在都返回 ErrNotFound，避免用错误差异泄露
 // 计划是否存在。
 func (p *PlanService) Get(ctx context.Context, caller account.Caller,

@@ -22,7 +22,7 @@ const backupsCommandUsage = `用法：
   loginctl backups artifacts detail <backup_id> <在线公共参数>
   loginctl backups artifacts download-token <backup_id> --confirm ISSUE-DOWNLOAD \
 [--out <path|->] [--overwrite] <在线公共参数>
-  loginctl backups schedules list <在线公共参数>
+  loginctl backups schedules list [--limit N] [--offset N] <在线公共参数>
   loginctl backups schedules get <schedule_id> <在线公共参数>
   loginctl backups schedules create --name <名称> --schedule-type daily|weekly|... \
 --expression <表达式> --time-zone <IANA> --missed-policy skip|run_once|... --confirm CREATE \
@@ -190,7 +190,8 @@ func (r *runner) runBackupSchedules(args []string) int {
 	subcommand, rest := args[0], args[1:]
 	switch subcommand {
 	case "list":
-		values, positional, err := parseFlags(rest, onlineFlagDefs())
+		values, positional, err := parseFlags(rest, onlineFlagDefs(
+			flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true}))
 		if err != nil {
 			return r.flagError(err)
 		}
@@ -198,8 +199,12 @@ func (r *runner) runBackupSchedules(args []string) int {
 		if len(positional) != 0 {
 			return r.usage("backups schedules list 不接受位置参数")
 		}
+		query := queryValues()
+		if err := addPageQuery(values, query); err != nil {
+			return r.usage("%v", err)
+		}
 		return r.withOnline(values, func(target *onlineTarget) int {
-			reply, failure := target.doJSON(r.ctx, "GET", "/backups/schedules", nil, nil)
+			reply, failure := target.doJSON(r.ctx, "GET", "/backups/schedules", query, nil)
 			if failure != nil {
 				return r.onlineFailure("列出备份计划", failure)
 			}

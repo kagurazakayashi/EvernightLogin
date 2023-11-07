@@ -154,6 +154,7 @@ type ReportService interface {
 // 行版本冲突由 PlanService 判定；强认证由本包注入的 Sensitive 另行要求。
 type ReportPlanService interface {
 	List(ctx context.Context, caller account.Caller) ([]reports.PlanView, error)
+	ListPage(ctx context.Context, request reports.PlanListRequest) (reports.PlanListResult, error)
 	Get(ctx context.Context, caller account.Caller, planID string) (reports.PlanView, error)
 	Create(ctx context.Context, request reports.PlanCreateRequest) (reports.PlanView, error)
 	Update(ctx context.Context, request reports.PlanUpdateRequest) (reports.PlanView, error)
@@ -181,6 +182,8 @@ type BackupService interface {
 	CleanupPreview(ctx context.Context, caller account.Caller) (backupadmin.CleanupPreview, error)
 	EnqueueCleanup(ctx context.Context, caller account.Caller, requestID string) (backupadmin.JobRef, error)
 	ListSchedules(ctx context.Context, caller account.Caller) ([]backupadmin.ScheduleView, error)
+	ListSchedulesPage(ctx context.Context, caller account.Caller,
+		limit, offset int) ([]backupadmin.ScheduleView, bool, error)
 	GetSchedule(ctx context.Context, caller account.Caller, scheduleID string) (backupadmin.ScheduleView, error)
 	CreateSchedule(ctx context.Context, request backupadmin.ScheduleRequest) (backupadmin.ScheduleView, error)
 	UpdateSchedule(ctx context.Context, scheduleID string, request backupadmin.ScheduleRequest) (backupadmin.ScheduleView, error)
@@ -258,6 +261,26 @@ type TaskAuthorizer interface {
 	AuthorizeTaskRead(ctx context.Context, caller account.Caller, job task.Job) error
 }
 
+// TaskListScope 是任务列表的可见范围：All=true 表示受信主体可看全部；否则只
+// 返回指定发起者（普通用户本人）的任务。列表必须在查询层应用该约束，不能先取
+// 全量再过滤，否则 HasMore/计数会泄露无权记录。
+type TaskListScope struct {
+	All           bool
+	InitiatorType audit.ActorKind
+	InitiatorID   string
+}
+
+// TaskLister 是任务列表分页契约；生产实现是 *task.Executor。
+type TaskLister interface {
+	ListJobs(ctx context.Context, request task.ListJobsRequest) (task.JobListPage, error)
+}
+
+// TaskListAuthorizer 判定当前管理会话能否读取任务列表并返回可见范围；与
+// TaskAuthorizer（单任务详情）分开，列表授权失败统一 403，不泄露任务是否存在。
+type TaskListAuthorizer interface {
+	AuthorizeTaskList(ctx context.Context, caller account.Caller) (TaskListScope, error)
+}
+
 // Options 是管理 API 的显式依赖。所有资源由宿主拥有；本包不启动协程、不监听
 // 端口、不写数据库（业务写入全部经领域服务）。
 type Options struct {
@@ -279,6 +302,10 @@ type Options struct {
 	Backups BackupService
 	// Tasks 为空时任务只读路由不挂载。
 	Tasks TaskReader
+	// TaskLister/TaskListAuthorizer 提供任务列表分页与列表级可见范围；任一为空时
+	// 列表路由不挂载（fail-closed）。
+	TaskLister         TaskLister
+	TaskListAuthorizer TaskListAuthorizer
 	// TaskAuthorizer 是任务详情权限/数据范围判定；为空时任务路由不挂载
 	// （fail-closed，绝不以"管理会话"代替任务读取授权）。
 	TaskAuthorizer TaskAuthorizer
@@ -321,6 +348,8 @@ type Server struct {
 	backups        BackupService
 	tasks          TaskReader
 	taskAuthorizer TaskAuthorizer
+	taskLister     TaskLister
+	taskListAuth   TaskListAuthorizer
 	sensitive      reauth.OperationRunner
 	auditRecorder  AuditRecorder
 	notifications  NotificationService
@@ -410,6 +439,8 @@ func New(options Options) (*Server, error) {
 		backups:        options.Backups,
 		tasks:          options.Tasks,
 		taskAuthorizer: options.TaskAuthorizer,
+		taskLister:     options.TaskLister,
+		taskListAuth:   options.TaskListAuthorizer,
 		sensitive:      options.Sensitive,
 		auditRecorder:  options.AuditRecorder,
 		notifications:  options.Notifications,

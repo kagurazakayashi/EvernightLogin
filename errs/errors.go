@@ -11,11 +11,14 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/correlation"
 )
 
 const (
-	// MaxCorrelationIDLength 是 request_id 与 task_id 允许的最大长度（ASCII 字符）。
-	MaxCorrelationIDLength = 64
+	// MaxCorrelationIDLength 是 request_id 与 task_id 允许的最大长度（ASCII 字符）；
+	// 规则单一实现位于公共叶子包 correlation。
+	MaxCorrelationIDLength = correlation.MaxCorrelationIDLength
 	// MaxPublicMessageLength 是公开错误消息允许的最大字符数（按 Unicode 字符计）。
 	MaxPublicMessageLength = 200
 	// requestIDPrefix 是本项目生成请求编号的固定前缀。
@@ -60,24 +63,8 @@ func ValidateCorrelationID(label, id string) error {
 }
 
 func validateCorrelationID(label, id string) error {
-	if id == "" {
-		return fmt.Errorf("%s不能为空", label)
-	}
-	if len(id) > MaxCorrelationIDLength {
-		return fmt.Errorf("%s长度不能超过 %d 个字符", label, MaxCorrelationIDLength)
-	}
-	if !isASCIIAlnum(id[0]) {
-		return fmt.Errorf("%s必须以 ASCII 字母或数字开头", label)
-	}
-	for index := 0; index < len(id); index++ {
-		character := id[index]
-		if !isASCIIAlnum(character) && character != '.' && character != '_' && character != '-' {
-			return fmt.Errorf("%s只能包含 ASCII 字母、数字、点、下划线和连字符", label)
-		}
-	}
-	return nil
+	return correlation.Validate(label, id)
 }
-
 func isASCIIAlnum(character byte) bool {
 	return (character >= 'a' && character <= 'z') ||
 		(character >= 'A' && character <= 'Z') ||

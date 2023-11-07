@@ -616,18 +616,36 @@ type ScheduleView struct {
 	PermissionState string
 }
 
-// ListSchedules 列出计划（要求 backups.read）。
+// ListSchedules 列出计划（要求 backups.read）。保持旧调用兼容；分页入口见
+// ListSchedulesPage（步骤 218）。
 func (s *Service) ListSchedules(ctx context.Context, caller account.Caller) ([]ScheduleView, error) {
+	views, _, err := s.ListSchedulesPage(ctx, caller, defaultListLimit, 0)
+	return views, err
+}
+
+// ListSchedulesPage 按创建时间倒序分页列出计划（步骤 218）。计划来自任务调度器
+// 的受控投影，先按当前授权读取可见计划再切页；HasMore 由多取一条判定。
+func (s *Service) ListSchedulesPage(ctx context.Context, caller account.Caller,
+	limit, offset int) ([]ScheduleView, bool, error) {
 	if err := s.authorize(ctx, caller, PermissionRead); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if limit == 0 {
+		limit = defaultListLimit
+	}
+	if limit < 1 || limit > maxListLimit {
+		return nil, false, fmt.Errorf("%w: 每页条数必须在 1～100 之间", ErrInvalidRequest)
+	}
+	if offset < 0 || offset > 1_000_000 {
+		return nil, false, fmt.Errorf("%w: 分页偏移超出范围", ErrInvalidRequest)
 	}
 	schedules, err := s.opts.Scheduler.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+		return nil, false, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 	metas, err := s.opts.Store.ListScheduleMeta(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	byID := make(map[string]ScheduleMeta, len(metas))
 	for _, meta := range metas {
@@ -638,7 +656,17 @@ func (s *Service) ListSchedules(ctx context.Context, caller account.Caller) ([]S
 		views = append(views, s.scheduleView(schedule, byID[schedule.ID]))
 	}
 	sort.SliceStable(views, func(i, j int) bool { return views[i].CreatedAt.After(views[j].CreatedAt) })
-	return views, nil
+	if offset >= len(views) {
+		return []ScheduleView{}, false, nil
+	}
+	end := offset + limit
+	hasMore := false
+	if end < len(views) {
+		hasMore = true
+	} else {
+		end = len(views)
+	}
+	return views[offset:end], hasMore, nil
 }
 
 // GetSchedule 读取单个计划（要求 backups.read）。

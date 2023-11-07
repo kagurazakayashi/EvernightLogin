@@ -183,6 +183,26 @@ func (a *ReportsAdapter) ListPlans(ctx context.Context,
 	return plans, nil
 }
 
+// ListPlansPage 实现 login.UIReportPlanPagedBackend（步骤 218）。
+func (a *ReportsAdapter) ListPlansPage(ctx context.Context, userID string, limit,
+	offset int) (login.UIReportPlanPage, error) {
+	caller, err := reportsCaller(userID)
+	if err != nil {
+		return login.UIReportPlanPage{}, err
+	}
+	result, err := a.opts.Plans.ListPage(ctx, reports.PlanListRequest{
+		Caller: caller, Limit: limit, Offset: offset})
+	if err != nil {
+		return login.UIReportPlanPage{}, mapReportsError(err)
+	}
+	plans := make([]login.UIReportPlan, 0, len(result.Plans))
+	for _, view := range result.Plans {
+		plans = append(plans, planView(view))
+	}
+	return login.UIReportPlanPage{Plans: plans, HasMore: result.HasMore,
+		NextOffset: result.NextOffset}, nil
+}
+
 // GetPlan 实现 login.UIPageReportsBackend。
 func (a *ReportsAdapter) GetPlan(ctx context.Context, userID,
 	planID string) (login.UIReportPlan, error) {
@@ -337,6 +357,7 @@ func (a *ReportsAdapter) ListHistory(ctx context.Context, userID string,
 		Caller: caller, PlanID: strings.TrimSpace(query.PlanID),
 		State: strings.TrimSpace(query.State), Limit: query.Limit,
 		BeforeCreatedAt: query.BeforeCreatedAt, BeforeID: query.BeforeID,
+		Cursor: strings.TrimSpace(query.Cursor),
 	})
 	if err != nil {
 		return login.UIReportHistoryPage{}, mapReportsError(err)
@@ -345,7 +366,8 @@ func (a *ReportsAdapter) ListHistory(ctx context.Context, userID string,
 	for _, record := range page.Records {
 		records = append(records, historyEntry(record))
 	}
-	return login.UIReportHistoryPage{Records: records, HasMore: page.HasMore}, nil
+	return login.UIReportHistoryPage{Records: records, HasMore: page.HasMore,
+		NextCursor: page.NextCursor}, nil
 }
 
 // historyEntry 把历史领域视图映射为页面条目。

@@ -80,6 +80,51 @@ func (f *fakeStore) RequestCancel(context.Context, CancelCommand) (CancelResult,
 	return CancelResult{}, nil
 }
 
+// ListJobs 实现 Store：测试替身只返回已保存任务的稳定排序页。
+func (f *fakeStore) ListJobs(_ context.Context, query JobPageQuery) (JobPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	jobs := make([]Job, 0, len(f.jobs))
+	for _, job := range f.jobs {
+		if query.State != "" && job.State != query.State {
+			continue
+		}
+		if query.Kind != "" && job.Kind != query.Kind {
+			continue
+		}
+		if query.RequestID != "" && job.RequestID != query.RequestID {
+			continue
+		}
+		if query.InitiatorType != "" && job.Initiator.Type != query.InitiatorType {
+			continue
+		}
+		if query.InitiatorID != "" && job.Initiator.ID != query.InitiatorID {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	// 与生产排序一致：创建时间倒序 + 编号倒序。
+	for left := 0; left < len(jobs); left++ {
+		for right := left + 1; right < len(jobs); right++ {
+			if jobs[right].CreatedAt.After(jobs[left].CreatedAt) ||
+				(jobs[right].CreatedAt.Equal(jobs[left].CreatedAt) && jobs[right].ID > jobs[left].ID) {
+				jobs[left], jobs[right] = jobs[right], jobs[left]
+			}
+		}
+	}
+	limit := query.Limit
+	if limit < 1 || limit > ListMaxLimit {
+		limit = ListDefaultLimit
+	}
+	page := JobPage{}
+	if len(jobs) > limit {
+		page.HasMore = true
+		jobs = jobs[:limit]
+	}
+	page.Jobs = jobs
+	return page, nil
+}
+
 // RecoverInterrupted 实现 Store。
 func (f *fakeStore) RecoverInterrupted(context.Context, string, time.Time) (int, error) {
 	return f.recovered, f.recoverErr

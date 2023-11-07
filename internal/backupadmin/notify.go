@@ -180,7 +180,8 @@ func (s *Service) newNotificationID() (string, error) {
 	return "ntf_" + hex.EncodeToString(buffer), nil
 }
 
-// ListNotifications 返回任务/产物的通知投递记录（要求 backups.read）。
+// ListNotifications 返回任务/产物的通知投递记录（要求 backups.read；全量兼容入口，
+// 页面/HTTP 应优先使用分页的 ListNotificationsPage）。
 func (s *Service) ListNotifications(ctx context.Context, caller account.Caller,
 	jobID, backupID string) ([]Notification, error) {
 	if err := s.authorize(ctx, caller, PermissionRead); err != nil {
@@ -194,4 +195,40 @@ func (s *Service) ListNotifications(ctx context.Context, caller account.Caller,
 		records[index].RecipientMasked = saturatingText(records[index].RecipientMasked, 64)
 	}
 	return records, nil
+}
+
+// ListNotificationsPage 分页返回任务/产物的通知投递记录（步骤 218）；旧
+// ListNotifications 保留全量兼容。记录按存储层最新在前返回，服务层再按 offset 切页。
+func (s *Service) ListNotificationsPage(ctx context.Context, caller account.Caller,
+	jobID, backupID string, limit, offset int) ([]Notification, bool, error) {
+	if err := s.authorize(ctx, caller, PermissionRead); err != nil {
+		return nil, false, err
+	}
+	if limit == 0 {
+		limit = defaultListLimit
+	}
+	if limit < 1 || limit > maxListLimit {
+		return nil, false, fmt.Errorf("%w: 每页条数必须在 1～100 之间", ErrInvalidRequest)
+	}
+	if offset < 0 || offset > 1_000_000 {
+		return nil, false, fmt.Errorf("%w: 分页偏移超出范围", ErrInvalidRequest)
+	}
+	records, err := s.opts.Store.ListNotifications(ctx, jobID, backupID)
+	if err != nil {
+		return nil, false, err
+	}
+	for index := range records {
+		records[index].RecipientMasked = saturatingText(records[index].RecipientMasked, 64)
+	}
+	if offset >= len(records) {
+		return []Notification{}, false, nil
+	}
+	end := offset + limit
+	hasMore := false
+	if end < len(records) {
+		hasMore = true
+	} else {
+		end = len(records)
+	}
+	return records[offset:end], hasMore, nil
 }

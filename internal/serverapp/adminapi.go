@@ -65,10 +65,12 @@ func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices
 		BasePath: normalized,
 		// 会话校验仍走真实 session.Service；包装器额外登记本次请求的管理强认证
 		// 事实，供同一请求内的高风险权限目录动作再次认证使用（步骤 189）。
-		Session:        managementSessionRecorder{Service: services.Sessions, gate: gate},
-		ErrorCodes:     codes,
-		Tasks:          runtime.Executor(),
-		TaskAuthorizer: hostTaskAuthorizer{checker: managed.Checker},
+		Session:            managementSessionRecorder{Service: services.Sessions, gate: gate},
+		ErrorCodes:         codes,
+		Tasks:              runtime.Executor(),
+		TaskAuthorizer:     hostTaskAuthorizer{checker: managed.Checker},
+		TaskLister:         runtime.Executor(),
+		TaskListAuthorizer: hostTaskAuthorizer{checker: managed.Checker},
 		// 已装配的真实领域服务：审计查询/导出/清理、报告与计划、备份管理。
 		Audit:         managed.AuditOps,
 		Reports:       managed.Reports,
@@ -125,6 +127,26 @@ func (a hostTaskAuthorizer) AuthorizeTaskRead(ctx context.Context,
 		return fmt.Errorf("未知任务类型 %q 的读取权限：拒绝", job.Kind)
 	}
 	return a.checker.check(ctx, actor.ID, key, "system")
+}
+
+// AuthorizeTaskList 实现 adminapi.TaskListAuthorizer：受信主体可看全部；其他主体
+// 需要 diagnostics.read，并且只能看本人发起的任务（列表查询在 SQL 层按发起者过滤，
+// HasMore/计数不会泄露他人任务）。读取失败一律拒绝（fail-closed）。
+func (a hostTaskAuthorizer) AuthorizeTaskList(ctx context.Context,
+	caller account.Caller) (adminapi.TaskListScope, error) {
+	actor := caller.Actor()
+	trusted, err := a.checker.roots.trustedActor(ctx, actor)
+	if err != nil {
+		return adminapi.TaskListScope{}, err
+	}
+	if trusted {
+		return adminapi.TaskListScope{All: true}, nil
+	}
+	if err := a.checker.check(ctx, actor.ID, "diagnostics.read", "system"); err != nil {
+		return adminapi.TaskListScope{}, err
+	}
+	return adminapi.TaskListScope{All: false, InitiatorType: actor.Type,
+		InitiatorID: actor.ID}, nil
 }
 
 // taskReadPermissionKey 把任务类型映射到读取权限键；未知类型 fail-closed。

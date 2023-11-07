@@ -99,6 +99,9 @@ type Store interface {
 	RecoverInterrupted(ctx context.Context, executorID string, now time.Time) (int, error)
 	Get(ctx context.Context, id string) (Job, bool, error)
 	Attempts(ctx context.Context, jobID string) ([]Attempt, error)
+	// ListJobs 按稳定排序（created_at_ms,id 倒序）读取一页任务；过滤与 keyset
+	// 位置直接写入 SQL，不先读全量再内存过滤；不返回任务载荷以外的额外秘密。
+	ListJobs(ctx context.Context, query JobPageQuery) (JobPage, error)
 }
 
 // ScheduleStore 是定时计划持久化契约，由 internal/task/sqlite 提供生产实现。

@@ -308,6 +308,11 @@ type UIPageBackupBackend interface {
 	Reconcile(ctx context.Context, userID string) (UIBackupReconcileResult, error)
 }
 
+// UIBackupSchedulePagedBackend 是支持备份计划分页的可选后端契约（步骤 218）。
+type UIBackupSchedulePagedBackend interface {
+	ListSchedulesPage(ctx context.Context, userID string, limit, offset int) ([]UIBackupSchedule, bool, error)
+}
+
 // UIPageBackupOptions 是备份管理页配置。
 type UIPageBackupOptions struct {
 	Backend UIPageBackupBackend
@@ -560,7 +565,16 @@ func (h *backupPageHandlers) scheduleList(ctx context.Context, request *http.Req
 		data["forbidden"] = true
 		return UIPageOutcome{StatusCode: http.StatusForbidden, Data: data}, nil
 	}
-	schedules, err := h.pages.options.Backend.ListSchedules(ctx, page.Session.UserID)
+	limit, offset := backupPageValues(request.URL.Query().Get("limit"),
+		request.URL.Query().Get("offset"))
+	var schedules []UIBackupSchedule
+	hasMore := false
+	var err error
+	if paged, ok := h.pages.options.Backend.(UIBackupSchedulePagedBackend); ok {
+		schedules, hasMore, err = paged.ListSchedulesPage(ctx, page.Session.UserID, limit, offset)
+	} else {
+		schedules, err = h.pages.options.Backend.ListSchedules(ctx, page.Session.UserID)
+	}
 	if err != nil {
 		status, summary, _ := backupStatus(err)
 		data["loadFailed"] = true
@@ -568,6 +582,10 @@ func (h *backupPageHandlers) scheduleList(ctx context.Context, request *http.Req
 	}
 	data["schedules"] = schedules
 	data["empty"] = len(schedules) == 0
+	data["hasMore"] = hasMore
+	data["limit"] = limit
+	data["offset"] = offset
+	data["nextOffset"] = offset + len(schedules)
 	return UIPageOutcome{Data: data}, nil
 }
 

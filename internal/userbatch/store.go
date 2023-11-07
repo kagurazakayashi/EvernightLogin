@@ -42,6 +42,9 @@ type ListJobsQuery struct {
 	OwnerType audit.ActorKind
 	OwnerID   string
 	Limit     int
+	// Offset 是受控深分页偏移（步骤 218）：由服务层校验上限后写入 SQL，
+	// 与 Limit 一起在数据源处分页，不先读全量再内存裁剪。
+	Offset int
 }
 
 // FinishJobCommand 是任务终态写入参数；Counts 为最终汇总计数。

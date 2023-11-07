@@ -669,8 +669,10 @@ func (a *Adapter) ListJobs(ctx context.Context, adminUserID, kind string, limit,
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	_ = offset // 后端 ListJobs 目前只支持 Limit，无 offset；页面不伪造更多分页
-	query := userbatch.ListJobsQuery{Limit: limit}
+	if offset < 0 || offset > 1_000_000 {
+		offset = 0
+	}
+	query := userbatch.ListJobsQuery{Limit: limit, Offset: offset}
 	switch userbatch.Kind(kind) {
 	case userbatch.KindImport:
 		query.Kind = userbatch.KindImport
@@ -680,11 +682,12 @@ func (a *Adapter) ListJobs(ctx context.Context, adminUserID, kind string, limit,
 	default:
 		return login.UIAdminBatchPage{}, adminErr("REQ_INVALID")
 	}
-	jobs, err := a.opts.Batches.ListJobs(ctx, caller, query)
+	jobs, hasMore, err := a.opts.Batches.ListJobs(ctx, caller, query)
 	if err != nil {
 		return login.UIAdminBatchPage{}, mapBatchError(err)
 	}
-	page := login.UIAdminBatchPage{Jobs: make([]login.UIAdminBatchJob, 0, len(jobs))}
+	page := login.UIAdminBatchPage{Jobs: make([]login.UIAdminBatchJob, 0, len(jobs)),
+		HasMore: hasMore}
 	for _, job := range jobs {
 		page.Jobs = append(page.Jobs, toBatchJob(job))
 	}

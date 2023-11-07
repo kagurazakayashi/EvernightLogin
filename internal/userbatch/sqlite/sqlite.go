@@ -158,11 +158,20 @@ func (s *Store) ListJobs(ctx context.Context,
 		}
 	}
 	limit := query.Limit
-	if limit <= 0 || limit > userbatch.MaxListLimit {
+	if limit <= 0 {
 		limit = userbatch.MaxListLimit
 	}
-	statement += " ORDER BY created_at_ms DESC,id DESC LIMIT ?"
-	args = append(args, limit)
+	// 服务层会多取一条判定 HasMore（limit+1）；存储层允许该探测值，但不允许
+	// 调用方无限放大单页。
+	if limit > userbatch.MaxListLimit+1 {
+		limit = userbatch.MaxListLimit + 1
+	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	statement += " ORDER BY created_at_ms DESC,id DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
 	rows, err := s.store.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, userbatch.ErrStoreUnavailable

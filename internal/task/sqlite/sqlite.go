@@ -531,6 +531,81 @@ func (s *Store) loadWithFound(ctx context.Context, id string) (task.Job, bool, e
 	return job, true, nil
 }
 
+// ListJobs 按稳定排序（created_at_ms DESC,id DESC）读取一页任务。过滤条件与
+// keyset 游标都写入 SQL；不读取 payload 以外的额外表。载荷仍由列返回，服务层
+// 列表视图会显式剔除（存储层不复制任务状态机）。
+func (s *Store) ListJobs(ctx context.Context, query task.JobPageQuery) (task.JobPage, error) {
+	clauses := make([]string, 0, 8)
+	args := make([]any, 0, 12)
+	if query.State != "" {
+		clauses = append(clauses, "state=?")
+		args = append(args, string(query.State))
+	}
+	if query.Kind != "" {
+		clauses = append(clauses, "kind=?")
+		args = append(args, query.Kind)
+	}
+	if query.RequestID != "" {
+		clauses = append(clauses, "request_id=?")
+		args = append(args, query.RequestID)
+	}
+	if query.InitiatorType != "" {
+		clauses = append(clauses, "initiated_by_type=?")
+		args = append(args, string(query.InitiatorType))
+	}
+	if query.InitiatorID != "" {
+		clauses = append(clauses, "initiated_by_id=?")
+		args = append(args, query.InitiatorID)
+	}
+	if !query.From.IsZero() {
+		clauses = append(clauses, "created_at_ms>=?")
+		args = append(args, query.From.UTC().UnixMilli())
+	}
+	if !query.To.IsZero() {
+		clauses = append(clauses, "created_at_ms<?")
+		args = append(args, query.To.UTC().UnixMilli())
+	}
+	if query.AfterID != "" {
+		clauses = append(clauses, "(created_at_ms<? OR (created_at_ms=? AND id<?))")
+		afterMS := query.AfterCreatedAt.UTC().UnixMilli()
+		args = append(args, afterMS, afterMS, query.AfterID)
+	}
+	if len(clauses) == 0 {
+		clauses = append(clauses, "1=1")
+	}
+	limit := query.Limit
+	if limit < 1 || limit > task.ListMaxLimit {
+		limit = task.ListDefaultLimit
+	}
+	statement := `SELECT ` + jobSelectColumns + ` FROM jobs WHERE ` +
+		strings.Join(clauses, " AND ") +
+		` ORDER BY created_at_ms DESC,id DESC LIMIT ?`
+	args = append(args, limit+1)
+	rows, err := s.raw.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return task.JobPage{}, mapStoreError(err)
+	}
+	defer rows.Close()
+	jobs := make([]task.Job, 0, limit+1)
+	for rows.Next() {
+		job, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return task.JobPage{}, mapStoreError(scanErr)
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return task.JobPage{}, mapStoreError(err)
+	}
+	page := task.JobPage{}
+	if len(jobs) > limit {
+		page.HasMore = true
+		jobs = jobs[:limit]
+	}
+	page.Jobs = jobs
+	return page, nil
+}
+
 // jobAuditEvent 构造任务状态变化的安全审计事件。
 func jobAuditEvent(jobID string, actor audit.Actor, action, state, requestID, errorCode string, changes []audit.FieldChange) audit.Event {
 	return audit.Event{

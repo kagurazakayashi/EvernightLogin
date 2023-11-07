@@ -152,6 +152,24 @@ func (a *BackupsAdapter) ListSchedules(ctx context.Context,
 	return schedules, nil
 }
 
+// ListSchedulesPage 实现 login.UIBackupSchedulePagedBackend（步骤 218）。
+func (a *BackupsAdapter) ListSchedulesPage(ctx context.Context, userID string,
+	limit, offset int) ([]login.UIBackupSchedule, bool, error) {
+	caller, err := backupCaller(userID)
+	if err != nil {
+		return nil, false, err
+	}
+	views, hasMore, err := a.opts.Admin.ListSchedulesPage(ctx, caller, limit, offset)
+	if err != nil {
+		return nil, false, mapBackupError(err)
+	}
+	schedules := make([]login.UIBackupSchedule, 0, len(views))
+	for _, view := range views {
+		schedules = append(schedules, scheduleView(view))
+	}
+	return schedules, hasMore, nil
+}
+
 // GetSchedule 实现 login.UIPageBackupBackend。
 func (a *BackupsAdapter) GetSchedule(ctx context.Context, userID,
 	scheduleID string) (login.UIBackupSchedule, error) {

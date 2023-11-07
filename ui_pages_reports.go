@@ -165,6 +165,8 @@ type UIReportHistoryQuery struct {
 	Limit           int
 	BeforeCreatedAt time.Time
 	BeforeID        string
+	// Cursor 是服务端上一页返回的稳定游标；与 Before* 互斥。
+	Cursor string
 }
 
 // UIReportHistoryEntry 是历史列表条目。
@@ -192,6 +194,8 @@ type UIReportHistoryEntry struct {
 type UIReportHistoryPage struct {
 	Records []UIReportHistoryEntry
 	HasMore bool
+	// NextCursor 是服务端返回的下一页稳定游标；HasMore=false 时为空。
+	NextCursor string
 }
 
 // UIReportArtifact 是历史详情中的产物可用性摘要。
@@ -338,6 +342,19 @@ type UIReportCleanupResult struct {
 	RawAuditNote   string
 	StartedAt      time.Time
 	FinishedAt     time.Time
+}
+
+// UIReportPlanPage 是报告计划分页结果（步骤 218）。
+type UIReportPlanPage struct {
+	Plans      []UIReportPlan
+	HasMore    bool
+	NextOffset int
+}
+
+// UIReportPlanPagedBackend 是支持报告计划分页的可选后端契约；旧后端仍按 ListPlans
+// 全量返回（页面回退且不伪造分页）。
+type UIReportPlanPagedBackend interface {
+	ListPlansPage(ctx context.Context, userID string, limit, offset int) (UIReportPlanPage, error)
 }
 
 // UIPageReportsBackend 是报告管理页面调用真实报告服务的最小契约。适配器负责可信
@@ -666,8 +683,16 @@ func (h *reportsPageHandlers) historyList(ctx context.Context, request *http.Req
 			ErrorSummary: reportsText("page.admin.reports.history.filter_invalid")}, nil
 	}
 	data["filter"] = map[string]string{"plan_id": query.PlanID, "state": query.State}
-	if cursor := strings.TrimSpace(values.Get("before")); cursor != "" {
-		if moment, err := time.Parse(time.RFC3339Nano, cursor); err == nil {
+	cursor := strings.TrimSpace(values.Get("cursor"))
+	if cursor != "" {
+		if len(cursor) > 4096 || strings.TrimSpace(values.Get("before")) != "" {
+			data["invalid"] = true
+			return UIPageOutcome{StatusCode: http.StatusBadRequest, Data: data,
+				ErrorSummary: reportsText("page.admin.reports.history.filter_invalid")}, nil
+		}
+		query.Cursor = cursor
+	} else if before := strings.TrimSpace(values.Get("before")); before != "" {
+		if moment, err := time.Parse(time.RFC3339Nano, before); err == nil {
 			query.BeforeCreatedAt = moment.UTC()
 			query.BeforeID = strings.TrimSpace(values.Get("before_id"))
 		}
@@ -682,7 +707,17 @@ func (h *reportsPageHandlers) historyList(ctx context.Context, request *http.Req
 	data["reports"] = result.Records
 	data["hasMore"] = result.HasMore
 	data["empty"] = len(result.Records) == 0 && !result.HasMore
-	if result.HasMore && len(result.Records) > 0 {
+	if result.HasMore && result.NextCursor != "" {
+		more := url.Values{}
+		more.Set("cursor", result.NextCursor)
+		if query.State != "" {
+			more.Set("state", query.State)
+		}
+		if query.PlanID != "" {
+			more.Set("plan_id", query.PlanID)
+		}
+		data["moreURL"] = routeURL(page, "admin.reports") + "?" + more.Encode()
+	} else if result.HasMore && len(result.Records) > 0 {
 		last := result.Records[len(result.Records)-1]
 		more := url.Values{}
 		more.Set("before", last.CreatedAt.UTC().Format(time.RFC3339Nano))
@@ -892,6 +927,34 @@ func (h *reportsPageHandlers) planList(ctx context.Context, request *http.Reques
 		data["forbidden"] = true
 		return UIPageOutcome{StatusCode: http.StatusForbidden, Data: data,
 			ErrorSummary: reportsText("page.admin.reports.common.forbidden")}, nil
+	}
+	limit, offset := 20, 0
+	if raw := strings.TrimSpace(request.URL.Query().Get("limit")); raw != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 1 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+	if raw := strings.TrimSpace(request.URL.Query().Get("offset")); raw != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 0 && parsed <= 1_000_000 {
+			offset = parsed
+		}
+	}
+	if paged, ok := h.pages.options.Backend.(UIReportPlanPagedBackend); ok {
+		result, pageErr := paged.ListPlansPage(ctx, page.Session.UserID, limit, offset)
+		if pageErr != nil {
+			status, summary := reportsStatus(pageErr)
+			data["loadFailed"] = true
+			return UIPageOutcome{StatusCode: status, Data: data,
+				ErrorSummary: summary}, nil
+		}
+		data["plans"] = result.Plans
+		data["empty"] = len(result.Plans) == 0 && !result.HasMore
+		data["hasMore"] = result.HasMore
+		data["nextOffset"] = result.NextOffset
+		data["offset"] = offset
+		data["limit"] = limit
+		data["canManage"] = caps.ScheduleManage
+		return UIPageOutcome{Data: data}, nil
 	}
 	plans, err := h.pages.options.Backend.ListPlans(ctx, page.Session.UserID)
 	if err != nil {

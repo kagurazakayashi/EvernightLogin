@@ -19,7 +19,8 @@ import (
 // reportsCommandUsage 是 reports 组帮助。
 const reportsCommandUsage = `用法：
   loginctl reports history list [--limit 20] [--plan-id <id>] [--state <s>] \
-[--before-created-at RFC3339] [--before-id <id>] <在线公共参数>
+[--before-created-at RFC3339] [--before-id <id>] [--cursor <next_cursor>] <在线公共参数>
+  loginctl reports plans list [--limit 20] [--offset 0] <在线公共参数>
   loginctl reports history detail <report_id> <在线公共参数>
   loginctl reports download-token <report_id> --format html|csv|json|pdf|markdown \
 --confirm ISSUE-DOWNLOAD [--out <path|->] [--overwrite] <在线公共参数>
@@ -45,6 +46,8 @@ func (r *runner) runReports(args []string) int {
 	switch subcommand {
 	case "history":
 		return r.runReportsHistory(rest)
+	case "plans":
+		return r.runReportsPlans(rest)
 	case "download-token":
 		return r.runReportsDownloadToken(rest)
 	case "cancel":
@@ -83,7 +86,8 @@ func (r *runner) runReportsHistory(args []string) int {
 func (r *runner) runReportsHistoryList(args []string) int {
 	defs := onlineFlagDefs(flagDef{name: "limit", value: true},
 		flagDef{name: "plan-id", value: true}, flagDef{name: "state", value: true},
-		flagDef{name: "before-created-at", value: true}, flagDef{name: "before-id", value: true})
+		flagDef{name: "before-created-at", value: true}, flagDef{name: "before-id", value: true},
+		flagDef{name: "cursor", value: true})
 	values, positional, err := parseFlags(args, defs)
 	if err != nil {
 		return r.flagError(err)
@@ -102,6 +106,12 @@ func (r *runner) runReportsHistoryList(args []string) int {
 	setQuery(values, query, "state", "state")
 	setQuery(values, query, "before-created-at", "before_created_at")
 	setQuery(values, query, "before-id", "before_id")
+	setQuery(values, query, "cursor", "cursor")
+	if strings.TrimSpace(values["cursor"]) != "" &&
+		(strings.TrimSpace(values["before-created-at"]) != "" ||
+			strings.TrimSpace(values["before-id"]) != "") {
+		return r.usage("--cursor 不能与 --before-created-at/--before-id 同时使用")
+	}
 	return r.withOnline(values, func(target *onlineTarget) int {
 		reply, failure := target.doJSON(r.ctx, "GET", "/reports", query, nil)
 		if failure != nil {
@@ -110,11 +120,56 @@ func (r *runner) runReportsHistoryList(args []string) int {
 		return r.succeedOnline(reply, func(out io.Writer) {
 			fmt.Fprintf(out, "历史报告：%d 条", len(onlineDataList(reply, "reports")))
 			if onlineDataBool(reply, "has_more") {
-				fmt.Fprintf(out, "（还有更多，请用 --before-created-at/--before-id 翻页）")
+				if cursor, _ := reply.data["next_cursor"].(string); cursor != "" {
+					fmt.Fprintf(out, "（还有更多，请用 --cursor %s 翻页）", cursor)
+				} else {
+					fmt.Fprintf(out, "（还有更多，请用 --before-created-at/--before-id 翻页）")
+				}
 			}
 			fmt.Fprintln(out)
 			printOnlineData(out, reply.data)
 		})
+	})
+}
+
+// runReportsPlans 分派 reports plans 子命令。
+func (r *runner) runReportsPlans(args []string) int {
+	if len(args) == 0 {
+		return r.helpText("reports plans", reportsCommandUsage)
+	}
+	subcommand, rest := args[0], args[1:]
+	switch subcommand {
+	case "list":
+		return r.runReportsPlansList(rest)
+	case "help", "-h", "--help":
+		return r.helpText("reports plans", reportsCommandUsage)
+	default:
+		return r.usage("未知的 reports plans 子命令 %q（可用：list）", subcommand)
+	}
+}
+
+// runReportsPlansList 分页列出报告计划。
+func (r *runner) runReportsPlansList(args []string) int {
+	defs := onlineFlagDefs(flagDef{name: "limit", value: true},
+		flagDef{name: "offset", value: true})
+	values, positional, err := parseFlags(args, defs)
+	if err != nil {
+		return r.flagError(err)
+	}
+	r.json = boolFlag(values, "json")
+	if len(positional) != 0 {
+		return r.usage("reports plans list 不接受位置参数")
+	}
+	query := queryValues()
+	if err := addPageQuery(values, query); err != nil {
+		return r.usage("%v", err)
+	}
+	return r.withOnline(values, func(target *onlineTarget) int {
+		reply, failure := target.doJSON(r.ctx, "GET", "/report-plans", query, nil)
+		if failure != nil {
+			return r.onlineFailure("列出报告计划", failure)
+		}
+		return r.succeedOnline(reply, nil)
 	})
 }
 

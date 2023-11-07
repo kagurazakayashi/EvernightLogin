@@ -24,7 +24,8 @@ import (
 
 // taskCommandUsage 是 task 组帮助。
 const taskCommandUsage = `用法：
-  loginctl task list [--config <file>] [--state <s>] [--kind <k>] [--limit N] [--json]
+  loginctl task list [--config <file>] [--state <s>] [--kind <k>] [--request-id <id>] \
+[--limit N] [--cursor <next_cursor>] [--json]
   loginctl task get <job_id> [--config <file>] [--json]
   loginctl task wait <job_id> [--timeout 60s] [--config <file>] [--json]
   loginctl task cancel <job_id> --operator <id> --reason <原因> [--config <file>] [--json]
@@ -143,11 +144,13 @@ func (r *runner) openTaskStore(values map[string]string,
 	return raw, taskStore, ExitOK
 }
 
-// runTaskList 列出最近任务（只读；不含 payload）。
+// runTaskList 列出最近任务（只读；不含 payload）。步骤 218：改用领域统一
+// task.ListJobs 契约（稳定排序 + 游标 + 筛选），不再自己直读 jobs 表拼 SQL。
 func (r *runner) runTaskList(args []string) int {
 	values, positional, err := parseFlags(args, []flagDef{
 		{name: "config", value: true}, {name: "json"}, {name: "state", value: true},
 		{name: "kind", value: true}, {name: "limit", value: true},
+		{name: "request-id", value: true}, {name: "cursor", value: true},
 	})
 	if err != nil {
 		return r.flagError(err)
@@ -165,60 +168,40 @@ func (r *runner) runTaskList(args []string) int {
 		return r.usage("--state 不是已定义的任务状态")
 	}
 	kind := strings.TrimSpace(values["kind"])
-	if len(kind) > 128 {
+	if len(kind) > task.MaxKindBytes {
 		return r.usage("--kind 过长")
+	}
+	request := task.ListJobsRequest{State: task.State(state), Kind: kind,
+		RequestID: strings.TrimSpace(values["request-id"]),
+		Limit:     limit, Cursor: strings.TrimSpace(values["cursor"])}
+	afterCreatedAt, afterID, cursorErr := task.DecodeJobListCursor(request)
+	if cursorErr != nil {
+		return r.usage("--cursor 无效或与当前筛选不匹配")
 	}
 	raw, taskStore, exit := r.openTaskStore(values, true)
 	if exit != ExitOK {
 		return exit
 	}
 	defer func() { _ = raw.Close() }()
-	query := `SELECT id FROM jobs WHERE 1=1`
-	var arguments []any
-	if state != "" {
-		query += " AND state = ?"
-		arguments = append(arguments, state)
-	}
-	if kind != "" {
-		query += " AND kind = ?"
-		arguments = append(arguments, kind)
-	}
-	query += " ORDER BY created_at_ms DESC, id DESC LIMIT ?"
-	arguments = append(arguments, limit+1)
-	rows, err := raw.DB().QueryContext(r.ctx, query, arguments...)
-	if err != nil {
+	page, listErr := taskStore.ListJobs(r.ctx, task.JobPageQuery{
+		State: request.State, Kind: request.Kind, RequestID: request.RequestID,
+		Limit: request.Limit, AfterCreatedAt: afterCreatedAt, AfterID: afterID,
+	})
+	if listErr != nil {
 		return r.fail("DB_UNAVAILABLE", ExitError, "查询任务列表失败", nil)
 	}
-	ids := make([]string, 0, limit+1)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return r.fail("DB_UNAVAILABLE", ExitError, "读取任务编号失败", nil)
-		}
-		ids = append(ids, id)
-	}
-	rowErr := rows.Err()
-	rows.Close()
-	if rowErr != nil {
-		return r.fail("DB_UNAVAILABLE", ExitError, "读取任务编号失败", nil)
-	}
-	hasMore := len(ids) > limit
-	if hasMore {
-		ids = ids[:limit]
-	}
-	items := make([]taskOutput, 0, len(ids))
-	for _, id := range ids {
-		job, found, err := taskStore.Get(r.ctx, id)
-		if err != nil {
-			return r.fail("DB_UNAVAILABLE", ExitError, "读取任务记录失败", nil)
-		}
-		if !found {
-			continue
-		}
+	items := make([]taskOutput, 0, len(page.Jobs))
+	for _, job := range page.Jobs {
 		items = append(items, newTaskOutput(job))
 	}
-	output := map[string]any{"jobs": items, "has_more": hasMore, "limit": limit}
+	output := map[string]any{"jobs": items, "has_more": page.HasMore, "limit": limit}
+	if page.HasMore && len(page.Jobs) > 0 {
+		cursor, cursorErr := task.EncodeJobListCursor(request, page.Jobs[len(page.Jobs)-1])
+		if cursorErr != nil {
+			return r.fail("INTERNAL_ERROR", ExitError, "生成任务列表游标失败", nil)
+		}
+		output["next_cursor"] = cursor
+	}
 	if r.json {
 		return r.succeed(output)
 	}
@@ -231,8 +214,10 @@ func (r *runner) runTaskList(args []string) int {
 			item.ID, item.State, item.InitiatorID, item.Kind, item.Attempt,
 			item.MaxAttempts, item.CreatedAt)
 	}
-	if hasMore {
-		fmt.Fprintln(r.stdout, "（还有更多结果；请用 --limit 或状态/类型筛选缩小范围）")
+	if page.HasMore {
+		if cursor, _ := output["next_cursor"].(string); cursor != "" {
+			fmt.Fprintf(r.stdout, "（还有更多结果；请用 --cursor %s 继续）\n", cursor)
+		}
 	}
 	return ExitOK
 }

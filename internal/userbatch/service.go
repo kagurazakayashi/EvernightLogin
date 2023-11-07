@@ -621,12 +621,13 @@ func (s *Service) GetJob(ctx context.Context, caller account.Caller, jobID strin
 	return s.jobView(record), nil
 }
 
-// ListJobs 列出调用者可访问范围内的任务。
+// ListJobs 列出调用者可访问范围内的任务（步骤 218：offset 真实在数据源分页，
+// 多取一条判定 HasMore；不返回总数）。
 func (s *Service) ListJobs(ctx context.Context, caller account.Caller,
-	query ListJobsQuery) ([]Job, error) {
+	query ListJobsQuery) ([]Job, bool, error) {
 	ctx = normalizeContext(ctx)
 	if err := s.authorize(ctx, caller, ActionQuery); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	actor := caller.Actor()
 	if actor.Type != audit.ActorSystem {
@@ -634,17 +635,33 @@ func (s *Service) ListJobs(ctx context.Context, caller account.Caller,
 		query.OwnerID = actor.ID
 	}
 	if query.Kind != "" && !query.Kind.Valid() {
-		return nil, fmt.Errorf("%w: 任务类型无效", ErrInvalidRequest)
+		return nil, false, fmt.Errorf("%w: 任务类型无效", ErrInvalidRequest)
 	}
+	if query.Offset < 0 || query.Offset > 1_000_000 {
+		return nil, false, fmt.Errorf("%w: 分页偏移超出范围", ErrInvalidRequest)
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > MaxListLimit {
+		return nil, false, fmt.Errorf("%w: 每页条数必须在 1～%d 之间", ErrInvalidRequest,
+			MaxListLimit)
+	}
+	query.Limit = limit + 1 // 多取一条判定 HasMore
 	records, err := s.opts.Store.ListJobs(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	hasMore := len(records) > limit
+	if hasMore {
+		records = records[:limit]
 	}
 	jobs := make([]Job, 0, len(records))
 	for _, record := range records {
 		jobs = append(jobs, s.jobView(record))
 	}
-	return jobs, nil
+	return jobs, hasMore, nil
 }
 
 // ListRows 读取逐行结果（仅任务所有者/系统）。

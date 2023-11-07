@@ -765,6 +765,26 @@ func (f *onlineBackupFake) ListSchedules(_ context.Context,
 	return []backupadmin.ScheduleView{f.backupSchedule()}, nil
 }
 
+// ListSchedulesPage 是步骤 218 的分页契约替身：从 ListSchedules 结果切页。
+func (f *onlineBackupFake) ListSchedulesPage(ctx context.Context, caller account.Caller,
+	limit, offset int) ([]backupadmin.ScheduleView, bool, error) {
+	views, err := f.ListSchedules(ctx, caller)
+	if err != nil {
+		return nil, false, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 || offset >= len(views) {
+		return []backupadmin.ScheduleView{}, false, nil
+	}
+	end := offset + limit
+	if end > len(views) {
+		end = len(views)
+	}
+	return views[offset:end], end < len(views), nil
+}
+
 func (f *onlineBackupFake) GetSchedule(_ context.Context, _ account.Caller,
 	scheduleID string) (backupadmin.ScheduleView, error) {
 	if err := f.accessDenied(); err != nil {

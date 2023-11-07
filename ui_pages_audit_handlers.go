@@ -285,6 +285,43 @@ func paginationURLs(request *http.Request, hasMore bool, limit, offset int) (str
 	return previous, next
 }
 
+// auditCursorFromQuery 解析稳定游标；游标与非零 offset 互斥、超长/非法格式由
+// 调用方按筛选错误处理（服务端仍会二次校验游标内容）。
+func auditCursorFromQuery(values url.Values) (string, bool) {
+	cursor := strings.TrimSpace(values.Get("cursor"))
+	if len(cursor) > 4096 {
+		return "", false
+	}
+	if cursor != "" && strings.TrimSpace(values.Get("offset")) != "" {
+		return "", false
+	}
+	return cursor, true
+}
+
+// paginationURLsWithCursor 在 offset 分页链接基础上支持服务端稳定游标：
+// 游标存在时下一页使用 cursor 并移除 offset；游标分页没有可靠的上一页 offset 链接。
+func paginationURLsWithCursor(request *http.Request, hasMore bool, limit, offset int,
+	nextCursor string) (string, string) {
+	previous, next := paginationURLs(request, hasMore, limit, offset)
+	if nextCursor == "" {
+		return previous, next
+	}
+	base := request.URL.Path
+	values := request.URL.Query()
+	cloned := url.Values{}
+	for key, items := range values {
+		if key == "offset" || key == "limit" || key == "cursor" {
+			continue
+		}
+		for _, item := range items {
+			cloned.Add(key, item)
+		}
+	}
+	cloned.Set("limit", strconv.Itoa(limit))
+	cloned.Set("cursor", nextCursor)
+	return "", base + "?" + cloned.Encode()
+}
+
 // list 渲染授权范围内审计列表（筛选/排序/分页/请求与任务编号精确查询）。
 func (h *auditPageHandlers) list(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
@@ -308,8 +345,15 @@ func (h *auditPageHandlers) list(ctx context.Context, request *http.Request,
 	if !pageOK {
 		fieldErrors["limit"] = text("page.admin.audit.filter.invalid_page")
 	}
+	cursor, cursorOK := auditCursorFromQuery(values)
+	if !cursorOK {
+		fieldErrors["cursor"] = text("page.admin.audit.filter.invalid_page")
+	}
+	if cursor != "" {
+		offset = 0
+	}
 	data["filter"] = filter
-	data["limit"], data["offset"] = limit, offset
+	data["limit"], data["offset"], data["cursor"] = limit, offset, cursor
 	data["order"] = auditOrder(values.Get("order"))
 	data["filtered"] = !filter.Empty()
 	// 回显已通过校验的日期筛选（筛选保持；导出表单也从这两个值继承时间范围）。
@@ -322,7 +366,7 @@ func (h *auditPageHandlers) list(ctx context.Context, request *http.Request,
 	}
 	result, err := h.pages.options.Backend.ListAudit(ctx, page.Session.UserID, UIAuditQuery{
 		ScopeID: UIAuditScopeSystem, Filter: filter, Order: data["order"].(string),
-		Limit: limit, Offset: offset})
+		Limit: limit, Offset: offset, Cursor: cursor})
 	if err != nil {
 		return auditErrorOutcome(err, data, "page.admin.audit.list.load_failed"), nil
 	}
@@ -335,7 +379,8 @@ func (h *auditPageHandlers) list(ctx context.Context, request *http.Request,
 	data["dataScope"] = result.DataScope
 	data["updatedAt"] = time.Now().UTC()
 	data["empty"] = len(result.Events) == 0
-	data["prevURL"], data["nextURL"] = paginationURLs(request, result.HasMore, limit, offset)
+	data["prevURL"], data["nextURL"] = paginationURLsWithCursor(request, result.HasMore,
+		limit, offset, result.NextCursor)
 	return UIPageOutcome{Data: data}, nil
 }
 
@@ -353,7 +398,15 @@ func (h *auditPageHandlers) ownActivity(ctx context.Context, request *http.Reque
 	if !pageOK {
 		fieldErrors["limit"] = text("page.admin.audit.filter.invalid_page")
 	}
+	cursor, cursorOK := auditCursorFromQuery(values)
+	if !cursorOK {
+		fieldErrors["cursor"] = text("page.admin.audit.filter.invalid_page")
+	}
+	if cursor != "" {
+		offset = 0
+	}
 	data["filter"], data["limit"], data["offset"] = filter, limit, offset
+	data["cursor"] = cursor
 	data["order"] = auditOrder(values.Get("order"))
 	data["filtered"] = !filter.Empty()
 	data["fromValue"] = strings.TrimSpace(values.Get("from"))
@@ -365,7 +418,7 @@ func (h *auditPageHandlers) ownActivity(ctx context.Context, request *http.Reque
 	}
 	result, err := h.pages.options.Backend.QueryOwnActivity(ctx, page.Session.UserID,
 		UIAuditQuery{ScopeID: UIAuditScopeSystem, Filter: filter,
-			Order: data["order"].(string), Limit: limit, Offset: offset})
+			Order: data["order"].(string), Limit: limit, Offset: offset, Cursor: cursor})
 	if err != nil {
 		return auditErrorOutcome(err, data, "page.account.activity.load_failed"), nil
 	}
@@ -377,7 +430,8 @@ func (h *auditPageHandlers) ownActivity(ctx context.Context, request *http.Reque
 	data["retentionCutoff"] = result.RetentionCutoff
 	data["updatedAt"] = time.Now().UTC()
 	data["empty"] = len(result.Events) == 0
-	data["prevURL"], data["nextURL"] = paginationURLs(request, result.HasMore, limit, offset)
+	data["prevURL"], data["nextURL"] = paginationURLsWithCursor(request, result.HasMore,
+		limit, offset, result.NextCursor)
 	return UIPageOutcome{Data: data}, nil
 }
 
