@@ -775,6 +775,44 @@ func (a onboardingManagementAuthorizer) AuthorizeManagement(ctx context.Context,
 	return a.checker.check(ctx, actor.ID, "users.update", "system")
 }
 
+// onboardingInviteAuthorizer 实现 onboarding.InviteAuthorizer（步骤 223）：
+// 受信主体（system/local_admin/root）放行；普通用户必须在该邀请作用范围持有
+// onboarding.invite.create 权限。可转授范围由 onboarding 服务内部的事务级
+// delegation.Guard 再复核（checkInvitationCreationTransfer），本适配器不重复实现。
+type onboardingInviteAuthorizer struct {
+	checker *permissionChecker
+}
+
+// AuthorizeInvite 实现 onboarding.InviteAuthorizer。
+func (a onboardingInviteAuthorizer) AuthorizeInvite(ctx context.Context,
+	caller onboarding.Caller, request onboarding.CreateRequest) error {
+	if a.checker == nil || a.checker.roots == nil {
+		return errAuthorizerNotConfigured
+	}
+	actor := caller.Actor()
+	trusted, err := a.checker.roots.trustedActor(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if trusted {
+		return nil
+	}
+	if actor.Type != audit.ActorUser {
+		return fmt.Errorf("%w: 邀请创建只允许受信管理主体或具备权限的用户",
+			onboarding.ErrAccessDenied)
+	}
+	scopeID := "system"
+	if appID := strings.TrimSpace(request.AppID); appID != "" {
+		scopeID = appID
+	}
+	if err := a.checker.check(ctx, actor.ID, "onboarding.invite.create", scopeID); err != nil {
+		return fmt.Errorf("%w: 当前主体无权在该范围创建邀请", onboarding.ErrAccessDenied)
+	}
+	return nil
+}
+
+var _ onboarding.InviteAuthorizer = onboardingInviteAuthorizer{}
+
 // rootOnlyDelegationGuard 是步骤 149 之前的旧 fail-closed 实现：受信系统/本地管理员
 // 与 root 允许，普通管理员一律拒绝。它保留作回滚/对照，不再注入生产装配；生产使用
 // productionDelegationGuard + 真实 delegation.Service。

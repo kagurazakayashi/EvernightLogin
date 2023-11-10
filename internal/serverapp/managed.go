@@ -214,7 +214,10 @@ func BuildManagedServices(deps Deps, core *Services, runtime *TaskRuntime,
 		Store: onboardingStore, Audit: deps.Audit, Guard: guard,
 		Credentials:    core.Credential,
 		ManagementAuth: onboardingManagementAuthorizer{checker: checker},
-		PasswordPolicy: authn.DefaultPasswordPolicy(), HashParams: authn.DefaultParams(),
+		// 步骤 223：普通应用/系统管理员创建邀请的真实授权（权限键
+		// onboarding.invite.create + 作用范围；委派 Guard 由入驻服务事务内复核）。
+		InviteAuthorizer: onboardingInviteAuthorizer{checker: checker},
+		PasswordPolicy:   authn.DefaultPasswordPolicy(), HashParams: authn.DefaultParams(),
 		Now: now, Logger: deps.Logger,
 	})
 	if err != nil {
