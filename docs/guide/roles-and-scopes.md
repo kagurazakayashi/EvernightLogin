@@ -132,4 +132,34 @@
   `loginctl` 的组/角色/应用/权限/通知管理命令已接通（本地读取与受控建组；需要委派/敏感
   策略的写动作返回 `MANAGEMENT_WRITE_NOT_EXPOSED`，`audit`/`reports`/`backups` 等在线命令
   需 `--session-file`），详见 [root-cli.md](root-cli.md) 第 8 节。
-- 外部宿主目前无法只靠公开包装配完整 RBAC 服务（真实仓储与授权引擎在 `internal/`）。
+- 外部宿主可通过步骤 224 新增的公开 Go 接口 `Runtime.RBAC()` 使用完整 RBAC 能力（真实
+  领域服务、委派 Guard、再次认证与审计仍由内部实现保证）；见下一节。
+
+## 10. 公开 Go RBAC 接口（步骤 224）
+
+`Runtime.RBAC()` 返回按领域分组的服务，宿主无需导入 `internal/`：
+
+```go
+rbac := runtime.RBAC()
+rbac.Roles()        // Get/Update/Enable/Disable/Delete/AddPermission/RemovePermission/
+                    // List/ListPermissions/ListAssignments/AssignUser/RevokeUser/AssignGroup/RevokeGroup
+rbac.Groups()       // Create/Get/Update/Delete/List/ListMembers/AddMembers/RemoveMembers
+rbac.Permissions()  // Create/Get/Update/Enable/Disable/Delete/List/Catalog
+rbac.Authorization()// Check/EffectivePermissions/PermissionSources/CheckResourceAccess
+rbac.Delegations()  // Grant/Revoke/Get/List/DelegatablePermissions
+rbac.Presets()      // Catalog/Preview/Restore
+```
+
+边界与约定：
+
+- 身份只来自 `AdminCaller`：`LocalAdmin()` 是宿主进程受信操作者；`AdminSession(secret)`
+  是真实完整用户会话，受限会话在解析阶段拒绝。领域服务在事务内复核系统/应用范围权限与
+  可委派范围，公开门面不因“不经过 HTTP”而绕过敏感策略、root 保护或审计失败回滚。
+- 列表复用 `AdminPage`/既有 `AdminList*` 请求结果（步骤 216/217），有界遍历直接用
+  `IterateAdminPages`（步骤 220）；自定义权限只在指定 scope 生效，同名系统/应用权限隔离。
+- 预设 `Preview`/`Restore` **只接受 `LocalAdmin`**；`AdminSession`（普通管理员/受限会话）
+  返回 `ACCESS_DENIED`，不能通过公开 Go 入口恢复高权限预设。恢复只接受预览签发的短时
+  单次令牌；`Catalog` 含真实 `Implemented` 标记与中文“能做什么/生效范围/不能做什么”。
+- 委派资格只表示“可转授上限”，不授予系统资格；签发/撤回只接受受信通道，普通用户只能
+  读取自己的资格与可转授权限；所有实际赋权仍经同一 Guard 复核。
+- 可运行外部示例：`examples/rbac-consumer`（独立 module，仅导入公开包，临时 SQLite 自清理）。

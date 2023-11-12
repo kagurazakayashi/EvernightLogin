@@ -449,6 +449,7 @@ defer instance.Close()
 - `examples/embedded-runtime`：嵌入式运行时与页面/HTTP 挂载骨架；
 - `examples/config-load`：只加载/校验配置；
 - `examples/ui-pages`：内置页面与替换契约；
+- `examples/rbac-consumer`：公开 RBAC Go 接口（角色/组/权限/授权查询/预设拒绝）外部消费；
 - 其他示例见 [`examples/`](examples/) 与 [`docs/guide/README.md`](docs/guide/README.md) 的示例索引。
 
 ## 8. 安全、备份、升级与排障
