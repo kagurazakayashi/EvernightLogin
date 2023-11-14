@@ -1,7 +1,8 @@
 // Command verify-docs 静态核对 docs/guide 与产品定义的一致性。
 //
 // 它只读仓库文件，不联网、不启动服务、不写文件。检查项：
-//   - 错误码注册表（error_codes.go）与错误码手册逐项一致（码/分类/HTTP/说明/顺序）；
+//   - 错误码注册表（errs/errors.go；兼容旧根 error_codes.go）与错误码手册逐项
+//     一致（码/分类/HTTP/说明/顺序）；
 //   - docs/guide/troubleshooting.md 覆盖全部已登记错误码；
 //   - docs/guide 中引用的错误码都存在（允许 CLI 工具码与环境变量名）；
 //   - 配置字段（config.go 的 configFields）与 docs/guide/configuration.md 表逐项一致
@@ -87,6 +88,35 @@ func fatalf(format string, args ...any) {
 
 func (v *verifier) path(rel string) string { return filepath.Join(v.root, rel) }
 
+// errorCodeSourceCandidates 是错误码注册表的候选位置：212 起注册表迁到
+// errs/errors.go，保留旧根路径回退以兼容迁移期与历史分支。
+var errorCodeSourceCandidates = []string{"errs/error_codes.go", "errs/errors.go", "error_codes.go"}
+
+// configSourceCandidates 是配置字段元数据的候选位置：212 起根 config.go 迁到
+// config/config.go，保留旧根路径回退。
+var configSourceCandidates = []string{"config/config.go", "config.go"}
+
+// readFirstExisting 读取候选路径中第一个存在的源码，返回内容与相对路径。
+func (v *verifier) readFirstExisting(purpose string, candidates []string) (string, string) {
+	for _, rel := range candidates {
+		if info, err := os.Stat(v.path(rel)); err == nil && !info.IsDir() {
+			return v.read(rel), rel
+		}
+	}
+	fatalf("未找到%s（候选：%v）", purpose, candidates)
+	return "", ""
+}
+
+// errorCodeSource 读取错误码注册表源码并返回内容与相对路径。
+func (v *verifier) errorCodeSource() (string, string) {
+	return v.readFirstExisting("错误码注册表", errorCodeSourceCandidates)
+}
+
+// configSource 读取配置字段元数据源码并返回内容与相对路径。
+func (v *verifier) configSource() (string, string) {
+	return v.readFirstExisting("配置字段元数据", configSourceCandidates)
+}
+
 func (v *verifier) read(rel string) string {
 	data, err := os.ReadFile(v.path(rel))
 	if err != nil {
@@ -122,11 +152,11 @@ type errorCodeDef struct {
 }
 
 func (v *verifier) checkErrorCodeRegistry() {
-	source := v.read("error_codes.go")
+	source, sourceName := v.errorCodeSource()
 	definitionPattern := regexp.MustCompile(`\{Code(\w+), Category(\w+), "((?:[^"\\]|\\.)*)", (\d+)\}`)
 	matches := definitionPattern.FindAllStringSubmatch(source, -1)
 	if len(matches) == 0 {
-		v.fail("error_codes.go 未解析出错误码定义")
+		v.fail("%s 未解析出错误码定义", sourceName)
 		return
 	}
 	categoryPattern := regexp.MustCompile(`Category(\w+)\s+ErrorCategory\s*=\s*"([^"]+)"`)
@@ -207,7 +237,7 @@ func (v *verifier) checkTroubleshootingCoverage() {
 			documented[code] = true
 		}
 	}
-	source := v.read("error_codes.go")
+	source, sourceName := v.errorCodeSource()
 	constPattern := regexp.MustCompile(`Code\w+\s+ErrorCode\s*=\s*"([A-Z0-9_]+)"`)
 	count := 0
 	for _, match := range constPattern.FindAllStringSubmatch(source, -1) {
@@ -217,7 +247,7 @@ func (v *verifier) checkTroubleshootingCoverage() {
 		}
 	}
 	if count == 0 {
-		v.fail("未从 error_codes.go 解析出错误码常量")
+		v.fail("未从 %s 解析出错误码常量", sourceName)
 	}
 	v.pass()
 }
@@ -287,7 +317,7 @@ var defaultSnapshot = map[string]string{
 }
 
 func (v *verifier) checkConfigReference() {
-	source := v.read("config.go")
+	source, sourceName := v.configSource()
 	fieldPattern := regexp.MustCompile(`\{Field: "([^"]+)", Env: ([A-Za-z0-9_]+), Class: Reload(\w+)(, Secret: true)?\}`)
 	envPattern := regexp.MustCompile(`(env\w+)\s*=\s*EnvVarPrefix \+ "([A-Z0-9_]+)"`)
 	prefixPattern := regexp.MustCompile(`EnvVarPrefix\s*=\s*"([^"]*)"`)
@@ -301,7 +331,7 @@ func (v *verifier) checkConfigReference() {
 	}
 	matches := fieldPattern.FindAllStringSubmatch(source, -1)
 	if len(matches) == 0 {
-		v.fail("config.go 未解析出 configFields")
+		v.fail("%s 未解析出 configFields", sourceName)
 		return
 	}
 	fields := make([]configField, 0, len(matches))
@@ -425,7 +455,7 @@ var allowedUpperTokens = map[string]bool{
 }
 
 func (v *verifier) checkGuideErrorCodeReferences() {
-	source := v.read("error_codes.go")
+	source, _ := v.errorCodeSource()
 	constPattern := regexp.MustCompile(`Code\w+\s+ErrorCode\s*=\s*"([A-Z0-9_]+)"`)
 	registered := map[string]bool{}
 	for _, match := range constPattern.FindAllStringSubmatch(source, -1) {

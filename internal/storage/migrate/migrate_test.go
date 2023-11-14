@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -182,13 +183,37 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载内嵌迁移失败：%v", err)
 	}
-	if len(migrations) != 51 {
-		t.Fatalf("内嵌迁移数量 = %d，期望 51（含 0051 找回入口安全代际/邮箱绑定）", len(migrations))
+	// 期望数量从同一嵌入迁移源动态计算，避免新增迁移后硬编码计数/版本清单漂移；
+	// 保留结构性断言：数量=嵌入 SQL 文件数、版本严格升序且唯一、四位数字编号、
+	// 每项有可执行语句与合法校验和、首项为 0001。
+	files, err := fs.Glob(appmigrations.SQLite, "*.sql")
+	if err != nil {
+		t.Fatalf("枚举嵌入迁移文件失败：%v", err)
 	}
-	expectedVersions := []string{"0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044", "0045", "0046", "0047", "0048", "0049", "0050", "0051"}
+	if len(migrations) != len(files) {
+		t.Fatalf("内嵌迁移数量 = %d，期望嵌入 SQL 文件数 %d", len(migrations), len(files))
+	}
+	if len(migrations) == 0 {
+		t.Fatal("内嵌迁移为空")
+	}
+	seen := make(map[string]struct{}, len(migrations))
 	for index, migration := range migrations {
-		if migration.Version != expectedVersions[index] {
-			t.Errorf("第 %d 个迁移版本 = %q，期望 %q", index, migration.Version, expectedVersions[index])
+		if len(migration.Version) != 4 {
+			t.Errorf("第 %d 个迁移版本 = %q，期望四位数字编号", index, migration.Version)
+		}
+		for _, digit := range migration.Version {
+			if digit < '0' || digit > '9' {
+				t.Errorf("第 %d 个迁移版本 = %q，期望四位数字编号", index, migration.Version)
+				break
+			}
+		}
+		if _, exists := seen[migration.Version]; exists {
+			t.Errorf("迁移版本重复：%s", migration.Version)
+		}
+		seen[migration.Version] = struct{}{}
+		if index > 0 && migrations[index-1].Version >= migration.Version {
+			t.Errorf("迁移版本未严格升序：%q 在 %q 之后",
+				migration.Version, migrations[index-1].Version)
 		}
 		if len(migration.Statements) == 0 {
 			t.Errorf("迁移 %s 没有可执行语句", migration.Version)
@@ -196,6 +221,9 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 		if len(migration.Checksum) != 64 {
 			t.Errorf("迁移 %s 校验和长度 = %d", migration.Version, len(migration.Checksum))
 		}
+	}
+	if migrations[0].Version != "0001" {
+		t.Errorf("首个迁移版本 = %q，期望 0001", migrations[0].Version)
 	}
 	if len(migrations[0].Statements) < 10 {
 		t.Errorf("0001 语句数 = %d，期望包含多张表和索引", len(migrations[0].Statements))

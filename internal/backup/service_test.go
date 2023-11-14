@@ -996,7 +996,9 @@ func TestStaleTempCleanup(t *testing.T) {
 	if err := os.WriteFile(staleFile, []byte("stale"), 0o600); err != nil {
 		t.Fatalf("写入遗留临时文件失败：%v", err)
 	}
-	oldTime := time.Now().Add(-72 * time.Hour)
+	// 服务用注入时钟 backupTestTime 计算清理阈值；测试文件的 mtime 必须相对同一
+	// 时钟构造，不能用真实 time.Now()，否则注入时钟下旧文件会被误判为新文件。
+	oldTime := backupTestTime.Add(-72 * time.Hour)
 	if err := os.Chtimes(staleFile, oldTime, oldTime); err != nil {
 		t.Fatalf("设置遗留文件时间失败：%v", err)
 	}

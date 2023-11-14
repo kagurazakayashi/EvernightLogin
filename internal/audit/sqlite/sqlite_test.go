@@ -134,9 +134,32 @@ func TestMigrationApplied(t *testing.T) {
 		}
 		versions = append(versions, version)
 	}
-	if len(versions) != 44 || versions[0] != "0001" || versions[1] != "0002" || versions[2] != "0003" || versions[3] != "0004" || versions[4] != "0005" || versions[5] != "0006" || versions[6] != "0007" || versions[7] != "0008" || versions[8] != "0009" || versions[9] != "0010" || versions[10] != "0011" || versions[11] != "0012" || versions[12] != "0013" || versions[13] != "0014" || versions[14] != "0015" || versions[15] != "0016" || versions[16] != "0017" || versions[17] != "0018" || versions[18] != "0019" || versions[19] != "0020" || versions[20] != "0021" || versions[21] != "0022" || versions[22] != "0023" || versions[23] != "0024" || versions[24] != "0025" || versions[25] != "0026" || versions[26] != "0027" || versions[27] != "0028" || versions[28] != "0029" || versions[29] != "0030" || versions[30] != "0031" || versions[31] != "0032" || versions[32] != "0033" || versions[33] != "0034" || versions[34] != "0035" || versions[35] != "0036" || versions[36] != "0037" || versions[37] != "0038" || versions[38] != "0039" || versions[39] != "0040" || versions[40] != "0041" || versions[41] != "0042" || versions[42] != "0043" || versions[43] != "0044" {
-		t.Fatalf("迁移历史 = %v，期望 [0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012 0013 0014 0015 0016 0017 0018 0019 0020 0021 0022 0023 0024 0025 0026 0027 0028 0029 0030 0031 0032 0033 0034 0035 0036]", versions)
+	// 期望版本从同一嵌入迁移源动态计算，避免新增迁移后硬编码计数漂移；同时保留
+	// 结构性断言：与源迁移数量一致、逐项版本一致（隐含升序）、首尾一致。
+	migrationSet, err := migrate.LoadMigrations(migrations.SQLite)
+	if err != nil {
+		t.Fatalf("加载迁移源失败: %v", err)
 	}
+	if len(migrationSet) == 0 {
+		t.Fatal("内嵌迁移为空")
+	}
+	if len(versions) != len(migrationSet) {
+		t.Fatalf("迁移历史条数 = %d，期望源迁移数 %d（历史=%v）",
+			len(versions), len(migrationSet), versions)
+	}
+	for index, migration := range migrationSet {
+		if versions[index] != migration.Version {
+			t.Fatalf("第 %d 条迁移历史 = %q，期望源迁移 %q（历史=%v）",
+				index, versions[index], migration.Version, versions)
+		}
+	}
+	if versions[0] != migrationSet[0].Version ||
+		versions[len(versions)-1] != migrationSet[len(migrationSet)-1].Version {
+		t.Fatalf("迁移历史首尾 = %q..%q，期望 %q..%q", versions[0],
+			versions[len(versions)-1], migrationSet[0].Version,
+			migrationSet[len(migrationSet)-1].Version)
+	}
+
 	type column struct {
 		kind    string
 		notNull int
