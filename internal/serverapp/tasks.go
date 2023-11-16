@@ -11,6 +11,11 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/auditops"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
+	authzsqlite "github.com/kagurazakayashi/EvernightLogin/internal/authz/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/backupadmin"
+	bootstrapsqlite "github.com/kagurazakayashi/EvernightLogin/internal/bootstrap/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	mailersqlite "github.com/kagurazakayashi/EvernightLogin/internal/mailer/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
@@ -61,6 +66,12 @@ type TaskRuntime struct {
 	logger       *slog.Logger
 	now          func() time.Time
 	handlerKinds []string
+	// deps 保留装配依赖，供运行前权限复验惰性构造真实权限判定器（不改变构造顺序）。
+	deps Deps
+	// permissionOnce 保证权限判定器只构造一次；失败后保持 fail-closed。
+	permissionOnce    sync.Once
+	permissionChecker *permissionChecker
+	permissionErr     error
 
 	hookMu      sync.Mutex
 	enqueueHook func(ctx context.Context, schedule task.Schedule, jobID string)
@@ -249,7 +260,7 @@ func NewTaskRuntime(deps Deps, gate *SecurityGate) (*TaskRuntime, error) {
 	}
 	runtime := &TaskRuntime{
 		store: taskStore, mailer: mailDelivery, webhook: webhookService,
-		enqueuer: relay, logger: logger, now: now,
+		enqueuer: relay, logger: logger, now: now, deps: deps,
 	}
 	// 调度器不依赖执行器/处理器，先创建以便备份管理等域服务在处理器注册前就能
 	// 持有真实调度器；成功入队回调通过动态 hook 转发（Start 前由宿主设置）。
@@ -310,6 +321,94 @@ func (r *TaskRuntime) Enqueuer() *taskEnqueuerRelay {
 	return r.enqueuer
 }
 
+// checkTaskPermission 是任务运行前的可信权限复验回调，注入 task.Options。
+//
+// 语义：
+//   - 系统/local_admin 是宿主受信主体，允许执行（与既有 host authorizer 的受信
+//     主体边界一致）；
+//   - 普通用户必须按任务类型映射到真实权限键，并在系统范围经真实权限引擎判定；
+//   - 未映射的任务类型、非法/非用户主体或权限引擎不可用一律拒绝（fail-closed），
+//     不默认放行。
+//
+// 该回调只做运行前复验；处理器自身仍会重新授权/复核数据范围，二者不互相替代。
+func (r *TaskRuntime) checkTaskPermission(ctx context.Context,
+	request task.PermissionRequest) error {
+	if r == nil {
+		return fmt.Errorf("任务运行时未构造：拒绝运行前权限复验")
+	}
+	if err := request.Actor.Validate(); err != nil {
+		return fmt.Errorf("任务发起者无效：拒绝运行前权限复验")
+	}
+	switch request.Actor.Type {
+	case audit.ActorSystem, audit.ActorLocalAdmin:
+		return nil
+	case audit.ActorUser:
+		key, ok := taskRunPermissionKey(request.Kind)
+		if !ok {
+			return fmt.Errorf("任务类型 %q 未登记运行权限：拒绝执行", request.Kind)
+		}
+		checker, err := r.taskPermissionChecker()
+		if err != nil {
+			return err
+		}
+		return checker.check(ctx, request.Actor.ID, key, "system")
+	default:
+		return fmt.Errorf("任务发起者类型 %q 不允许运行权限复验：拒绝执行",
+			request.Actor.Type)
+	}
+}
+
+// taskRunPermissionKey 把需要运行前复验的任务类型映射到真实权限键。
+// 未登记类型返回 ok=false，由调用方按 fail-closed 拒绝。
+func taskRunPermissionKey(kind string) (string, bool) {
+	switch strings.TrimSpace(kind) {
+	case auditops.TaskKindAuditExport:
+		return auditops.PermissionExport, true
+	case auditops.TaskKindAuditPurge:
+		return auditops.PermissionPurge, true
+	case backupadmin.KindBackupCreate:
+		return backupadmin.PermissionCreate, true
+	case backupadmin.KindBackupCleanup:
+		return backupadmin.PermissionCleanup, true
+	default:
+		return "", false
+	}
+}
+
+// taskPermissionChecker 惰性构造真实权限判定器：复用 bootstrap root 检查与真实
+// authz 存储/引擎；构造失败保持 fail-closed，不降级为放行。
+func (r *TaskRuntime) taskPermissionChecker() (*permissionChecker, error) {
+	r.permissionOnce.Do(func() {
+		if r.deps.Store == nil {
+			r.permissionErr = fmt.Errorf("任务权限复验缺少存储依赖")
+			return
+		}
+		bootstrapStore, err := bootstrapsqlite.New(r.deps.Store)
+		if err != nil {
+			r.permissionErr = fmt.Errorf("构造任务权限复验 root 存储失败: %w", err)
+			return
+		}
+		roots, err := newHostRootChecker(bootstrapStore)
+		if err != nil {
+			r.permissionErr = fmt.Errorf("构造任务权限复验 root 检查失败: %w", err)
+			return
+		}
+		authzStore, err := authzsqlite.New(r.deps.Store)
+		if err != nil {
+			r.permissionErr = fmt.Errorf("构造任务权限复验存储失败: %w", err)
+			return
+		}
+		access, err := authz.New(authz.Options{Store: authzStore,
+			Authorizer: selfQueryAuthorizer{}, Logger: r.logger})
+		if err != nil {
+			r.permissionErr = fmt.Errorf("构造任务权限复验引擎失败: %w", err)
+			return
+		}
+		r.permissionChecker = newPermissionChecker(access, roots)
+	})
+	return r.permissionChecker, r.permissionErr
+}
+
 // Complete 注册本阶段真实存在的任务处理器并创建执行器与定时调度器。
 //
 // 必须的处理器：
@@ -350,6 +449,10 @@ func (r *TaskRuntime) Complete(extra map[string]task.Handler) error {
 		Store: r.store, Handlers: handlers, ExecutorID: taskExecutorID,
 		MaxConcurrent: taskMaxConcurrent, PollInterval: taskPollInterval,
 		ShutdownTimeout: taskShutdownTimeout, Logger: r.logger, Now: now,
+		// 运行前权限复验：审计导出/清理、备份创建/清理等任务标记
+		// PermissionRequired；缺少可信回调时执行器会 fail-closed。回调按任务类型
+		// 映射到真实权限键，受信宿主主体放行，其余一律经权限引擎判定。
+		PermissionCheck: r.checkTaskPermission,
 	})
 	if err != nil {
 		return fmt.Errorf("构造任务执行器失败: %w", err)
