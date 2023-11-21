@@ -496,6 +496,98 @@
       "pagination": {"mode": "none", "reason": "遍历辅助工具不定义新的列表端点；复用 216/217 的 AdminPage/AdminPageInfo 契约，默认有界（10 页/1000 项），支持取消、最大页/项、防重复 offset 与明确部分结果语义。"},
       "notes": "单页列表 API 不强制使用迭代器；跨应用范围/授权仍由调用方 fetch 的具体领域列表服务判定。"
     },    {
+      "id": "admin.observability_lists",
+      "title": "审计/报告/任务/备份管理列表分页闭环（步骤 218）",
+      "domain": "管理",
+      "internal_services": ["internal/auditops", "internal/reports", "internal/backupadmin", "internal/adminapi", "internal/task"],
+      "app_api": ["AdminAuditChange", "AdminAuditEvent", "AdminAuditEventList", "AdminAuditFilter", "AdminBackupArtifact", "AdminBackupArtifactList", "AdminBackupJob", "AdminBackupJobList", "AdminBackupNotification", "AdminBackupNotificationList", "AdminBackupSchedule", "AdminBackupScheduleList", "AdminListAuditEventsRequest", "AdminListBackupArtifactsRequest", "AdminListBackupJobsRequest", "AdminListBackupNotificationsRequest", "AdminListBackupSchedulesRequest", "AdminListReportPlansRequest", "AdminListReportsRequest", "AdminListTasksRequest", "AdminReportArtifact", "AdminReportHistory", "AdminReportList", "AdminReportPlan", "AdminReportPlanList", "AdminTask", "AdminTaskList"],
+      "admin_routes": ["GET tasks"],
+      "tests": [
+        {"package": "./app", "run": "TestAdminObservabilityListsPagination", "files": ["app/admin_observability_test.go"]},
+        {"package": "./internal/adminapi", "run": "TestAdminAuditEventsCursorHTTP"},
+        {"package": "./internal/adminapi", "run": "TestBackupEndpointsWiring"},
+        {"package": "./internal/adminapi", "run": "TestReportEndpointsWiring"}
+      ],
+      "pagination": {"mode": "cursor", "continuation": "cursor", "evidence": ["AdminListAuditEventsRequest.Cursor", "AdminAuditEventList.NextCursor", "AdminListReportsRequest.Cursor", "AdminReportList.NextCursor", "AdminListTasksRequest.Cursor", "AdminTaskList.NextCursor", "AdminListBackupJobsRequest.Page", "AdminBackupJobList.HasMore"]},
+      "notes": "大流水（审计/报告/任务）优先稳定游标；任务/备份/报告计划等小表使用 Page/HasMore offset 分页；游标绑定查询范围与筛选。"
+    },
+    {
+      "id": "account.lifecycle_public",
+      "title": "注册、资料与邮箱生命周期公开 Go 门面（步骤 221）",
+      "domain": "账户",
+      "internal_services": ["internal/registration", "internal/profile", "internal/emailchange", "internal/session"],
+      "app_api": ["CancelEmailChangeRequest", "ChangeOwnUsernameRequest", "EmailChangeService", "EmailChangeState", "EmailChangeStateRequest", "EmailChangeVerified", "EmailVerificationSendResult", "OwnProfileRequest", "ProfileService", "ProfileView", "RegisterAccountRequest", "RegisteredAccount", "RegistrationAvailability", "RegistrationService", "RequestEmailChangeRequest", "ResendEmailVerificationRequest", "ResendEmailVerificationResult", "Runtime.EmailChange", "Runtime.Profile", "Runtime.Registration", "SendEmailVerificationRequest", "UpdateOwnProfileRequest", "VerifiedEmail", "VerifyEmailChangeRequest", "VerifyEmailRequest"],
+      "tests": [
+        {"package": "./app", "run": "TestRegistrationPublicFlow", "files": ["app/registration_public_test.go"]},
+        {"package": "./app", "run": "TestProfilePublicFlow", "files": ["app/profile_public_test.go"]},
+        {"package": "./app", "run": "TestEmailChangePublicFlow", "files": ["app/emailchange_public_test.go"]}
+      ],
+      "pagination": {"mode": "none", "reason": "注册/资料/邮箱生命周期服务是单账户单次操作或一次性令牌流程；没有可增长列表，重发/待处理状态为固定单条。"},
+      "notes": "会话派生身份 + 字段白名单 + 请求编号；邮箱切换复用旧找回链接失效链，公开类型不含 verified/root/安全版本字段。"
+    },
+    {
+      "id": "account.user_lifecycle_public",
+      "title": "用户生命周期、自有密码、邀请审批与批量导入公开门面（步骤 223）",
+      "domain": "账户",
+      "internal_services": ["internal/account", "internal/userbatch", "internal/onboarding", "internal/authn", "internal/session"],
+      "app_api": ["AdminCancelInvitationRequest", "AdminCreateInvitationRequest", "AdminDeletionPreview", "AdminDeletionResult", "AdminInvitation", "AdminInvitationCancelResult", "AdminInvitationCreateResult", "AdminInvitationList", "AdminInvitationRequest", "AdminInvitationRole", "AdminListInvitationsRequest", "AdminListRegistrationsRequest", "AdminRegistration", "AdminRegistrationDecisionRequest", "AdminRegistrationDecisionResult", "AdminRegistrationList", "AdminRegistrationRequest", "AdminUserBatchCancelRequest", "AdminUserBatchExportRequest", "AdminUserBatchImportRequest", "AdminUserBatchJob", "AdminUserBatchJobList", "AdminUserBatchJobRequest", "AdminUserBatchJobStart", "AdminUserBatchListJobsRequest", "AdminUserBatchParseError", "AdminUserBatchPrecheckRequest", "AdminUserBatchPrecheckResult", "AdminUserBatchRow", "AdminUserBatchRowList", "AdminUserBatchRowsRequest", "AdminUserState", "AdminUserStateChange", "AdminUserStateRequest", "ChangeOwnPasswordRequest", "InvitationAdminService", "PasswordChangeResult", "PasswordChangeService", "Runtime.Invitations", "Runtime.Passwords", "Runtime.UserBatch", "Runtime.UserLifecycle", "UserBatchService", "UserLifecycleService"],
+      "tests": [
+        {"package": "./app", "run": "TestUserLifecycleLocalAdminChain", "files": ["app/users_public_test.go"]},
+        {"package": "./app", "run": "TestChangeOwnPassword", "files": ["app/passwords_public_test.go"]},
+        {"package": "./app", "run": "TestInvitationAdminLifecycle", "files": ["app/invitations_public_test.go"]},
+        {"package": "./app", "run": "TestUserBatchImportLifecycle", "files": ["app/userbatch_public_test.go"]}
+      ],
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["AdminUserBatchListJobsRequest.Page", "AdminUserBatchJobList.HasMore", "AdminListInvitationsRequest.Page", "AdminInvitationList.HasMore", "AdminListRegistrationsRequest.Page", "AdminRegistrationList.HasMore", "AdminUserBatchRowsRequest.Limit", "AdminUserBatchRowList.Truncated"]},
+      "notes": "批量任务列表/邀请/注册审核按 Page+HasMore 分页；批量行结果由 Limit+Truncated 明确截断语义；状态变更保留会话/令牌失效与审计。"
+    },
+    {
+      "id": "rbac.public_facade",
+      "title": "角色/用户组/权限/预设/委派/授权查询公开门面（步骤 224）",
+      "domain": "授权",
+      "internal_services": ["internal/role", "internal/permission", "internal/group", "internal/delegation", "internal/preset", "internal/authz"],
+      "app_api": ["RBACAuthorizationService", "RBACCatalogRequest", "RBACCheckRequest", "RBACCheckResult", "RBACCreateGroupRequest", "RBACDelegatablePermission", "RBACDelegatableRequest", "RBACDelegation", "RBACDelegationList", "RBACDelegationListRequest", "RBACDelegationRequest", "RBACDelegationService", "RBACEffectivePermission", "RBACEffectiveRequest", "RBACEffectiveResult", "RBACGrantSource", "RBACGroup", "RBACGroupMemberBatchRequest", "RBACGroupMemberBatchResult", "RBACGroupRequest", "RBACGroupService", "RBACPermission", "RBACPermissionDecision", "RBACPermissionRequest", "RBACPermissionService", "RBACPermissionSourcesRequest", "RBACPermissionSourcesResult", "RBACPresetCatalog", "RBACPresetPermission", "RBACPresetPreview", "RBACPresetPreviewRequest", "RBACPresetRestoreRequest", "RBACPresetRestoreResult", "RBACPresetRoleDiff", "RBACPresetScopeDiff", "RBACPresetSelection", "RBACPresetService", "RBACPresetSkippedScope", "RBACPresetSummary", "RBACResourceAccessRequest", "RBACResourceDecision", "RBACRole", "RBACRoleGroupRequest", "RBACRolePermissionRemoveRequest", "RBACRoleRequest", "RBACRoleService", "RBACRoleStateRequest", "RBACService", "RBACUpdateGroupRequest", "RBACUpdatePermissionRequest", "RBACUpdateRoleRequest", "Runtime.RBAC"],
+      "tests": [
+        {"package": "./app", "run": "TestRBACRoleLifecycleAndRootProtection", "files": ["app/rbac_public_test.go"]},
+        {"package": "./app", "run": "TestRBACGroupLifecycleAndMembers", "files": ["app/rbac_public_test.go"]},
+        {"package": "./app", "run": "TestRBACAuthorizationCrossAppAndRevoke", "files": ["app/rbac_public_test.go"]},
+        {"package": "./app", "run": "TestRBACPresetCatalogImplementedFlags", "files": ["app/rbac_presets_delegations_test.go"]},
+        {"package": "./app", "run": "TestRBACPublicSurfaceHasNoInternalTypes", "files": ["app/rbac_surface_test.go"]}
+      ],
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["RBACDelegationListRequest.Page", "RBACDelegationList.HasMore"]},
+      "notes": "六组服务 RBACService/Role/Group/Permission/Preset/Delegation/Authorization 复用真实领域授权与委派范围检查；委派列表分页，其余为单资源操作。"
+    },
+    {
+      "id": "applications.oauth_delegation_public",
+      "title": "应用生命周期、OAuth 客户端与应用成员委派公开门面（步骤 225）",
+      "domain": "应用",
+      "internal_services": ["internal/app", "internal/oauthclient", "internal/delegation", "internal/managedapi", "internal/role"],
+      "app_api": ["AdminApplicationDeleteRequest", "AdminApplicationDeletionPreview", "AdminApplicationDeletionResult", "AdminApplicationDetail", "AdminApplicationMemberChange", "AdminApplicationMemberChangeRequest", "AdminApplicationMemberDetail", "AdminApplicationMemberRequest", "AdminApplicationPurgeRequest", "AdminApplicationPurgeResult", "AdminClientCertificateInfo", "AdminClientSecretInfo", "AdminDelegatablePermission", "AdminDelegatablePermissionsRequest", "AdminDelegationDetail", "AdminDelegationList", "AdminDelegationRequest", "AdminDelegationRevokeResult", "AdminListDelegationsRequest", "AdminOAuthClient", "AdminOAuthClientCertificateRequest", "AdminOAuthClientRegistration", "AdminOAuthClientRequest", "AdminOAuthClientSecretRevokeRequest", "AdminOAuthClientSecretRotateRequest", "AdminRegisterOAuthClientRequest", "AdminRevealedClientSecret", "AdminUpdateApplicationMemberRequest", "AdminUpdateApplicationRequest", "AdminUpdateOAuthClientSettingsRequest", "ApplicationLifecycleService", "DelegationAdminService", "OAuthClientAdminService", "Runtime.Applications", "Runtime.Delegations", "Runtime.OAuthClients"],
+      "tests": [
+        {"package": "./app", "run": "TestApplicationLifecyclePublicFlow", "files": ["app/applications_public_test.go"]},
+        {"package": "./app", "run": "TestOAuthClientCredentialsPublicFlow", "files": ["app/oauthclients_public_test.go"]},
+        {"package": "./app", "run": "TestDelegationPublicFlow", "files": ["app/delegations_public_test.go"]}
+      ],
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["AdminListDelegationsRequest.Page", "AdminDelegationList.HasMore"]},
+      "notes": "应用删除/清理需预览与显式确认；OAuth 客户端秘密只按注册流程一次展示，列表不含秘密；委派列表分页且受可转授范围约束。"
+    },
+    {
+      "id": "audit.reports_public",
+      "title": "审计查询、导出/清理与统计报告公开 Go 门面（步骤 230）",
+      "domain": "审计与报告",
+      "internal_services": ["internal/auditops", "internal/reports", "internal/stats", "internal/serverapp"],
+      "app_api": ["AdminAuditEventDetail", "AdminAuditEventRequest", "AdminAuditExport", "AdminAuditExportCancelRequest", "AdminAuditExportList", "AdminAuditExportListRequest", "AdminAuditExportRequest", "AdminAuditExportStartRequest", "AdminAuditPurgeCancelRequest", "AdminAuditPurgePreview", "AdminAuditPurgePreviewRequest", "AdminAuditPurgeRun", "AdminAuditPurgeRunList", "AdminAuditPurgeRunListRequest", "AdminAuditPurgeRunRequest", "AdminAuditPurgeStartRequest", "AdminAuditRetention", "AdminAuditRetentionRequest", "AdminAuditRetentionSetRequest", "AdminDownload", "AdminErrorCategorySummary", "AdminErrorStatsRequest", "AdminErrorStatsResult", "AdminErrorStatsRow", "AdminReport", "AdminReportArtifactInfo", "AdminReportArtifactRequest", "AdminReportCancelRequest", "AdminReportCapabilities", "AdminReportCapabilitiesRequest", "AdminReportCleanupFailure", "AdminReportCleanupPreview", "AdminReportCleanupPreviewRequest", "AdminReportCleanupRequest", "AdminReportCleanupResult", "AdminReportCleanupTarget", "AdminReportCompleteness", "AdminReportRequest", "AdminReportRetentionPolicy", "AdminReportRetryRequest", "AdminReportStartRequest", "AdminReportSummary", "AdminStatsCompleteness", "AdminStatsMissingInterval", "AdminTaskAttempt", "AdminTaskCancelRequest", "AdminTaskCancelResult", "AdminTaskRequest", "AuditService", "ReportsService", "Runtime.Audit", "Runtime.Reports"],
+      "tests": [
+        {"package": "./app", "run": "TestAuditReportsPublicFacade", "files": ["app/audit_reports_public_test.go"]},
+        {"package": "./app", "run": "TestAuditExportPublicFacade", "files": ["app/audit_export_public_test.go"]},
+        {"package": "./app", "run": "TestAuditErrorStatsCrossApplicationIsolation", "files": ["app/audit_cross_app_public_test.go"]},
+        {"package": "./app", "run": "TestReportsPublicCancelRetry", "files": ["app/report_lifecycle_public_test.go"]},
+        {"package": "./app", "run": "TestTaskPermissionRecheckFailClosed", "files": ["app/task_permission_wiring_test.go"]},
+        {"package": "./internal/serverapp", "run": "TestTaskRunPermissionKeyMappings", "files": ["internal/serverapp/tasks_permission_test.go"]}
+      ],
+      "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["AdminAuditExportListRequest.Page", "AdminAuditExportList.HasMore", "AdminAuditPurgeRunListRequest.Page", "AdminAuditPurgeRunList.HasMore", "AdminErrorStatsRequest.Limit", "AdminErrorStatsResult.HasMore"]},
+      "notes": "审计事件查询延续 218 的游标分页；导出任务/清理运行/错误统计使用 Page 或 Limit+HasMore offset 分页。报告生成/取消/重试/清理为单任务操作；导出下载与清理需再次认证，权限由领域与审计共同判定。"
+    },
+    {
       "id": "gap.unimplemented_permissions",
       "title": "已知未实现权限键（settings.manage / diagnostics.read）",
       "domain": "已知缺口",

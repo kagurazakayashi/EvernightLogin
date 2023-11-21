@@ -2,7 +2,7 @@
   "schema": "evernight.capability-matrix/v1",
   "description": "EvernightLogin 本轮机器可读能力清单：由 scripts/capabilities 扫描源码生成，状态由声明面是否真实解析决定，禁止手写全绿。",
   "metadata": {
-    "generated_at": "2026-11-24T19:45:43Z",
+    "generated_at": "2026-11-24T20:55:41Z",
     "generator": "go run ./scripts/capabilities",
     "repo_root": ".",
     "git_head": "",
@@ -21,19 +21,19 @@
       "internal/",
       "测试函数（根、app、internal、cmd 的 *_test.go）"
     ],
-    "files_scanned": 610
+    "files_scanned": 658
   },
   "summary": {
-    "total": 36,
-    "implemented": 35,
+    "total": 42,
+    "implemented": 41,
     "implemented_untested": 0,
     "missing": 0,
     "unimplemented": 1,
     "by_status": {
-      "implemented": 35,
+      "implemented": 41,
       "unimplemented": 1
     },
-    "matched_tests_total": 128
+    "matched_tests_total": 154
   },
   "capabilities": [
     {
@@ -216,6 +216,293 @@
       "matched_tests": [
         "./internal/tokenauthz:TestIntegrationRealTokenAndPermission",
         "./internal/tokenauthz:TestStep92HTTPJointAuthorization"
+      ]
+    },
+    {
+      "id": "account.lifecycle_public",
+      "title": "注册、资料与邮箱生命周期公开 Go 门面（步骤 221）",
+      "domain": "账户",
+      "internal_services": [
+        "internal/registration",
+        "internal/profile",
+        "internal/emailchange",
+        "internal/session"
+      ],
+      "app_api": [
+        "CancelEmailChangeRequest",
+        "ChangeOwnUsernameRequest",
+        "EmailChangeService",
+        "EmailChangeState",
+        "EmailChangeStateRequest",
+        "EmailChangeVerified",
+        "EmailVerificationSendResult",
+        "OwnProfileRequest",
+        "ProfileService",
+        "ProfileView",
+        "RegisterAccountRequest",
+        "RegisteredAccount",
+        "RegistrationAvailability",
+        "RegistrationService",
+        "RequestEmailChangeRequest",
+        "ResendEmailVerificationRequest",
+        "ResendEmailVerificationResult",
+        "Runtime.EmailChange",
+        "Runtime.Profile",
+        "Runtime.Registration",
+        "SendEmailVerificationRequest",
+        "UpdateOwnProfileRequest",
+        "VerifiedEmail",
+        "VerifyEmailChangeRequest",
+        "VerifyEmailRequest"
+      ],
+      "pagination": {
+        "mode": "none",
+        "reason": "注册/资料/邮箱生命周期服务是单账户单次操作或一次性令牌流程；没有可增长列表，重发/待处理状态为固定单条。"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestRegistrationPublicFlow",
+          "files": [
+            "app/registration_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestProfilePublicFlow",
+          "files": [
+            "app/profile_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestEmailChangePublicFlow",
+          "files": [
+            "app/emailchange_public_test.go"
+          ]
+        }
+      ],
+      "notes": "会话派生身份 + 字段白名单 + 请求编号；邮箱切换复用旧找回链接失效链，公开类型不含 verified/root/安全版本字段。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 4,
+          "found": 4
+        },
+        {
+          "kind": "app_api",
+          "total": 25,
+          "found": 25
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 3,
+          "found": 3
+        }
+      ],
+      "matched_tests": [
+        "./app:TestRegistrationPublicFlow",
+        "./app:TestProfilePublicFlow",
+        "./app:TestEmailChangePublicFlow"
+      ]
+    },
+    {
+      "id": "account.user_lifecycle_public",
+      "title": "用户生命周期、自有密码、邀请审批与批量导入公开门面（步骤 223）",
+      "domain": "账户",
+      "internal_services": [
+        "internal/account",
+        "internal/userbatch",
+        "internal/onboarding",
+        "internal/authn",
+        "internal/session"
+      ],
+      "app_api": [
+        "AdminCancelInvitationRequest",
+        "AdminCreateInvitationRequest",
+        "AdminDeletionPreview",
+        "AdminDeletionResult",
+        "AdminInvitation",
+        "AdminInvitationCancelResult",
+        "AdminInvitationCreateResult",
+        "AdminInvitationList",
+        "AdminInvitationRequest",
+        "AdminInvitationRole",
+        "AdminListInvitationsRequest",
+        "AdminListRegistrationsRequest",
+        "AdminRegistration",
+        "AdminRegistrationDecisionRequest",
+        "AdminRegistrationDecisionResult",
+        "AdminRegistrationList",
+        "AdminRegistrationRequest",
+        "AdminUserBatchCancelRequest",
+        "AdminUserBatchExportRequest",
+        "AdminUserBatchImportRequest",
+        "AdminUserBatchJob",
+        "AdminUserBatchJobList",
+        "AdminUserBatchJobRequest",
+        "AdminUserBatchJobStart",
+        "AdminUserBatchListJobsRequest",
+        "AdminUserBatchParseError",
+        "AdminUserBatchPrecheckRequest",
+        "AdminUserBatchPrecheckResult",
+        "AdminUserBatchRow",
+        "AdminUserBatchRowList",
+        "AdminUserBatchRowsRequest",
+        "AdminUserState",
+        "AdminUserStateChange",
+        "AdminUserStateRequest",
+        "ChangeOwnPasswordRequest",
+        "InvitationAdminService",
+        "PasswordChangeResult",
+        "PasswordChangeService",
+        "Runtime.Invitations",
+        "Runtime.Passwords",
+        "Runtime.UserBatch",
+        "Runtime.UserLifecycle",
+        "UserBatchService",
+        "UserLifecycleService"
+      ],
+      "pagination": {
+        "mode": "offset",
+        "evidence": [
+          "AdminUserBatchListJobsRequest.Page",
+          "AdminUserBatchJobList.HasMore",
+          "AdminListInvitationsRequest.Page",
+          "AdminInvitationList.HasMore",
+          "AdminListRegistrationsRequest.Page",
+          "AdminRegistrationList.HasMore",
+          "AdminUserBatchRowsRequest.Limit",
+          "AdminUserBatchRowList.Truncated"
+        ],
+        "continuation": "has_more"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestUserLifecycleLocalAdminChain",
+          "files": [
+            "app/users_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestChangeOwnPassword",
+          "files": [
+            "app/passwords_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestInvitationAdminLifecycle",
+          "files": [
+            "app/invitations_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestUserBatchImportLifecycle",
+          "files": [
+            "app/userbatch_public_test.go"
+          ]
+        }
+      ],
+      "notes": "批量任务列表/邀请/注册审核按 Page+HasMore 分页；批量行结果由 Limit+Truncated 明确截断语义；状态变更保留会话/令牌失效与审计。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 5,
+          "found": 5
+        },
+        {
+          "kind": "app_api",
+          "total": 44,
+          "found": 44
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 4,
+          "found": 4
+        }
+      ],
+      "matched_tests": [
+        "./app:TestUserLifecycleLocalAdminChain",
+        "./app:TestChangeOwnPassword",
+        "./app:TestChangeOwnPasswordRejections",
+        "./app:TestInvitationAdminLifecycle",
+        "./app:TestUserBatchImportLifecycle"
       ]
     },
     {
@@ -495,6 +782,145 @@
       ]
     },
     {
+      "id": "admin.observability_lists",
+      "title": "审计/报告/任务/备份管理列表分页闭环（步骤 218）",
+      "domain": "管理",
+      "internal_services": [
+        "internal/auditops",
+        "internal/reports",
+        "internal/backupadmin",
+        "internal/adminapi",
+        "internal/task"
+      ],
+      "app_api": [
+        "AdminAuditChange",
+        "AdminAuditEvent",
+        "AdminAuditEventList",
+        "AdminAuditFilter",
+        "AdminBackupArtifact",
+        "AdminBackupArtifactList",
+        "AdminBackupJob",
+        "AdminBackupJobList",
+        "AdminBackupNotification",
+        "AdminBackupNotificationList",
+        "AdminBackupSchedule",
+        "AdminBackupScheduleList",
+        "AdminListAuditEventsRequest",
+        "AdminListBackupArtifactsRequest",
+        "AdminListBackupJobsRequest",
+        "AdminListBackupNotificationsRequest",
+        "AdminListBackupSchedulesRequest",
+        "AdminListReportPlansRequest",
+        "AdminListReportsRequest",
+        "AdminListTasksRequest",
+        "AdminReportArtifact",
+        "AdminReportHistory",
+        "AdminReportList",
+        "AdminReportPlan",
+        "AdminReportPlanList",
+        "AdminTask",
+        "AdminTaskList"
+      ],
+      "admin_routes": [
+        "GET tasks"
+      ],
+      "pagination": {
+        "mode": "cursor",
+        "evidence": [
+          "AdminListAuditEventsRequest.Cursor",
+          "AdminAuditEventList.NextCursor",
+          "AdminListReportsRequest.Cursor",
+          "AdminReportList.NextCursor",
+          "AdminListTasksRequest.Cursor",
+          "AdminTaskList.NextCursor",
+          "AdminListBackupJobsRequest.Page",
+          "AdminBackupJobList.HasMore"
+        ],
+        "continuation": "cursor"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestAdminObservabilityListsPagination",
+          "files": [
+            "app/admin_observability_test.go"
+          ]
+        },
+        {
+          "package": "./internal/adminapi",
+          "run": "TestAdminAuditEventsCursorHTTP"
+        },
+        {
+          "package": "./internal/adminapi",
+          "run": "TestBackupEndpointsWiring"
+        },
+        {
+          "package": "./internal/adminapi",
+          "run": "TestReportEndpointsWiring"
+        }
+      ],
+      "notes": "大流水（审计/报告/任务）优先稳定游标；任务/备份/报告计划等小表使用 Page/HasMore offset 分页；游标绑定查询范围与筛选。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 5,
+          "found": 5
+        },
+        {
+          "kind": "app_api",
+          "total": 27,
+          "found": 27
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 4,
+          "found": 4
+        }
+      ],
+      "matched_tests": [
+        "./app:TestAdminObservabilityListsPagination",
+        "./internal/adminapi:TestAdminAuditEventsCursorHTTP",
+        "./internal/adminapi:TestBackupEndpointsWiring",
+        "./internal/adminapi:TestReportEndpointsWiring"
+      ]
+    },
+    {
       "id": "adminapi.core",
       "title": "管理 JSON API 基础端点、错误码与任务详情",
       "domain": "管理",
@@ -721,6 +1147,146 @@
       ]
     },
     {
+      "id": "applications.oauth_delegation_public",
+      "title": "应用生命周期、OAuth 客户端与应用成员委派公开门面（步骤 225）",
+      "domain": "应用",
+      "internal_services": [
+        "internal/app",
+        "internal/oauthclient",
+        "internal/delegation",
+        "internal/managedapi",
+        "internal/role"
+      ],
+      "app_api": [
+        "AdminApplicationDeleteRequest",
+        "AdminApplicationDeletionPreview",
+        "AdminApplicationDeletionResult",
+        "AdminApplicationDetail",
+        "AdminApplicationMemberChange",
+        "AdminApplicationMemberChangeRequest",
+        "AdminApplicationMemberDetail",
+        "AdminApplicationMemberRequest",
+        "AdminApplicationPurgeRequest",
+        "AdminApplicationPurgeResult",
+        "AdminClientCertificateInfo",
+        "AdminClientSecretInfo",
+        "AdminDelegatablePermission",
+        "AdminDelegatablePermissionsRequest",
+        "AdminDelegationDetail",
+        "AdminDelegationList",
+        "AdminDelegationRequest",
+        "AdminDelegationRevokeResult",
+        "AdminListDelegationsRequest",
+        "AdminOAuthClient",
+        "AdminOAuthClientCertificateRequest",
+        "AdminOAuthClientRegistration",
+        "AdminOAuthClientRequest",
+        "AdminOAuthClientSecretRevokeRequest",
+        "AdminOAuthClientSecretRotateRequest",
+        "AdminRegisterOAuthClientRequest",
+        "AdminRevealedClientSecret",
+        "AdminUpdateApplicationMemberRequest",
+        "AdminUpdateApplicationRequest",
+        "AdminUpdateOAuthClientSettingsRequest",
+        "ApplicationLifecycleService",
+        "DelegationAdminService",
+        "OAuthClientAdminService",
+        "Runtime.Applications",
+        "Runtime.Delegations",
+        "Runtime.OAuthClients"
+      ],
+      "pagination": {
+        "mode": "offset",
+        "evidence": [
+          "AdminListDelegationsRequest.Page",
+          "AdminDelegationList.HasMore"
+        ],
+        "continuation": "has_more"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestApplicationLifecyclePublicFlow",
+          "files": [
+            "app/applications_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestOAuthClientCredentialsPublicFlow",
+          "files": [
+            "app/oauthclients_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestDelegationPublicFlow",
+          "files": [
+            "app/delegations_public_test.go"
+          ]
+        }
+      ],
+      "notes": "应用删除/清理需预览与显式确认；OAuth 客户端秘密只按注册流程一次展示，列表不含秘密；委派列表分页且受可转授范围约束。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 5,
+          "found": 5
+        },
+        {
+          "kind": "app_api",
+          "total": 36,
+          "found": 36
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 3,
+          "found": 3
+        }
+      ],
+      "matched_tests": [
+        "./app:TestApplicationLifecyclePublicFlow",
+        "./app:TestOAuthClientCredentialsPublicFlow",
+        "./app:TestDelegationPublicFlow"
+      ]
+    },
+    {
       "id": "audit.events",
       "title": "安全审计查询、导出与保留清理",
       "domain": "审计与报告",
@@ -823,6 +1389,189 @@
         "./internal/audit:TestRedactChanges",
         "./internal/audit:TestRedactChangesFieldLimit",
         "./internal/adminapi:TestAuditQueryPermissionsAndDataScope"
+      ]
+    },
+    {
+      "id": "audit.reports_public",
+      "title": "审计查询、导出/清理与统计报告公开 Go 门面（步骤 230）",
+      "domain": "审计与报告",
+      "internal_services": [
+        "internal/auditops",
+        "internal/reports",
+        "internal/stats",
+        "internal/serverapp"
+      ],
+      "app_api": [
+        "AdminAuditEventDetail",
+        "AdminAuditEventRequest",
+        "AdminAuditExport",
+        "AdminAuditExportCancelRequest",
+        "AdminAuditExportList",
+        "AdminAuditExportListRequest",
+        "AdminAuditExportRequest",
+        "AdminAuditExportStartRequest",
+        "AdminAuditPurgeCancelRequest",
+        "AdminAuditPurgePreview",
+        "AdminAuditPurgePreviewRequest",
+        "AdminAuditPurgeRun",
+        "AdminAuditPurgeRunList",
+        "AdminAuditPurgeRunListRequest",
+        "AdminAuditPurgeRunRequest",
+        "AdminAuditPurgeStartRequest",
+        "AdminAuditRetention",
+        "AdminAuditRetentionRequest",
+        "AdminAuditRetentionSetRequest",
+        "AdminDownload",
+        "AdminErrorCategorySummary",
+        "AdminErrorStatsRequest",
+        "AdminErrorStatsResult",
+        "AdminErrorStatsRow",
+        "AdminReport",
+        "AdminReportArtifactInfo",
+        "AdminReportArtifactRequest",
+        "AdminReportCancelRequest",
+        "AdminReportCapabilities",
+        "AdminReportCapabilitiesRequest",
+        "AdminReportCleanupFailure",
+        "AdminReportCleanupPreview",
+        "AdminReportCleanupPreviewRequest",
+        "AdminReportCleanupRequest",
+        "AdminReportCleanupResult",
+        "AdminReportCleanupTarget",
+        "AdminReportCompleteness",
+        "AdminReportRequest",
+        "AdminReportRetentionPolicy",
+        "AdminReportRetryRequest",
+        "AdminReportStartRequest",
+        "AdminReportSummary",
+        "AdminStatsCompleteness",
+        "AdminStatsMissingInterval",
+        "AdminTaskAttempt",
+        "AdminTaskCancelRequest",
+        "AdminTaskCancelResult",
+        "AdminTaskRequest",
+        "AuditService",
+        "ReportsService",
+        "Runtime.Audit",
+        "Runtime.Reports"
+      ],
+      "pagination": {
+        "mode": "offset",
+        "evidence": [
+          "AdminAuditExportListRequest.Page",
+          "AdminAuditExportList.HasMore",
+          "AdminAuditPurgeRunListRequest.Page",
+          "AdminAuditPurgeRunList.HasMore",
+          "AdminErrorStatsRequest.Limit",
+          "AdminErrorStatsResult.HasMore"
+        ],
+        "continuation": "has_more"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestAuditReportsPublicFacade",
+          "files": [
+            "app/audit_reports_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestAuditExportPublicFacade",
+          "files": [
+            "app/audit_export_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestAuditErrorStatsCrossApplicationIsolation",
+          "files": [
+            "app/audit_cross_app_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestReportsPublicCancelRetry",
+          "files": [
+            "app/report_lifecycle_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestTaskPermissionRecheckFailClosed",
+          "files": [
+            "app/task_permission_wiring_test.go"
+          ]
+        },
+        {
+          "package": "./internal/serverapp",
+          "run": "TestTaskRunPermissionKeyMappings",
+          "files": [
+            "internal/serverapp/tasks_permission_test.go"
+          ]
+        }
+      ],
+      "notes": "审计事件查询延续 218 的游标分页；导出任务/清理运行/错误统计使用 Page 或 Limit+HasMore offset 分页。报告生成/取消/重试/清理为单任务操作；导出下载与清理需再次认证，权限由领域与审计共同判定。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 4,
+          "found": 4
+        },
+        {
+          "kind": "app_api",
+          "total": 52,
+          "found": 52
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 6,
+          "found": 6
+        }
+      ],
+      "matched_tests": [
+        "./app:TestAuditReportsPublicFacade",
+        "./app:TestAuditExportPublicFacade",
+        "./app:TestAuditErrorStatsCrossApplicationIsolation",
+        "./app:TestReportsPublicCancelRetry",
+        "./app:TestTaskPermissionRecheckFailClosed",
+        "./internal/serverapp:TestTaskRunPermissionKeyMappings"
       ]
     },
     {
@@ -2354,6 +3103,179 @@
       ]
     },
     {
+      "id": "rbac.public_facade",
+      "title": "角色/用户组/权限/预设/委派/授权查询公开门面（步骤 224）",
+      "domain": "授权",
+      "internal_services": [
+        "internal/role",
+        "internal/permission",
+        "internal/group",
+        "internal/delegation",
+        "internal/preset",
+        "internal/authz"
+      ],
+      "app_api": [
+        "RBACAuthorizationService",
+        "RBACCatalogRequest",
+        "RBACCheckRequest",
+        "RBACCheckResult",
+        "RBACCreateGroupRequest",
+        "RBACDelegatablePermission",
+        "RBACDelegatableRequest",
+        "RBACDelegation",
+        "RBACDelegationList",
+        "RBACDelegationListRequest",
+        "RBACDelegationRequest",
+        "RBACDelegationService",
+        "RBACEffectivePermission",
+        "RBACEffectiveRequest",
+        "RBACEffectiveResult",
+        "RBACGrantSource",
+        "RBACGroup",
+        "RBACGroupMemberBatchRequest",
+        "RBACGroupMemberBatchResult",
+        "RBACGroupRequest",
+        "RBACGroupService",
+        "RBACPermission",
+        "RBACPermissionDecision",
+        "RBACPermissionRequest",
+        "RBACPermissionService",
+        "RBACPermissionSourcesRequest",
+        "RBACPermissionSourcesResult",
+        "RBACPresetCatalog",
+        "RBACPresetPermission",
+        "RBACPresetPreview",
+        "RBACPresetPreviewRequest",
+        "RBACPresetRestoreRequest",
+        "RBACPresetRestoreResult",
+        "RBACPresetRoleDiff",
+        "RBACPresetScopeDiff",
+        "RBACPresetSelection",
+        "RBACPresetService",
+        "RBACPresetSkippedScope",
+        "RBACPresetSummary",
+        "RBACResourceAccessRequest",
+        "RBACResourceDecision",
+        "RBACRole",
+        "RBACRoleGroupRequest",
+        "RBACRolePermissionRemoveRequest",
+        "RBACRoleRequest",
+        "RBACRoleService",
+        "RBACRoleStateRequest",
+        "RBACService",
+        "RBACUpdateGroupRequest",
+        "RBACUpdatePermissionRequest",
+        "RBACUpdateRoleRequest",
+        "Runtime.RBAC"
+      ],
+      "pagination": {
+        "mode": "offset",
+        "evidence": [
+          "RBACDelegationListRequest.Page",
+          "RBACDelegationList.HasMore"
+        ],
+        "continuation": "has_more"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestRBACRoleLifecycleAndRootProtection",
+          "files": [
+            "app/rbac_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestRBACGroupLifecycleAndMembers",
+          "files": [
+            "app/rbac_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestRBACAuthorizationCrossAppAndRevoke",
+          "files": [
+            "app/rbac_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestRBACPresetCatalogImplementedFlags",
+          "files": [
+            "app/rbac_presets_delegations_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestRBACPublicSurfaceHasNoInternalTypes",
+          "files": [
+            "app/rbac_surface_test.go"
+          ]
+        }
+      ],
+      "notes": "六组服务 RBACService/Role/Group/Permission/Preset/Delegation/Authorization 复用真实领域授权与委派范围检查；委派列表分页，其余为单资源操作。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 6,
+          "found": 6
+        },
+        {
+          "kind": "app_api",
+          "total": 52,
+          "found": 52
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 5,
+          "found": 5
+        }
+      ],
+      "matched_tests": [
+        "./app:TestRBACRoleLifecycleAndRootProtection",
+        "./app:TestRBACGroupLifecycleAndMembers",
+        "./app:TestRBACAuthorizationCrossAppAndRevoke",
+        "./app:TestRBACPresetCatalogImplementedFlags",
+        "./app:TestRBACPublicSurfaceHasNoInternalTypes"
+      ]
+    },
+    {
       "id": "rbac.roles_permissions",
       "title": "用户组、角色、权限目录与委派",
       "domain": "授权",
@@ -3747,8 +4669,8 @@
     }
   ],
   "coverage": {
-    "app_types_total": 125,
-    "admin_routes_total": 112,
+    "app_types_total": 348,
+    "admin_routes_total": 113,
     "protocol_paths_total": 17,
     "pages_total": 241,
     "cli_commands_total": 40,
@@ -3779,6 +4701,127 @@
         "claim_mode": "offset"
       },
       {
+        "name": "AdminAuditEventList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "NextCursor"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminAuditExportList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "audit.reports_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminAuditExportListRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "audit.reports_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminAuditPurgeRunList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "audit.reports_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminAuditPurgeRunListRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "audit.reports_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminBackupArtifactList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminBackupJobList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminBackupNotificationList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminBackupScheduleList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminDelegationList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "applications.oauth_delegation_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminErrorStatsRequest",
+        "kind": "request",
+        "bounded": true,
+        "capability": "audit.reports_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminErrorStatsResult",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore"
+        ],
+        "capability": "audit.reports_public",
+        "claim_mode": "offset"
+      },
+      {
         "name": "AdminGroupList",
         "kind": "result",
         "bounded": true,
@@ -3798,6 +4841,17 @@
           "Page"
         ],
         "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminInvitationList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "account.user_lifecycle_public",
         "claim_mode": "offset"
       },
       {
@@ -3833,6 +4887,46 @@
         "claim_mode": "offset"
       },
       {
+        "name": "AdminListBackupArtifactsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminListBackupJobsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminListBackupNotificationsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminListBackupSchedulesRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminListDelegationsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "applications.oauth_delegation_public",
+        "claim_mode": "offset"
+      },
+      {
         "name": "AdminListGroupMembersRequest",
         "kind": "request",
         "bounded": true,
@@ -3849,12 +4943,36 @@
         "claim_mode": "offset"
       },
       {
+        "name": "AdminListInvitationsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "account.user_lifecycle_public",
+        "claim_mode": "offset"
+      },
+      {
         "name": "AdminListPermissionsRequest",
         "kind": "request",
         "bounded": true,
         "page_field": "Page",
         "capability": "admin.facade_api",
         "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListRegistrationsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "account.user_lifecycle_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminListReportPlansRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
       },
       {
         "name": "AdminListRolesRequest",
@@ -3898,6 +5016,39 @@
         "claim_mode": "offset"
       },
       {
+        "name": "AdminRegistrationList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "account.user_lifecycle_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminReportList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "NextCursor"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminReportPlanList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
         "name": "AdminRoleAssignmentList",
         "kind": "result",
         "bounded": true,
@@ -3919,6 +5070,56 @@
           "Page"
         ],
         "capability": "admin.facade_api",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminTaskList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "NextCursor"
+        ],
+        "capability": "admin.observability_lists",
+        "claim_mode": "cursor"
+      },
+      {
+        "name": "AdminUserBatchJobList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "account.user_lifecycle_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminUserBatchListJobsRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "account.user_lifecycle_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminUserBatchPrecheckResult",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "Truncated"
+        ],
+        "capability": "account.user_lifecycle_public",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "AdminUserBatchRowList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "Truncated"
+        ],
+        "capability": "account.user_lifecycle_public",
         "claim_mode": "offset"
       },
       {
@@ -3974,6 +5175,63 @@
         "claim_mode": "fixed"
       },
       {
+        "name": "RBACDelegationList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "rbac.public_facade",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "RBACDelegationListRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "rbac.public_facade",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "RBACEffectiveRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "rbac.public_facade",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "RBACEffectiveResult",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "rbac.public_facade",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "RBACPermissionSourcesRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "rbac.public_facade",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "RBACPermissionSourcesResult",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "HasMore",
+          "Page"
+        ],
+        "capability": "rbac.public_facade",
+        "claim_mode": "offset"
+      },
+      {
         "name": "SessionDeviceList",
         "kind": "result",
         "bounded": true,
@@ -3994,7 +5252,7 @@
         "claim_mode": "offset"
       }
     ],
-    "bounded_lists": 23,
+    "bounded_lists": 58,
     "exceptions": [
       "IterationOptions -\u003e pagination.iteration（none：由能力声明理由承担）",
       "MFAFactorList -\u003e mfa.public_facade（fixed：由能力声明理由承担）",
@@ -4101,6 +5359,104 @@
           "Status": "string"
         }
       },
+      "AdminApplicationDeleteRequest": {
+        "name": "AdminApplicationDeleteRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "ExpectedRowVersion",
+          "RequestID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "ExpectedRowVersion": "int64",
+          "RequestID": "string"
+        }
+      },
+      "AdminApplicationDeletionPreview": {
+        "name": "AdminApplicationDeletionPreview",
+        "kind": "struct",
+        "fields": [
+          "ActiveMemberCount",
+          "ActiveSessionCount",
+          "ApplicationID",
+          "BlockReason",
+          "CanDelete",
+          "GroupCount",
+          "InvitationCount",
+          "MemberCount",
+          "OAuthClientCount",
+          "PermissionCount",
+          "RefreshTokenFamilyCount",
+          "RoleCount",
+          "WebhookEndpointCount"
+        ],
+        "field_types": {
+          "ActiveMemberCount": "int",
+          "ActiveSessionCount": "int",
+          "ApplicationID": "string",
+          "BlockReason": "string",
+          "CanDelete": "bool",
+          "GroupCount": "int",
+          "InvitationCount": "int",
+          "MemberCount": "int",
+          "OAuthClientCount": "int",
+          "PermissionCount": "int",
+          "RefreshTokenFamilyCount": "int",
+          "RoleCount": "int",
+          "WebhookEndpointCount": "int"
+        }
+      },
+      "AdminApplicationDeletionResult": {
+        "name": "AdminApplicationDeletionResult",
+        "kind": "struct",
+        "fields": [
+          "Application",
+          "Changed"
+        ],
+        "field_types": {
+          "Application": "AdminApplicationDetail",
+          "Changed": "bool"
+        }
+      },
+      "AdminApplicationDetail": {
+        "name": "AdminApplicationDetail",
+        "kind": "struct",
+        "fields": [
+          "ClientType",
+          "ContactInfo",
+          "CreatedAt",
+          "DeletedAt",
+          "Description",
+          "Homepage",
+          "ID",
+          "IconRef",
+          "Name",
+          "OwnerUserID",
+          "RowVersion",
+          "ScopeID",
+          "Status",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "ClientType": "string",
+          "ContactInfo": "string",
+          "CreatedAt": "time.Time",
+          "DeletedAt": "time.Time",
+          "Description": "string",
+          "Homepage": "string",
+          "ID": "string",
+          "IconRef": "string",
+          "Name": "string",
+          "OwnerUserID": "string",
+          "RowVersion": "int64",
+          "ScopeID": "string",
+          "Status": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
       "AdminApplicationList": {
         "name": "AdminApplicationList",
         "kind": "struct",
@@ -4135,6 +5491,62 @@
           "UserID": "string"
         }
       },
+      "AdminApplicationMemberChange": {
+        "name": "AdminApplicationMemberChange",
+        "kind": "struct",
+        "fields": [
+          "Changed",
+          "Member"
+        ],
+        "field_types": {
+          "Changed": "bool",
+          "Member": "AdminApplicationMemberDetail"
+        }
+      },
+      "AdminApplicationMemberChangeRequest": {
+        "name": "AdminApplicationMemberChangeRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "ExpectedRowVersion",
+          "RequestID",
+          "UserID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "ExpectedRowVersion": "int64",
+          "RequestID": "string",
+          "UserID": "string"
+        }
+      },
+      "AdminApplicationMemberDetail": {
+        "name": "AdminApplicationMemberDetail",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "CreatedAt",
+          "DisplayName",
+          "Note",
+          "RowVersion",
+          "Status",
+          "Title",
+          "UpdatedAt",
+          "UserID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "CreatedAt": "time.Time",
+          "DisplayName": "string",
+          "Note": "string",
+          "RowVersion": "int64",
+          "Status": "string",
+          "Title": "string",
+          "UpdatedAt": "time.Time",
+          "UserID": "string"
+        }
+      },
       "AdminApplicationMemberList": {
         "name": "AdminApplicationMemberList",
         "kind": "struct",
@@ -4147,6 +5559,48 @@
           "HasMore": "bool",
           "Members": "[]AdminApplicationMember",
           "Page": "AdminPageInfo"
+        }
+      },
+      "AdminApplicationMemberRequest": {
+        "name": "AdminApplicationMemberRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "RequestID",
+          "UserID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "UserID": "string"
+        }
+      },
+      "AdminApplicationPurgeRequest": {
+        "name": "AdminApplicationPurgeRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "AdminApplicationPurgeResult": {
+        "name": "AdminApplicationPurgeResult",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Changed"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Changed": "bool"
         }
       },
       "AdminApplicationRequest": {
@@ -4163,9 +5617,819 @@
           "RequestID": "string"
         }
       },
+      "AdminAuditChange": {
+        "name": "AdminAuditChange",
+        "kind": "struct",
+        "fields": [
+          "After",
+          "Before",
+          "Field"
+        ],
+        "field_types": {
+          "After": "string",
+          "Before": "string",
+          "Field": "string"
+        }
+      },
+      "AdminAuditEvent": {
+        "name": "AdminAuditEvent",
+        "kind": "struct",
+        "fields": [
+          "Action",
+          "ActorID",
+          "ActorType",
+          "AppID",
+          "Changes",
+          "ErrorCode",
+          "ID",
+          "OccurredAt",
+          "Outcome",
+          "ReasonCode",
+          "RequestID",
+          "TargetID",
+          "TargetType",
+          "TaskID"
+        ],
+        "field_types": {
+          "Action": "string",
+          "ActorID": "string",
+          "ActorType": "string",
+          "AppID": "string",
+          "Changes": "[]AdminAuditChange",
+          "ErrorCode": "string",
+          "ID": "string",
+          "OccurredAt": "time.Time",
+          "Outcome": "string",
+          "ReasonCode": "string",
+          "RequestID": "string",
+          "TargetID": "string",
+          "TargetType": "string",
+          "TaskID": "string"
+        }
+      },
+      "AdminAuditEventDetail": {
+        "name": "AdminAuditEventDetail",
+        "kind": "struct",
+        "fields": [
+          "Event",
+          "RetentionConfigured",
+          "RetentionCutoff",
+          "RetentionDays",
+          "ScopeID",
+          "ScopeKind",
+          "Stale"
+        ],
+        "field_types": {
+          "Event": "AdminAuditEvent",
+          "RetentionConfigured": "bool",
+          "RetentionCutoff": "time.Time",
+          "RetentionDays": "int",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "Stale": "bool"
+        }
+      },
+      "AdminAuditEventList": {
+        "name": "AdminAuditEventList",
+        "kind": "struct",
+        "fields": [
+          "Events",
+          "HasMore",
+          "Limit",
+          "NextCursor",
+          "Order",
+          "RetentionConfigured",
+          "RetentionCutoff",
+          "RetentionDays",
+          "ScopeID",
+          "ScopeKind"
+        ],
+        "field_types": {
+          "Events": "[]AdminAuditEvent",
+          "HasMore": "bool",
+          "Limit": "int",
+          "NextCursor": "string",
+          "Order": "string",
+          "RetentionConfigured": "bool",
+          "RetentionCutoff": "time.Time",
+          "RetentionDays": "int",
+          "ScopeID": "string",
+          "ScopeKind": "string"
+        }
+      },
+      "AdminAuditEventRequest": {
+        "name": "AdminAuditEventRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "EventID",
+          "OccurredAtHint",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "EventID": "string",
+          "OccurredAtHint": "time.Time",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "AdminAuditExport": {
+        "name": "AdminAuditExport",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "ErrorCode",
+          "ExecutorID",
+          "FailureReason",
+          "FileAvailable",
+          "FileExpiresAt",
+          "FinishedAt",
+          "Format",
+          "ID",
+          "MaxRows",
+          "RequestID",
+          "RequestedID",
+          "RequestedType",
+          "RowCount",
+          "ScopeID",
+          "ScopeKind",
+          "StartedAt",
+          "State",
+          "TaskID",
+          "Truncated"
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "ErrorCode": "string",
+          "ExecutorID": "string",
+          "FailureReason": "string",
+          "FileAvailable": "bool",
+          "FileExpiresAt": "time.Time",
+          "FinishedAt": "time.Time",
+          "Format": "string",
+          "ID": "string",
+          "MaxRows": "int",
+          "RequestID": "string",
+          "RequestedID": "string",
+          "RequestedType": "string",
+          "RowCount": "int",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "StartedAt": "time.Time",
+          "State": "string",
+          "TaskID": "string",
+          "Truncated": "bool"
+        }
+      },
+      "AdminAuditExportCancelRequest": {
+        "name": "AdminAuditExportCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ExportID",
+          "Password",
+          "Reason",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ExportID": "string",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminAuditExportList": {
+        "name": "AdminAuditExportList",
+        "kind": "struct",
+        "fields": [
+          "Exports",
+          "HasMore",
+          "Page"
+        ],
+        "field_types": {
+          "Exports": "[]AdminAuditExport",
+          "HasMore": "bool",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminAuditExportListRequest": {
+        "name": "AdminAuditExportListRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID",
+          "ScopeID",
+          "State"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "State": "string"
+        }
+      },
+      "AdminAuditExportRequest": {
+        "name": "AdminAuditExportRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ExportID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ExportID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminAuditExportStartRequest": {
+        "name": "AdminAuditExportStartRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Filter",
+          "Format",
+          "MaxRows",
+          "Order",
+          "Password",
+          "RequestID",
+          "ScopeID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Filter": "AdminAuditFilter",
+          "Format": "string",
+          "MaxRows": "int",
+          "Order": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminAuditFilter": {
+        "name": "AdminAuditFilter",
+        "kind": "struct",
+        "fields": [
+          "Action",
+          "ActorID",
+          "ActorType",
+          "AppID",
+          "ErrorCode",
+          "From",
+          "Outcome",
+          "RequestID",
+          "SystemOnly",
+          "TargetID",
+          "TargetType",
+          "TaskID",
+          "To"
+        ],
+        "field_types": {
+          "Action": "string",
+          "ActorID": "string",
+          "ActorType": "string",
+          "AppID": "string",
+          "ErrorCode": "string",
+          "From": "time.Time",
+          "Outcome": "string",
+          "RequestID": "string",
+          "SystemOnly": "bool",
+          "TargetID": "string",
+          "TargetType": "string",
+          "TaskID": "string",
+          "To": "time.Time"
+        }
+      },
+      "AdminAuditPurgeCancelRequest": {
+        "name": "AdminAuditPurgeCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Password",
+          "Reason",
+          "RequestID",
+          "RunID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "RunID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminAuditPurgePreview": {
+        "name": "AdminAuditPurgePreview",
+        "kind": "struct",
+        "fields": [
+          "ArtifactsIncluded",
+          "AtLeast",
+          "BatchSize",
+          "Cutoff",
+          "Digest",
+          "EstimatedCount",
+          "GeneratedAt",
+          "MaintenanceProtected",
+          "MaxRecords",
+          "Retention",
+          "ScopeID",
+          "ScopeKind",
+          "WithinRetention"
+        ],
+        "field_types": {
+          "ArtifactsIncluded": "bool",
+          "AtLeast": "bool",
+          "BatchSize": "int",
+          "Cutoff": "time.Time",
+          "Digest": "string",
+          "EstimatedCount": "int64",
+          "GeneratedAt": "time.Time",
+          "MaintenanceProtected": "bool",
+          "MaxRecords": "int",
+          "Retention": "AdminAuditRetention",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "WithinRetention": "bool"
+        }
+      },
+      "AdminAuditPurgePreviewRequest": {
+        "name": "AdminAuditPurgePreviewRequest",
+        "kind": "struct",
+        "fields": [
+          "BatchSize",
+          "Caller",
+          "Cutoff",
+          "MaxRecords",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "BatchSize": "int",
+          "Caller": "AdminCaller",
+          "Cutoff": "time.Time",
+          "MaxRecords": "int",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "AdminAuditPurgeRun": {
+        "name": "AdminAuditPurgeRun",
+        "kind": "struct",
+        "fields": [
+          "BatchSize",
+          "Batches",
+          "Cleaned",
+          "CreatedAt",
+          "Cutoff",
+          "ErrorCode",
+          "ExecutorID",
+          "Failed",
+          "FailureReason",
+          "FinishedAt",
+          "ID",
+          "Kind",
+          "LimitReached",
+          "MaxRecords",
+          "RequestID",
+          "RequestedID",
+          "RequestedType",
+          "Scanned",
+          "ScopeID",
+          "ScopeKind",
+          "Skipped",
+          "StartedAt",
+          "State",
+          "TaskID"
+        ],
+        "field_types": {
+          "BatchSize": "int",
+          "Batches": "int",
+          "Cleaned": "int",
+          "CreatedAt": "time.Time",
+          "Cutoff": "time.Time",
+          "ErrorCode": "string",
+          "ExecutorID": "string",
+          "Failed": "int",
+          "FailureReason": "string",
+          "FinishedAt": "time.Time",
+          "ID": "string",
+          "Kind": "string",
+          "LimitReached": "bool",
+          "MaxRecords": "int",
+          "RequestID": "string",
+          "RequestedID": "string",
+          "RequestedType": "string",
+          "Scanned": "int",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "Skipped": "int",
+          "StartedAt": "time.Time",
+          "State": "string",
+          "TaskID": "string"
+        }
+      },
+      "AdminAuditPurgeRunList": {
+        "name": "AdminAuditPurgeRunList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Page",
+          "Runs"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Runs": "[]AdminAuditPurgeRun"
+        }
+      },
+      "AdminAuditPurgeRunListRequest": {
+        "name": "AdminAuditPurgeRunListRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Kind",
+          "Page",
+          "RequestID",
+          "State"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Kind": "string",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "State": "string"
+        }
+      },
+      "AdminAuditPurgeRunRequest": {
+        "name": "AdminAuditPurgeRunRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "RunID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "RunID": "string"
+        }
+      },
+      "AdminAuditPurgeStartRequest": {
+        "name": "AdminAuditPurgeStartRequest",
+        "kind": "struct",
+        "fields": [
+          "BatchSize",
+          "Caller",
+          "Cutoff",
+          "Digest",
+          "MaxRecords",
+          "Password",
+          "Reason",
+          "RequestID",
+          "ScopeID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "BatchSize": "int",
+          "Caller": "AdminCaller",
+          "Cutoff": "time.Time",
+          "Digest": "string",
+          "MaxRecords": "int",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminAuditRetention": {
+        "name": "AdminAuditRetention",
+        "kind": "struct",
+        "fields": [
+          "Configured",
+          "Cutoff",
+          "Days",
+          "UpdatedAt",
+          "Version"
+        ],
+        "field_types": {
+          "Configured": "bool",
+          "Cutoff": "time.Time",
+          "Days": "int",
+          "UpdatedAt": "time.Time",
+          "Version": "int64"
+        }
+      },
+      "AdminAuditRetentionRequest": {
+        "name": "AdminAuditRetentionRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "AdminAuditRetentionSetRequest": {
+        "name": "AdminAuditRetentionSetRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ExpectedVersion",
+          "Password",
+          "Reason",
+          "RequestID",
+          "RetentionDays",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ExpectedVersion": "int64",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "RetentionDays": "int",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminBackupArtifact": {
+        "name": "AdminBackupArtifact",
+        "kind": "struct",
+        "fields": [
+          "Cleanup",
+          "CreatedAt",
+          "Downloadable",
+          "FileExists",
+          "FileSHA256",
+          "ID",
+          "IsLastUsable",
+          "JobID",
+          "Origin",
+          "ProtectionReason",
+          "PublishedAt",
+          "ScheduleID",
+          "SizeBytes",
+          "Verification",
+          "VerifiedAt"
+        ],
+        "field_types": {
+          "Cleanup": "string",
+          "CreatedAt": "time.Time",
+          "Downloadable": "bool",
+          "FileExists": "bool",
+          "FileSHA256": "string",
+          "ID": "string",
+          "IsLastUsable": "bool",
+          "JobID": "string",
+          "Origin": "string",
+          "ProtectionReason": "string",
+          "PublishedAt": "time.Time",
+          "ScheduleID": "string",
+          "SizeBytes": "int64",
+          "Verification": "string",
+          "VerifiedAt": "time.Time"
+        }
+      },
+      "AdminBackupArtifactList": {
+        "name": "AdminBackupArtifactList",
+        "kind": "struct",
+        "fields": [
+          "Artifacts",
+          "HasMore",
+          "Page"
+        ],
+        "field_types": {
+          "Artifacts": "[]AdminBackupArtifact",
+          "HasMore": "bool",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminBackupJob": {
+        "name": "AdminBackupJob",
+        "kind": "struct",
+        "fields": [
+          "Attempt",
+          "BackupID",
+          "CreatedAt",
+          "ErrorCode",
+          "FailureReason",
+          "FinishedAt",
+          "ID",
+          "InitiatorID",
+          "InitiatorType",
+          "Kind",
+          "MaxAttempts",
+          "Origin",
+          "RequestID",
+          "ScheduleID",
+          "StageCode",
+          "StartedAt",
+          "State"
+        ],
+        "field_types": {
+          "Attempt": "int",
+          "BackupID": "string",
+          "CreatedAt": "time.Time",
+          "ErrorCode": "string",
+          "FailureReason": "string",
+          "FinishedAt": "time.Time",
+          "ID": "string",
+          "InitiatorID": "string",
+          "InitiatorType": "string",
+          "Kind": "string",
+          "MaxAttempts": "int",
+          "Origin": "string",
+          "RequestID": "string",
+          "ScheduleID": "string",
+          "StageCode": "string",
+          "StartedAt": "time.Time",
+          "State": "string"
+        }
+      },
+      "AdminBackupJobList": {
+        "name": "AdminBackupJobList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Jobs",
+          "Page"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Jobs": "[]AdminBackupJob",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminBackupNotification": {
+        "name": "AdminBackupNotification",
+        "kind": "struct",
+        "fields": [
+          "Attempts",
+          "BackupID",
+          "Channel",
+          "CreatedAt",
+          "ErrorCode",
+          "ID",
+          "JobID",
+          "Kind",
+          "RecipientMasked",
+          "State",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "Attempts": "int",
+          "BackupID": "string",
+          "Channel": "string",
+          "CreatedAt": "time.Time",
+          "ErrorCode": "string",
+          "ID": "string",
+          "JobID": "string",
+          "Kind": "string",
+          "RecipientMasked": "string",
+          "State": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "AdminBackupNotificationList": {
+        "name": "AdminBackupNotificationList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Notifications",
+          "Page"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Notifications": "[]AdminBackupNotification",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminBackupSchedule": {
+        "name": "AdminBackupSchedule",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "Enabled",
+          "Expression",
+          "ID",
+          "MissedPolicy",
+          "Name",
+          "NextRun",
+          "NextRunUnknown",
+          "PeriodDescription",
+          "PermissionState",
+          "ScheduleType",
+          "ScopeID",
+          "TimeZone",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "Enabled": "bool",
+          "Expression": "string",
+          "ID": "string",
+          "MissedPolicy": "string",
+          "Name": "string",
+          "NextRun": "time.Time",
+          "NextRunUnknown": "bool",
+          "PeriodDescription": "string",
+          "PermissionState": "string",
+          "ScheduleType": "string",
+          "ScopeID": "string",
+          "TimeZone": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "AdminBackupScheduleList": {
+        "name": "AdminBackupScheduleList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Page",
+          "Schedules"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Schedules": "[]AdminBackupSchedule"
+        }
+      },
       "AdminCaller": {
         "name": "AdminCaller",
         "kind": "struct"
+      },
+      "AdminCancelInvitationRequest": {
+        "name": "AdminCancelInvitationRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "InvitationID",
+          "Reason",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "InvitationID": "string",
+          "Reason": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminClientCertificateInfo": {
+        "name": "AdminClientCertificateInfo",
+        "kind": "struct",
+        "fields": [
+          "ClientID",
+          "CreatedAt",
+          "FingerprintSHA256",
+          "ID",
+          "NotAfter",
+          "NotBefore",
+          "RevokedAt",
+          "Subject"
+        ],
+        "field_types": {
+          "ClientID": "string",
+          "CreatedAt": "time.Time",
+          "FingerprintSHA256": "string",
+          "ID": "string",
+          "NotAfter": "time.Time",
+          "NotBefore": "time.Time",
+          "RevokedAt": "time.Time",
+          "Subject": "string"
+        }
+      },
+      "AdminClientSecretInfo": {
+        "name": "AdminClientSecretInfo",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "ExpiresAt",
+          "ID",
+          "Prefix",
+          "RetireAt",
+          "RevokedAt"
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "ExpiresAt": "time.Time",
+          "ID": "string",
+          "Prefix": "string",
+          "RetireAt": "time.Time",
+          "RevokedAt": "time.Time"
+        }
       },
       "AdminCreateApplicationRequest": {
         "name": "AdminCreateApplicationRequest",
@@ -4185,6 +6449,30 @@
           "Name": "string",
           "OwnerUserID": "string",
           "RequestID": "string"
+        }
+      },
+      "AdminCreateInvitationRequest": {
+        "name": "AdminCreateInvitationRequest",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "Caller",
+          "MaxUses",
+          "RequestID",
+          "Roles",
+          "TTL",
+          "TargetEmail",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "Caller": "AdminCaller",
+          "MaxUses": "int",
+          "RequestID": "string",
+          "Roles": "[]AdminInvitationRole",
+          "TTL": "time.Duration",
+          "TargetEmail": "string",
+          "TargetUserID": "string"
         }
       },
       "AdminCreatePermissionRequest": {
@@ -4251,6 +6539,40 @@
           "Username": "string"
         }
       },
+      "AdminDelegatablePermission": {
+        "name": "AdminDelegatablePermission",
+        "kind": "struct",
+        "fields": [
+          "AllowSelf",
+          "ExpiresAt",
+          "Key",
+          "MaxDataScope",
+          "Name",
+          "PermissionID"
+        ],
+        "field_types": {
+          "AllowSelf": "bool",
+          "ExpiresAt": "string",
+          "Key": "string",
+          "MaxDataScope": "string",
+          "Name": "string",
+          "PermissionID": "string"
+        }
+      },
+      "AdminDelegatablePermissionsRequest": {
+        "name": "AdminDelegatablePermissionsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
       "AdminDelegation": {
         "name": "AdminDelegation",
         "kind": "struct",
@@ -4267,6 +6589,50 @@
           "ID": "string",
           "PermissionKey": "string",
           "ScopeID": "string"
+        }
+      },
+      "AdminDelegationDetail": {
+        "name": "AdminDelegationDetail",
+        "kind": "struct",
+        "fields": [
+          "AllowSelf",
+          "AllowedGroups",
+          "AllowedUsers",
+          "ApplicationID",
+          "CreatedAt",
+          "CreatedByID",
+          "CreatedByType",
+          "DelegatorUserID",
+          "ExpiresAt",
+          "ID",
+          "MaxDataScope",
+          "PermissionID",
+          "PermissionKey",
+          "PermissionName",
+          "RevokedAt",
+          "ScopeID",
+          "ScopeKind",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "AllowSelf": "bool",
+          "AllowedGroups": "[]string",
+          "AllowedUsers": "[]string",
+          "ApplicationID": "string",
+          "CreatedAt": "string",
+          "CreatedByID": "string",
+          "CreatedByType": "string",
+          "DelegatorUserID": "string",
+          "ExpiresAt": "string",
+          "ID": "string",
+          "MaxDataScope": "string",
+          "PermissionID": "string",
+          "PermissionKey": "string",
+          "PermissionName": "string",
+          "RevokedAt": "string",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "UpdatedAt": "string"
         }
       },
       "AdminDelegationGrantRequest": {
@@ -4289,6 +6655,110 @@
           "ScopeID": "string"
         }
       },
+      "AdminDelegationList": {
+        "name": "AdminDelegationList",
+        "kind": "struct",
+        "fields": [
+          "Delegations",
+          "HasMore",
+          "Page"
+        ],
+        "field_types": {
+          "Delegations": "[]AdminDelegationDetail",
+          "HasMore": "bool",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminDelegationRequest": {
+        "name": "AdminDelegationRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "GrantID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "GrantID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminDelegationRevokeResult": {
+        "name": "AdminDelegationRevokeResult",
+        "kind": "struct",
+        "fields": [
+          "Changed",
+          "Grant",
+          "GrantID"
+        ],
+        "field_types": {
+          "Changed": "bool",
+          "Grant": "AdminDelegationDetail",
+          "GrantID": "string"
+        }
+      },
+      "AdminDeletionPreview": {
+        "name": "AdminDeletionPreview",
+        "kind": "struct",
+        "fields": [
+          "AppMemberships",
+          "GroupMemberships",
+          "IsRoot",
+          "OneTimeCredentials",
+          "OwnedApplications",
+          "RowVersion",
+          "SecurityVersion",
+          "Status",
+          "UserID",
+          "UserRoles",
+          "Username"
+        ],
+        "field_types": {
+          "AppMemberships": "int",
+          "GroupMemberships": "int",
+          "IsRoot": "bool",
+          "OneTimeCredentials": "int",
+          "OwnedApplications": "int",
+          "RowVersion": "int64",
+          "SecurityVersion": "int64",
+          "Status": "string",
+          "UserID": "string",
+          "UserRoles": "int",
+          "Username": "string"
+        }
+      },
+      "AdminDeletionResult": {
+        "name": "AdminDeletionResult",
+        "kind": "struct",
+        "fields": [
+          "DeletedAt",
+          "Preview"
+        ],
+        "field_types": {
+          "DeletedAt": "time.Time",
+          "Preview": "AdminDeletionPreview"
+        }
+      },
+      "AdminDownload": {
+        "name": "AdminDownload",
+        "kind": "struct",
+        "fields": [
+          "ContentType",
+          "ExpiresAt",
+          "FileName",
+          "Reader",
+          "SHA256",
+          "Size"
+        ],
+        "field_types": {
+          "ContentType": "string",
+          "ExpiresAt": "time.Time",
+          "FileName": "string",
+          "Reader": "io.ReadCloser",
+          "SHA256": "string",
+          "Size": "int64"
+        }
+      },
       "AdminEffectivePermissions": {
         "name": "AdminEffectivePermissions",
         "kind": "struct",
@@ -4303,6 +6773,134 @@
           "Permissions": "[]AdminPermission",
           "ScopeID": "string",
           "UserID": "string"
+        }
+      },
+      "AdminErrorCategorySummary": {
+        "name": "AdminErrorCategorySummary",
+        "kind": "struct",
+        "fields": [
+          "Category",
+          "FailedRequests",
+          "FailedTasks",
+          "RawEvents",
+          "Severity"
+        ],
+        "field_types": {
+          "Category": "string",
+          "FailedRequests": "int64",
+          "FailedTasks": "int64",
+          "RawEvents": "int64",
+          "Severity": "string"
+        }
+      },
+      "AdminErrorStatsRequest": {
+        "name": "AdminErrorStatsRequest",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "Caller",
+          "Categories",
+          "End",
+          "Granularity",
+          "Limit",
+          "Offset",
+          "Order",
+          "RequestID",
+          "ScopeID",
+          "Sort",
+          "Start",
+          "TimeZone"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "Caller": "AdminCaller",
+          "Categories": "[]string",
+          "End": "time.Time",
+          "Granularity": "string",
+          "Limit": "int",
+          "Offset": "int",
+          "Order": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "Sort": "string",
+          "Start": "time.Time",
+          "TimeZone": "string"
+        }
+      },
+      "AdminErrorStatsResult": {
+        "name": "AdminErrorStatsResult",
+        "kind": "struct",
+        "fields": [
+          "Categories",
+          "Completeness",
+          "End",
+          "FailedRequests",
+          "FailedTasks",
+          "GeneratedAt",
+          "Granularity",
+          "HasMore",
+          "Limit",
+          "Offset",
+          "Order",
+          "Rows",
+          "ShareDenominator",
+          "Sort",
+          "Start",
+          "TimeZone",
+          "TotalRawEvents"
+        ],
+        "field_types": {
+          "Categories": "[]AdminErrorCategorySummary",
+          "Completeness": "AdminStatsCompleteness",
+          "End": "time.Time",
+          "FailedRequests": "int64",
+          "FailedTasks": "int64",
+          "GeneratedAt": "time.Time",
+          "Granularity": "string",
+          "HasMore": "bool",
+          "Limit": "int",
+          "Offset": "int",
+          "Order": "string",
+          "Rows": "[]AdminErrorStatsRow",
+          "ShareDenominator": "int64",
+          "Sort": "string",
+          "Start": "time.Time",
+          "TimeZone": "string",
+          "TotalRawEvents": "int64"
+        }
+      },
+      "AdminErrorStatsRow": {
+        "name": "AdminErrorStatsRow",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "Category",
+          "DataStatus",
+          "ErrorCode",
+          "FailedRequests",
+          "FailedTasks",
+          "FirstSeen",
+          "GrowthKind",
+          "GrowthPercent",
+          "LastSeen",
+          "RawEvents",
+          "Severity",
+          "Share"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "Category": "string",
+          "DataStatus": "string",
+          "ErrorCode": "string",
+          "FailedRequests": "int64",
+          "FailedTasks": "int64",
+          "FirstSeen": "time.Time",
+          "GrowthKind": "string",
+          "GrowthPercent": "float64",
+          "LastSeen": "time.Time",
+          "RawEvents": "int64",
+          "Severity": "string",
+          "Share": "float64"
         }
       },
       "AdminGroup": {
@@ -4369,6 +6967,116 @@
           "HasMore": "bool",
           "Members": "[]AdminGroupMember",
           "Page": "AdminPageInfo"
+        }
+      },
+      "AdminInvitation": {
+        "name": "AdminInvitation",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "CancelReason",
+          "CancelledAt",
+          "CreatedAt",
+          "ExpiresAt",
+          "ID",
+          "InviterUserID",
+          "MaxUses",
+          "NotifiedAt",
+          "NotifyError",
+          "NotifyState",
+          "Roles",
+          "Status",
+          "TargetEmail",
+          "TargetKind",
+          "TargetUserID",
+          "UpdatedAt",
+          "UsedCount"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "CancelReason": "string",
+          "CancelledAt": "time.Time",
+          "CreatedAt": "time.Time",
+          "ExpiresAt": "time.Time",
+          "ID": "string",
+          "InviterUserID": "string",
+          "MaxUses": "int",
+          "NotifiedAt": "time.Time",
+          "NotifyError": "string",
+          "NotifyState": "string",
+          "Roles": "[]AdminInvitationRole",
+          "Status": "string",
+          "TargetEmail": "string",
+          "TargetKind": "string",
+          "TargetUserID": "string",
+          "UpdatedAt": "time.Time",
+          "UsedCount": "int"
+        }
+      },
+      "AdminInvitationCancelResult": {
+        "name": "AdminInvitationCancelResult",
+        "kind": "struct",
+        "fields": [
+          "Cancelled",
+          "Invitation"
+        ],
+        "field_types": {
+          "Cancelled": "bool",
+          "Invitation": "AdminInvitation"
+        }
+      },
+      "AdminInvitationCreateResult": {
+        "name": "AdminInvitationCreateResult",
+        "kind": "struct",
+        "fields": [
+          "ErrorCode",
+          "Invitation",
+          "TokenSent"
+        ],
+        "field_types": {
+          "ErrorCode": "string",
+          "Invitation": "AdminInvitation",
+          "TokenSent": "bool"
+        }
+      },
+      "AdminInvitationList": {
+        "name": "AdminInvitationList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Invitations",
+          "Page"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Invitations": "[]AdminInvitation",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminInvitationRequest": {
+        "name": "AdminInvitationRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "InvitationID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "InvitationID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminInvitationRole": {
+        "name": "AdminInvitationRole",
+        "kind": "struct",
+        "fields": [
+          "RoleID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "RoleID": "string",
+          "ScopeID": "string"
         }
       },
       "AdminListApplicationGroupsRequest": {
@@ -4459,6 +7167,120 @@
           "Status": "string"
         }
       },
+      "AdminListAuditEventsRequest": {
+        "name": "AdminListAuditEventsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Cursor",
+          "Filter",
+          "Limit",
+          "Order",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Cursor": "string",
+          "Filter": "AdminAuditFilter",
+          "Limit": "int",
+          "Order": "string",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "AdminListBackupArtifactsRequest": {
+        "name": "AdminListBackupArtifactsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Cleanup",
+          "JobID",
+          "Origin",
+          "Page",
+          "RequestID",
+          "ScheduleID",
+          "Verification"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Cleanup": "string",
+          "JobID": "string",
+          "Origin": "string",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScheduleID": "string",
+          "Verification": "string"
+        }
+      },
+      "AdminListBackupJobsRequest": {
+        "name": "AdminListBackupJobsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Kind",
+          "Page",
+          "RequestID",
+          "ScheduleID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Kind": "string",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScheduleID": "string"
+        }
+      },
+      "AdminListBackupNotificationsRequest": {
+        "name": "AdminListBackupNotificationsRequest",
+        "kind": "struct",
+        "fields": [
+          "BackupID",
+          "Caller",
+          "JobID",
+          "Page",
+          "RequestID"
+        ],
+        "field_types": {
+          "BackupID": "string",
+          "Caller": "AdminCaller",
+          "JobID": "string",
+          "Page": "AdminPage",
+          "RequestID": "string"
+        }
+      },
+      "AdminListBackupSchedulesRequest": {
+        "name": "AdminListBackupSchedulesRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string"
+        }
+      },
+      "AdminListDelegationsRequest": {
+        "name": "AdminListDelegationsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "DelegatorUserID",
+          "IncludeRevoked",
+          "Page",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "DelegatorUserID": "string",
+          "IncludeRevoked": "bool",
+          "Page": "AdminPage",
+          "RequestID": "string"
+        }
+      },
       "AdminListGroupMembersRequest": {
         "name": "AdminListGroupMembersRequest",
         "kind": "struct",
@@ -4499,6 +7321,22 @@
           "Sort": "string"
         }
       },
+      "AdminListInvitationsRequest": {
+        "name": "AdminListInvitationsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID",
+          "Status"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "Status": "string"
+        }
+      },
       "AdminListPermissionsRequest": {
         "name": "AdminListPermissionsRequest",
         "kind": "struct",
@@ -4519,6 +7357,54 @@
           "RequestID": "string",
           "ScopeID": "string",
           "Sort": "string"
+        }
+      },
+      "AdminListRegistrationsRequest": {
+        "name": "AdminListRegistrationsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string"
+        }
+      },
+      "AdminListReportPlansRequest": {
+        "name": "AdminListReportPlansRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string"
+        }
+      },
+      "AdminListReportsRequest": {
+        "name": "AdminListReportsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Cursor",
+          "Limit",
+          "PlanID",
+          "RequestID",
+          "State"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Cursor": "string",
+          "Limit": "int",
+          "PlanID": "string",
+          "RequestID": "string",
+          "State": "string"
         }
       },
       "AdminListRoleAssignmentsRequest": {
@@ -4567,6 +7453,32 @@
           "Sort": "string"
         }
       },
+      "AdminListTasksRequest": {
+        "name": "AdminListTasksRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Cursor",
+          "From",
+          "Kind",
+          "Limit",
+          "RequestID",
+          "State",
+          "TaskRequestID",
+          "To"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Cursor": "string",
+          "From": "time.Time",
+          "Kind": "string",
+          "Limit": "int",
+          "RequestID": "string",
+          "State": "string",
+          "TaskRequestID": "string",
+          "To": "time.Time"
+        }
+      },
       "AdminListUserSessionsRequest": {
         "name": "AdminListUserSessionsRequest",
         "kind": "struct",
@@ -4605,6 +7517,126 @@
           "RequestID": "string",
           "Sort": "string",
           "Status": "string"
+        }
+      },
+      "AdminOAuthClient": {
+        "name": "AdminOAuthClient",
+        "kind": "struct",
+        "fields": [
+          "Audiences",
+          "AuthMethods",
+          "ClientID",
+          "ClientType",
+          "CreatedAt",
+          "GrantTypes",
+          "PostLogoutRedirectURIs",
+          "RedirectURIs",
+          "RequirePKCE",
+          "RowVersion",
+          "Scopes",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "Audiences": "[]string",
+          "AuthMethods": "[]string",
+          "ClientID": "string",
+          "ClientType": "string",
+          "CreatedAt": "time.Time",
+          "GrantTypes": "[]string",
+          "PostLogoutRedirectURIs": "[]string",
+          "RedirectURIs": "[]string",
+          "RequirePKCE": "bool",
+          "RowVersion": "int64",
+          "Scopes": "[]string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "AdminOAuthClientCertificateRequest": {
+        "name": "AdminOAuthClientCertificateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "CertificateID",
+          "CertificatePEM",
+          "ClientID",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "CertificateID": "string",
+          "CertificatePEM": "string",
+          "ClientID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminOAuthClientRegistration": {
+        "name": "AdminOAuthClientRegistration",
+        "kind": "struct",
+        "fields": [
+          "Certificate",
+          "Client",
+          "Secret"
+        ],
+        "field_types": {
+          "Certificate": "*AdminClientCertificateInfo",
+          "Client": "AdminOAuthClient",
+          "Secret": "*AdminRevealedClientSecret"
+        }
+      },
+      "AdminOAuthClientRequest": {
+        "name": "AdminOAuthClientRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ClientID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ClientID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminOAuthClientSecretRevokeRequest": {
+        "name": "AdminOAuthClientSecretRevokeRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ClientID",
+          "Password",
+          "RequestID",
+          "SecretID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ClientID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "SecretID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminOAuthClientSecretRotateRequest": {
+        "name": "AdminOAuthClientSecretRotateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ClientID",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ClientID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
         }
       },
       "AdminPage": {
@@ -4723,6 +7755,700 @@
           "RequestID": "string",
           "ScopeID": "string",
           "UserID": "string"
+        }
+      },
+      "AdminRegisterOAuthClientRequest": {
+        "name": "AdminRegisterOAuthClientRequest",
+        "kind": "struct",
+        "fields": [
+          "Audiences",
+          "AuthMethods",
+          "Caller",
+          "CertificatePEM",
+          "ClientID",
+          "ClientType",
+          "GrantTypes",
+          "Password",
+          "PostLogoutRedirectURIs",
+          "RedirectURIs",
+          "RequestID",
+          "RequirePKCE",
+          "Scopes",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Audiences": "[]string",
+          "AuthMethods": "[]string",
+          "Caller": "AdminCaller",
+          "CertificatePEM": "string",
+          "ClientID": "string",
+          "ClientType": "string",
+          "GrantTypes": "[]string",
+          "Password": "string",
+          "PostLogoutRedirectURIs": "[]string",
+          "RedirectURIs": "[]string",
+          "RequestID": "string",
+          "RequirePKCE": "*bool",
+          "Scopes": "[]string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminRegistration": {
+        "name": "AdminRegistration",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "DecidedAt",
+          "DecidedByID",
+          "DecidedByType",
+          "NotifiedAt",
+          "NotifyError",
+          "NotifyState",
+          "Reason",
+          "ReviewStatus",
+          "Status",
+          "UserID",
+          "Username"
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "DecidedAt": "time.Time",
+          "DecidedByID": "string",
+          "DecidedByType": "string",
+          "NotifiedAt": "time.Time",
+          "NotifyError": "string",
+          "NotifyState": "string",
+          "Reason": "string",
+          "ReviewStatus": "string",
+          "Status": "string",
+          "UserID": "string",
+          "Username": "string"
+        }
+      },
+      "AdminRegistrationDecisionRequest": {
+        "name": "AdminRegistrationDecisionRequest",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "Caller",
+          "Reason",
+          "RequestID",
+          "Roles",
+          "UserID"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "Caller": "AdminCaller",
+          "Reason": "string",
+          "RequestID": "string",
+          "Roles": "[]AdminInvitationRole",
+          "UserID": "string"
+        }
+      },
+      "AdminRegistrationDecisionResult": {
+        "name": "AdminRegistrationDecisionResult",
+        "kind": "struct",
+        "fields": [
+          "ErrorCode",
+          "Notified",
+          "Registration"
+        ],
+        "field_types": {
+          "ErrorCode": "string",
+          "Notified": "bool",
+          "Registration": "AdminRegistration"
+        }
+      },
+      "AdminRegistrationList": {
+        "name": "AdminRegistrationList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Page",
+          "Registrations"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Registrations": "[]AdminRegistration"
+        }
+      },
+      "AdminRegistrationRequest": {
+        "name": "AdminRegistrationRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "UserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "UserID": "string"
+        }
+      },
+      "AdminReport": {
+        "name": "AdminReport",
+        "kind": "struct",
+        "fields": [
+          "ArtifactExpiresAt",
+          "Artifacts",
+          "Completeness",
+          "CreatedAt",
+          "ErrorCode",
+          "ExecutorID",
+          "FailureReason",
+          "FinishedAt",
+          "Formats",
+          "GeneratedAt",
+          "ID",
+          "Notes",
+          "OverallStatus",
+          "RequestID",
+          "RequestedID",
+          "RequestedType",
+          "RetryOf",
+          "SchemaVersion",
+          "ScopeID",
+          "ScopeKind",
+          "StartedAt",
+          "State",
+          "Summary",
+          "TaskID",
+          "TemplateVersion"
+        ],
+        "field_types": {
+          "ArtifactExpiresAt": "time.Time",
+          "Artifacts": "[]AdminReportArtifactInfo",
+          "Completeness": "AdminReportCompleteness",
+          "CreatedAt": "time.Time",
+          "ErrorCode": "string",
+          "ExecutorID": "string",
+          "FailureReason": "string",
+          "FinishedAt": "time.Time",
+          "Formats": "[]string",
+          "GeneratedAt": "time.Time",
+          "ID": "string",
+          "Notes": "[]string",
+          "OverallStatus": "string",
+          "RequestID": "string",
+          "RequestedID": "string",
+          "RequestedType": "string",
+          "RetryOf": "string",
+          "SchemaVersion": "string",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "StartedAt": "time.Time",
+          "State": "string",
+          "Summary": "AdminReportSummary",
+          "TaskID": "string",
+          "TemplateVersion": "int"
+        }
+      },
+      "AdminReportArtifact": {
+        "name": "AdminReportArtifact",
+        "kind": "struct",
+        "fields": [
+          "Available",
+          "Bytes",
+          "ExpiresAt",
+          "Format",
+          "SHA256"
+        ],
+        "field_types": {
+          "Available": "bool",
+          "Bytes": "int64",
+          "ExpiresAt": "time.Time",
+          "Format": "string",
+          "SHA256": "string"
+        }
+      },
+      "AdminReportArtifactInfo": {
+        "name": "AdminReportArtifactInfo",
+        "kind": "struct",
+        "fields": [
+          "Available",
+          "Bytes",
+          "ExpiresAt",
+          "Format",
+          "SHA256"
+        ],
+        "field_types": {
+          "Available": "bool",
+          "Bytes": "int64",
+          "ExpiresAt": "time.Time",
+          "Format": "string",
+          "SHA256": "string"
+        }
+      },
+      "AdminReportArtifactRequest": {
+        "name": "AdminReportArtifactRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Format",
+          "ReportID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Format": "string",
+          "ReportID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminReportCancelRequest": {
+        "name": "AdminReportCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Reason",
+          "ReportID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Reason": "string",
+          "ReportID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminReportCapabilities": {
+        "name": "AdminReportCapabilities",
+        "kind": "struct",
+        "fields": [
+          "DefaultDetailRows",
+          "Formats",
+          "MarkdownAvailable",
+          "MaxDetailRows",
+          "PDFAvailable"
+        ],
+        "field_types": {
+          "DefaultDetailRows": "int",
+          "Formats": "[]string",
+          "MarkdownAvailable": "bool",
+          "MaxDetailRows": "int",
+          "PDFAvailable": "bool"
+        }
+      },
+      "AdminReportCapabilitiesRequest": {
+        "name": "AdminReportCapabilitiesRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "AdminReportCleanupFailure": {
+        "name": "AdminReportCleanupFailure",
+        "kind": "struct",
+        "fields": [
+          "Reason",
+          "ReportID"
+        ],
+        "field_types": {
+          "Reason": "string",
+          "ReportID": "string"
+        }
+      },
+      "AdminReportCleanupPreview": {
+        "name": "AdminReportCleanupPreview",
+        "kind": "struct",
+        "fields": [
+          "NewestExpiresAt",
+          "Note",
+          "OldestExpiresAt",
+          "Policy",
+          "PreviewedAt",
+          "Scopes",
+          "TargetCount",
+          "Targets",
+          "TotalBytes"
+        ],
+        "field_types": {
+          "NewestExpiresAt": "time.Time",
+          "Note": "string",
+          "OldestExpiresAt": "time.Time",
+          "Policy": "AdminReportRetentionPolicy",
+          "PreviewedAt": "time.Time",
+          "Scopes": "[]string",
+          "TargetCount": "int",
+          "Targets": "[]AdminReportCleanupTarget",
+          "TotalBytes": "int64"
+        }
+      },
+      "AdminReportCleanupPreviewRequest": {
+        "name": "AdminReportCleanupPreviewRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "AdminReportCleanupRequest": {
+        "name": "AdminReportCleanupRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "MaxTargets",
+          "Password",
+          "Reason",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "MaxTargets": "int",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminReportCleanupResult": {
+        "name": "AdminReportCleanupResult",
+        "kind": "struct",
+        "fields": [
+          "CleanedCount",
+          "DeletedFiles",
+          "FailedCount",
+          "Failures",
+          "FinishedAt",
+          "FreedBytes",
+          "OperatorID",
+          "OperatorType",
+          "Policy",
+          "RawAuditNote",
+          "RequestedCount",
+          "SkippedCount",
+          "StartedAt"
+        ],
+        "field_types": {
+          "CleanedCount": "int",
+          "DeletedFiles": "int",
+          "FailedCount": "int",
+          "Failures": "[]AdminReportCleanupFailure",
+          "FinishedAt": "time.Time",
+          "FreedBytes": "int64",
+          "OperatorID": "string",
+          "OperatorType": "string",
+          "Policy": "AdminReportRetentionPolicy",
+          "RawAuditNote": "string",
+          "RequestedCount": "int",
+          "SkippedCount": "int",
+          "StartedAt": "time.Time"
+        }
+      },
+      "AdminReportCleanupTarget": {
+        "name": "AdminReportCleanupTarget",
+        "kind": "struct",
+        "fields": [
+          "ArtifactCount",
+          "Bytes",
+          "CleanupState",
+          "ExpiresAt",
+          "Formats",
+          "Name",
+          "PlanID",
+          "ReportID",
+          "ScopeID",
+          "State"
+        ],
+        "field_types": {
+          "ArtifactCount": "int",
+          "Bytes": "int64",
+          "CleanupState": "string",
+          "ExpiresAt": "time.Time",
+          "Formats": "[]string",
+          "Name": "string",
+          "PlanID": "string",
+          "ReportID": "string",
+          "ScopeID": "string",
+          "State": "string"
+        }
+      },
+      "AdminReportCompleteness": {
+        "name": "AdminReportCompleteness",
+        "kind": "struct",
+        "fields": [
+          "DetailRowsTruncated",
+          "MissingIntervals",
+          "ModulesNotEnabled",
+          "RetentionConfigured",
+          "RetentionCutoff",
+          "RetentionDays",
+          "ScopeTrimmed",
+          "SourceTruncated",
+          "TrendPointsTruncated",
+          "WindowWithinRetention"
+        ],
+        "field_types": {
+          "DetailRowsTruncated": "bool",
+          "MissingIntervals": "[]AdminStatsMissingInterval",
+          "ModulesNotEnabled": "[]string",
+          "RetentionConfigured": "bool",
+          "RetentionCutoff": "time.Time",
+          "RetentionDays": "int",
+          "ScopeTrimmed": "bool",
+          "SourceTruncated": "bool",
+          "TrendPointsTruncated": "bool",
+          "WindowWithinRetention": "bool"
+        }
+      },
+      "AdminReportHistory": {
+        "name": "AdminReportHistory",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "Artifacts",
+          "CleanupState",
+          "CreatedAt",
+          "ErrorCode",
+          "ExecutorID",
+          "ExpiresAt",
+          "FailureReason",
+          "FinishedAt",
+          "Formats",
+          "ID",
+          "Name",
+          "OwnerID",
+          "OwnerType",
+          "PlanID",
+          "RequestID",
+          "ScopeID",
+          "ScopeKind",
+          "StartedAt",
+          "State",
+          "TaskID"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "Artifacts": "[]AdminReportArtifact",
+          "CleanupState": "string",
+          "CreatedAt": "time.Time",
+          "ErrorCode": "string",
+          "ExecutorID": "string",
+          "ExpiresAt": "time.Time",
+          "FailureReason": "string",
+          "FinishedAt": "time.Time",
+          "Formats": "[]string",
+          "ID": "string",
+          "Name": "string",
+          "OwnerID": "string",
+          "OwnerType": "string",
+          "PlanID": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "StartedAt": "time.Time",
+          "State": "string",
+          "TaskID": "string"
+        }
+      },
+      "AdminReportList": {
+        "name": "AdminReportList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Limit",
+          "NextCursor",
+          "Reports",
+          "ScopeTrimmed"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Limit": "int",
+          "NextCursor": "string",
+          "Reports": "[]AdminReportHistory",
+          "ScopeTrimmed": "bool"
+        }
+      },
+      "AdminReportPlan": {
+        "name": "AdminReportPlan",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "CreatedAt",
+          "Enabled",
+          "Expression",
+          "Formats",
+          "Granularity",
+          "ID",
+          "Name",
+          "OwnerID",
+          "OwnerType",
+          "PermissionState",
+          "ScheduleType",
+          "ScopeID",
+          "ScopeKind",
+          "TimeZone",
+          "UpdatedAt",
+          "Version"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "CreatedAt": "time.Time",
+          "Enabled": "bool",
+          "Expression": "string",
+          "Formats": "[]string",
+          "Granularity": "string",
+          "ID": "string",
+          "Name": "string",
+          "OwnerID": "string",
+          "OwnerType": "string",
+          "PermissionState": "string",
+          "ScheduleType": "string",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "TimeZone": "string",
+          "UpdatedAt": "time.Time",
+          "Version": "int64"
+        }
+      },
+      "AdminReportPlanList": {
+        "name": "AdminReportPlanList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Page",
+          "Plans"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Page": "AdminPageInfo",
+          "Plans": "[]AdminReportPlan"
+        }
+      },
+      "AdminReportRequest": {
+        "name": "AdminReportRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ReportID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ReportID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminReportRetentionPolicy": {
+        "name": "AdminReportRetentionPolicy",
+        "kind": "struct",
+        "fields": [
+          "ArtifactTTL",
+          "CleanupGrace",
+          "EligibleBefore",
+          "HistoryNote",
+          "RawAuditNote",
+          "Source"
+        ],
+        "field_types": {
+          "ArtifactTTL": "time.Duration",
+          "CleanupGrace": "time.Duration",
+          "EligibleBefore": "time.Time",
+          "HistoryNote": "string",
+          "RawAuditNote": "string",
+          "Source": "string"
+        }
+      },
+      "AdminReportRetryRequest": {
+        "name": "AdminReportRetryRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Password",
+          "Reason",
+          "ReportID",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "Reason": "string",
+          "ReportID": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminReportStartRequest": {
+        "name": "AdminReportStartRequest",
+        "kind": "struct",
+        "fields": [
+          "AppID",
+          "Caller",
+          "Categories",
+          "End",
+          "Formats",
+          "Granularity",
+          "MaxDetailRows",
+          "Password",
+          "RequestID",
+          "ScopeID",
+          "Start",
+          "TOTPCode",
+          "TimeZone",
+          "TrendMetric"
+        ],
+        "field_types": {
+          "AppID": "string",
+          "Caller": "AdminCaller",
+          "Categories": "[]string",
+          "End": "time.Time",
+          "Formats": "[]string",
+          "Granularity": "string",
+          "MaxDetailRows": "int",
+          "Password": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "Start": "time.Time",
+          "TOTPCode": "string",
+          "TimeZone": "string",
+          "TrendMetric": "string"
+        }
+      },
+      "AdminReportSummary": {
+        "name": "AdminReportSummary",
+        "kind": "struct",
+        "fields": [
+          "ActiveUsers",
+          "DetailRows",
+          "FailedRequests",
+          "FailedTasks",
+          "TotalRawEvents",
+          "TrendPoints"
+        ],
+        "field_types": {
+          "ActiveUsers": "int64",
+          "DetailRows": "int",
+          "FailedRequests": "int64",
+          "FailedTasks": "int64",
+          "TotalRawEvents": "int64",
+          "TrendPoints": "int"
+        }
+      },
+      "AdminRevealedClientSecret": {
+        "name": "AdminRevealedClientSecret",
+        "kind": "struct",
+        "fields": [
+          "ClientID",
+          "Info",
+          "Secret"
+        ],
+        "field_types": {
+          "ClientID": "string",
+          "Info": "AdminClientSecretInfo",
+          "Secret": "string"
         }
       },
       "AdminRole": {
@@ -4867,12 +8593,20 @@
           "ListApplicationMembers",
           "ListApplicationRoles",
           "ListApplications",
+          "ListAuditEvents",
+          "ListBackupArtifacts",
+          "ListBackupJobs",
+          "ListBackupNotifications",
+          "ListBackupSchedules",
           "ListGroupMembers",
           "ListGroups",
           "ListPermissions",
+          "ListReportPlans",
+          "ListReports",
           "ListRoleAssignments",
           "ListRolePermissions",
           "ListRoles",
+          "ListTasks",
           "ListUserSessions",
           "ListUsers",
           "RevokeApplicationRole",
@@ -4930,6 +8664,246 @@
           "RequestID": "string"
         }
       },
+      "AdminStatsCompleteness": {
+        "name": "AdminStatsCompleteness",
+        "kind": "struct",
+        "fields": [
+          "MissingIntervals",
+          "ModulesNotEnabled",
+          "RetentionConfigured",
+          "RetentionCutoff",
+          "RetentionDays",
+          "ScopeTrimmed",
+          "SourceTruncated",
+          "WindowWithinRetention"
+        ],
+        "field_types": {
+          "MissingIntervals": "[]AdminStatsMissingInterval",
+          "ModulesNotEnabled": "[]string",
+          "RetentionConfigured": "bool",
+          "RetentionCutoff": "time.Time",
+          "RetentionDays": "int",
+          "ScopeTrimmed": "bool",
+          "SourceTruncated": "bool",
+          "WindowWithinRetention": "bool"
+        }
+      },
+      "AdminStatsMissingInterval": {
+        "name": "AdminStatsMissingInterval",
+        "kind": "struct",
+        "fields": [
+          "End",
+          "Reason",
+          "Start"
+        ],
+        "field_types": {
+          "End": "time.Time",
+          "Reason": "string",
+          "Start": "time.Time"
+        }
+      },
+      "AdminTask": {
+        "name": "AdminTask",
+        "kind": "struct",
+        "fields": [
+          "Attempt",
+          "CreatedAt",
+          "ErrorCode",
+          "ExecutorID",
+          "FailureReason",
+          "FinishedAt",
+          "ID",
+          "InitiatorID",
+          "InitiatorType",
+          "Kind",
+          "MaxAttempts",
+          "RequestID",
+          "StartedAt",
+          "State"
+        ],
+        "field_types": {
+          "Attempt": "int",
+          "CreatedAt": "time.Time",
+          "ErrorCode": "string",
+          "ExecutorID": "string",
+          "FailureReason": "string",
+          "FinishedAt": "time.Time",
+          "ID": "string",
+          "InitiatorID": "string",
+          "InitiatorType": "string",
+          "Kind": "string",
+          "MaxAttempts": "int",
+          "RequestID": "string",
+          "StartedAt": "time.Time",
+          "State": "string"
+        }
+      },
+      "AdminTaskAttempt": {
+        "name": "AdminTaskAttempt",
+        "kind": "struct",
+        "fields": [
+          "Attempt",
+          "ErrorCode",
+          "FinishedAt",
+          "Outcome",
+          "StartedAt"
+        ],
+        "field_types": {
+          "Attempt": "int",
+          "ErrorCode": "string",
+          "FinishedAt": "time.Time",
+          "Outcome": "string",
+          "StartedAt": "time.Time"
+        }
+      },
+      "AdminTaskCancelRequest": {
+        "name": "AdminTaskCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Reason",
+          "RequestID",
+          "TaskID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Reason": "string",
+          "RequestID": "string",
+          "TaskID": "string"
+        }
+      },
+      "AdminTaskCancelResult": {
+        "name": "AdminTaskCancelResult",
+        "kind": "struct",
+        "fields": [
+          "Accepted",
+          "AlreadyRequested",
+          "Note",
+          "State",
+          "TaskID"
+        ],
+        "field_types": {
+          "Accepted": "bool",
+          "AlreadyRequested": "bool",
+          "Note": "string",
+          "State": "string",
+          "TaskID": "string"
+        }
+      },
+      "AdminTaskList": {
+        "name": "AdminTaskList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Limit",
+          "NextCursor",
+          "Tasks"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Limit": "int",
+          "NextCursor": "string",
+          "Tasks": "[]AdminTask"
+        }
+      },
+      "AdminTaskRequest": {
+        "name": "AdminTaskRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "TaskID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "TaskID": "string"
+        }
+      },
+      "AdminUpdateApplicationMemberRequest": {
+        "name": "AdminUpdateApplicationMemberRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "DisplayName",
+          "ExpectedRowVersion",
+          "Note",
+          "RequestID",
+          "Title",
+          "UserID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "DisplayName": "string",
+          "ExpectedRowVersion": "int64",
+          "Note": "string",
+          "RequestID": "string",
+          "Title": "string",
+          "UserID": "string"
+        }
+      },
+      "AdminUpdateApplicationRequest": {
+        "name": "AdminUpdateApplicationRequest",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "Caller",
+          "ContactInfo",
+          "Description",
+          "ExpectedRowVersion",
+          "Homepage",
+          "IconRef",
+          "Name",
+          "OwnerUserID",
+          "RequestID"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "Caller": "AdminCaller",
+          "ContactInfo": "string",
+          "Description": "string",
+          "ExpectedRowVersion": "int64",
+          "Homepage": "string",
+          "IconRef": "string",
+          "Name": "string",
+          "OwnerUserID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminUpdateOAuthClientSettingsRequest": {
+        "name": "AdminUpdateOAuthClientSettingsRequest",
+        "kind": "struct",
+        "fields": [
+          "Audiences",
+          "Caller",
+          "ClientID",
+          "ExpectedRowVersion",
+          "GrantTypes",
+          "Password",
+          "PostLogoutRedirectURIs",
+          "RedirectURIs",
+          "RequestID",
+          "RequirePKCE",
+          "Scopes",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Audiences": "[]string",
+          "Caller": "AdminCaller",
+          "ClientID": "string",
+          "ExpectedRowVersion": "int64",
+          "GrantTypes": "[]string",
+          "Password": "string",
+          "PostLogoutRedirectURIs": "[]string",
+          "RedirectURIs": "[]string",
+          "RequestID": "string",
+          "RequirePKCE": "*bool",
+          "Scopes": "[]string",
+          "TOTPCode": "string"
+        }
+      },
       "AdminUpdateProfileRequest": {
         "name": "AdminUpdateProfileRequest",
         "kind": "struct",
@@ -4970,6 +8944,278 @@
           "Nickname": "string",
           "Status": "string",
           "Username": "string"
+        }
+      },
+      "AdminUserBatchCancelRequest": {
+        "name": "AdminUserBatchCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "JobID",
+          "Reason",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "JobID": "string",
+          "Reason": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminUserBatchExportRequest": {
+        "name": "AdminUserBatchExportRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Fields",
+          "IdempotencyKey",
+          "IncludeFreeText",
+          "MaxRows",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Fields": "[]string",
+          "IdempotencyKey": "string",
+          "IncludeFreeText": "bool",
+          "MaxRows": "int",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminUserBatchImportRequest": {
+        "name": "AdminUserBatchImportRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Content",
+          "IdempotencyKey",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Content": "[]byte",
+          "IdempotencyKey": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "AdminUserBatchJob": {
+        "name": "AdminUserBatchJob",
+        "kind": "struct",
+        "fields": [
+          "ConflictCount",
+          "CreatedAt",
+          "CreatedCount",
+          "DeniedCount",
+          "ErrorCode",
+          "ExportPath",
+          "ExportRows",
+          "ExportSHA256",
+          "FailedCount",
+          "FinishedAt",
+          "ID",
+          "InputAvailable",
+          "Kind",
+          "OwnerID",
+          "OwnerType",
+          "RequestID",
+          "ScopeID",
+          "SkippedCount",
+          "State",
+          "TaskID",
+          "TotalRows",
+          "Truncated",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "ConflictCount": "int",
+          "CreatedAt": "time.Time",
+          "CreatedCount": "int",
+          "DeniedCount": "int",
+          "ErrorCode": "string",
+          "ExportPath": "string",
+          "ExportRows": "int",
+          "ExportSHA256": "string",
+          "FailedCount": "int",
+          "FinishedAt": "time.Time",
+          "ID": "string",
+          "InputAvailable": "bool",
+          "Kind": "string",
+          "OwnerID": "string",
+          "OwnerType": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "SkippedCount": "int",
+          "State": "string",
+          "TaskID": "string",
+          "TotalRows": "int",
+          "Truncated": "bool",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "AdminUserBatchJobList": {
+        "name": "AdminUserBatchJobList",
+        "kind": "struct",
+        "fields": [
+          "HasMore",
+          "Jobs",
+          "Page"
+        ],
+        "field_types": {
+          "HasMore": "bool",
+          "Jobs": "[]AdminUserBatchJob",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "AdminUserBatchJobRequest": {
+        "name": "AdminUserBatchJobRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "JobID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "JobID": "string",
+          "RequestID": "string"
+        }
+      },
+      "AdminUserBatchJobStart": {
+        "name": "AdminUserBatchJobStart",
+        "kind": "struct",
+        "fields": [
+          "Duplicate",
+          "Job",
+          "Report"
+        ],
+        "field_types": {
+          "Duplicate": "bool",
+          "Job": "AdminUserBatchJob",
+          "Report": "*AdminUserBatchPrecheckResult"
+        }
+      },
+      "AdminUserBatchListJobsRequest": {
+        "name": "AdminUserBatchListJobsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Kind",
+          "Page",
+          "RequestID",
+          "State"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Kind": "string",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "State": "string"
+        }
+      },
+      "AdminUserBatchParseError": {
+        "name": "AdminUserBatchParseError",
+        "kind": "struct",
+        "fields": [
+          "Code",
+          "Column",
+          "Line",
+          "Reason"
+        ],
+        "field_types": {
+          "Code": "string",
+          "Column": "string",
+          "Line": "int",
+          "Reason": "string"
+        }
+      },
+      "AdminUserBatchPrecheckRequest": {
+        "name": "AdminUserBatchPrecheckRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Content",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Content": "[]byte",
+          "RequestID": "string"
+        }
+      },
+      "AdminUserBatchPrecheckResult": {
+        "name": "AdminUserBatchPrecheckResult",
+        "kind": "struct",
+        "fields": [
+          "CanImport",
+          "Errors",
+          "Headers",
+          "RejectedRows",
+          "TotalRows",
+          "Truncated"
+        ],
+        "field_types": {
+          "CanImport": "bool",
+          "Errors": "[]AdminUserBatchParseError",
+          "Headers": "[]string",
+          "RejectedRows": "int",
+          "TotalRows": "int",
+          "Truncated": "bool"
+        }
+      },
+      "AdminUserBatchRow": {
+        "name": "AdminUserBatchRow",
+        "kind": "struct",
+        "fields": [
+          "Action",
+          "ErrorCode",
+          "ReasonCode",
+          "RowNumber",
+          "UserID",
+          "UsernameNormalized"
+        ],
+        "field_types": {
+          "Action": "string",
+          "ErrorCode": "string",
+          "ReasonCode": "string",
+          "RowNumber": "int",
+          "UserID": "string",
+          "UsernameNormalized": "string"
+        }
+      },
+      "AdminUserBatchRowList": {
+        "name": "AdminUserBatchRowList",
+        "kind": "struct",
+        "fields": [
+          "Rows",
+          "Truncated"
+        ],
+        "field_types": {
+          "Rows": "[]AdminUserBatchRow",
+          "Truncated": "bool"
+        }
+      },
+      "AdminUserBatchRowsRequest": {
+        "name": "AdminUserBatchRowsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "JobID",
+          "Limit",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "JobID": "string",
+          "Limit": "int",
+          "RequestID": "string"
         }
       },
       "AdminUserByUsernameRequest": {
@@ -5062,6 +9308,108 @@
           "Total": "int64"
         }
       },
+      "AdminUserState": {
+        "name": "AdminUserState",
+        "kind": "struct",
+        "fields": [
+          "Biography",
+          "CreatedAt",
+          "ID",
+          "Language",
+          "Nickname",
+          "RowVersion",
+          "SecurityVersion",
+          "Status",
+          "Timezone",
+          "UpdatedAt",
+          "Username"
+        ],
+        "field_types": {
+          "Biography": "string",
+          "CreatedAt": "time.Time",
+          "ID": "string",
+          "Language": "string",
+          "Nickname": "string",
+          "RowVersion": "int64",
+          "SecurityVersion": "int64",
+          "Status": "string",
+          "Timezone": "string",
+          "UpdatedAt": "time.Time",
+          "Username": "string"
+        }
+      },
+      "AdminUserStateChange": {
+        "name": "AdminUserStateChange",
+        "kind": "struct",
+        "fields": [
+          "Changed",
+          "PreviousStatus",
+          "RequiresRelogin",
+          "User"
+        ],
+        "field_types": {
+          "Changed": "bool",
+          "PreviousStatus": "string",
+          "RequiresRelogin": "bool",
+          "User": "AdminUserState"
+        }
+      },
+      "AdminUserStateRequest": {
+        "name": "AdminUserStateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ExpectedRowVersion",
+          "RequestID",
+          "UserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ExpectedRowVersion": "int64",
+          "RequestID": "string",
+          "UserID": "string"
+        }
+      },
+      "ApplicationLifecycleService": {
+        "name": "ApplicationLifecycleService",
+        "kind": "interface",
+        "methods": [
+          "DeleteApplication",
+          "DisableApplicationMember",
+          "EnableApplicationMember",
+          "GetApplication",
+          "GetApplicationMember",
+          "PreviewApplicationDeletion",
+          "PurgeApplication",
+          "RemoveApplicationMember",
+          "UpdateApplication",
+          "UpdateApplicationMemberProfile"
+        ]
+      },
+      "AuditService": {
+        "name": "AuditService",
+        "kind": "interface",
+        "methods": [
+          "CancelExport",
+          "CancelPurge",
+          "CancelTask",
+          "ErrorStats",
+          "GetEvent",
+          "GetExport",
+          "GetPurgeRun",
+          "GetTask",
+          "ListExports",
+          "ListPurgeRuns",
+          "ListTaskAttempts",
+          "OpenExport",
+          "PreviewPurge",
+          "Query",
+          "Retention",
+          "SetRetention",
+          "StartExport",
+          "StartPurge"
+        ]
+      },
       "AuthService": {
         "name": "AuthService",
         "kind": "interface",
@@ -5096,6 +9444,60 @@
         "methods": [
           "EnsureRoot"
         ]
+      },
+      "CancelEmailChangeRequest": {
+        "name": "CancelEmailChangeRequest",
+        "kind": "struct",
+        "fields": [
+          "ChangeRequestID",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "ChangeRequestID": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "ChangeOwnPasswordRequest": {
+        "name": "ChangeOwnPasswordRequest",
+        "kind": "struct",
+        "fields": [
+          "ClientIP",
+          "CurrentPassword",
+          "NewPassword",
+          "RequestID",
+          "SessionSecret",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "ClientIP": "string",
+          "CurrentPassword": "string",
+          "NewPassword": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "TOTPCode": "string"
+        }
+      },
+      "ChangeOwnUsernameRequest": {
+        "name": "ChangeOwnUsernameRequest",
+        "kind": "struct",
+        "fields": [
+          "ExpectedRowVersion",
+          "NewUsername",
+          "Password",
+          "RequestID",
+          "SessionSecret",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "ExpectedRowVersion": "int64",
+          "NewUsername": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "TOTPCode": "string"
+        }
       },
       "CompletePasswordResetRequest": {
         "name": "CompletePasswordResetRequest",
@@ -5133,6 +9535,98 @@
           "RequestID": "string",
           "Timezone": "string",
           "Username": "string"
+        }
+      },
+      "DelegationAdminService": {
+        "name": "DelegationAdminService",
+        "kind": "interface",
+        "methods": [
+          "DelegatablePermissions",
+          "GetDelegation",
+          "ListDelegations",
+          "RevokeDelegation"
+        ]
+      },
+      "EmailChangeService": {
+        "name": "EmailChangeService",
+        "kind": "interface",
+        "methods": [
+          "Cancel",
+          "Request",
+          "State",
+          "Verify"
+        ]
+      },
+      "EmailChangeState": {
+        "name": "EmailChangeState",
+        "kind": "struct",
+        "fields": [
+          "ErrorCode",
+          "ExpiresAt",
+          "HasEmail",
+          "NewEmail",
+          "OldEmail",
+          "Pending",
+          "VerificationSent"
+        ],
+        "field_types": {
+          "ErrorCode": "string",
+          "ExpiresAt": "string",
+          "HasEmail": "bool",
+          "NewEmail": "string",
+          "OldEmail": "string",
+          "Pending": "bool",
+          "VerificationSent": "bool"
+        }
+      },
+      "EmailChangeStateRequest": {
+        "name": "EmailChangeStateRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "EmailChangeVerified": {
+        "name": "EmailChangeVerified",
+        "kind": "struct",
+        "fields": [
+          "Email",
+          "ErrorCode",
+          "Notified",
+          "OldEmail",
+          "SwitchedAt",
+          "UserID"
+        ],
+        "field_types": {
+          "Email": "string",
+          "ErrorCode": "string",
+          "Notified": "bool",
+          "OldEmail": "string",
+          "SwitchedAt": "string",
+          "UserID": "string"
+        }
+      },
+      "EmailVerificationSendResult": {
+        "name": "EmailVerificationSendResult",
+        "kind": "struct",
+        "fields": [
+          "Email",
+          "ErrorCode",
+          "ResendAllowedAt",
+          "Sent",
+          "UserID"
+        ],
+        "field_types": {
+          "Email": "string",
+          "ErrorCode": "string",
+          "ResendAllowedAt": "string",
+          "Sent": "bool",
+          "UserID": "string"
         }
       },
       "GrantRoleRequest": {
@@ -5184,6 +9678,20 @@
           "PageOverrides": "*PageOverrides",
           "Prefix": "string"
         }
+      },
+      "InvitationAdminService": {
+        "name": "InvitationAdminService",
+        "kind": "interface",
+        "methods": [
+          "ApproveRegistration",
+          "CancelInvitation",
+          "CreateInvitation",
+          "GetInvitation",
+          "GetRegistration",
+          "ListInvitations",
+          "ListPendingRegistrations",
+          "RejectRegistration"
+        ]
       },
       "IterationOptions": {
         "name": "IterationOptions",
@@ -5673,6 +10181,21 @@
           "Resource": "string"
         }
       },
+      "OAuthClientAdminService": {
+        "name": "OAuthClientAdminService",
+        "kind": "interface",
+        "methods": [
+          "GetClient",
+          "ListClientCertificates",
+          "ListClientSecrets",
+          "RegisterClient",
+          "RegisterClientCertificate",
+          "RevokeClientCertificate",
+          "RevokeClientSecret",
+          "RotateClientSecret",
+          "UpdateClientSettings"
+        ]
+      },
       "Options": {
         "name": "Options",
         "kind": "struct",
@@ -5705,6 +10228,18 @@
           "OperatorID": "string"
         }
       },
+      "OwnProfileRequest": {
+        "name": "OwnProfileRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
       "PageOverrides": {
         "name": "PageOverrides",
         "kind": "struct",
@@ -5724,6 +10259,29 @@
           "HostTemplates": "*login.UIHostTemplates",
           "Translations": "login.UICatalogProvider"
         }
+      },
+      "PasswordChangeResult": {
+        "name": "PasswordChangeResult",
+        "kind": "struct",
+        "fields": [
+          "RequiresRelogin",
+          "SecurityVersion",
+          "SessionsRevoked",
+          "UserID"
+        ],
+        "field_types": {
+          "RequiresRelogin": "bool",
+          "SecurityVersion": "int64",
+          "SessionsRevoked": "int64",
+          "UserID": "string"
+        }
+      },
+      "PasswordChangeService": {
+        "name": "PasswordChangeService",
+        "kind": "interface",
+        "methods": [
+          "ChangeOwnPassword"
+        ]
       },
       "PasswordResetResult": {
         "name": "PasswordResetResult",
@@ -5752,6 +10310,1058 @@
           "ValidateToken",
           "ValidateTokenWithSource"
         ]
+      },
+      "ProfileService": {
+        "name": "ProfileService",
+        "kind": "interface",
+        "methods": [
+          "ChangeUsername",
+          "GetProfile",
+          "UpdateProfile"
+        ]
+      },
+      "ProfileView": {
+        "name": "ProfileView",
+        "kind": "struct",
+        "fields": [
+          "Biography",
+          "CreatedAt",
+          "IsRoot",
+          "Language",
+          "Nickname",
+          "Phone",
+          "PhoneVerified",
+          "RowVersion",
+          "Timezone",
+          "UpdatedAt",
+          "UserID",
+          "Username",
+          "UsernameChangedAt",
+          "UsernameNormalized"
+        ],
+        "field_types": {
+          "Biography": "string",
+          "CreatedAt": "string",
+          "IsRoot": "bool",
+          "Language": "string",
+          "Nickname": "string",
+          "Phone": "string",
+          "PhoneVerified": "bool",
+          "RowVersion": "int64",
+          "Timezone": "string",
+          "UpdatedAt": "string",
+          "UserID": "string",
+          "Username": "string",
+          "UsernameChangedAt": "string",
+          "UsernameNormalized": "string"
+        }
+      },
+      "RBACAuthorizationService": {
+        "name": "RBACAuthorizationService",
+        "kind": "interface",
+        "methods": [
+          "Check",
+          "CheckResourceAccess",
+          "EffectivePermissions",
+          "PermissionSources"
+        ]
+      },
+      "RBACCatalogRequest": {
+        "name": "RBACCatalogRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "RBACCheckRequest": {
+        "name": "RBACCheckRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Mode",
+          "Permissions",
+          "RequestID",
+          "ScopeID",
+          "SubjectUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Mode": "string",
+          "Permissions": "[]string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "SubjectUserID": "string"
+        }
+      },
+      "RBACCheckResult": {
+        "name": "RBACCheckResult",
+        "kind": "struct",
+        "fields": [
+          "Allowed",
+          "Code",
+          "Mode",
+          "Permissions",
+          "Reason",
+          "ScopeID",
+          "SourceLimitReached",
+          "SubjectUserID"
+        ],
+        "field_types": {
+          "Allowed": "bool",
+          "Code": "string",
+          "Mode": "string",
+          "Permissions": "[]RBACPermissionDecision",
+          "Reason": "string",
+          "ScopeID": "string",
+          "SourceLimitReached": "bool",
+          "SubjectUserID": "string"
+        }
+      },
+      "RBACCreateGroupRequest": {
+        "name": "RBACCreateGroupRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Description",
+          "Key",
+          "Name",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Description": "string",
+          "Key": "string",
+          "Name": "string",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "RBACDelegatablePermission": {
+        "name": "RBACDelegatablePermission",
+        "kind": "struct",
+        "fields": [
+          "AllowSelf",
+          "ExpiresAt",
+          "Key",
+          "MaxDataScope",
+          "Name",
+          "PermissionID"
+        ],
+        "field_types": {
+          "AllowSelf": "bool",
+          "ExpiresAt": "*time.Time",
+          "Key": "string",
+          "MaxDataScope": "string",
+          "Name": "string",
+          "PermissionID": "string"
+        }
+      },
+      "RBACDelegatableRequest": {
+        "name": "RBACDelegatableRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "RBACDelegation": {
+        "name": "RBACDelegation",
+        "kind": "struct",
+        "fields": [
+          "AllowSelf",
+          "CreatedAt",
+          "CreatedBy",
+          "DelegatorUserID",
+          "ExpiresAt",
+          "ID",
+          "MaxDataScope",
+          "PermissionID",
+          "PermissionKey",
+          "PermissionName",
+          "RevokedAt",
+          "ScopeID",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "AllowSelf": "bool",
+          "CreatedAt": "time.Time",
+          "CreatedBy": "string",
+          "DelegatorUserID": "string",
+          "ExpiresAt": "*time.Time",
+          "ID": "string",
+          "MaxDataScope": "string",
+          "PermissionID": "string",
+          "PermissionKey": "string",
+          "PermissionName": "string",
+          "RevokedAt": "*time.Time",
+          "ScopeID": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "RBACDelegationList": {
+        "name": "RBACDelegationList",
+        "kind": "struct",
+        "fields": [
+          "Grants",
+          "HasMore",
+          "Page"
+        ],
+        "field_types": {
+          "Grants": "[]RBACDelegation",
+          "HasMore": "bool",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "RBACDelegationListRequest": {
+        "name": "RBACDelegationListRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "DelegatorUserID",
+          "IncludeRevoked",
+          "Page",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "DelegatorUserID": "string",
+          "IncludeRevoked": "bool",
+          "Page": "AdminPage",
+          "RequestID": "string"
+        }
+      },
+      "RBACDelegationRequest": {
+        "name": "RBACDelegationRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "GrantID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "GrantID": "string",
+          "RequestID": "string"
+        }
+      },
+      "RBACDelegationService": {
+        "name": "RBACDelegationService",
+        "kind": "interface",
+        "methods": [
+          "DelegatablePermissions",
+          "Get",
+          "Grant",
+          "List",
+          "Revoke"
+        ]
+      },
+      "RBACEffectivePermission": {
+        "name": "RBACEffectivePermission",
+        "kind": "struct",
+        "fields": [
+          "DataScope",
+          "DataScopeMode",
+          "Key",
+          "Name",
+          "ScopeID",
+          "Sources"
+        ],
+        "field_types": {
+          "DataScope": "[]string",
+          "DataScopeMode": "string",
+          "Key": "string",
+          "Name": "string",
+          "ScopeID": "string",
+          "Sources": "[]RBACGrantSource"
+        }
+      },
+      "RBACEffectiveRequest": {
+        "name": "RBACEffectiveRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID",
+          "ScopeID",
+          "SubjectUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "SubjectUserID": "string"
+        }
+      },
+      "RBACEffectiveResult": {
+        "name": "RBACEffectiveResult",
+        "kind": "struct",
+        "fields": [
+          "AccountStatus",
+          "ApplicationStatus",
+          "DeniedCode",
+          "DeniedReason",
+          "HasMore",
+          "MembershipStatus",
+          "Page",
+          "Permissions",
+          "ScopeID",
+          "SourceLimitReached",
+          "SubjectUserID"
+        ],
+        "field_types": {
+          "AccountStatus": "string",
+          "ApplicationStatus": "string",
+          "DeniedCode": "string",
+          "DeniedReason": "string",
+          "HasMore": "bool",
+          "MembershipStatus": "string",
+          "Page": "AdminPageInfo",
+          "Permissions": "[]RBACEffectivePermission",
+          "ScopeID": "string",
+          "SourceLimitReached": "bool",
+          "SubjectUserID": "string"
+        }
+      },
+      "RBACGrantSource": {
+        "name": "RBACGrantSource",
+        "kind": "struct",
+        "fields": [
+          "DataScope",
+          "DataScopeMode",
+          "GroupID",
+          "GroupKey",
+          "GroupName",
+          "Kind",
+          "PermissionEnabled",
+          "PermissionID",
+          "PermissionKey",
+          "PermissionName",
+          "RoleEnabled",
+          "RoleID",
+          "RoleKey",
+          "RoleName",
+          "RootOnly"
+        ],
+        "field_types": {
+          "DataScope": "[]string",
+          "DataScopeMode": "string",
+          "GroupID": "string",
+          "GroupKey": "string",
+          "GroupName": "string",
+          "Kind": "string",
+          "PermissionEnabled": "bool",
+          "PermissionID": "string",
+          "PermissionKey": "string",
+          "PermissionName": "string",
+          "RoleEnabled": "bool",
+          "RoleID": "string",
+          "RoleKey": "string",
+          "RoleName": "string",
+          "RootOnly": "bool"
+        }
+      },
+      "RBACGroup": {
+        "name": "RBACGroup",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "CreatedAt",
+          "Description",
+          "ID",
+          "Key",
+          "Name",
+          "ScopeID",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "CreatedAt": "time.Time",
+          "Description": "string",
+          "ID": "string",
+          "Key": "string",
+          "Name": "string",
+          "ScopeID": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "RBACGroupMemberBatchRequest": {
+        "name": "RBACGroupMemberBatchRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "GroupID",
+          "Password",
+          "RequestID",
+          "TOTPCode",
+          "UserIDs"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "GroupID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string",
+          "UserIDs": "[]string"
+        }
+      },
+      "RBACGroupMemberBatchResult": {
+        "name": "RBACGroupMemberBatchResult",
+        "kind": "struct",
+        "fields": [
+          "Added",
+          "Removed",
+          "Skipped"
+        ],
+        "field_types": {
+          "Added": "int",
+          "Removed": "int",
+          "Skipped": "int"
+        }
+      },
+      "RBACGroupRequest": {
+        "name": "RBACGroupRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "GroupID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "GroupID": "string",
+          "RequestID": "string"
+        }
+      },
+      "RBACGroupService": {
+        "name": "RBACGroupService",
+        "kind": "interface",
+        "methods": [
+          "AddMembers",
+          "Create",
+          "Delete",
+          "Get",
+          "List",
+          "ListMembers",
+          "RemoveMembers",
+          "Update"
+        ]
+      },
+      "RBACPermission": {
+        "name": "RBACPermission",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "CreatedAt",
+          "Description",
+          "Enabled",
+          "ID",
+          "IsBuiltin",
+          "Key",
+          "Limits",
+          "Name",
+          "RootOnly",
+          "ScopeID",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "CreatedAt": "time.Time",
+          "Description": "string",
+          "Enabled": "bool",
+          "ID": "string",
+          "IsBuiltin": "bool",
+          "Key": "string",
+          "Limits": "string",
+          "Name": "string",
+          "RootOnly": "bool",
+          "ScopeID": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "RBACPermissionDecision": {
+        "name": "RBACPermissionDecision",
+        "kind": "struct",
+        "fields": [
+          "Allowed",
+          "Code",
+          "DataScope",
+          "DataScopeMode",
+          "Key",
+          "Reason",
+          "SourceLimitReached",
+          "Sources"
+        ],
+        "field_types": {
+          "Allowed": "bool",
+          "Code": "string",
+          "DataScope": "[]string",
+          "DataScopeMode": "string",
+          "Key": "string",
+          "Reason": "string",
+          "SourceLimitReached": "bool",
+          "Sources": "[]RBACGrantSource"
+        }
+      },
+      "RBACPermissionRequest": {
+        "name": "RBACPermissionRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "PermissionID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "PermissionID": "string",
+          "RequestID": "string"
+        }
+      },
+      "RBACPermissionService": {
+        "name": "RBACPermissionService",
+        "kind": "interface",
+        "methods": [
+          "Catalog",
+          "Create",
+          "Delete",
+          "Disable",
+          "Enable",
+          "Get",
+          "List",
+          "Update"
+        ]
+      },
+      "RBACPermissionSourcesRequest": {
+        "name": "RBACPermissionSourcesRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "PermissionKey",
+          "RequestID",
+          "ScopeID",
+          "SubjectUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "PermissionKey": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "SubjectUserID": "string"
+        }
+      },
+      "RBACPermissionSourcesResult": {
+        "name": "RBACPermissionSourcesResult",
+        "kind": "struct",
+        "fields": [
+          "AccountStatus",
+          "ApplicationStatus",
+          "HasMore",
+          "MembershipStatus",
+          "Page",
+          "PermissionFound",
+          "PermissionKey",
+          "PermissionName",
+          "ScopeID",
+          "Sources",
+          "SubjectUserID"
+        ],
+        "field_types": {
+          "AccountStatus": "string",
+          "ApplicationStatus": "string",
+          "HasMore": "bool",
+          "MembershipStatus": "string",
+          "Page": "AdminPageInfo",
+          "PermissionFound": "bool",
+          "PermissionKey": "string",
+          "PermissionName": "string",
+          "ScopeID": "string",
+          "Sources": "[]RBACGrantSource",
+          "SubjectUserID": "string"
+        }
+      },
+      "RBACPresetCatalog": {
+        "name": "RBACPresetCatalog",
+        "kind": "struct",
+        "fields": [
+          "Permissions",
+          "Version"
+        ],
+        "field_types": {
+          "Permissions": "[]RBACPresetPermission",
+          "Version": "string"
+        }
+      },
+      "RBACPresetPermission": {
+        "name": "RBACPresetPermission",
+        "kind": "struct",
+        "fields": [
+          "DefaultRoles",
+          "Implemented",
+          "Key",
+          "Limits",
+          "Name",
+          "RequiresReauth",
+          "RootOnly",
+          "Scope",
+          "Summary"
+        ],
+        "field_types": {
+          "DefaultRoles": "[]string",
+          "Implemented": "bool",
+          "Key": "string",
+          "Limits": "string",
+          "Name": "string",
+          "RequiresReauth": "bool",
+          "RootOnly": "bool",
+          "Scope": "string",
+          "Summary": "string"
+        }
+      },
+      "RBACPresetPreview": {
+        "name": "RBACPresetPreview",
+        "kind": "struct",
+        "fields": [
+          "All",
+          "CatalogVersion",
+          "Digest",
+          "ExpiresAt",
+          "GeneratedAt",
+          "Scopes",
+          "Selections",
+          "SkippedScopes",
+          "Summary",
+          "Token"
+        ],
+        "field_types": {
+          "All": "bool",
+          "CatalogVersion": "string",
+          "Digest": "string",
+          "ExpiresAt": "time.Time",
+          "GeneratedAt": "time.Time",
+          "Scopes": "[]RBACPresetScopeDiff",
+          "Selections": "[]RBACPresetSelection",
+          "SkippedScopes": "[]RBACPresetSkippedScope",
+          "Summary": "RBACPresetSummary",
+          "Token": "string"
+        }
+      },
+      "RBACPresetPreviewRequest": {
+        "name": "RBACPresetPreviewRequest",
+        "kind": "struct",
+        "fields": [
+          "All",
+          "Caller",
+          "RequestID",
+          "RoleKeys",
+          "ScopeID"
+        ],
+        "field_types": {
+          "All": "bool",
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "RoleKeys": "[]string",
+          "ScopeID": "string"
+        }
+      },
+      "RBACPresetRestoreRequest": {
+        "name": "RBACPresetRestoreRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "Token"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "Token": "string"
+        }
+      },
+      "RBACPresetRestoreResult": {
+        "name": "RBACPresetRestoreResult",
+        "kind": "struct",
+        "fields": [
+          "All",
+          "CatalogVersion",
+          "Digest",
+          "Scopes",
+          "Selections",
+          "SkippedScopes",
+          "Summary"
+        ],
+        "field_types": {
+          "All": "bool",
+          "CatalogVersion": "string",
+          "Digest": "string",
+          "Scopes": "[]RBACPresetScopeDiff",
+          "Selections": "[]RBACPresetSelection",
+          "SkippedScopes": "[]RBACPresetSkippedScope",
+          "Summary": "RBACPresetSummary"
+        }
+      },
+      "RBACPresetRoleDiff": {
+        "name": "RBACPresetRoleDiff",
+        "kind": "struct",
+        "fields": [
+          "AddPermissions",
+          "Exists",
+          "Name",
+          "Protected",
+          "RemovePermissions",
+          "RoleID",
+          "RoleKey",
+          "ScopeID",
+          "Unchanged"
+        ],
+        "field_types": {
+          "AddPermissions": "[]string",
+          "Exists": "bool",
+          "Name": "string",
+          "Protected": "bool",
+          "RemovePermissions": "[]string",
+          "RoleID": "string",
+          "RoleKey": "string",
+          "ScopeID": "string",
+          "Unchanged": "bool"
+        }
+      },
+      "RBACPresetScopeDiff": {
+        "name": "RBACPresetScopeDiff",
+        "kind": "struct",
+        "fields": [
+          "CatalogVersion",
+          "Installed",
+          "InstalledVersion",
+          "MissingGroups",
+          "MissingPermissions",
+          "MissingRoles",
+          "ReenablePermissions",
+          "RoleDiffs",
+          "ScopeID",
+          "ScopeKind",
+          "SkippedRootOnlyReenables",
+          "UpdatePermissionTexts"
+        ],
+        "field_types": {
+          "CatalogVersion": "string",
+          "Installed": "bool",
+          "InstalledVersion": "string",
+          "MissingGroups": "[]string",
+          "MissingPermissions": "[]string",
+          "MissingRoles": "[]string",
+          "ReenablePermissions": "[]string",
+          "RoleDiffs": "[]RBACPresetRoleDiff",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "SkippedRootOnlyReenables": "[]string",
+          "UpdatePermissionTexts": "[]string"
+        }
+      },
+      "RBACPresetSelection": {
+        "name": "RBACPresetSelection",
+        "kind": "struct",
+        "fields": [
+          "RoleKeys",
+          "ScopeID"
+        ],
+        "field_types": {
+          "RoleKeys": "[]string",
+          "ScopeID": "string"
+        }
+      },
+      "RBACPresetService": {
+        "name": "RBACPresetService",
+        "kind": "interface",
+        "methods": [
+          "Catalog",
+          "Preview",
+          "Restore"
+        ]
+      },
+      "RBACPresetSkippedScope": {
+        "name": "RBACPresetSkippedScope",
+        "kind": "struct",
+        "fields": [
+          "Reason",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Reason": "string",
+          "ScopeID": "string"
+        }
+      },
+      "RBACPresetSummary": {
+        "name": "RBACPresetSummary",
+        "kind": "struct",
+        "fields": [
+          "AddRolePermissions",
+          "CreateGroups",
+          "CreatePermissions",
+          "CreateRoles",
+          "ProtectedRoles",
+          "ReenablePermissions",
+          "RemoveRolePermissions",
+          "SkippedRootOnlyReenables",
+          "UnchangedRoles",
+          "UpdatePermissionTexts"
+        ],
+        "field_types": {
+          "AddRolePermissions": "int",
+          "CreateGroups": "int",
+          "CreatePermissions": "int",
+          "CreateRoles": "int",
+          "ProtectedRoles": "int",
+          "ReenablePermissions": "int",
+          "RemoveRolePermissions": "int",
+          "SkippedRootOnlyReenables": "int",
+          "UnchangedRoles": "int",
+          "UpdatePermissionTexts": "int"
+        }
+      },
+      "RBACResourceAccessRequest": {
+        "name": "RBACResourceAccessRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "PermissionKey",
+          "RequestID",
+          "ResourceID",
+          "ScopeID",
+          "SubjectUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "PermissionKey": "string",
+          "RequestID": "string",
+          "ResourceID": "string",
+          "ScopeID": "string",
+          "SubjectUserID": "string"
+        }
+      },
+      "RBACResourceDecision": {
+        "name": "RBACResourceDecision",
+        "kind": "struct",
+        "fields": [
+          "Allowed",
+          "Code",
+          "DataScope",
+          "DataScopeMode",
+          "PermissionKey",
+          "Reason",
+          "ResourceID"
+        ],
+        "field_types": {
+          "Allowed": "bool",
+          "Code": "string",
+          "DataScope": "[]string",
+          "DataScopeMode": "string",
+          "PermissionKey": "string",
+          "Reason": "string",
+          "ResourceID": "string"
+        }
+      },
+      "RBACRole": {
+        "name": "RBACRole",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "CreatedAt",
+          "Description",
+          "Enabled",
+          "ID",
+          "IsBuiltin",
+          "Key",
+          "Limits",
+          "Name",
+          "ScopeID",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "CreatedAt": "time.Time",
+          "Description": "string",
+          "Enabled": "bool",
+          "ID": "string",
+          "IsBuiltin": "bool",
+          "Key": "string",
+          "Limits": "string",
+          "Name": "string",
+          "ScopeID": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "RBACRoleGroupRequest": {
+        "name": "RBACRoleGroupRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "GroupID",
+          "Password",
+          "RequestID",
+          "RoleID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "GroupID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "RoleID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "RBACRolePermissionRemoveRequest": {
+        "name": "RBACRolePermissionRemoveRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Password",
+          "PermissionID",
+          "RequestID",
+          "RoleID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "PermissionID": "string",
+          "RequestID": "string",
+          "RoleID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "RBACRoleRequest": {
+        "name": "RBACRoleRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "RoleID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "RoleID": "string"
+        }
+      },
+      "RBACRoleService": {
+        "name": "RBACRoleService",
+        "kind": "interface",
+        "methods": [
+          "AddPermission",
+          "AssignGroup",
+          "AssignUser",
+          "Create",
+          "Delete",
+          "Disable",
+          "Enable",
+          "Get",
+          "List",
+          "ListAssignments",
+          "ListPermissions",
+          "RemovePermission",
+          "RevokeGroup",
+          "RevokeUser",
+          "Update"
+        ]
+      },
+      "RBACRoleStateRequest": {
+        "name": "RBACRoleStateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "RoleID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "RoleID": "string"
+        }
+      },
+      "RBACService": {
+        "name": "RBACService",
+        "kind": "interface",
+        "methods": [
+          "Authorization",
+          "Delegations",
+          "Groups",
+          "Permissions",
+          "Presets",
+          "Roles"
+        ]
+      },
+      "RBACUpdateGroupRequest": {
+        "name": "RBACUpdateGroupRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Description",
+          "GroupID",
+          "Name",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Description": "string",
+          "GroupID": "string",
+          "Name": "string",
+          "RequestID": "string"
+        }
+      },
+      "RBACUpdatePermissionRequest": {
+        "name": "RBACUpdatePermissionRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Description",
+          "Limits",
+          "Name",
+          "PermissionID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Description": "string",
+          "Limits": "string",
+          "Name": "string",
+          "PermissionID": "string",
+          "RequestID": "string"
+        }
+      },
+      "RBACUpdateRoleRequest": {
+        "name": "RBACUpdateRoleRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Description",
+          "Limits",
+          "Name",
+          "RequestID",
+          "RoleID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Description": "string",
+          "Limits": "string",
+          "Name": "string",
+          "RequestID": "string",
+          "RoleID": "string"
+        }
       },
       "RecoveryCodes": {
         "name": "RecoveryCodes",
@@ -5835,6 +11445,109 @@
           "SessionSecret": "[]byte"
         }
       },
+      "RegisterAccountRequest": {
+        "name": "RegisterAccountRequest",
+        "kind": "struct",
+        "fields": [
+          "Email",
+          "Language",
+          "Nickname",
+          "Password",
+          "RequestID",
+          "Timezone",
+          "Username"
+        ],
+        "field_types": {
+          "Email": "string",
+          "Language": "string",
+          "Nickname": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "Timezone": "string",
+          "Username": "string"
+        }
+      },
+      "RegisteredAccount": {
+        "name": "RegisteredAccount",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "Email",
+          "Status",
+          "UserID",
+          "Username",
+          "VerificationErrorCode",
+          "VerificationSent"
+        ],
+        "field_types": {
+          "CreatedAt": "string",
+          "Email": "string",
+          "Status": "string",
+          "UserID": "string",
+          "Username": "string",
+          "VerificationErrorCode": "string",
+          "VerificationSent": "bool"
+        }
+      },
+      "RegistrationAvailability": {
+        "name": "RegistrationAvailability",
+        "kind": "struct",
+        "fields": [
+          "EmailCapability",
+          "Enabled",
+          "RequireEmailVerification",
+          "RequireReview"
+        ],
+        "field_types": {
+          "EmailCapability": "bool",
+          "Enabled": "bool",
+          "RequireEmailVerification": "bool",
+          "RequireReview": "bool"
+        }
+      },
+      "RegistrationService": {
+        "name": "RegistrationService",
+        "kind": "interface",
+        "methods": [
+          "Availability",
+          "RegisterAccount",
+          "ResendEmailVerification",
+          "SendEmailVerification",
+          "VerifyEmail"
+        ]
+      },
+      "ReportsService": {
+        "name": "ReportsService",
+        "kind": "interface",
+        "methods": [
+          "Cancel",
+          "Capabilities",
+          "CleanupExecute",
+          "CleanupPreview",
+          "Get",
+          "OpenArtifact",
+          "Retry",
+          "Start"
+        ]
+      },
+      "RequestEmailChangeRequest": {
+        "name": "RequestEmailChangeRequest",
+        "kind": "struct",
+        "fields": [
+          "NewEmail",
+          "Password",
+          "RequestID",
+          "SessionSecret",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "NewEmail": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "TOTPCode": "string"
+        }
+      },
       "RequestPasswordResetRequest": {
         "name": "RequestPasswordResetRequest",
         "kind": "struct",
@@ -5847,6 +11560,34 @@
           "ClientIP": "string",
           "Identifier": "string",
           "RequestID": "string"
+        }
+      },
+      "ResendEmailVerificationRequest": {
+        "name": "ResendEmailVerificationRequest",
+        "kind": "struct",
+        "fields": [
+          "CredentialID",
+          "RequestID",
+          "SessionSecret",
+          "Token",
+          "UserID"
+        ],
+        "field_types": {
+          "CredentialID": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "Token": "string",
+          "UserID": "string"
+        }
+      },
+      "ResendEmailVerificationResult": {
+        "name": "ResendEmailVerificationResult",
+        "kind": "struct",
+        "fields": [
+          "Accepted"
+        ],
+        "field_types": {
+          "Accepted": "bool"
         }
       },
       "RevokeRoleRequest": {
@@ -5904,23 +11645,36 @@
           "Access",
           "Admin",
           "AdminSession",
+          "Applications",
+          "Audit",
           "Auth",
           "Bootstrap",
           "Close",
           "Config",
+          "Delegations",
+          "EmailChange",
           "HTTPMounts",
           "HTTPPrefix",
           "Handler",
           "Instance",
+          "Invitations",
           "LocalAdmin",
           "MFA",
           "Mount",
+          "OAuthClients",
           "PasswordReset",
+          "Passwords",
+          "Profile",
+          "RBAC",
           "Ready",
+          "Registration",
+          "Reports",
           "Security",
           "Sessions",
           "Start",
           "State",
+          "UserBatch",
+          "UserLifecycle",
           "Users"
         ]
       },
@@ -5988,6 +11742,20 @@
           "SessionSecret"
         ],
         "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "SendEmailVerificationRequest": {
+        "name": "SendEmailVerificationRequest",
+        "kind": "struct",
+        "fields": [
+          "Email",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "Email": "string",
           "RequestID": "string",
           "SessionSecret": "[]byte"
         }
@@ -6197,6 +11965,30 @@
           "Secret": "string"
         }
       },
+      "UpdateOwnProfileRequest": {
+        "name": "UpdateOwnProfileRequest",
+        "kind": "struct",
+        "fields": [
+          "Biography",
+          "ExpectedRowVersion",
+          "Language",
+          "Nickname",
+          "Phone",
+          "RequestID",
+          "SessionSecret",
+          "Timezone"
+        ],
+        "field_types": {
+          "Biography": "*string",
+          "ExpectedRowVersion": "int64",
+          "Language": "*string",
+          "Nickname": "*string",
+          "Phone": "*string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "Timezone": "*string"
+        }
+      },
       "User": {
         "name": "User",
         "kind": "struct",
@@ -6216,6 +12008,32 @@
           "Status": "string",
           "Username": "string"
         }
+      },
+      "UserBatchService": {
+        "name": "UserBatchService",
+        "kind": "interface",
+        "methods": [
+          "CancelJob",
+          "GetJob",
+          "ListJobs",
+          "ListRows",
+          "PrecheckImport",
+          "RetryJob",
+          "StartExport",
+          "StartImport"
+        ]
+      },
+      "UserLifecycleService": {
+        "name": "UserLifecycleService",
+        "kind": "interface",
+        "methods": [
+          "CompleteUserDeletion",
+          "DisableUser",
+          "EnableUser",
+          "GetUser",
+          "PreviewUserDeletion",
+          "RequestUserDeletion"
+        ]
       },
       "UserService": {
         "name": "UserService",
@@ -6238,6 +12056,20 @@
           "Token": "string"
         }
       },
+      "VerifiedEmail": {
+        "name": "VerifiedEmail",
+        "kind": "struct",
+        "fields": [
+          "Email",
+          "UserID",
+          "VerifiedAt"
+        ],
+        "field_types": {
+          "Email": "string",
+          "UserID": "string",
+          "VerifiedAt": "string"
+        }
+      },
       "VerifiedSession": {
         "name": "VerifiedSession",
         "kind": "struct",
@@ -6257,6 +12089,38 @@
           "SessionID": "string",
           "SessionSecret": "[]byte",
           "Strength": "string",
+          "UserID": "string"
+        }
+      },
+      "VerifyEmailChangeRequest": {
+        "name": "VerifyEmailChangeRequest",
+        "kind": "struct",
+        "fields": [
+          "ChangeRequestID",
+          "CredentialID",
+          "RequestID",
+          "Token"
+        ],
+        "field_types": {
+          "ChangeRequestID": "string",
+          "CredentialID": "string",
+          "RequestID": "string",
+          "Token": "string"
+        }
+      },
+      "VerifyEmailRequest": {
+        "name": "VerifyEmailRequest",
+        "kind": "struct",
+        "fields": [
+          "CredentialID",
+          "RequestID",
+          "Token",
+          "UserID"
+        ],
+        "field_types": {
+          "CredentialID": "string",
+          "RequestID": "string",
+          "Token": "string",
           "UserID": "string"
         }
       },
@@ -6286,46 +12150,99 @@
     "app_funcs": [
       "Access",
       "AddApplicationMember",
+      "AddMembers",
+      "AddPermission",
       "AddRolePermission",
       "Admin",
       "AdminSession",
+      "Applications",
+      "ApproveRegistration",
       "AsNotFound",
+      "AssignGroup",
+      "AssignUser",
+      "Audit",
       "Auth",
+      "Authorization",
       "Authorize",
+      "Availability",
       "BeginEmailEnrollment",
       "BeginPasskeyLogin",
       "BeginPasskeyRegistration",
       "BeginRecovery",
       "BeginTOTPBinding",
       "Bootstrap",
+      "Cancel",
+      "CancelExport",
+      "CancelInvitation",
+      "CancelJob",
+      "CancelPurge",
+      "CancelTask",
+      "Capabilities",
+      "Catalog",
+      "ChangeOwnPassword",
+      "ChangeUsername",
       "Check",
       "CheckPermission",
+      "CheckResourceAccess",
+      "CleanupExecute",
+      "CleanupPreview",
       "Close",
       "Code",
       "Complete",
+      "CompleteUserDeletion",
       "Config",
       "ConfirmEmailEnrollment",
       "ConfirmTOTPBinding",
       "Create",
       "CreateApplication",
+      "CreateInvitation",
       "CreatePermission",
       "CreateRole",
       "CreateUser",
+      "DelegatablePermissions",
+      "Delegations",
+      "Delete",
+      "DeleteApplication",
+      "Disable",
+      "DisableApplicationMember",
+      "DisableUser",
       "EffectivePermissions",
+      "EmailChange",
+      "Enable",
+      "EnableApplicationMember",
+      "EnableUser",
       "EnsureRoot",
       "Error",
+      "ErrorStats",
       "FinishPasskeyLogin",
       "FinishPasskeyRegistration",
       "GenerateRecoveryCodes",
+      "Get",
+      "GetApplication",
+      "GetApplicationMember",
+      "GetClient",
+      "GetDelegation",
+      "GetEvent",
+      "GetExport",
+      "GetInvitation",
+      "GetJob",
+      "GetProfile",
+      "GetPurgeRun",
+      "GetRegistration",
+      "GetTask",
+      "GetUser",
       "GetUserByUsername",
       "GetUserProfile",
+      "Grant",
       "GrantApplicationRole",
       "GrantDelegation",
+      "Groups",
       "HTTPMounts",
       "HTTPPrefix",
       "HTTPStatus",
       "Handler",
       "Instance",
+      "Invitations",
       "IsNotFound",
       "IterateAdminPages",
       "List",
@@ -6333,14 +12250,34 @@
       "ListApplicationMembers",
       "ListApplicationRoles",
       "ListApplications",
+      "ListAssignments",
+      "ListAuditEvents",
+      "ListBackupArtifacts",
+      "ListBackupJobs",
+      "ListBackupNotifications",
+      "ListBackupSchedules",
+      "ListClientCertificates",
+      "ListClientSecrets",
+      "ListDelegations",
       "ListDevices",
+      "ListExports",
       "ListGroupMembers",
       "ListGroups",
+      "ListInvitations",
+      "ListJobs",
+      "ListMembers",
       "ListPasskeys",
+      "ListPendingRegistrations",
       "ListPermissions",
+      "ListPurgeRuns",
+      "ListReportPlans",
+      "ListReports",
       "ListRoleAssignments",
       "ListRolePermissions",
       "ListRoles",
+      "ListRows",
+      "ListTaskAttempts",
+      "ListTasks",
       "ListUserSessions",
       "ListUsers",
       "LocalAdmin",
@@ -6350,31 +12287,83 @@
       "Mount",
       "NewAdminPageInfo",
       "NormalizeAdminPage",
+      "OAuthClients",
       "Open",
+      "OpenArtifact",
+      "OpenExport",
       "PasswordReset",
+      "Passwords",
+      "PermissionSources",
+      "Permissions",
+      "PrecheckImport",
+      "Presets",
+      "Preview",
+      "PreviewApplicationDeletion",
+      "PreviewPurge",
+      "PreviewUserDeletion",
+      "Profile",
+      "PurgeApplication",
+      "Query",
+      "RBAC",
       "Ready",
       "RecoveryCodes",
       "RecoveryStatus",
+      "RegisterAccount",
+      "RegisterClient",
+      "RegisterClientCertificate",
+      "Registration",
+      "RejectRegistration",
+      "RemoveApplicationMember",
       "RemoveEmail",
+      "RemoveMembers",
       "RemovePasskey",
+      "RemovePermission",
       "RemoveTOTP",
       "RenamePasskey",
+      "Reports",
       "Request",
+      "RequestUserDeletion",
+      "ResendEmailVerification",
+      "Restore",
+      "Retention",
+      "Retry",
+      "RetryJob",
       "Revoke",
       "RevokeApplicationRole",
+      "RevokeClientCertificate",
+      "RevokeClientSecret",
+      "RevokeDelegation",
+      "RevokeGroup",
+      "RevokeUser",
+      "Roles",
+      "RotateClientSecret",
       "Security",
+      "SendEmailVerification",
       "Sessions",
       "SetApplicationEnabled",
+      "SetRetention",
       "Start",
+      "StartExport",
+      "StartImport",
+      "StartPurge",
       "State",
       "Status",
       "Unwrap",
+      "Update",
+      "UpdateApplication",
+      "UpdateApplicationMemberProfile",
+      "UpdateClientSettings",
+      "UpdateProfile",
       "UpdateUserProfile",
+      "UserBatch",
+      "UserLifecycle",
       "Users",
       "Validate",
       "ValidateCSRF",
       "ValidateToken",
       "ValidateTokenWithSource",
+      "Verify",
+      "VerifyEmail",
       "VerifySecondFactor"
     ],
     "app_vars": [
@@ -6569,6 +12558,7 @@
       "UIBackupRetention",
       "UIBackupRetentionRequest",
       "UIBackupSchedule",
+      "UIBackupSchedulePagedBackend",
       "UIBackupScheduleRequest",
       "UIBrand",
       "UICatalogProvider",
@@ -6734,6 +12724,8 @@
       "UIReportHistoryQuery",
       "UIReportPlan",
       "UIReportPlanDeletePreview",
+      "UIReportPlanPage",
+      "UIReportPlanPagedBackend",
       "UIReportPlanRequest",
       "UIReportPreview",
       "UIReportPreviewRow",
@@ -7120,6 +13112,11 @@
         "method": "GET",
         "pattern": "support/recovery/requests/{request_id}",
         "source": "internal/serverapp/admin_domain_routes.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "tasks",
+        "source": "internal/adminapi/handler.go"
       },
       {
         "method": "GET",
@@ -9766,6 +15763,7 @@
       "./app": [
         "TestAdminApplicationListsPagination",
         "TestPublicNotFoundContractFromExternalModule",
+        "TestAdminObservabilityListsPagination",
         "TestAdminPaginatedListFacades",
         "TestNormalizeAdminPage",
         "TestAdminQueryRequestIDCorrelation",
@@ -9782,12 +15780,23 @@
         "TestExampleOnlyImportsPublicPackages",
         "TestRootPackageDoesNotImportApp",
         "TestAppPackageHasNoInitSideEffects",
+        "TestApplicationLifecyclePublicFlow",
+        "TestApplicationAdminCrossAppIsolation",
+        "TestApplicationAuditFailureRollsBack",
+        "TestAuditErrorStatsCrossApplicationIsolation",
+        "TestAuditExportPublicFacade",
+        "TestAuditReportsPublicFacade",
+        "TestDelegationPublicFlow",
+        "TestEmailChangePublicFlow",
         "TestHostServerAndReverseProxyTrustedSource",
         "TestEmbeddedHTTPPagesMountAndSecurity",
         "TestEmbeddedHTTPMissingDependenciesFailStartup",
         "TestEmbeddedHTTPPageOverrides",
         "TestEmbeddedHTTPAdminAPIMount",
         "TestHTTPHandlerAbsentWithoutOptions",
+        "TestInvitationAdminLifecycle",
+        "TestInvitationAdminDeniedForNormalUser",
+        "TestRegistrationReviewAdminSurface",
         "TestIterateAdminPagesRealRuntimeDomains",
         "TestIterateAdminPagesSuccess",
         "TestIterateAdminPagesEmptyList",
@@ -9807,6 +15816,7 @@
         "TestPasswordLoginTOTPSecondFactorAndSensitiveReauth",
         "TestRecoveryCodesRequireStrongAuthAndRestrictedRecovery",
         "TestConfigVariantsKeepTOTPAndRejectRegistration",
+        "TestOAuthClientCredentialsPublicFlow",
         "TestPasswordResetValidateSourceLimit",
         "TestPasswordResetCompleteSourceLimit",
         "TestPasswordResetSourceKeyTrustBoundary",
@@ -9815,6 +15825,30 @@
         "TestPasswordResetFacadeLogsNoSecrets",
         "TestPasswordResetRequiresMailAndRejectsInvalidToken",
         "TestPasswordResetValidateTokenMatchesServiceJudgment",
+        "TestChangeOwnPassword",
+        "TestChangeOwnPasswordRejections",
+        "TestProfilePublicFlow",
+        "TestProfileChangeUsername",
+        "TestRBACPresetCatalogImplementedFlags",
+        "TestRBACPresetAdminSessionDenied",
+        "TestRBACPresetLocalAdminPreviewRestore",
+        "TestRBACDelegationLocalAdminAndUserRead",
+        "TestRBACDelegationAdminSessionCannotGrant",
+        "TestRBACRoleLifecycleAndRootProtection",
+        "TestRBACRolePermissionCompositionAndRevocation",
+        "TestRBACGroupLifecycleAndMembers",
+        "TestRBACPermissionScopeIsolation",
+        "TestRBACAuthorizationCrossAppAndRevoke",
+        "TestRBACAuditFailureFailsClosed",
+        "TestRBACRestrictedSessionRejected",
+        "TestRBACListPaginationAndIterate",
+        "TestRBACPermissionBuiltinProtection",
+        "TestRBACInvalidRequestIDRejected",
+        "TestRBACPublicSurfaceHasNoInternalTypes",
+        "TestRegistrationPublicFlow",
+        "TestRegistrationClosedConfigInvalid",
+        "TestRegistrationResendAntiEnumeration",
+        "TestReportsPublicCancelRetry",
         "TestOpenEnsureRootUsersLoginAccessRevokeStartClose",
         "TestOpenMigrateFalseFailsAndCleansUpResources",
         "TestOpenMissingKeyWithoutCreateFails",
@@ -9828,7 +15862,14 @@
         "TestSessionServiceValidateAndCSRF",
         "TestSessionServiceValidateExpiry",
         "TestSessionServiceValidateRejectsRestricted",
-        "TestAdminListUsersAndGetByUsername"
+        "TestTaskPermissionRecheckFailClosed",
+        "TestAdminListUsersAndGetByUsername",
+        "TestUserBatchImportLifecycle",
+        "TestUserBatchOwnerIsolation",
+        "TestUserLifecycleLocalAdminChain",
+        "TestUserLifecyclePermissionBoundaries",
+        "TestUserLifecycleAuditFailureRollsBack",
+        "TestUserLifecycleNotFoundAndRequestID"
       ],
       "./cmd/login-backup": [
         "TestCLICreateVerifyAndInfo",
@@ -10036,6 +16077,9 @@
         "TestConfirmAndBodyContract",
         "TestPanicRecovery",
         "TestMount",
+        "TestAdminAuditEventsCursorHTTP",
+        "TestAdminTaskListHTTPAndScope",
+        "TestAdminPlansAndBackupSchedulesPaginationHTTP",
         "TestReportPlanWriteEndpoints",
         "TestBackupScheduleWriteEndpoints",
         "TestNotificationEndpoints",
@@ -10145,7 +16189,8 @@
         "TestProtectedLogRejectsReplace",
         "TestExportDownloadVerifiesDigestAndOwner",
         "TestPurgeCountsAndExecutorAreReal",
-        "TestReadDenialsAudited"
+        "TestReadDenialsAudited",
+        "TestAuditCursorPaginationStableAndBound"
       ],
       "./internal/authfact": [
         "TestStrengthCombination",
@@ -10293,7 +16338,8 @@
         "TestCleanupFailureSendsNotification",
         "TestRetryableBackupFailureNotNonRetryable",
         "TestReconcileDefaultInspectRejectsInvalidFile",
-        "TestBackupFailureNotificationKinds"
+        "TestBackupFailureNotificationKinds",
+        "TestBackupSchedulesAndNotificationsPagination"
       ],
       "./internal/bootstrap": [
         "TestInitializeCreatesSinglePendingRoot",
@@ -10622,6 +16668,7 @@
         "TestTaskWaitFailureExitCode",
         "TestTaskCancelRequestAndConflict",
         "TestTaskCancelRejectsUntrustedOperator",
+        "TestTaskListCursorCLI",
         "TestUserListAndGet",
         "TestUserDisableWritesAuditAndEnableRestores",
         "TestUserDisableConfirmationRequired",
@@ -11068,6 +17115,7 @@
         "TestDefaultRolesRejectApplicationScope"
       ],
       "./internal/reports": [
+        "TestHistoryCursorPaginationStableAndBound",
         "TestHistoryWritesTerminalStates",
         "TestHistoryScheduledDenied",
         "TestHistoryWriteFailureDoesNotFakeSuccess",
@@ -11293,6 +17341,7 @@
         "TestBuildMailRuntimeEnabledFailClosed",
         "TestBuildMailRuntimeEnabled",
         "TestBuildMailURLs",
+        "TestMailURLConfigCombinations",
         "TestValidateMailRegistration",
         "TestManagePagesApplicationScopeA_B",
         "TestManagePageRowVersionConflict",
@@ -11357,7 +17406,9 @@
         "TestStep209MFAResetFailClosedWithoutRebindMethod",
         "TestAdminApplicationPathParam",
         "TestParseAdminListQueryApplicationSortWhitelist",
-        "TestStep222AllowedStrongSetupMethodsProtectedTransition"
+        "TestStep222AllowedStrongSetupMethodsProtectedTransition",
+        "TestTaskRunPermissionKeyMappings",
+        "TestCheckTaskPermissionFailClosed"
       ],
       "./internal/session": [
         "TestAdminListSessionsScopeAndAudit",
@@ -11576,6 +17627,7 @@
         "TestCustomIntervalSchedule"
       ],
       "./internal/task/sqlite": [
+        "TestListJobsCursorStableAndFiltered",
         "TestExecutorRetryBackoffAndExhaustion",
         "TestExecutorNonRetryableAndPermanentFailures",
         "TestCancelPreventsRetry",
@@ -11818,6 +17870,7 @@
         "TestOptionalCapabilityMethodsFailClosed"
       ],
       "./internal/userbatch": [
+        "TestListJobsOffsetPagination",
         "TestImportPrecheckRejectsBadFiles",
         "TestImportRowsAndIdempotency",
         "TestImportCancelAndResume",

@@ -196,7 +196,7 @@ func isContinuationField(field, fieldType string) bool {
 	lower := strings.ToLower(field)
 	if strings.Contains(lower, "hasmore") || strings.HasPrefix(lower, "next") ||
 		lower == "total" || lower == "returned" || lower == "cursor" ||
-		strings.Contains(lower, "nextcursor") {
+		strings.Contains(lower, "nextcursor") || lower == "truncated" {
 		return true
 	}
 	return strings.HasSuffix(fieldType, "AdminPageInfo") || strings.HasSuffix(fieldType, "PageInfo")
