@@ -494,6 +494,29 @@ type AdminUserSessionList struct {
 	Page               AdminPageInfo
 }
 
+// AdminRevokeSessionsRequest 是管理员强制下线请求：TargetUserID 与 TargetSessionID
+// 必须且只能指定一个；ScopeApplicationID 为空表示系统范围。Reason 必填（仅审计/
+// 排障，不参与授权）。Password/TOTPCode 只用于本次真实再次认证，不保存/不记录。
+type AdminRevokeSessionsRequest struct {
+	Caller             AdminCaller
+	ScopeApplicationID string
+	TargetUserID       string
+	TargetSessionID    string
+	Reason             string
+	Password           string
+	TOTPCode           string
+	RequestID          string
+}
+
+// AdminRevokeSessionsResult 是管理员强制下线结果；Revoked 是实际撤销数量，
+// 越界或目标已失效按幂等 0 返回。
+type AdminRevokeSessionsResult struct {
+	ScopeApplicationID string
+	TargetUserID       string
+	TargetSessionID    string
+	Revoked            int64
+}
+
 // SessionDeviceRequest 是本人设备列表请求；SessionSecret 必须是仍有效且可访问普通
 // 业务的会话秘密。
 type SessionDeviceRequest struct {
@@ -523,6 +546,34 @@ type SessionDeviceList struct {
 	Total   int64
 	HasMore bool
 	Page    AdminPageInfo
+}
+
+// SessionDeviceRevokeRequest 是本人退出指定设备的请求；身份只来自会话秘密。
+type SessionDeviceRevokeRequest struct {
+	SessionSecret   []byte
+	TargetSessionID string
+	RequestID       string
+}
+
+// SessionDeviceRevokeResult 是本人退出指定设备的结果；Revoked=false 表示目标
+// 不属于本人、不存在或已失效（幂等，不泄露他人会话）。
+type SessionDeviceRevokeResult struct {
+	TargetSessionID string
+	Revoked         bool
+}
+
+// SessionRevokeOthersRequest 是本人退出其他会话的请求；KeepCurrent=true 保留当前
+// 会话，false 退出全部本人会话。
+type SessionRevokeOthersRequest struct {
+	SessionSecret []byte
+	KeepCurrent   bool
+	RequestID     string
+}
+
+// SessionRevokeOthersResult 是退出其他/全部会话的结果。
+type SessionRevokeOthersResult struct {
+	Revoked     int64
+	KeptCurrent bool
 }
 
 // ===== 审计/报告/后台任务/备份列表（步骤 218） =====
@@ -1198,6 +1249,10 @@ type AdminService interface {
 	// ListUserSessions 管理员按作用范围分页读取目标用户活动会话（仅 AdminSession
 	// 调用者；强认证、范围、root 保护与读审计由会话服务重新判定）。
 	ListUserSessions(ctx context.Context, req AdminListUserSessionsRequest) (AdminUserSessionList, error)
+	// RevokeUserSessions 管理员按作用范围强制下线目标用户或指定会话（仅真实
+	// AdminSession + 强再次认证；LocalAdmin 没有管理会话，不能执行）。root 与
+	// 受保护目标由会话服务拒绝；越界目标按幂等 0 处理，不泄露存在性。
+	RevokeUserSessions(ctx context.Context, req AdminRevokeSessionsRequest) (AdminRevokeSessionsResult, error)
 	// ListAuditEvents/ListReports/ListTasks 分页读取审计、历史报告与后台任务
 	// （步骤 218：稳定游标分页，游标绑定 scope/筛选；不改 216 已有方法）。
 	ListAuditEvents(ctx context.Context, req AdminListAuditEventsRequest) (AdminAuditEventList, error)
@@ -1284,6 +1339,12 @@ type SessionService interface {
 	// ListDevices 分页列出当前会话所属用户的本人活动会话（设备列表）；不包含会话
 	// 秘密/CSRF/验证摘要，offset 在并发登录/退出下不保证快照一致。
 	ListDevices(ctx context.Context, req SessionDeviceRequest) (SessionDeviceList, error)
+	// RevokeDevice 让当前会话本人退出指定的其他设备。目标不属于本人/不存在/已失效
+	// 按幂等成功返回 Revoked=false，不泄露他人会话存在性；受限会话拒绝。
+	RevokeDevice(ctx context.Context, req SessionDeviceRevokeRequest) (SessionDeviceRevokeResult, error)
+	// RevokeOtherDevices 退出本人其他全部会话；KeepCurrent=true 时保留当前会话
+	// （“退出其他设备”），false 时退出全部（含当前）。返回实际撤销数量。
+	RevokeOtherDevices(ctx context.Context, req SessionRevokeOthersRequest) (SessionRevokeOthersResult, error)
 }
 
 // SessionAccessRequest 是“会话 + 应用绑定 + 所需权限”的联合检查请求。
