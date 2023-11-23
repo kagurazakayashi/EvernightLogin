@@ -92,3 +92,25 @@ go run ./scripts/capabilities -strict
 状态由"声明面是否在源码中真实解析到"决定：`implemented` / `implemented_untested` /
 `missing` / `unimplemented`；反向覆盖段列出未被任何能力声明覆盖的生产面。`-strict`
 时有 missing 或未覆盖项会返回退出码 3，可作为后续步骤的回归门禁。
+
+## 6. 场景：embedded-minimal-selftest（步骤 240）
+
+`embedded-minimal-selftest` 由步骤 240 登记，用于验证"最小嵌入示例"这一外部
+Module 的真实可运行性；示例本身在 `examples/embedded-minimal/`（独立 go.mod，
+只导入公开包 `login` 与 `app`，不导入 `internal/`）。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
+  -Scenario embedded-minimal-selftest -TimeoutSeconds 180 `
+  -Out docs\acceptance\evidence\step240\shorttest-embedded-minimal.json
+```
+
+场景行为：在入口临时目录内 `go build` 外部示例 Module → 运行示例
+`-self-test -json`（示例自己用真实临时 SQLite 与 127.0.0.1 动态端口，覆盖打开
+实例、受控初始化、注册、登录成功/拒绝、会话校验与撤销、HTTP/UI 页面与 CSRF/401/
+403、宿主受保护路由、显式启停与清理）→ 解析示例 JSON，断言 15 项检查全部 PASS，
+并**独立核验**：示例临时数据目录已删除、动态端口已释放、场景构建产物已删除、
+入口临时目录无残留文件。任一断言失败或清理校验失败都返回非零退出码。
+
+预期：`status=PASS`、`exit_code=0`；结果 JSON 中 `checks[]` 是场景检查，
+`example_result` 是示例自身结构化结果，`cleanup` 是场景独立清理证据。

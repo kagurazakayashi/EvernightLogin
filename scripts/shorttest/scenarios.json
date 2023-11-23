@@ -27,6 +27,21 @@
       "arguments": ["-seconds", "120"],
       "covers": ["harness.timeout_kill_cleanup"],
       "notes": "用 -TimeoutSeconds 20 运行时，子进程（固定睡眠 120 秒）应被入口强制结束，入口输出 TIMEOUT 结构化结果并清理临时目录；仅用于验证入口自身，不代表产品能力。"
+    },
+    {
+      "id": "embedded-minimal-selftest",
+      "title": "最小嵌入示例自检（公开 app 包：打开 → 注册/登录/会话校验 → HTTP/UI 挂载 → 关闭清理）",
+      "program": "./scripts/shorttest/scenario/embedded_minimal_selftest",
+      "needs_server_binary": false,
+      "timeout_seconds": 180,
+      "arguments": ["-workdir", "{workdir}", "-timeout", "{timeout}", "-result", "{result}"],
+      "covers": [
+        "runtime.embedded",
+        "bootstrap.root",
+        "auth.password_session",
+        "ui.public_pages"
+      ],
+      "notes": "构建并运行真实外部 Module examples/embedded-minimal（只导入公开包）：临时 SQLite + 动态回环端口；成功路径覆盖打开实例/受控初始化/注册/登录/会话校验/HTTP 页面/宿主受保护路由，拒绝路径覆盖错误密码、缺 CSRF、跨来源、未认证管理页 401、普通用户 403、撤销后 401；场景独立核验示例临时目录删除、端口释放与构建产物清理。"
     }
   ]
 }

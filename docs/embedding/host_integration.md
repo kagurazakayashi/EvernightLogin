@@ -499,6 +499,35 @@ HTTP: &app.HTTPOptions{
 }
 ```
 
+### 3.5 最小可运行示例与一键自检（步骤 240）
+
+`examples/embedded-minimal/` 是独立 Go module 的最小可运行示例（只导入公开包
+`login` 与 `app`，不导入 `internal/`），覆盖：打开实例（`StateNew`）→ 受控本地
+初始化管理员 → 公开注册合成用户 → 登录失败/成功 → 会话校验与撤销 → 把 HTTP/UI
+挂到宿主自己的 `http.Server`（动态 127.0.0.1 端口）→ 宿主受保护业务路由用
+`Sessions.Validate` 校验会话 → 显式 `Start`/`Ready`/幂等 `Close` → 删除临时
+SQLite 数据目录。
+
+```powershell
+cd examples/embedded-minimal
+go run . -self-test -json     # 有界自检：单行 JSON，退出码 0/1
+go run . -demo                # 显式启动演示；Ctrl+C 或 -duration 到期后清理
+go test ./...                 # 同一自检作为测试运行
+```
+
+一键自检走统一短测试入口（临时目录、总超时、子进程退出与清理校验、结构化 JSON
+由入口负责）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
+  -Scenario embedded-minimal-selftest -TimeoutSeconds 180
+```
+
+场景 `embedded-minimal-selftest` 构建并运行该示例，核对示例 JSON 的 15 项检查全
+PASS，并独立验证示例临时数据目录删除、动态端口释放与构建产物清理。实测记录见
+`.ai/lead/reports/step240-dev.md`。限制：只覆盖密码登录且未启用第二因素的场景；
+TOTP/Passkey/邮件/真实浏览器/非 Windows 未在该示例实测。
+
 ## 4. 生命周期、取消与资源所有权
 
 - 状态机：`StateNew → StateRunning → StateClosed`。`Start` 只能成功一次；失败或
