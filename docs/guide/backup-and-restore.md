@@ -138,7 +138,40 @@ loginctl maintenance-exit --database P:\data\login.db --state-dir P:\data\state 
 - 恢复过程审计先写库外 `restore-journal.jsonl`（JSONL + SHA-256 哈希链 + fsync +
   跨进程锁），成功后幂等合并进恢复后数据库；合并失败保持维护、库外日志完整、可重试。
 
-## 5. 当前状态与限制
+## 5. 公开 Go 备份/恢复接口（步骤 231）
+
+宿主可只依赖公开包使用同一套备份/恢复能力（不经过 CLI/页面）：
+
+```go
+backup := runtime.Backup()
+backup.Plans()       // 备份计划 List/Get/Create/Update/SetEnabled/Delete
+backup.Jobs()        // Trigger/Get/List/Cancel（任务型：提交成功≠备份完成）
+backup.Artifacts()   // List/Get/Check/Export（按备份编号，不暴露磁盘路径）
+backup.Recovery()    // 仅 LocalAdmin 的受控本地恢复/维护
+```
+
+约定与安全边界：
+
+- 触发、导出、计划创建/更新/启停/删除属于敏感操作：本机受信操作者按既有审计事实
+  执行；普通管理会话必须提供近期密码/动态码，失败 fail-closed（不静默降级）。
+- 任务型 API 返回任务 ID/状态：`Jobs().Trigger` 后必须用 `Jobs().Get` 或
+  `Artifacts().Get` 查询真实终态；`Jobs().Cancel` 的 `Accepted` 只表示请求受理，
+  实际终态以任务真实状态为准（取消记录真实操作者与终态审计）。
+- `Artifacts().Check` 按备份编号复算登记摘要/大小并做完整认证校验（有主密钥环时），
+  失败返回错误而不是假成功；`Artifacts().Export` 返回受控字节（一次性下载票据 +
+  大小/摘要复核），**不接受/不返回任意磁盘路径**。
+- 恢复仅限受控本地：先 `Configure`（库外状态目录必须绝对路径且不能位于数据库目录内）
+  与 `LoadBackup`（在线阶段按编号解析受控备份），随后宿主**关闭 Runtime**，再
+  `Initialize`（显式确认）→ `Rehearse`（只读预演）→ `Execute`（确认令牌 `RESTORE`）。
+  `internal/restore` 负责排他锁、维护状态、回退备份、失败保持维护与凭证代际失效；
+  普通管理会话/受限会话一律 `ACCESS_DENIED`，不新增匿名远程恢复。
+- 运行时备份默认只包含 SQLite 数据库（附件/配置未装配时为 `not_configured`），
+  非 SQLite 备份如实标记不支持，不冒充可解析。
+
+可运行的自检见 `app/backup_public_test.go`（真实临时 SQLite：备份→检查→导出→
+修改数据→关闭运行时→预演→恢复→旧会话失效、损坏备份预检失败、权限/路径/确认门禁）。
+
+## 6. 当前状态与限制
 
 | 能力 | 状态 |
 |---|---|
@@ -147,6 +180,7 @@ loginctl maintenance-exit --database P:\data\login.db --state-dir P:\data\state 
 | 维护模式恢复、预演、回退、凭证失效、审计合并 | 已实现；2026-11-23 步骤196 以真实临时 SQLite + 真实备份/恢复服务验收旧凭据失效（会话/刷新令牌/授权码/恢复代码/重置链接/一次性凭证/签名密钥），恢复失败保持维护并可重试（见 [步骤196 验收](../acceptance/step196-backup-restore-credentials.md)） |
 | 主密钥环的生成与保管 | 已提供：首次初始化用 `login-server init --master-key-file <受保护路径>` 生成受保护密钥环文件（文件不存在时自动生成，只打印路径，不打印密钥材料）；`login-backup` 与 `loginctl restore-*` 的 `--key-file` 使用同一文件。主密钥必须与数据库、备份分开保存，丢失即无法解密相关数据与备份，**不可恢复** |
 | 备份/恢复 HTTP 入口 | **未实现**（页面恢复区仍占位） |
+| 公开 Go 备份/恢复接口 | **已实现（步骤 231）**：`Runtime.Backup()` 提供计划/触发/查询/取消/认证检查/受控导出与仅 LocalAdmin 的本地恢复；任务型 API 异步且可查询/取消，恢复复用维护状态/排他锁/预演/回退/凭证失效（详见上一节） |
 | 配置自动应用、跨进程写入门闸 | 未实现；恢复时必须停服或由宿主接线 |
 | 大库性能/内存压力、真实 ENOSPC、非 Windows、`-race` | 未实测 |
 | 回退备份、明文快照的安全擦除 | 未提供（删除不等于安全擦除） |

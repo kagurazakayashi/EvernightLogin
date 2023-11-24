@@ -272,8 +272,9 @@ func NewTaskRuntime(deps Deps, gate *SecurityGate) (*TaskRuntime, error) {
 	}
 	scheduler, err := task.NewScheduler(task.SchedulerOptions{
 		Store: taskStore, SchedulerID: taskSchedulerID,
-		OnJobEnqueued: runtime.dispatchEnqueueHook,
-		TickInterval:  taskTickInterval, Now: now, Logger: logger,
+		PermissionCheck: runtime.checkTaskPermission,
+		OnJobEnqueued:   runtime.dispatchEnqueueHook,
+		TickInterval:    taskTickInterval, Now: now, Logger: logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构造任务调度器失败: %w", err)

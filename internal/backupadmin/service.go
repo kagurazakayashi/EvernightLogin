@@ -22,6 +22,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 )
@@ -236,9 +237,12 @@ type Options struct {
 	DownloadTTL time.Duration
 	// MaxPageDownloadBytes 是单次页面下载上限；0 使用默认 256 MiB。
 	MaxPageDownloadBytes int64
-	Now                  func() time.Time
-	Random               io.Reader
-	Logger               *slog.Logger
+	// Keyring 提供主密钥环文档，用于对既有备份做完整认证校验（检查命令）。
+	// 为空时 VerifyArtifact 只能做无密钥结构检查，结果如实标记为未认证。
+	Keyring secrets.Provider
+	Now     func() time.Time
+	Random  io.Reader
+	Logger  *slog.Logger
 }
 
 // Service 是备份管理领域服务。构造后不可变、可并发使用；不启动协程、不监听端口。

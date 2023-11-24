@@ -364,6 +364,7 @@ func buildBackups(deps Deps, managed *ManagedServices,
 		Root:       statsRootChecker{roots: managed.Roots},
 		Sensitive:  gate.Reauth,
 		Audit:      deps.Audit, SchedulerRelay: relay,
+		Keyring:   keyringProvider,
 		OutputDir: outputDir, AppVersion: login.CurrentBuildInfo().Version,
 		DefaultRetention: backupadmin.RetentionPolicy{
 			Version: 1, MaxAgeDays: 30, MaxCount: 20,
