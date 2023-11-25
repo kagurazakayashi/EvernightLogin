@@ -327,14 +327,16 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	adminAdapter, adminErr := uiadminadapter.New(uiadminadapter.Options{
 		Account: managed.Account, Profile: managed.Profile,
 		Reviews: managed.Onboarding, Groups: managed.Group,
-		Batches:   managed.Batch,
-		Authorize: managed.Checker.authorizePageAction,
-		Logger:    logger,
+		Batches:     managed.Batch,
+		Authorize:   managed.Checker.authorizePageAction,
+		Diagnostics: newDiagnosticsCollector(deps, func() string { return "running" }),
+		Logger:      logger,
 	})
 	if adminErr != nil {
 		return nil, fmt.Errorf("构造用户管理页适配器失败: %w", adminErr)
 	}
-	webOptions.PageAdmin = &login.UIPageAdminOptions{Backend: adminAdapter}
+	webOptions.PageAdmin = &login.UIPageAdminOptions{Backend: adminAdapter,
+		Diagnostics: &login.UIPageAdminDiagnosticsOptions{Backend: adminAdapter}}
 	rbacAdapter, rbacErr := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
 		Roles: managed.Role, Permissions: managed.Permission,
 		Access: managed.Authz, Delegations: managed.Delegation,

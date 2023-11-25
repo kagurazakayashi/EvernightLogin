@@ -276,7 +276,7 @@ func RunInit(ctx context.Context, options InitOptions) (exitErr error) {
 	if err != nil {
 		return err
 	}
-	deps := Deps{Config: cfg, Store: store, Keyring: keyring,
+	deps := Deps{Config: cfg, ConfigPath: options.ConfigPath, Store: store, Keyring: keyring,
 		Audit: auditRecorder, Logger: logger, Now: now}
 	bootstrapService, caller, err := BuildBootstrapService(deps, operatorID)
 	if err != nil {

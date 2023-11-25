@@ -18,6 +18,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/diag"
 	"github.com/kagurazakayashi/EvernightLogin/internal/group"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
@@ -34,7 +35,10 @@ type Options struct {
 	Groups    *group.Service
 	Batches   *userbatch.Service
 	Authorize func(ctx context.Context, adminUserID, action string) error
-	Logger    *slog.Logger
+	// Diagnostics 是可选的脱敏运行诊断收集器；nil 时诊断页面返回不可用（不伪造
+	// 数据，也不越权读取）。
+	Diagnostics *diag.Collector
+	Logger      *slog.Logger
 }
 
 // Adapter 实现 login.UIAdminBackend。

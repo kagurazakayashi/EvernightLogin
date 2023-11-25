@@ -79,6 +79,9 @@
 //	GET  /backups/cleanup-preview                backupadmin.CleanupPreview：backups.read
 //	POST /backups/cleanup                        backupadmin.EnqueueCleanup：backups.create + 敏感策略 + 确认
 //	GET  /tasks/{id}                             task.Executor.Get/Attempts + TaskAuthorizer：`diagnostics.read` + 数据范围/属主（拒绝 403、不存在 404）；显式剔除任务载荷
+//	GET  /diagnostics                           宿主 Diagnostics：diagnostics.read + 明确 system/应用范围；只读脱敏运行状态/队列/配置待重启/关联错误白名单
+//	GET  /diagnostics/errors                    同上 + request_id 白名单关联错误（有界条数，不返回审计 detail）
+//	GET  /diagnostics/export                    同上 + 有界脱敏导出（JSON 快照 + 可选关联错误）
 //	GET  /notifications                          宿主 NotificationService：脱敏配置/启用状态；未装配 503 MAIL_DIAGNOSTICS_UNAVAILABLE
 //	POST /notifications/test                     本地捕获 notifier：执行前核验 LocalCapture/DeliveryMode=local_capture；reauth + 真实审计 + 确认；禁止真实外发；未装配或非本地捕获 503 NOTIFICATION_TEST_DISABLED
 //	GET  /sessions                               session.AdminListSessions：强认证管理会话 + sessions.revoke 范围授权 + root/受保护目标拒绝 + 真实读取审计（只返回公开摘要，不含秘密）

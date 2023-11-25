@@ -347,7 +347,7 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	}
 
 	base, err := OpenBase(ctx, BaseOptions{
-		Config: cfg, Keyring: keyring, Migrate: options.Migrate,
+		Config: cfg, ConfigPath: options.ConfigPath, Keyring: keyring, Migrate: options.Migrate,
 		WriteGuard: maintenanceController.Gate().Guard,
 		Logger:     logger, Now: now,
 		RequireInitialized:          !maintenanceMode && !options.AllowUninitialized,

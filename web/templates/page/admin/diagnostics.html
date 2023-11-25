@@ -1,0 +1,66 @@
+{{define "page-title"}}运行诊断{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.report}}
+<p class="ln-meta">只读、脱敏的运行诊断。不包含数据库连接串、路径、密钥、token、密码、个人资料、完整配置或审计原文。</p>
+<section aria-labelledby="diagnostics-summary-title">
+  <h2 id="diagnostics-summary-title">概况</h2>
+  <dl class="ln-stats-metrics">
+    <div class="ln-stats-metric"><dt>生成时间</dt><dd>{{.GeneratedAt}}</dd></div>
+    <div class="ln-stats-metric"><dt>状态</dt><dd>{{.Status}}</dd></div>
+    <div class="ln-stats-metric"><dt>运行状态</dt><dd>{{.State}}</dd></div>
+    <div class="ln-stats-metric"><dt>版本</dt><dd>{{.Version}}</dd></div>
+    <div class="ln-stats-metric"><dt>作用范围</dt><dd>{{.ScopeID}}</dd></div>
+  </dl>
+</section>
+<section aria-labelledby="diagnostics-storage-title">
+  <h2 id="diagnostics-storage-title">存储健康</h2>
+  <p>状态：{{.StorageStatus}}；检查耗时：{{.StorageLatencyMS}} ms</p>
+</section>
+<section aria-labelledby="diagnostics-queue-title">
+  <h2 id="diagnostics-queue-title">队列状态</h2>
+  {{if .QueueCounts}}
+  <table class="ln-table">
+    <caption>后台任务与邮件投递状态计数（仅计数，不含载荷/收件人）</caption>
+    <thead><tr><th scope="col">类别</th><th scope="col">状态</th><th scope="col">数量</th></tr></thead>
+    <tbody>
+    {{range .QueueCounts}}<tr><td>{{.Kind}}</td><td>{{.State}}</td><td>{{.Count}}</td></tr>{{end}}
+    </tbody>
+  </table>
+  {{else}}<p>没有可读取的队列计数。</p>{{end}}
+</section>
+<section aria-labelledby="diagnostics-config-title">
+  <h2 id="diagnostics-config-title">配置生效与待重启摘要</h2>
+  <p>待重启：{{.PendingRestartStatus}}</p>
+  {{if .PendingRestart}}<ul>{{range .PendingRestart}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{if .FeatureFlags}}
+  <table class="ln-table">
+    <caption>功能开关（只显示布尔摘要，不显示配置值）</caption>
+    <thead><tr><th scope="col">开关</th><th scope="col">状态</th></tr></thead>
+    <tbody>
+    {{range .FeatureFlags}}<tr><td>{{.Name}}</td><td>{{if .Enabled}}启用{{else}}关闭{{end}}</td></tr>{{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+<section aria-labelledby="diagnostics-errors-title">
+  <h2 id="diagnostics-errors-title">关联错误查询</h2>
+  <form method="get" action="/admin/diagnostics">
+    <label>请求编号 <input type="text" name="request_id" value="{{.ErrorRequestID}}" maxlength="64" placeholder="req_..."></label>
+    <button type="submit" class="ln-button ln-button--secondary">查询</button>
+  </form>
+  {{if .ErrorRequestID}}
+    <p>查询状态：{{.ErrorStatus}}</p>
+    {{if .Errors}}
+    <table class="ln-table">
+      <caption>与请求编号关联的错误事件（白名单字段）</caption>
+      <thead><tr><th scope="col">时间</th><th scope="col">动作</th><th scope="col">结果</th><th scope="col">错误码</th></tr></thead>
+      <tbody>
+      {{range .Errors}}<tr><td>{{.OccurredAt}}</td><td>{{.Action}}</td><td>{{.Outcome}}</td><td>{{.ErrorCode}}</td></tr>{{end}}
+      </tbody>
+    </table>
+    {{else}}<p>没有关联错误事件（或关联事件不可读）。</p>{{end}}
+  {{end}}
+</section>
+{{end}}
+{{end}}

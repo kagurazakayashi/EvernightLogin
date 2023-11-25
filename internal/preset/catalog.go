@@ -390,8 +390,10 @@ func catalogV1() *Catalog {
 //   - sessions.revoke：internal/session.AdminRevoke 有权限授权器实现，但生产装配未注入
 //     ScopeAuthorizer，`loginctl session admin-revoke` 明确返回强认证不可用；当前只有
 //     本人会话撤销（self.sessions.manage）可用。
-//   - settings.manage / diagnostics.read：没有对应的服务端执行路径，保持 false 且
-//     **不授予任何预设角色**（避免误以为可用）；后续实现从 203 起登记。
+//   - settings.manage：没有对应的服务端执行路径，保持 false 且不授予预设角色。
+//   - diagnostics.read 已在步骤 233 接通：公开 Go 门面（Runtime.Diagnostics）、
+//     管理 API（GET /admin/v1/diagnostics 等）与管理页面均以该键在明确 system/应用
+//     范围重新判定；只返回脱敏诊断，默认授予系统管理员预设角色。
 //
 // authorization.check 已标记 Implemented=true：扩展联合判定端点 POST /oauth/token/authorize
 // 在登记 protocol.resource_services 时由生产装配挂载（internal/serverapp/resource_authz.go），
@@ -653,10 +655,9 @@ func catalogPermissionsV1() []PermissionDefinition {
 			Scope: "全系统高风险操作。", Limits: "仅 root；不能通过普通角色分配下放，不能取消安全底线。",
 			RootOnly: true, RequiresReauth: true, Implemented: true,
 		},
-		// 常规设置与诊断：缺少权限键对应的服务端真实执行路径，保持未实现且不授予预设角色。
-		// settings.manage：当前没有常规设置的读取/写入服务、页面或 API，只有权限目录项；
-		// diagnostics.read：仅有本地受信边界下的 `loginctl diag` 脱敏诊断，没有以该键做的
-		// 服务端管理判定，管理 API 任务详情按任务类型复用各域读取权限。
+		// 常规设置：仍缺少权限键对应的服务端真实执行路径，保持未实现且不授予预设角色。
+		// diagnostics.read 已由步骤 233 接通真实只读授权路径（Go/HTTP/页面），默认授予
+		// 系统管理员；输出只包含脱敏白名单字段。
 		{
 			Key: "settings.manage", Name: "修改常规设置", Summary: "修改常规运行设置。",
 			Scope: "仅常规设置，不包含敏感策略。", Limits: "不能修改敏感操作规则、主密钥或未脱敏秘密。",
@@ -664,8 +665,9 @@ func catalogPermissionsV1() []PermissionDefinition {
 		},
 		{
 			Key: "diagnostics.read", Name: "查看运行诊断", Summary: "查看脱敏的运行诊断信息。",
-			Scope: "仅脱敏诊断信息。", Limits: "不能查看未脱敏秘密、主密钥或敏感策略内容。",
-			Implemented: false,
+			Scope:       "系统或明确的应用范围；仅返回脱敏运行状态、队列计数、配置生效/待重启字段与关联错误白名单。",
+			Limits:      "不能查看未脱敏秘密、主密钥、完整配置、个人资料或审计原文；不能修改任何状态。",
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 	}
 }
@@ -688,7 +690,7 @@ func catalogRolesV1() []RoleTemplate {
 				"applications.credentials.manage", "applications.members.manage",
 				"sessions.revoke", "audit.read", "audit.export", "reports.read",
 				"reports.generate", "reports.export", "reports.schedule.manage",
-				"reports.cleanup",
+				"reports.cleanup", "diagnostics.read",
 				"backups.create", "backups.read", "backups.cancel",
 				"backups.retention", "backups.cleanup",
 			},

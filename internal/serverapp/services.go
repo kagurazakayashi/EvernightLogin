@@ -32,6 +32,9 @@ import (
 // Deps 是装配宿主服务所需的显式依赖；所有资源由调用方拥有和关闭。
 type Deps struct {
 	Config login.Config
+	// ConfigPath 是启动时加载的 YAML 配置文件路径（可选）；诊断的“待重启配置”
+	// 摘要只读取该文件计算字段差异，不输出路径或配置值。
+	ConfigPath string
 	// Mail 是真实邮件运行时（步骤 139）；nil 表示未装配（等价于未配置发送器）。
 	Mail *MailRuntime
 	// MailDeliveryProvider 延迟返回可靠投递服务（任务运行时构造完成后可用）；

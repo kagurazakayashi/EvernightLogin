@@ -78,7 +78,8 @@ func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices
 		Backups:       managed.BackupAdmin,
 		Sensitive:     gate.Reauth,
 		Notifications: newMailNotificationService(deps.Mail, runtime),
-		DomainRoutes:  buildAdminDomainRoutes(managed, pages, gate),
+		DomainRoutes: append(buildAdminDomainRoutes(managed, pages, gate),
+			buildAdminDiagnosticsRoutes(deps, managed)...),
 		AuditRecorder: deps.Audit,
 		Logger:        deps.Logger, Now: deps.Now,
 	})

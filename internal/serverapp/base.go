@@ -50,6 +50,9 @@ var ErrUninitialized = errors.New("数据库尚未完成首次初始化")
 type BaseOptions struct {
 	// Config 是已通过最终校验的配置（数据库路径覆盖已应用）。
 	Config login.Config
+	// ConfigPath 是加载配置时使用的 YAML 文件路径（可选）；只用于诊断的待重启
+	// 字段比较，不用于重新读取秘密或修改运行配置。
+	ConfigPath string
 	// Keyring 是调用方已加载的主密钥环；nil 时由 OpenBase 按 MasterKeyFile/
 	// CreateMasterKey 加载（独立服务在打开库外维护状态前需要先用密钥环，因此
 	// 允许由调用方注入，避免重复读取密钥材料）。
@@ -100,6 +103,9 @@ type Base struct {
 	Managed  *ManagedServices
 	// Security 是认证/安全域真实服务集合（TOTP/Passkey/MFA/恢复代码/找回/客服等）。
 	Security *SecurityDomains
+	// Protocol 是 OAuth/OIDC 协议域真实服务集合（配置启用时构造；供 HTTP 装配与
+	// 嵌入式宿主公开 Go 查询入口共用同一实例，避免重复构造/重复密钥引导）。
+	Protocol *ProtocolDomains
 
 	mu       sync.Mutex
 	closed   bool
@@ -215,7 +221,7 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 
 	// 延迟投递提供器：任务运行时构造完成后才对域服务可见，避免循环依赖。
 	var taskRuntime *TaskRuntime
-	deps := Deps{Config: cfg, Store: store, Keyring: keyring, Mail: mailRuntime,
+	deps := Deps{Config: cfg, ConfigPath: options.ConfigPath, Store: store, Keyring: keyring, Mail: mailRuntime,
 		MailDeliveryProvider: func() *mailer.DeliveryService {
 			if taskRuntime == nil {
 				return nil
@@ -283,6 +289,15 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 	}
 	strongPresenceRelay.Set(securityDomains.StrongFactors)
 	managed.Support = securityDomains.Support
+	// 协议域在配置启用时提前构造：HTTP 装配与嵌入式宿主公开 Go 查询入口复用同一
+	// 真实令牌/授权流程服务；构造失败拒绝启动（fail-closed），不发布半可用协议。
+	if cfg.Protocol.Enabled {
+		protocolDomains, protocolErr := BuildProtocolDomains(deps, services, managed, gate)
+		if protocolErr != nil {
+			return nil, fmt.Errorf("构造协议域失败: %w", protocolErr)
+		}
+		base.Protocol = protocolDomains
+	}
 	// 任务处理器注册：缺少必需处理器时构造失败，不留下“能启动但不会执行”的
 	// 半配置运行时。
 	if err := taskRuntime.Complete(managed.TaskHandlers()); err != nil {

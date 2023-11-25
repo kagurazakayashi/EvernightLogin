@@ -35,6 +35,8 @@ const diagCommandUsage = `用法：
   loginctl diag certificate [--config <file>] [--json]
   loginctl diag mail [--config <file>] [--json]
   loginctl diag all [--config <file>] [--state-dir <dir>] [--keyring-file <f>] [--json]
+  loginctl diag runtime [--config <file>] [--scope system|<app_id>] [--json]
+  loginctl diag errors --request-id <req_...> [--config <file>] [--scope system|<app_id>] [--limit N] [--json]
 
 状态值：ok / degraded / unavailable / not_configured / unverified。
 只有 ok 与 not_configured 视为该检查通过；degraded/unavailable/unverified 使命令
@@ -87,10 +89,14 @@ func (r *runner) runDiag(args []string) int {
 	switch subcommand {
 	case "health", "ready", "database", "certificate", "mail", "all":
 		return r.runDiagCheck(subcommand, rest)
+	case "runtime":
+		return r.runDiagRuntime(rest)
+	case "errors":
+		return r.runDiagErrors(rest)
 	case "help", "-h", "--help":
 		return r.helpText("diag", diagCommandUsage)
 	default:
-		return r.usage("未知的 diag 子命令 %q（可用：health/ready/database/certificate/mail/all）",
+		return r.usage("未知的 diag 子命令 %q（可用：health/ready/database/certificate/mail/all/runtime/errors）",
 			subcommand)
 	}
 }

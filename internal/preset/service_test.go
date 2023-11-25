@@ -293,10 +293,9 @@ func TestCatalogIntegrity(t *testing.T) {
 	// 未实现的权限必须显式标记，不能伪装成功。逐键核对代码后：权限键对应的真实
 	// 服务端执行路径已实现的标 true；下列键没有真实执行路径，必须保持 false 且不
 	// 授予任何预设角色：
-	//   settings.manage、diagnostics.read（无服务端执行路径，203 再实现）。
+	//   settings.manage（仍无服务端执行路径）；diagnostics.read 已在步骤 233 接通。
 	notImplemented := map[string]struct{}{
-		"settings.manage":  {},
-		"diagnostics.read": {},
+		"settings.manage": {},
 	}
 	for _, definition := range catalog.Permissions {
 		want := true

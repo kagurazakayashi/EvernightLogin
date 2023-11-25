@@ -26,6 +26,8 @@ import (
 // UIPageAdminOptions 是步骤 68 管理页配置。
 type UIPageAdminOptions struct {
 	Backend UIAdminBackend
+	// Diagnostics 是可选的运行诊断页面入口；nil 时不注册该页面（404）。
+	Diagnostics *UIPageAdminDiagnosticsOptions
 }
 
 // UIAdminBackend 是管理页面调用真实管理服务的最小契约；适配器负责可信 Caller、
@@ -337,6 +339,12 @@ func newPageAdminPages(options UIPageAdminOptions) (*pageAdminPages, error) {
 			Path: "/admin/users/batch/report", Access: UIAccessManagement,
 			Layout: "layout/base", Template: "page/admin/batch_detail"},
 	}
+	if options.Diagnostics != nil && !isNilUIValue(options.Diagnostics.Backend) {
+		routes = append(routes, UIRoute{Name: "admin.diagnostics",
+			Method: http.MethodGet, Path: "/admin/diagnostics",
+			Access: UIAccessManagement, Layout: "layout/base",
+			Template: "page/admin/diagnostics"})
+	}
 	for _, route := range routes {
 		pages.routes = append(pages.routes, route)
 		pages.handlers[route.Name] = handler
@@ -396,6 +404,8 @@ func (h *adminPageHandlers) HandlePage(ctx context.Context, request *http.Reques
 		return h.userBatchDetail(ctx, request, page)
 	case "admin.user_batch_report":
 		return h.userBatchReport(ctx, request, page)
+	case "admin.diagnostics":
+		return h.diagnostics(ctx, request, page)
 	default:
 		return UIPageOutcome{}, nil
 	}
