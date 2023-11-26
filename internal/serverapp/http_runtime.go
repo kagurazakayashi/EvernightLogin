@@ -108,6 +108,9 @@ func BuildHTTPRuntime(base *Base, options HTTPRuntimeOptions) (*HTTPRuntime, err
 	if err != nil {
 		return nil, fmt.Errorf("装配协议域失败: %w", err)
 	}
+	// 供嵌入式宿主公开 Go 查询入口复用同一（本 HTTP 装配生成的）协议域实例；
+	// 以 HTTP 选项覆盖后的 PathPrefix 为准，避免与 OpenBase 中的预构造实例路径不一致。
+	base.Protocol = protocolDomains
 	pages, err := BuildPagesWithOptions(deps, base.Services, base.Managed, base.Security,
 		base.Gate, protocolDomains, pageBuildOptions(prefix, options.PageOverrides))
 	if err != nil {

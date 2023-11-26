@@ -77,6 +77,26 @@ func (r *resourceRegistry) entriesForClient(clientID string) []resourceServiceEn
 	return r.byClient[clientID]
 }
 
+// lookupByServiceID 按启动配置中唯一的 service_id 查询资源服务登记。公开 Go 查询
+// 入口只接受该受信标识，不信任调用方自述 application_id/audience。
+func (r *resourceRegistry) lookupByServiceID(serviceID string) (resourceServiceEntry, error) {
+	if r == nil {
+		return resourceServiceEntry{}, fmt.Errorf("资源服务登记未装配")
+	}
+	serviceID = strings.TrimSpace(serviceID)
+	if serviceID == "" {
+		return resourceServiceEntry{}, fmt.Errorf("资源服务标识为空")
+	}
+	for _, entries := range r.byClient {
+		for _, entry := range entries {
+			if entry.ServiceID == serviceID {
+				return entry, nil
+			}
+		}
+	}
+	return resourceServiceEntry{}, fmt.Errorf("资源服务未登记")
+}
+
 // resolve 选择本次请求的资源身份：未指定 audience 时仅允许唯一登记；指定时必须
 // 命中该客户端的登记白名单。
 func (r *resourceRegistry) resolve(clientID, audience string) (resourceServiceEntry, error) {

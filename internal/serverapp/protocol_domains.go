@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	accountsqlite "github.com/kagurazakayashi/EvernightLogin/internal/account/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -56,6 +58,12 @@ type ProtocolDomains struct {
 	Protocol           *protocolapi.Server
 	Mounts             []HandlerMount
 	revocation         *revocationLinker
+	// InspectEnabled 表示 RFC 7662 状态查询真实启用；false 时公开 Go 查询入口
+	// 必须拒绝，不能因服务存在就宣称可查询。
+	InspectEnabled bool
+	// registry 是启动期受信资源服务登记；公开 Go 查询入口只按 service_id 映射到
+	// 已登记的 client_id/audience，绝不接受请求自称应用或 audience。
+	registry *resourceRegistry
 }
 
 // revocationLinker 解决 oidc（需要 oauthflow 做在线撤销检查）与 oauthflow（需要
@@ -126,10 +134,14 @@ func BuildProtocolDomains(deps Deps, services *Services, managed *ManagedService
 	if err != nil {
 		return nil, fmt.Errorf("构造令牌存储失败: %w", err)
 	}
+	issuanceAccounts, err := accountsqlite.New(deps.Store)
+	if err != nil {
+		return nil, fmt.Errorf("构造令牌签发账户有效期读取失败: %w", err)
+	}
 	tokenService, err := token.New(token.Options{
 		Store: tokenStore, Audit: deps.Audit, Sealer: sealer,
 		Issuer: issuer, Clients: tokenClients,
-		Authorizer: protocolIssuanceAuthorizer{},
+		Authorizer: protocolIssuanceAuthorizer{accounts: issuanceAccounts, now: now},
 		Now:        now, Logger: deps.Logger,
 	})
 	if err != nil {
@@ -311,31 +323,58 @@ func BuildProtocolDomains(deps Deps, services *Services, managed *ManagedService
 		Tokens: tokenService, OIDC: oidcService, OAuthFlow: flow,
 		QRLogin: qrLogin, QRClientID: qrClientID, QRApplicationNames: qrApplicationNames,
 		Protocol: server, Mounts: mounts, revocation: linker,
+		InspectEnabled: inspectEnabled, registry: resourceRegistry,
 	}, nil
 }
 
 // protocolIssuanceAuthorizer 是令牌签发的宿主授权实现：只允许受信系统编排服务
 // （授权码/设备码/客户端凭证流程）与用户本人（授权码/设备码）签发；未知授权类型
 // 一律拒绝。客户端登记范围、audience 与 scope 由令牌服务按客户端配置再校验。
-type protocolIssuanceAuthorizer struct{}
+type protocolIssuanceAuthorizer struct {
+	// accounts 读取账户有效期/状态；每次签发即时判定，不依赖定时扫描。
+	accounts *accountsqlite.Store
+	now      func() time.Time
+}
 
 // AuthorizeIssuance 实现 token.IssuanceAuthorizer。
-func (protocolIssuanceAuthorizer) AuthorizeIssuance(_ context.Context, caller token.Caller,
+func (a protocolIssuanceAuthorizer) AuthorizeIssuance(ctx context.Context, caller token.Caller,
 	request token.IssuanceRequest) error {
 	actor := caller.Actor()
 	switch actor.Type {
 	case audit.ActorSystem:
-		return nil
 	case audit.ActorUser:
 		switch request.GrantType {
 		case token.GrantAuthorizationCode, token.GrantDeviceCode:
-			return nil
 		default:
 			return token.ErrAccessDenied
 		}
 	default:
 		return token.ErrAccessDenied
 	}
+	// 用户主体令牌（授权码/设备码/刷新后签发）在签发时即时复核账户可用性：
+	// 到期/未开始/手动禁用都拒绝；root 由 GetUserState 的 IsRoot 豁免普通期限。
+	subject := strings.TrimSpace(request.SubjectUserID)
+	if !account.ValidUserID(subject) {
+		return nil
+	}
+	if a.accounts == nil {
+		return token.ErrAccessDenied
+	}
+	state, err := a.accounts.GetUserState(ctx, subject)
+	if err != nil {
+		return token.ErrAccessDenied
+	}
+	if state.IsRoot {
+		return nil
+	}
+	now := time.Now
+	if a.now != nil {
+		now = a.now
+	}
+	if available, _ := state.User.AvailabilityAt(now().UTC(), false); !available {
+		return token.ErrAccessDenied
+	}
+	return nil
 }
 
 // deriveSubjectSecret 从主密钥环派生稳定的 OIDC subject 配对秘密（32 字节）。
