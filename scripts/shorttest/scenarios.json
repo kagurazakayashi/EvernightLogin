@@ -42,6 +42,21 @@
         "ui.public_pages"
       ],
       "notes": "构建并运行真实外部 Module examples/embedded-minimal（只导入公开包）：临时 SQLite + 动态回环端口；成功路径覆盖打开实例/受控初始化/注册/登录/会话校验/HTTP 页面/宿主受保护路由，拒绝路径覆盖错误密码、缺 CSRF、跨来源、未认证管理页 401、普通用户 403、撤销后 401；场景独立核验示例临时目录删除、端口释放与构建产物清理。"
+    },
+    {
+      "id": "custom-pages-profile-sync-selftest",
+      "title": "宿主自定义页面与资料同步示例自检（自定义页面/CSRF/邮箱验证/找回/改名/业务投影/MFA 不绕过）",
+      "program": "./scripts/shorttest/scenario/custom_pages_profile_sync_selftest",
+      "needs_server_binary": false,
+      "timeout_seconds": 240,
+      "arguments": ["-workdir", "{workdir}", "-timeout", "{timeout}", "-result", "{result}"],
+      "covers": [
+        "runtime.embedded",
+        "auth.password_session",
+        "account.lifecycle_public",
+        "ui.public_pages"
+      ],
+      "notes": "构建并运行真实外部 Module examples/custom-pages-profile-sync（只导入公开包）：临时 SQLite + 动态回环端口 + 进程内本地邮件捕获器；成功路径覆盖宿主自定义登录/注册/邮箱验证/找回/重置/资料页面与 Evernight 内置页面并存、注册→验证邮件→登录、资料白名单更新与受控改名、业务投影按稳定 UserID 同步、找回密码→重置→新密码登录、MFA 第二步不建立宿主会话；拒绝路径覆盖匿名 CSRF/跨来源、缺会话 CSRF、过期资料版本、错误密码改名、跨用户修改拒绝；场景独立核验示例临时目录删除、HTTP 端口与邮件捕获器端口释放、构建产物清理。"
     }
   ]
 }

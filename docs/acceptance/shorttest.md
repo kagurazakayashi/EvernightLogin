@@ -114,3 +114,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
 
 预期：`status=PASS`、`exit_code=0`；结果 JSON 中 `checks[]` 是场景检查，
 `example_result` 是示例自身结构化结果，`cleanup` 是场景独立清理证据。
+
+## 7. 场景：custom-pages-profile-sync-selftest（步骤 241）
+
+`custom-pages-profile-sync-selftest` 由步骤 241 登记，验证"宿主自定义页面与资料
+同步示例"这一外部 Module 的真实可运行性；示例在
+`examples/custom-pages-profile-sync/`（独立 go.mod，只导入公开包）。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
+  -Scenario custom-pages-profile-sync-selftest -TimeoutSeconds 240 `
+  -Out docs\acceptance\evidence\step241\shorttest-custom-pages-profile-sync.json
+```
+
+场景行为：在入口临时目录内 `go build` 外部示例 Module → 运行示例
+`-self-test -json`（示例自己用真实临时 SQLite、127.0.0.1 动态端口与进程内本地邮件
+捕获器，覆盖宿主自定义页面并存挂载、匿名 CSRF 拒绝、注册→邮箱验证邮件→登录、
+资料读取/白名单更新、受控改名与业务投影按稳定 UserID 同步、跨用户修改拒绝、找回
+密码→重置→旧会话失效→新密码登录、MFA 受限会话不建立宿主会话、显式启停与清理）→
+解析示例 JSON，断言 **23 项检查**全部 PASS，并**独立核验**：示例临时数据目录已删除、
+HTTP 动态端口已释放、本地邮件捕获器端口已释放、场景构建产物已删除、入口临时目录
+无残留文件。任一断言失败或清理校验失败都返回非零退出码。
+
+预期：`status=PASS`、`exit_code=0`；`cleanup` 段含 `port_released`、
+`mail_port_released`、`workdir_removed`、`processes_remaining` 等清理证据。

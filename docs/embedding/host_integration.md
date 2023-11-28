@@ -528,6 +528,45 @@ PASS，并独立验证示例临时数据目录删除、动态端口释放与构�
 `.ai/lead/reports/step240-dev.md`。限制：只覆盖密码登录且未启用第二因素的场景；
 TOTP/Passkey/邮件/真实浏览器/非 Windows 未在该示例实测。
 
+### 3.6 宿主自定义页面与资料同步示例（步骤 241）
+
+`examples/custom-pages-profile-sync/` 是第二个独立 Go module 示例（只导入公开包
+`login` 与 `app`）：宿主自己的登录/注册/邮箱验证/找回/重置/资料页面与 Evernight
+内置页面在同一 mux 上并存，宿主页面只调用公开 Go 接口；业务侧资料投影只按稳定
+UserID 关联，username 是只读同步展示值，更名不换身份。
+
+```powershell
+cd examples/custom-pages-profile-sync
+go run . -self-test -json     # 有界自检：单行 JSON，退出码 0/1（23 项检查）
+go run . -demo                # 显式启动演示；/dev/mailbox 仅演示模式可用
+go test ./...
+```
+
+一键自检（统一短测试入口）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
+  -Scenario custom-pages-profile-sync-selftest -TimeoutSeconds 240
+```
+
+覆盖与边界：
+
+- 宿主页面在 Evernight 固定前缀下用精确路径覆盖内置登录/注册/邮箱验证/找回/重置
+  页面（更精确的 mux 模式优先于挂载的内置前缀子树），其余内置页面仍由
+  Evernight 提供；两者路由不冲突。
+- 宿主页面不经过 Evernight HTTP 中间件，因此**自行**实现同源校验 + 匿名双提交
+  CSRF；已登录表单用公开 `Sessions.ValidateCSRF`。密码校验、失败限制、审计仍由
+  领域层执行；启用第二因素的账户只得到受限会话，宿主不建立会话（不绕过 MFA）。
+- 自检自动使用进程内本地邮件捕获器走真实注册验证邮件与找回邮件，完成邮箱验证、
+  找回与密码重置；重置后旧会话/旧密码失效。邮件捕获器只是测试夹具，不是产品投递。
+- 资料投影区分账户 `CreatedAt`（公开资料视图）、业务 `LinkedAt` 与业务
+  `BusinessUpdatedAt`（未同步显示“未同步”），不读取/伪造账户上不存在的业务字段。
+- 示例用 LocalAdmin 创建 system 范围示例自助权限角色并分配给合成用户（仅让自包含
+  示例可运行）；真实部署应使用产品内置角色/预设与正式管理流程。宿主会话存储为
+  进程内示例实现，Evernight 会话秘密不进入浏览器 Cookie/日志/文件。
+- 已知限制：只覆盖密码登录与“启用第二因素后受限”的拒绝路径；未实现第二步表单、
+  Passkey ceremony、真实 SMTP、非 Windows/`-race`/真实浏览器实测。
+
 ## 4. 生命周期、取消与资源所有权
 
 - 状态机：`StateNew → StateRunning → StateClosed`。`Start` 只能成功一次；失败或
