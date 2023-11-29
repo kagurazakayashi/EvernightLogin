@@ -316,6 +316,14 @@ VALUES(?,?,?,?,?,?)`, "ocs_e2e_resource", resourceApp.ID, resourceSecret[:8], di
 	if status != http.StatusOK || payload["active"] != false {
 		t.Fatalf("撤销后应 inactive: %d %+v", status, payload)
 	}
+	// 撤销后联合业务授权判定也必须拒绝（在线撤销联动，而非仅内省视图）。
+	status, payload = postJSON("/oauth/token/authorize", resourceApp.ID, resourceSecret,
+		map[string]any{"access_token": accessToken,
+			"permissions": []string{"authorization.check"}, "audience": audience})
+	if status != http.StatusOK || payload["allow"] != false ||
+		payload["code"] != "TOKEN_REVOKED" {
+		t.Fatalf("撤销后业务授权应拒绝 TOKEN_REVOKED: %d %+v", status, payload)
+	}
 
 	// 扫码登录：匿名创建、二维码载荷不含领取绑定、错误绑定/匿名确认被拒。
 	qrPost := func(path string, body map[string]any, bearer string) (int, map[string]any, http.Header) {
