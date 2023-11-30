@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
@@ -44,6 +45,8 @@ type Options struct {
 	Store      Store
 	Authorizer Authorizer
 	Logger     *slog.Logger
+	// Now 是可注入时钟；nil 使用 time.Now。用于账户有效期即时判断。
+	Now func() time.Time
 }
 
 // Service 是有效权限计算引擎；构造后不可变，可并发使用，不启动后台协程。
@@ -51,6 +54,7 @@ type Service struct {
 	store      Store
 	authorizer Authorizer
 	logger     *slog.Logger
+	now        func() time.Time
 }
 
 // New 校验依赖并构造引擎；缺少 Store/Authorizer 返回 ErrOptionsInvalid。
@@ -65,7 +69,12 @@ func New(options Options) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
-	return &Service{store: options.Store, authorizer: options.Authorizer, logger: logger}, nil
+	now := options.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Service{store: options.Store, authorizer: options.Authorizer, logger: logger,
+		now: now}, nil
 }
 
 // subjectState 是同一快照内的主体状态。
@@ -356,6 +365,14 @@ func (s *Service) loadState(ctx context.Context, reader Reader, subject string, 
 	}
 	if info.Status != account.StatusActive {
 		return state, &denial{code: CodeUserDisabled, reason: "account_inactive"}, nil
+	}
+	// 账户有效期是计算出的不可用原因：每次授权即时判断，不依赖定时扫描。
+	now := s.now().UTC()
+	if info.ValidFrom != nil && now.Before(info.ValidFrom.UTC()) {
+		return state, &denial{code: CodeUserDisabled, reason: "account_not_yet_valid"}, nil
+	}
+	if info.ValidUntil != nil && !now.Before(info.ValidUntil.UTC()) {
+		return state, &denial{code: CodeUserDisabled, reason: "account_expired"}, nil
 	}
 	if scope.Kind == ScopeKindSystem {
 		return state, nil, nil

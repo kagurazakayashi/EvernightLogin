@@ -150,7 +150,8 @@ func BuildManagedServices(deps Deps, core *Services, runtime *TaskRuntime,
 		return nil, fmt.Errorf("构造权限引擎存储失败: %w", err)
 	}
 	access, err := authz.New(authz.Options{
-		Store: authzStore, Authorizer: selfQueryAuthorizer{}, Logger: deps.Logger})
+		Store: authzStore, Authorizer: selfQueryAuthorizer{}, Logger: deps.Logger,
+		Now: deps.Now})
 	if err != nil {
 		return nil, fmt.Errorf("构造权限引擎失败: %w", err)
 	}

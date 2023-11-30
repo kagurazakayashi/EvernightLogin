@@ -430,6 +430,14 @@ func (s *Service) Authenticate(ctx context.Context, request AuthenticateRequest)
 			user.UserID, reason)
 	}
 
+	// 账户有效期是计算出的不可用原因：每次登录即时判断，不依赖定时扫描。
+	if available, reason := user.AvailabilityAt(s.now(), user.IsRoot); !available {
+		s.logger.Warn("密码正确但账户有效期不允许登录", "user_id", user.UserID,
+			"reason", reason)
+		return AuthenticateResult{}, s.recordAuthFailure(ctx, request, ipClass, accountKey,
+			lockKey, user.UserID, reason)
+	}
+
 	strongAuthRequired, err := s.store.StrongAuthRequired(ctx, user.UserID)
 	if err != nil {
 		if auditErr := s.recordVerifyFailure(ctx, request, user.UserID, reasonStrongAuthUnknown, CodeDBUnavailable); auditErr != nil {

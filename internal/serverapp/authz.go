@@ -497,8 +497,10 @@ func accountActionPermission(action account.Action) (string, bool) {
 	switch action {
 	case account.ActionCreateUser:
 		return "users.create", true
-	case account.ActionGetUser, account.ActionListUsers:
+	case account.ActionGetUser, account.ActionListUsers, account.ActionGetValidity:
 		return "users.read", true
+	case account.ActionSetValidity:
+		return "users.update", true
 	case account.ActionDisableUser, account.ActionEnableUser:
 		return "users.disable", true
 	case account.ActionRequestDeletion, account.ActionPreviewDeletion,

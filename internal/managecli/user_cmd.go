@@ -33,6 +33,9 @@ const userCommandUsage = `用法：
 [--config <file>] [--json]
   loginctl user enable <user_id> --operator <id> --expected-version N --confirm ENABLE \
 [--config <file>] [--json]
+  loginctl user validity get <user_id> --operator <id> [--config <file>] [--json]
+  loginctl user validity set <user_id> --operator <id> --expected-version N --confirm SET-VALIDITY \
+[--from <RFC3339>] [--until <RFC3339>] [--config <file>] [--json]
 
 说明：
   - --operator 是本地管理员稳定标识；授权器只允许该标识执行本命令列出的动作。
@@ -61,7 +64,8 @@ func (a localAccountAuthorizer) Authorize(_ context.Context, caller account.Call
 	}
 	switch action {
 	case account.ActionGetUser, account.ActionListUsers,
-		account.ActionDisableUser, account.ActionEnableUser:
+		account.ActionDisableUser, account.ActionEnableUser,
+		account.ActionGetValidity, account.ActionSetValidity:
 		return nil
 	default:
 		return account.ErrAccessDenied
@@ -105,10 +109,12 @@ func (r *runner) runUser(args []string) int {
 		return r.runUserState(rest, false)
 	case "enable":
 		return r.runUserState(rest, true)
+	case "validity":
+		return r.runUserValidity(rest)
 	case "help", "-h", "--help":
 		return r.helpText("user", userCommandUsage)
 	default:
-		return r.usage("未知的 user 子命令 %q（可用：list/get/disable/enable）", subcommand)
+		return r.usage("未知的 user 子命令 %q（可用：list/get/disable/enable/validity）", subcommand)
 	}
 }
 
@@ -368,7 +374,7 @@ func (r *runner) userFailure(operation string, err error) int {
 	case errors.Is(err, account.ErrUserNotFound):
 		code = "USER_NOT_FOUND"
 		exitCode = ExitError
-	case errors.Is(err, account.ErrInvalidRequest):
+	case errors.Is(err, account.ErrInvalidRequest), errors.Is(err, account.ErrValidityInvalid):
 		exitCode = ExitUsage
 	case errors.Is(err, account.ErrAccessDenied), errors.Is(err, account.ErrProtectedUser):
 		exitCode = ExitForbidden

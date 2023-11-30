@@ -52,6 +52,12 @@ type UserLifecycleService interface {
 	// CompleteUserDeletion 完成不可逆删除；只允许 pending_delete 状态且
 	// expected_row_version 必须匹配；root 拒绝；审计失败整体拒绝（业务回滚）。
 	CompleteUserDeletion(ctx context.Context, req AdminUserStateRequest) (AdminDeletionResult, error)
+	// GetUserValidity 读取账户全局有效期与当前可用性（需要 users.read）。
+	GetUserValidity(ctx context.Context, req AdminUserRequest) (AdminUserValidity, error)
+	// SetUserValidity 设置全局账户有效期（UTC 半开区间，nil 表示该端不限制）。
+	// 需要 users.update；root 返回 ACCESS_DENIED；到期只影响可用性，不改手动状态，
+	// 续期不会启用被手动禁用的账户。
+	SetUserValidity(ctx context.Context, req AdminUserValidityRequest) (AdminUserValidityChange, error)
 }
 
 // AdminUserState 是生命周期视图（脱敏；不含密码、哈希、秘密或邮箱）。
@@ -67,8 +73,11 @@ type AdminUserState struct {
 	RowVersion int64
 	// SecurityVersion 是会话/令牌失效版本；disable 与 request_deletion 递增。
 	SecurityVersion int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// ValidFrom/ValidUntil 是全局账户有效期 UTC 半开区间；nil 表示该端不限制。
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // AdminUserStateRequest 是生命周期写请求。
@@ -286,7 +295,8 @@ func adminUserStateOf(record account.User) AdminUserState {
 		Nickname: record.Nickname, Biography: record.Biography,
 		Language: record.Language, Timezone: record.Timezone,
 		Status: string(record.Status), RowVersion: record.RowVersion,
-		SecurityVersion: record.SecurityVersion, CreatedAt: record.CreatedAt,
+		SecurityVersion: record.SecurityVersion, ValidFrom: cloneAdminTime(record.ValidFrom),
+		ValidUntil: cloneAdminTime(record.ValidUntil), CreatedAt: record.CreatedAt,
 		UpdatedAt: record.UpdatedAt}
 }
 

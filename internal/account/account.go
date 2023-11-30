@@ -128,8 +128,101 @@ type User struct {
 	// 递减。未来会话/令牌模块必须拒绝版本低于当前值的凭证（本步未实现这些
 	// 模块，只提供数据和可靠审计事件作为失效契约）。
 	SecurityVersion int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// ValidFrom/ValidUntil 是全局账户有效期的 UTC 半开区间 [from, until)；
+	// nil 表示该端不限制，默认都为空（永久有效）。root 的有效期由领域服务在写入
+	// 与可用性判断中忽略，不由普通期限管理锁死。
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// AvailabilityReason 是账户当前可用性的计算原因。它不持久化：到期/未开始都由
+// 有效期与可注入时钟即时计算，绝不自动改写 users.status。
+type AvailabilityReason string
+
+const (
+	// AvailabilityOK 表示账户在有效期内且状态允许使用。
+	AvailabilityOK AvailabilityReason = "available"
+	// AvailabilityNotStarted 表示尚未到 valid_from（半开区间左端）。
+	AvailabilityNotStarted AvailabilityReason = "not_yet_valid"
+	// AvailabilityExpired 表示已到 valid_until（半开区间右端，[from, until)）。
+	AvailabilityExpired AvailabilityReason = "expired"
+	// AvailabilityStatusPending 表示账户仍待验证/审核。
+	AvailabilityStatusPending AvailabilityReason = "pending"
+	// AvailabilityStatusDisabled 表示手动禁用。
+	AvailabilityStatusDisabled AvailabilityReason = "disabled"
+	// AvailabilityStatusPendingDelete 表示已标记待删除。
+	AvailabilityStatusPendingDelete AvailabilityReason = "pending_delete"
+)
+
+// AvailabilityAt 计算账户在 now 的可用性。
+//
+// 语义：有效区间为 UTC 半开区间 [ValidFrom, ValidUntil)，任一端 nil 表示不限制；
+// 到期只是计算出的不可用原因，不改写 Status；手动禁用与到期分离。root 不受普通
+// 期限管理约束：其有效期字段在可用性判断中被忽略，但仍受手动状态约束。
+func (u User) AvailabilityAt(now time.Time, isRoot bool) (bool, AvailabilityReason) {
+	switch u.Status {
+	case StatusPending:
+		return false, AvailabilityStatusPending
+	case StatusDisabled:
+		return false, AvailabilityStatusDisabled
+	case StatusPendingDelete:
+		return false, AvailabilityStatusPendingDelete
+	case StatusActive:
+	default:
+		return false, AvailabilityStatusDisabled
+	}
+	if isRoot {
+		return true, AvailabilityOK
+	}
+	now = now.UTC()
+	if u.ValidFrom != nil && now.Before(u.ValidFrom.UTC()) {
+		return false, AvailabilityNotStarted
+	}
+	if u.ValidUntil != nil && !now.Before(u.ValidUntil.UTC()) {
+		return false, AvailabilityExpired
+	}
+	return true, AvailabilityOK
+}
+
+// UserValidity 是账户有效期与当前可用性的只读快照。
+type UserValidity struct {
+	UserID     string
+	Status     Status
+	IsRoot     bool
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+	RowVersion int64
+	Available  bool
+	Reason     AvailabilityReason
+	CheckedAt  time.Time
+}
+
+// ValidityCommandRequest 是设置账户有效期的普通管理请求。ExpectedRowVersion 是
+// 乐观并发校验；ValidFrom/ValidUntil 为 nil 表示清除该端（永久有效）。不允许设置
+// root 的有效期。
+type ValidityCommandRequest struct {
+	UserID             string
+	ValidFrom          *time.Time
+	ValidUntil         *time.Time
+	ExpectedRowVersion int64
+}
+
+// ValidityCommandResult 是有效期变更结果。
+type ValidityCommandResult struct {
+	User               User
+	PreviousValidFrom  *time.Time
+	PreviousValidUntil *time.Time
+	Changed            bool
+}
+
+// ValidityEquals 报告两个可选时间是否都为空或表示同一毫秒时刻。
+func ValidityEquals(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.UTC().UnixMilli() == right.UTC().UnixMilli()
 }
 
 // CreateRequest 是创建用户的资料白名单。它刻意不包含 status、is_root、
@@ -179,6 +272,8 @@ var (
 	ErrProtectedUser = errors.New("受保护账户不能通过普通管理流程变更")
 	// ErrInvalidTransition 表示当前状态不允许该操作（例如已待删除账户解禁）。
 	ErrInvalidTransition = errors.New("当前账户状态不允许该操作")
+	// ErrValidityInvalid 表示账户有效期输入无效（例如两段都设置但区间为空）。
+	ErrValidityInvalid = errors.New("账户有效期无效")
 	// ErrStateConflict 表示并发修改或行版本不匹配，调用方应重新读取后决定。
 	ErrStateConflict = errors.New("账户状态已被其他操作修改")
 )
@@ -208,7 +303,8 @@ func CodeOf(err error) ErrorCode {
 	switch {
 	case err == nil:
 		return ""
-	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrUserNotFound):
+	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrUserNotFound),
+		errors.Is(err, ErrValidityInvalid):
 		return CodeReqInvalid
 	case errors.Is(err, ErrUsernameTaken):
 		return CodeConflict
@@ -498,6 +594,10 @@ const (
 	ActionPreviewDeletion Action = "user.delete.preview"
 	// ActionCompleteDeletion 完成删除（硬删除账户与关联个人数据）。
 	ActionCompleteDeletion Action = "user.delete.complete"
+	// ActionGetValidity 读取账户有效期与当前可用性。
+	ActionGetValidity Action = "user.validity.get"
+	// ActionSetValidity 设置账户有效期（普通期限管理，不允许作用于 root）。
+	ActionSetValidity Action = "user.validity.set"
 )
 
 // Valid 报告动作是否已定义。
@@ -505,7 +605,8 @@ func (a Action) Valid() bool {
 	switch a {
 	case ActionCreateUser, ActionGetUser, ActionListUsers,
 		ActionDisableUser, ActionEnableUser, ActionRequestDeletion,
-		ActionPreviewDeletion, ActionCompleteDeletion:
+		ActionPreviewDeletion, ActionCompleteDeletion,
+		ActionGetValidity, ActionSetValidity:
 		return true
 	default:
 		return false

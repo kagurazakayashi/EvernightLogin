@@ -71,7 +71,7 @@ AND id NOT IN (
 
 	countUserSessionsSQL = `SELECT COUNT(*) FROM sessions WHERE user_id=? AND ` + activeSessionsFilter
 
-	selectUserStateSQL = `SELECT status,security_version,is_root FROM users WHERE id=?`
+	selectUserStateSQL = `SELECT status,security_version,is_root,valid_from_ms,valid_until_ms FROM users WHERE id=?`
 
 	// selectMembershipSQL 一次读取应用状态与成员状态；成员缺失时成员状态为空串。
 	selectMembershipSQL = `SELECT a.status,COALESCE(m.status,'')
@@ -346,12 +346,17 @@ func (s *Store) LoadUserState(ctx context.Context, userID string) (session.UserS
 	}
 	var status string
 	var isRoot int
+	var validFromMS sql.NullInt64
+	var validUntilMS sql.NullInt64
 	state := session.UserState{}
-	if err := rows.Scan(&status, &state.SecurityVersion, &isRoot); err != nil {
+	if err := rows.Scan(&status, &state.SecurityVersion, &isRoot,
+		&validFromMS, &validUntilMS); err != nil {
 		return session.UserState{}, false, storeError("读取账户状态", err)
 	}
 	state.Status = account.Status(status)
 	state.IsRoot = isRoot == 1
+	state.ValidFrom = sessionTimeFromMilli(validFromMS)
+	state.ValidUntil = sessionTimeFromMilli(validUntilMS)
 	if err := rows.Err(); err != nil {
 		return session.UserState{}, false, storeError("读取账户状态", err)
 	}
@@ -616,4 +621,13 @@ func nullableTime(value time.Time) any {
 		return nil
 	}
 	return toUnixMilli(value)
+}
+
+// sessionTimeFromMilli 把可空毫秒列转成 UTC 时间；NULL 表示该端不限制。
+func sessionTimeFromMilli(value sql.NullInt64) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	converted := time.UnixMilli(value.Int64).UTC()
+	return &converted
 }

@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	selectAccountSQL = `SELECT id,status,is_root FROM users WHERE id=?`
+	selectAccountSQL = `SELECT id,status,is_root,valid_from_ms,valid_until_ms FROM users WHERE id=?`
 
 	selectApplicationSQL = `SELECT id,status FROM applications WHERE id=?`
 
@@ -127,11 +127,14 @@ func (r *snapshotReader) Account(ctx context.Context, userID string) (authz.Acco
 		return authz.AccountInfo{}, false, nil
 	}
 	var (
-		info   authz.AccountInfo
-		status string
-		isRoot int
+		info         authz.AccountInfo
+		status       string
+		isRoot       int
+		validFromMS  sql.NullInt64
+		validUntilMS sql.NullInt64
 	)
-	if err := rows.Scan(&info.UserID, &status, &isRoot); err != nil {
+	if err := rows.Scan(&info.UserID, &status, &isRoot, &validFromMS,
+		&validUntilMS); err != nil {
 		return authz.AccountInfo{}, false, storeError(err)
 	}
 	parsed := account.Status(status)
@@ -140,6 +143,8 @@ func (r *snapshotReader) Account(ctx context.Context, userID string) (authz.Acco
 	}
 	info.Status = parsed
 	info.IsRoot = isRoot == 1
+	info.ValidFrom = authzTimeFromMilli(validFromMS)
+	info.ValidUntil = authzTimeFromMilli(validUntilMS)
 	if err := rows.Err(); err != nil {
 		return authz.AccountInfo{}, false, storeError(err)
 	}
@@ -366,4 +371,13 @@ func storeError(err error) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %w", authz.ErrStoreUnavailable, err)
+}
+
+// authzTimeFromMilli 把可空毫秒列转成 UTC 时间；NULL 表示该端不限制。
+func authzTimeFromMilli(value sql.NullInt64) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	converted := time.UnixMilli(value.Int64).UTC()
+	return &converted
 }

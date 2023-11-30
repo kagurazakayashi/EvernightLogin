@@ -54,6 +54,28 @@ type UserState struct {
 	SecurityVersion int64
 	// IsRoot 表示受保护 root 账户；root 只能持有受限会话（强认证未完成）。
 	IsRoot bool
+	// ValidFrom/ValidUntil 是全局账户有效期 UTC 半开区间；nil 表示该端不限制。
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+}
+
+// AvailableAt 报告账户在 now 是否允许身份生效。到期是计算出的不可用原因，
+// 不改写 users.status；root 忽略普通期限约束；手动禁用/待删除仍拒绝。
+func (s UserState) AvailableAt(now time.Time) bool {
+	if s.Status != account.StatusActive {
+		return false
+	}
+	if s.IsRoot {
+		return true
+	}
+	now = now.UTC()
+	if s.ValidFrom != nil && now.Before(s.ValidFrom.UTC()) {
+		return false
+	}
+	if s.ValidUntil != nil && !now.Before(s.ValidUntil.UTC()) {
+		return false
+	}
+	return true
 }
 
 // MembershipState 是校验时重读的应用与成员状态快照。

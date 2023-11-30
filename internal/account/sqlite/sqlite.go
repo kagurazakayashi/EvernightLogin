@@ -26,7 +26,7 @@ id,username,username_normalized,nickname,biography,avatar_ref,language,timezone,
 ) VALUES(?,?,?,?,?,NULL,?,?,?,0,1,1,?,?)
 ON CONFLICT(username_normalized) DO NOTHING`
 
-	selectUserColumns = `id,username,username_normalized,nickname,biography,language,timezone,status,row_version,security_version,created_at_ms,updated_at_ms`
+	selectUserColumns = `id,username,username_normalized,nickname,biography,language,timezone,status,row_version,security_version,valid_from_ms,valid_until_ms,created_at_ms,updated_at_ms`
 
 	selectUserByIDSQL = `SELECT ` + selectUserColumns + ` FROM users WHERE id=?`
 
@@ -283,6 +283,40 @@ func (s *Store) ApplyStateChange(ctx context.Context, tx audit.Tx, change accoun
 	}
 }
 
+// ApplyValidityChange 在调用方审计事务内条件更新账户有效期：行版本 CAS 且
+// is_root=0；受保护 root 或并发修改返回 account.ErrStateConflict，不留部分更新。
+func (s *Store) ApplyValidityChange(ctx context.Context, tx audit.Tx,
+	change account.ValidityChange) error {
+	if tx == nil {
+		return fmt.Errorf("%w: 审计事务为空", account.ErrOptionsInvalid)
+	}
+	const statement = `UPDATE users SET valid_from_ms=?, valid_until_ms=?,
+row_version=row_version+1, updated_at_ms=?
+WHERE id=? AND row_version=? AND is_root=0`
+	result, err := tx.ExecContext(ctx, statement,
+		optionalUnixMilli(change.ValidFrom), optionalUnixMilli(change.ValidUntil),
+		change.Now.UTC().UnixMilli(), change.UserID, change.ExpectedRowVersion)
+	if err != nil {
+		return fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%w: %w", account.ErrStoreUnavailable, err)
+	}
+	if affected != 1 {
+		return account.ErrStateConflict
+	}
+	return nil
+}
+
+// optionalUnixMilli 把可选 UTC 时间转换为可空毫秒参数。
+func optionalUnixMilli(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC().UnixMilli()
+}
+
 // CompleteDeletion 在审计事务中按明确策略清理关联个人数据后删除用户行：
 //   - 一次性凭证、应用成员关系、角色分配、用户组成员关系删除（属于账户个人
 //     数据/关系，删除前计数已写入审计）；
@@ -375,11 +409,13 @@ func scanUser(rows *sql.Rows) (account.User, error) {
 // scanUserState 读取用户行；withRoot=true 时同一行多读一个 is_root 整数列。
 func scanUserState(rows *sql.Rows, withRoot bool) (account.User, bool, error) {
 	var (
-		user        account.User
-		status      string
-		createdAtMS int64
-		updatedAtMS int64
-		isRoot      int64
+		user         account.User
+		status       string
+		createdAtMS  int64
+		updatedAtMS  int64
+		validFromMS  sql.NullInt64
+		validUntilMS sql.NullInt64
+		isRoot       int64
 	)
 	targets := []any{
 		&user.ID,
@@ -392,6 +428,8 @@ func scanUserState(rows *sql.Rows, withRoot bool) (account.User, bool, error) {
 		&status,
 		&user.RowVersion,
 		&user.SecurityVersion,
+		&validFromMS,
+		&validUntilMS,
 		&createdAtMS,
 		&updatedAtMS,
 	}
@@ -410,7 +448,18 @@ func scanUserState(rows *sql.Rows, withRoot bool) (account.User, bool, error) {
 	}
 	user.CreatedAt = timeFromUnixMilli(createdAtMS)
 	user.UpdatedAt = timeFromUnixMilli(updatedAtMS)
+	user.ValidFrom = optionalTimeFromUnixMilli(validFromMS)
+	user.ValidUntil = optionalTimeFromUnixMilli(validUntilMS)
 	return user, isRoot == 1, nil
+}
+
+// optionalTimeFromUnixMilli 把可空毫秒时间转成 UTC 时间；NULL 表示该端不限制。
+func optionalTimeFromUnixMilli(value sql.NullInt64) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	converted := timeFromUnixMilli(value.Int64)
+	return &converted
 }
 
 // timeFromUnixMilli 把数据库毫秒时间转成 UTC 时间。

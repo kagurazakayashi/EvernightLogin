@@ -22,7 +22,7 @@ import (
 
 const (
 	// selectUserColumns 是账户最小快照的公共选择列表。
-	selectUserColumns = `u.id,u.username,u.username_normalized,u.nickname,u.status,u.is_root,u.security_version`
+	selectUserColumns = `u.id,u.username,u.username_normalized,u.nickname,u.status,u.is_root,u.security_version,u.valid_from_ms,u.valid_until_ms`
 
 	selectUserByIDSQL = `SELECT ` + selectUserColumns + ` FROM users u WHERE u.id=?`
 
@@ -173,12 +173,15 @@ func (s *Store) findUser(ctx context.Context, querier rowQuerier, query string,
 		return authn.UserRecord{}, false, nil
 	}
 	var (
-		record authn.UserRecord
-		status string
-		isRoot int
+		record       authn.UserRecord
+		status       string
+		isRoot       int
+		validFromMS  sql.NullInt64
+		validUntilMS sql.NullInt64
 	)
 	if err := rows.Scan(&record.UserID, &record.Username, &record.UsernameNormalized,
-		&record.Nickname, &status, &isRoot, &record.SecurityVersion); err != nil {
+		&record.Nickname, &status, &isRoot, &record.SecurityVersion,
+		&validFromMS, &validUntilMS); err != nil {
 		return authn.UserRecord{}, false, fmt.Errorf("%w: %w", authn.ErrStoreUnavailable, err)
 	}
 	if err := rows.Err(); err != nil {
@@ -186,6 +189,8 @@ func (s *Store) findUser(ctx context.Context, querier rowQuerier, query string,
 	}
 	record.Status = account.Status(status)
 	record.IsRoot = isRoot == 1
+	record.ValidFrom = authnTimeFromMilli(validFromMS)
+	record.ValidUntil = authnTimeFromMilli(validUntilMS)
 	if !account.ValidUserID(record.UserID) || !record.Status.Valid() ||
 		record.UsernameNormalized == "" || (isRoot != 0 && isRoot != 1) {
 		return authn.UserRecord{}, false, fmt.Errorf("%w: 账户数据无效", authn.ErrStoreUnavailable)
@@ -503,4 +508,13 @@ func boolToInt(value bool) int {
 // timeFromUnixMilli 把数据库毫秒时间转成 UTC 时间。
 func timeFromUnixMilli(value int64) time.Time {
 	return time.UnixMilli(value).UTC()
+}
+
+// authnTimeFromMilli 把可空毫秒列转成 UTC 时间；NULL 表示该端不限制。
+func authnTimeFromMilli(value sql.NullInt64) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	converted := time.UnixMilli(value.Int64).UTC()
+	return &converted
 }

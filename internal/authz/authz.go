@@ -314,6 +314,10 @@ type AccountInfo struct {
 	UserID string
 	Status account.Status
 	IsRoot bool
+	// ValidFrom/ValidUntil 是全局账户有效期 UTC 半开区间；nil 表示该端不限制。
+	// 授权引擎在每次判定时即时读取并拒绝到期/未开始账户，不依赖定时扫描。
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
 }
 
 // ApplicationInfo 是应用状态快照。

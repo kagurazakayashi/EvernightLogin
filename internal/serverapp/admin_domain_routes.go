@@ -449,6 +449,7 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 	}
 	routes = append(routes, buildAdminWriteRoutes(managed, pages)...)
 	routes = append(routes, buildAdminWriteRoutesExtra(managed, pages, gate)...)
+	routes = append(routes, buildAdminValidityRoutes(managed)...)
 	return routes
 }
 

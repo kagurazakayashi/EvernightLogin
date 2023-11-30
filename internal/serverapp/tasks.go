@@ -400,7 +400,7 @@ func (r *TaskRuntime) taskPermissionChecker() (*permissionChecker, error) {
 			return
 		}
 		access, err := authz.New(authz.Options{Store: authzStore,
-			Authorizer: selfQueryAuthorizer{}, Logger: r.logger})
+			Authorizer: selfQueryAuthorizer{}, Logger: r.logger, Now: r.now})
 		if err != nil {
 			r.permissionErr = fmt.Errorf("构造任务权限复验引擎失败: %w", err)
 			return

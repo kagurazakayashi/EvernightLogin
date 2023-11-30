@@ -45,6 +45,9 @@ type Store interface {
 	// CompleteDeletion 在审计事务中清理关联个人数据并删除 users 行；任一步失败
 	// 整体回滚。
 	CompleteDeletion(ctx context.Context, tx audit.Tx, request CompleteDeletionRequest) error
+	// ApplyValidityChange 在审计事务内条件更新账户有效期（行版本 CAS + is_root=0）；
+	// 并发修改/受保护账户返回 ErrStateConflict，不留部分更新。
+	ApplyValidityChange(ctx context.Context, tx audit.Tx, change ValidityChange) error
 }
 
 // StateSnapshot 是账户状态操作需要的内部快照；IsRoot 不通过公开 User 暴露。
@@ -61,6 +64,16 @@ type StateChange struct {
 	NewStatus           Status
 	Now                 time.Time
 	BumpSecurityVersion bool
+}
+
+// ValidityChange 是一次已通过输入校验的有效期条件更新。时间为 UTC 毫秒精度，
+// nil 表示清除该端；ExpectedRowVersion 用于乐观并发，is_root 账户由 SQL 条件拒绝。
+type ValidityChange struct {
+	UserID             string
+	ExpectedRowVersion int64
+	ValidFrom          *time.Time
+	ValidUntil         *time.Time
+	Now                time.Time
 }
 
 // CompleteDeletionRequest 是完成删除的事务内请求。
@@ -707,4 +720,168 @@ func normalizeContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+// GetUserValidity 读取账户有效期与当前可用性（只读，不改变状态）。
+func (s *Service) GetUserValidity(ctx context.Context, caller Caller,
+	userID string) (UserValidity, error) {
+	if err := s.authorize(ctx, caller, ActionGetValidity); err != nil {
+		return UserValidity{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return UserValidity{}, err
+	}
+	if !ValidUserID(userID) {
+		return UserValidity{}, fmt.Errorf("%w: 用户 ID 格式无效", ErrInvalidRequest)
+	}
+	state, err := s.store.GetUserState(ctx, userID)
+	if err != nil {
+		return UserValidity{}, err
+	}
+	if err := s.recordRead(ctx, caller, ActionGetValidity, userID); err != nil {
+		return UserValidity{}, err
+	}
+	now := s.now().UTC()
+	available, reason := state.User.AvailabilityAt(now, state.IsRoot)
+	return UserValidity{UserID: state.User.ID, Status: state.User.Status,
+		IsRoot: state.IsRoot, ValidFrom: cloneTime(state.User.ValidFrom),
+		ValidUntil: cloneTime(state.User.ValidUntil),
+		RowVersion: state.User.RowVersion, Available: available, Reason: reason,
+		CheckedAt: now}, nil
+}
+
+// SetValidity 设置账户全局有效期（普通期限管理）。
+//
+// 安全语义：
+//   - 有效期是 UTC 半开区间 [valid_from, valid_until)；nil 表示该端不限制；
+//   - 到期只是计算出的不可用原因，不改写 users.status；续期不会启用被手动禁用
+//     的账户（状态机与可用性判断都保持分离）；
+//   - root 不允许被普通期限管理锁死：写入前拒绝并记录失败审计；
+//   - 行版本乐观并发；成功变更与关键审计同事务提交，失败整体回滚；
+//   - 不递增 security_version：每次身份生效与请求校验都即时读取有效期并拒绝；
+//     离线纯 JWT 验签无法感知即时到期，严格集成必须走在线授权。
+func (s *Service) SetValidity(ctx context.Context, caller Caller,
+	request ValidityCommandRequest) (ValidityCommandResult, error) {
+	if err := s.authorize(ctx, caller, ActionSetValidity); err != nil {
+		return ValidityCommandResult{}, err
+	}
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return ValidityCommandResult{}, err
+	}
+	if !ValidUserID(request.UserID) {
+		return ValidityCommandResult{}, fmt.Errorf("%w: 用户 ID 格式无效", ErrInvalidRequest)
+	}
+	if request.ExpectedRowVersion <= 0 {
+		return ValidityCommandResult{}, fmt.Errorf("%w: 期望行版本必须大于 0", ErrInvalidRequest)
+	}
+	validFrom, validUntil, err := normalizeValidityTimes(request.ValidFrom, request.ValidUntil)
+	if err != nil {
+		return ValidityCommandResult{}, err
+	}
+	state, err := s.store.GetUserState(ctx, request.UserID)
+	if err != nil {
+		return ValidityCommandResult{}, err
+	}
+	if state.IsRoot {
+		return ValidityCommandResult{}, s.recordProtectedRejection(ctx, caller,
+			ActionSetValidity, request.UserID, "root_protected")
+	}
+	if request.ExpectedRowVersion != state.User.RowVersion {
+		return ValidityCommandResult{}, ErrStateConflict
+	}
+	changed := !ValidityEquals(state.User.ValidFrom, validFrom) ||
+		!ValidityEquals(state.User.ValidUntil, validUntil)
+	if !changed {
+		event := audit.Event{Actor: caller.actor,
+			Action:  string(ActionSetValidity),
+			Target:  audit.Target{Type: "user", ID: request.UserID},
+			Outcome: audit.OutcomeSuccess, RequestID: caller.requestID,
+			Changes: []audit.FieldChange{{Field: "result", After: "unchanged"}}}
+		if err := s.audit.Record(ctx, event); err != nil {
+			return ValidityCommandResult{}, fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
+		}
+		return ValidityCommandResult{User: state.User,
+			PreviousValidFrom:  cloneTime(state.User.ValidFrom),
+			PreviousValidUntil: cloneTime(state.User.ValidUntil), Changed: false}, nil
+	}
+	now := s.now().UTC().Truncate(time.Millisecond)
+	event := audit.Event{Actor: caller.actor,
+		Action:  string(ActionSetValidity),
+		Target:  audit.Target{Type: "user", ID: request.UserID},
+		Outcome: audit.OutcomeSuccess, RequestID: caller.requestID,
+		Changes: []audit.FieldChange{
+			{Field: "valid_from", Before: formatValidityTime(state.User.ValidFrom),
+				After: formatValidityTime(validFrom)},
+			{Field: "valid_until", Before: formatValidityTime(state.User.ValidUntil),
+				After: formatValidityTime(validUntil)},
+		}}
+	critical := audit.CriticalRequest{Event: event,
+		FailureReasonCode: "user.validity_change_failed",
+		FailureErrorCodeFor: func(err error) string {
+			return string(CodeOf(mapCriticalError(err)))
+		}}
+	if err := s.audit.ExecuteCritical(ctx, critical, func(txCtx context.Context,
+		tx audit.Tx) error {
+		return s.store.ApplyValidityChange(txCtx, tx, ValidityChange{
+			UserID: request.UserID, ExpectedRowVersion: request.ExpectedRowVersion,
+			ValidFrom: validFrom, ValidUntil: validUntil, Now: now})
+	}); err != nil {
+		return ValidityCommandResult{}, mapCriticalError(err)
+	}
+	updated, err := s.store.GetUser(ctx, request.UserID)
+	if err != nil {
+		return ValidityCommandResult{}, err
+	}
+	s.logger.Info("账户有效期已变更", "user_id", request.UserID, "result", "changed")
+	return ValidityCommandResult{User: updated,
+		PreviousValidFrom:  cloneTime(state.User.ValidFrom),
+		PreviousValidUntil: cloneTime(state.User.ValidUntil), Changed: true}, nil
+}
+
+// normalizeValidityTimes 规范化可选有效期端点：UTC、毫秒精度；两端都设置时必须
+// 形成非空半开区间 [from, until)。
+func normalizeValidityTimes(validFrom, validUntil *time.Time) (*time.Time, *time.Time, error) {
+	normalize := func(value *time.Time) (*time.Time, error) {
+		if value == nil {
+			return nil, nil
+		}
+		utc := value.UTC().Truncate(time.Millisecond)
+		if utc.Year() < 1970 || utc.Year() > 9999 {
+			return nil, fmt.Errorf("%w: 有效期时间超出允许范围", ErrValidityInvalid)
+		}
+		copy := utc
+		return &copy, nil
+	}
+	normalizedFrom, err := normalize(validFrom)
+	if err != nil {
+		return nil, nil, err
+	}
+	normalizedUntil, err := normalize(validUntil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if normalizedFrom != nil && normalizedUntil != nil &&
+		!normalizedUntil.After(*normalizedFrom) {
+		return nil, nil, fmt.Errorf("%w: valid_until 必须晚于 valid_from", ErrValidityInvalid)
+	}
+	return normalizedFrom, normalizedUntil, nil
+}
+
+// cloneTime 复制可选 UTC 时间，避免调用方修改内部快照。
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := value.UTC()
+	return &copy
+}
+
+// formatValidityTime 把可选时间格式化为审计差异值（只记录 UTC 时间，不含资料）。
+func formatValidityTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }

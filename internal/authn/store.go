@@ -25,6 +25,35 @@ type UserRecord struct {
 	IsRoot bool
 	// SecurityVersion 是会话/令牌失效版本；认证结果会携带它，供会话服务绑定。
 	SecurityVersion int64
+	// ValidFrom/ValidUntil 是全局账户有效期 UTC 半开区间；nil 表示该端不限制。
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+}
+
+// AvailabilityAt 计算账户在 now 是否可用于身份生效；root 忽略普通期限约束。
+// 返回的 reason 是内部审计原因键，不直接暴露给客户端。
+func (r UserRecord) AvailabilityAt(now time.Time, isRoot bool) (bool, string) {
+	if r.Status != account.StatusActive {
+		switch r.Status {
+		case account.StatusPending:
+			return false, "account_pending"
+		case account.StatusPendingDelete:
+			return false, "account_pending_delete"
+		default:
+			return false, "account_disabled"
+		}
+	}
+	if isRoot || r.IsRoot {
+		return true, ""
+	}
+	now = now.UTC()
+	if r.ValidFrom != nil && now.Before(r.ValidFrom.UTC()) {
+		return false, "account_not_yet_valid"
+	}
+	if r.ValidUntil != nil && !now.Before(r.ValidUntil.UTC()) {
+		return false, "account_expired"
+	}
+	return true, ""
 }
 
 // CredentialRecord 是正式密码凭证快照。PasswordHash 是 Argon2id PHC 编码字符串，

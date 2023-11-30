@@ -739,7 +739,7 @@ func (s *Service) IssueRecoverySession(ctx context.Context, request RecoverySess
 	if err != nil {
 		return IssuedSession{}, s.storeFailure(ctx, "读取账户状态", err)
 	}
-	if !found || state.Status != account.StatusActive {
+	if !found || !state.AvailableAt(s.clockNow()) {
 		s.recordRecoveryRejection(ctx, request, "account_not_eligible")
 		return IssuedSession{}, ErrAccountNotEligible
 	}
@@ -906,7 +906,7 @@ func (s *Service) checkEligibility(ctx context.Context, spec authnSpec, appID st
 	if err != nil {
 		return s.storeFailure(ctx, "读取账户状态", err)
 	}
-	if !found || state.Status != account.StatusActive || state.SecurityVersion != spec.securityVersion {
+	if !found || !state.AvailableAt(s.clockNow()) || state.SecurityVersion != spec.securityVersion {
 		s.recordIssuanceRejection(ctx, spec, appID, "account_not_eligible")
 		return ErrAccountNotEligible
 	}
@@ -2157,7 +2157,7 @@ func (s *Service) checkCurrentState(ctx context.Context, record Record) error {
 	if err != nil {
 		return s.storeFailure(ctx, "读取账户状态", err)
 	}
-	if !found || state.Status != account.StatusActive || state.SecurityVersion != record.SecurityVersion {
+	if !found || !state.AvailableAt(s.clockNow()) || state.SecurityVersion != record.SecurityVersion {
 		s.logger.Info("会话因账户状态变化失效",
 			"session_id", record.ID,
 			"user_id", record.UserID,
