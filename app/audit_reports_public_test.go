@@ -23,13 +23,41 @@ func TestAuditReportsPublicFacade(t *testing.T) {
 	ctx := context.Background()
 	clock := newTestClock(time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC))
 	runtime := adminTestRuntime(t, ctx, testConfig(), t.TempDir(), clock)
-	if err := runtime.Start(ctx); err != nil {
-		t.Fatalf("启动运行时: %v", err)
-	}
 	local := runtime.LocalAdmin()
 	auditSvc := runtime.Audit()
 	reportsSvc := runtime.Reports()
 
+	// 任务取消要可确定地测试 queued→cancelled：在 Start（启动执行器）之前入队，
+	// 没有 worker 竞争，避免任务瞬间结束导致时序 flake（步骤 230 测试修复）。
+	if runtime.base == nil || runtime.base.Tasks == nil || runtime.base.Tasks.Executor() == nil {
+		t.Fatal("任务执行器未装配")
+	}
+	executor := runtime.base.Tasks.Executor()
+	queuedJob, err := executor.Enqueue(ctx, task.EnqueueRequest{Kind: "test.public.task",
+		Actor:   audit.Actor{Type: audit.ActorLocalAdmin, ID: "host-operator"},
+		Payload: json.RawMessage(`{}`), TimeoutSeconds: 30, MaxAttempts: 1,
+		RequestID: login.NewRequestID()})
+	if err != nil {
+		t.Fatalf("入队测试任务: %v", err)
+	}
+	gotTask, err := auditSvc.GetTask(ctx, AdminTaskRequest{Caller: local, TaskID: queuedJob.ID,
+		RequestID: login.NewRequestID()})
+	if err != nil || gotTask.ID != queuedJob.ID {
+		t.Fatalf("读取任务 = %+v err=%v", gotTask, err)
+	}
+	cancel, err := auditSvc.CancelTask(ctx, AdminTaskCancelRequest{Caller: local,
+		TaskID: queuedJob.ID, Reason: "测试取消", RequestID: login.NewRequestID()})
+	if err != nil || !cancel.Accepted {
+		t.Fatalf("取消任务 = %+v err=%v", cancel, err)
+	}
+	after, err := auditSvc.GetTask(ctx, AdminTaskRequest{Caller: local, TaskID: queuedJob.ID,
+		RequestID: login.NewRequestID()})
+	if err != nil || after.State != string(task.StateCancelled) {
+		t.Fatalf("取消后任务 = %+v err=%v", after, err)
+	}
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatalf("启动运行时: %v", err)
+	}
 	// 生成一条可查询的审计事件（创建用户）。
 	created, err := runtime.Users().Create(ctx, CreateUserRequest{
 		Username: "public-audit-user", Password: "T4!kR8#wQ2@mN6$z",
@@ -100,28 +128,34 @@ func TestAuditReportsPublicFacade(t *testing.T) {
 	if runtime.base == nil || runtime.base.Tasks == nil || runtime.base.Tasks.Executor() == nil {
 		t.Fatal("任务执行器未装配")
 	}
-	executor := runtime.base.Tasks.Executor()
-	job, err := executor.Enqueue(ctx, task.EnqueueRequest{Kind: "test.public.task",
+	// 已结束任务不可取消：入队后等待真实终态（无处理器会快速失败），CancelTask
+	// 必须明确拒绝，不能把“请求取消”误报为成功（产品语义断言）。
+	terminalJob, err := executor.Enqueue(ctx, task.EnqueueRequest{Kind: "test.public.task",
 		Actor:   audit.Actor{Type: audit.ActorLocalAdmin, ID: "host-operator"},
 		Payload: json.RawMessage(`{}`), TimeoutSeconds: 30, MaxAttempts: 1,
 		RequestID: login.NewRequestID()})
 	if err != nil {
-		t.Fatalf("入队测试任务: %v", err)
+		t.Fatalf("入队终态测试任务: %v", err)
 	}
-	gotTask, err := auditSvc.GetTask(ctx, AdminTaskRequest{Caller: local, TaskID: job.ID,
-		RequestID: login.NewRequestID()})
-	if err != nil || gotTask.ID != job.ID {
-		t.Fatalf("读取任务 = %+v err=%v", gotTask, err)
+	terminalDeadline := time.Now().Add(5 * time.Second)
+	for {
+		terminal, getErr := auditSvc.GetTask(ctx, AdminTaskRequest{Caller: local,
+			TaskID: terminalJob.ID, RequestID: login.NewRequestID()})
+		if getErr != nil {
+			t.Fatalf("读取终态任务: %v", getErr)
+		}
+		if task.State(terminal.State).Terminal() {
+			break
+		}
+		if time.Now().After(terminalDeadline) {
+			t.Fatalf("任务未在期限内进入终态: %+v", terminal)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	cancel, err := auditSvc.CancelTask(ctx, AdminTaskCancelRequest{Caller: local,
-		TaskID: job.ID, Reason: "测试取消", RequestID: login.NewRequestID()})
-	if err != nil || !cancel.Accepted {
-		t.Fatalf("取消任务 = %+v err=%v", cancel, err)
-	}
-	after, err := auditSvc.GetTask(ctx, AdminTaskRequest{Caller: local, TaskID: job.ID,
-		RequestID: login.NewRequestID()})
-	if err != nil || after.State != string(task.StateCancelled) {
-		t.Fatalf("取消后任务 = %+v err=%v", after, err)
+	if _, err := auditSvc.CancelTask(ctx, AdminTaskCancelRequest{Caller: local,
+		TaskID: terminalJob.ID, Reason: "测试取消已结束任务",
+		RequestID: login.NewRequestID()}); err == nil {
+		t.Fatal("已结束任务取消必须拒绝")
 	}
 	if _, err := auditSvc.GetTask(ctx, AdminTaskRequest{Caller: local,
 		TaskID:    "job_00000000000000000000000000000000",
@@ -205,12 +239,12 @@ func TestAuditReportsPublicFacade(t *testing.T) {
 		t.Fatalf("管理会话读取本人任务 = %+v err=%v", ownTask, err)
 	}
 	if _, err := auditSvc.GetTask(ctx, AdminTaskRequest{Caller: userCaller,
-		TaskID: job.ID, RequestID: login.NewRequestID()}); !login.IsErrorCode(err,
+		TaskID: queuedJob.ID, RequestID: login.NewRequestID()}); !login.IsErrorCode(err,
 		login.CodeAccessDenied) {
 		t.Fatalf("管理会话读取他人任务错误 = %v，期望 ACCESS_DENIED", err)
 	}
 	if _, err := auditSvc.CancelTask(ctx, AdminTaskCancelRequest{Caller: userCaller,
-		TaskID: job.ID, Reason: "测试", RequestID: login.NewRequestID()}); !login.IsErrorCode(err,
+		TaskID: queuedJob.ID, Reason: "测试", RequestID: login.NewRequestID()}); !login.IsErrorCode(err,
 		login.CodeAccessDenied) {
 		t.Fatalf("管理会话取消他人任务错误 = %v，期望 ACCESS_DENIED", err)
 	}
