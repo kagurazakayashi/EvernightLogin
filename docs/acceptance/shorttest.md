@@ -138,3 +138,23 @@ HTTP 动态端口已释放、本地邮件捕获器端口已释放、场景构建
 
 预期：`status=PASS`、`exit_code=0`；`cleanup` 段含 `port_released`、
 `mail_port_released`、`workdir_removed`、`processes_remaining` 等清理证据。
+
+## 8. 场景：app-delegation-support-selftest（步骤 242）
+
+`app-delegation-support-selftest` 由步骤 242 登记，验证“应用委派管理与客服示例”
+这一外部 Module 的真实可运行性；示例在 `examples/app-delegation-support/`
+（独立 go.mod，只导入公开包）。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
+  -Scenario app-delegation-support-selftest -TimeoutSeconds 120 `
+  -Out docs\acceptance\evidence\step242\shorttest-app-delegation-support.json
+```
+
+场景行为：在入口临时目录内 `go build` 外部示例 Module → 运行示例
+`-self-test -json`（示例使用真实临时 SQLite/主密钥，不监听端口/不访问网络；覆盖
+两个应用共享账户但成员/权限隔离、应用范围权限/角色、委派资格授予/撤回与跨 scope
+拒绝、confidential OAuth 客户端一次性秘密、业务投影稳定 UserID/CreatedAt≠LinkedAt、
+客服工单在无真实客服会话时 fail-closed、人工恢复制度只读、跨应用/错误版本资料更新
+拒绝）→ 解析示例 JSON，断言至少 10 项检查全部 PASS，并独立核验示例临时数据目录与
+场景构建产物已删除。预期 `status=PASS`、`exit_code=0`。
