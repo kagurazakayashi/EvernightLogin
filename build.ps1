@@ -1,4 +1,5 @@
-﻿# build.ps1 - 步骤179 根目录一键构建入口（Windows PowerShell 5.1/7）。
+﻿# build.ps1 - 步骤179/239 根目录一键构建入口（Windows PowerShell 5.1/7）。
+# 239 起 build-summary.json 追加 entry/status/cancelled/artifacts(command/version/hash) 可追溯字段。
 #
 # 用法示例：
 #   .\build.ps1                                       # 四产品 × 六目标，输出 dist/build
@@ -20,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:LOGIN_BUILD_ENTRY = 'build.ps1'
 $core = Join-Path $PSScriptRoot 'scripts\build-all.ps1'
 if (-not (Test-Path -LiteralPath $core)) {
     Write-Host "build.ps1: missing scripts/build-all.ps1"

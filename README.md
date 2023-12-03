@@ -73,12 +73,16 @@ CGO_ENABLED=0 go build -o build/loginctl ./cmd/loginctl
 CGO_ENABLED=0 go build -o build/login-backup ./cmd/login-backup
 ```
 
-推荐用根目录一键入口构建两个产品的六目标（步骤 179）：`.\build.ps1 -Version 0.1.0-dev`；
-产物为 24 项（4 命令 × 6 目标）与 `dist/build/build-summary.json`/`checklist.txt`，由
-`scripts/verify-build.ps1` 独立校验类型/架构/哈希；发布包 12 个 per-target zip 由步骤 202 的
-`scripts/package-release.ps1` 生成并用 `scripts/verify-release.ps1` 校验（见
-[`docs/deployment/packaging.md`](docs/deployment/packaging.md) §1.1/§9）。上文的逐命令
-`go build` 仍适用于单命令调试；`scripts/build-release.ps1` 作为旧版 Login 六目标脚本保留兼容。
+推荐用根目录一键入口构建两个产品的六目标（步骤 179/239）：`.\build.ps1 -Version 0.1.0-dev`；
+POSIX 环境可直接 `sh ./build.sh`（有 PowerShell 时自动委托；`sh ./build.sh --no-powershell`
+仅依赖 Go+shell）。产物为 24 项（4 命令 × 6 目标）与可追溯清单
+`dist/build/build-summary.json`/`checklist.txt`（版本、commit、平台、命令入口、SHA-256、
+失败/取消状态），由 `scripts/verify-build.ps1` 独立校验类型/架构/哈希；发布包 12 个
+per-target zip 由步骤 202 的 `scripts/package-release.ps1` 生成并用
+`scripts/verify-release.ps1` 校验（见 [`docs/deployment/packaging.md`](docs/deployment/packaging.md)
+§1.1/§9 与 [`docs/deployment/one-click-build.md`](docs/deployment/one-click-build.md)）。
+上文的逐命令 `go build` 仍适用于单命令调试；`scripts/build-release.ps1` 作为旧版 Login
+六目标脚本保留兼容。
 
 ## 3. 从零部署（Windows / Linux）
 

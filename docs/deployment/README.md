@@ -16,6 +16,7 @@
 | [service-hosting.md](service-hosting.md) | Windows 服务、systemd、launchd 托管样例与操作步骤 |
 | [integration.md](integration.md) | 业务接入契约：OIDC 登录、服务身份、权限联合校验、设备码、扫码登录、Token 保存边界 |
 | [packaging.md](packaging.md) | 发布包内容、跨平台构建矩阵、版本/依赖/许可证/校验清单、排除项；含 §1.1 一键构建入口（179）与 §9 双产品 12 zip 打包（202） |
+| [one-click-build.md](one-click-build.md) | 一键构建入口（Windows/POSIX 原生回退）、可追溯 build-summary 字段、失败/取消语义、输出清理边界（239） |
 | [e2e-smoke.md](e2e-smoke.md) | 发布前端到端冒烟测试器说明（真实进程 + 真实 SQLite；依赖源码树脚本与 `tools/`） |
 | [mail-submodule.md](mail-submodule.md) | EvernightMail 子模块前置、构建检查、提交顺序、隔离副本复现与生产包边界 |
 | [managed-api.md](managed-api.md) | 业务应用托管管理 API `/api/managed/v1` 的认证、路由、幂等、错误与安全边界（默认关闭） |

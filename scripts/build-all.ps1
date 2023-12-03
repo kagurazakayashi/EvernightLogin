@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Stop'
 
 # 固定基线（本提交 = go-build-all 179 工具提交；Mail = 175 提交）。
 $ToolSHA = '8764de6504db1ecd1ecc5c3d4dd6618b51699cf1'
-$MailSHA = 'b9891ac569c7f5a0530ac74b73dfe8d5a9441b6e'
+$MailSHA = 'aa7ccf57f6c0a8bb000a7dff6f101983ed6219fa'
 $MinGoVersion = '1.27.0'
 $StdoutLog = New-Object System.Collections.Generic.List[string]
 $Warnings = New-Object System.Collections.Generic.List[string]
@@ -62,6 +62,83 @@ function Write-JsonFile([string]$path, $value) {
     }
     $json = $value | ConvertTo-Json -Depth 12
     [System.IO.File]::WriteAllText($path, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# New-SummaryBase 返回所有构建摘要共享的身份/环境/入口字段（步骤 239 可追溯清单）。
+function New-SummaryBase([string]$status, [string]$stage, [int]$exitCode, $verification) {
+    return [ordered]@{
+        format = 1
+        generated_at = (Get-Date).ToString('o')
+        started_at = $script:startedAt
+        duration_ms = [int]((Get-Date) - $script:startedAt).TotalMilliseconds
+        version = $Version
+        build_time = $BuildTime
+        status = $status
+        cancelled = ($status -eq 'cancelled')
+        stage = $stage
+        exit_code = $exitCode
+        entry = [ordered]@{
+            wrapper = $(if ([string]::IsNullOrWhiteSpace($env:LOGIN_BUILD_ENTRY)) { 'scripts/build-all.ps1' } else { $env:LOGIN_BUILD_ENTRY })
+            script = 'scripts/build-all.ps1'
+            arguments = [ordered]@{
+                version = $Version; products = $Products; targets = $Targets;
+                commands = $Commands; jobs = $Jobs; output_dir = $AbsoluteOutputDir;
+                analyze = $Analyze; force_clean = [bool]$ForceClean;
+                skip_verify = [bool]$SkipVerify; allow_dirty = [bool]$AllowDirty;
+                strict_gitlink = [bool]$StrictGitlink
+            }
+        }
+        host = [ordered]@{
+            os = [System.Environment]::OSVersion.VersionString
+            powershell = $PSVersionTable.PSVersion.ToString()
+            machine = [System.Environment]::MachineName
+        }
+        tool = [ordered]@{ commit = $ToolSHA; path = $toolExe; sha256 = $toolSHA256 }
+        go = [ordered]@{ version = $context.go_version; goos = $context.goos; goarch = $context.goarch;
+            cgo_enabled = '0'; gotoolchain = 'local'; gowork = 'off'; goflags = '-mod=readonly' }
+        modules = @(
+            [ordered]@{ name = 'EvernightLogin'; root = $repositoryRoot; commit = $context.parent_head; dirty = $context.parent_dirty }
+            [ordered]@{ name = 'EvernightMail'; root = $context.mail_root; commit = $context.mail_head; dirty = $context.mail_dirty }
+        )
+        submodule_gitlinks = [ordered]@{ mail = $context.mail_gitlink; tool = $context.tool_gitlink }
+        platforms = $context.platforms
+        invocations = $Invocations
+        verification = $verification
+        warnings = $Warnings
+    }
+}
+
+# Get-ArtifactCommand 把产品名映射回真实命令入口（可追溯清单要求命令入口与产物绑定）。
+function Get-ArtifactCommand([string]$product) {
+    switch ($product) {
+        'login-server' { return 'cmd/login-server' }
+        'loginctl' { return 'cmd/loginctl' }
+        'login-backup' { return 'cmd/login-backup' }
+        'evernightmail' { return 'cmd/evernightmail' }
+        default { return '' }
+    }
+}
+
+# New-ArtifactList 把校验器 checklist 转换为带版本/commit/命令入口/平台/哈希的清单项。
+function New-ArtifactList($checklist) {
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @($checklist)) {
+        $items.Add([ordered]@{
+            product = [string]$item.product
+            command = Get-ArtifactCommand ([string]$item.product)
+            goos = [string]$item.goos
+            goarch = [string]$item.goarch
+            type = [string]$item.type
+            arch = [string]$item.arch
+            version = $Version
+            commit = $(if ([string]$item.product -eq 'evernightmail') { $context.mail_head } else { $context.parent_head })
+            size = $item.size
+            sha256 = [string]$item.sha256
+            path = [string]$item.path
+            status = [string]$item.status
+        })
+    }
+    return $items
 }
 
 function Get-SHA256Hex([string]$path) {
@@ -200,7 +277,22 @@ function Invoke-Preflight([string]$RepositoryRoot, [string]$AbsoluteOutputDir) {
 }
 
 # ==== 主流程 ====
+$script:startedAt = Get-Date
 $currentStage = 'preflight'
+$script:cancelRequested = $false
+$script:cancelHandler = $null
+$toolExe = ''
+$toolSHA256 = ''
+$BuildTime = ''
+$VersionCommit = ''
+if (-not [System.Console]::IsInputRedirected) {
+    $script:cancelHandler = [ConsoleCancelEventHandler]{
+        param($sender, $eventArgs)
+        $eventArgs.Cancel = $true
+        $script:cancelRequested = $true
+    }
+    [System.Console]::add_CancelKeyPress($script:cancelHandler)
+}
 try {
     $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
     $context = Invoke-Preflight $repositoryRoot $OutputDir
@@ -243,6 +335,29 @@ try {
     if ([string]::IsNullOrWhiteSpace($BuildTime)) {
         $BuildTime = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
+
+    function Write-FailureSummary([string]$stage, [int]$exitCode, $verification, [string]$status = 'failed') {
+        $summaryPath = Join-Path $AbsoluteOutputDir 'build-summary.json'
+        $summary = New-SummaryBase $status $stage $exitCode $verification
+        $summary.exit_code_note = $(if ($status -eq 'cancelled') { 'cancelled before checklist completed' } else { 'failed before checklist completed' })
+        Write-JsonFile $summaryPath $summary
+        Write-Host ("build-summary ({0}): {1}" -f $status, $summaryPath)
+    }
+
+    function Test-Cancelled([string]$where) {
+        if ($env:LOGIN_BUILD_TEST_CANCEL -eq $where) {
+            Write-Warn "LOGIN_BUILD_TEST_CANCEL=${where}: deterministic cancellation test hook (not for production)"
+            Write-FailureSummary "test-cancel:$where" 130 $null 'cancelled'
+            exit 130
+        }
+        if ($script:cancelRequested) {
+            Write-Warn "cancellation requested: writing cancelled build summary"
+            Write-FailureSummary "cancel:$where" 130 $null 'cancelled'
+            exit 130
+        }
+    }
+
+    Test-Cancelled 'after-preflight'
 
     # ==== 构建工具（源码固定 SHA；不使用工作树遗留二进制）====
     $toolExe = $null
@@ -313,32 +428,6 @@ try {
         return $exitCode
     }
 
-    function Write-FailureSummary([string]$stage, [int]$exitCode, $verification) {
-        $summaryPath = Join-Path $AbsoluteOutputDir 'build-summary.json'
-        $summary = [ordered]@{
-            format = 1
-            generated_at = (Get-Date).ToString('o')
-            version = $Version
-            build_time = $BuildTime
-            stage = $stage
-            exit_code = $exitCode
-            tool = [ordered]@{ commit = $ToolSHA; path = $toolExe; sha256 = $toolSHA256 }
-            go = [ordered]@{ version = $context.go_version; goos = $context.goos; goarch = $context.goarch;
-                cgo_enabled = '0'; gotoolchain = 'local'; gowork = 'off'; goflags = '-mod=readonly' }
-            modules = @(
-                [ordered]@{ name = 'EvernightLogin'; root = $repositoryRoot; commit = $context.parent_head }
-                [ordered]@{ name = 'EvernightMail'; root = $context.mail_root; commit = $context.mail_head }
-            )
-            submodule_gitlinks = [ordered]@{ mail = $context.mail_gitlink; tool = $context.tool_gitlink }
-            invocations = $Invocations
-            verification = $verification
-            warnings = $Warnings
-            exit_code_note = 'failed before checklist completed'
-        }
-        Write-JsonFile $summaryPath $summary
-        Write-Host "build-summary (partial): $summaryPath"
-    }
-
     $selected = $context.selected_products
     $buildLogin = $selected -contains 'all' -or $selected -contains 'login'
     $buildMail = $selected -contains 'all' -or $selected -contains 'mail'
@@ -359,6 +448,8 @@ try {
             exit 22
         }
     }
+
+    Test-Cancelled 'after-build'
 
     # ==== 独立校验 24 项产物 ====
     $verifyJson = Join-Path $AbsoluteOutputDir 'verify-result.json'
@@ -397,27 +488,15 @@ try {
         $checklist = @($verification.checklist)
         $totals = $verification.totals
     }
-    $summary = [ordered]@{
-        format = 1
-        generated_at = (Get-Date).ToString('o')
-        version = $Version
-        build_time = $BuildTime
-        stage = 'completed'
-        exit_code = 0
-        tool = [ordered]@{ commit = $ToolSHA; path = $toolExe; sha256 = $toolSHA256 }
-        go = [ordered]@{ version = $context.go_version; goos = $context.goos; goarch = $context.goarch;
-            cgo_enabled = '0'; gotoolchain = 'local'; gowork = 'off'; goflags = '-mod=readonly' }
-        modules = @(
-            [ordered]@{ name = 'EvernightLogin'; root = $repositoryRoot; commit = $context.parent_head; dirty = $context.parent_dirty }
-            [ordered]@{ name = 'EvernightMail'; root = $context.mail_root; commit = $context.mail_head; dirty = $context.mail_dirty }
-        )
-        submodule_gitlinks = [ordered]@{ mail = $context.mail_gitlink; tool = $context.tool_gitlink }
-        platforms = $context.platforms
-        invocations = $Invocations
-        checklist = $checklist
-        totals = $totals
-        verification = [ordered]@{ exit_code = $verifyExit; manifest_checks = $verification.manifest_checks }
-        warnings = $Warnings
+    $summary = New-SummaryBase 'completed' 'completed' 0 ([ordered]@{
+        exit_code = $verifyExit; manifest_checks = $verification.manifest_checks })
+    $summary.checklist = $checklist
+    $summary.artifacts = New-ArtifactList $checklist
+    $summary.totals = $totals
+    $summary.execution = [ordered]@{
+        products = $context.selected_products
+        commands = $loginCommandList + $mailCommandList
+        tools_invoked = $Invocations.Count
     }
     $summaryPath = Join-Path $AbsoluteOutputDir 'build-summary.json'
     Write-JsonFile $summaryPath $summary
@@ -439,10 +518,20 @@ try {
     Write-Step "checklist:    $checklistPath"
     Write-Step ("Done. verified={0}/{1} failed={2} warnings={3} exit=0" -f $totals.verified, $totals.expected, $totals.failed, $Warnings.Count)
     exit 0
+} catch [System.Management.Automation.PipelineStoppedException], [System.OperationCanceledException] {
+    $stage = if ($null -ne $currentStage) { $currentStage } else { 'internal' }
+    if ($null -ne $AbsoluteOutputDir -and (Test-Path -LiteralPath $AbsoluteOutputDir)) {
+        Write-FailureSummary ("cancel:" + $stage) 130 $null 'cancelled'
+    }
+    exit 130
 } catch {
     $stage = if ($null -ne $currentStage) { $currentStage } else { 'internal' }
     $code = 40
     if ($stage -eq 'preflight' -or $stage -eq 'output-dir') { $code = 10 }
     Write-Host ("BUILD-ALL ERROR ({0}): {1}" -f $stage, $_.Exception.Message)
     exit $code
+} finally {
+    if ($null -ne $script:cancelHandler) {
+        try { [System.Console]::remove_CancelKeyPress($script:cancelHandler) } catch { }
+    }
 }
