@@ -123,3 +123,22 @@
 - 导出错误信息给外部支持时，先移除秘密、Token、完整邮箱/电话与内部地址。
 - 发现错误码与手册不一致时，以 `error_codes.go` + 手册自动比对测试为准，并报告文档缺陷；
   不要自行修改已发布的码含义。
+
+## 7. 常见问题速查（迁移自根 README §8.4，步骤 244 阶段 A）
+
+> 本节原文迁移自根 `README.md` §8.4，保证信息不丢失；根 README 将在步骤 244 阶段 B 收敛为
+> 入口页。第 5 节是更贴近本仓库的扩展排障场景，本节保留根 README 的入门速查表。
+
+| 现象 | 常见原因与处理 |
+|---|---|
+| 启动提示缺少 root/未初始化 | 先执行 `login-server init`；不要用 `--allow-uninitialized` 暴露到非回环。 |
+| 启动提示未迁移 | 使用 `--migrate=apply`；生产先备份。 |
+| 第二个进程启动失败 | 同一 SQLite 只允许一个 `serve`；确认旧进程已退出。 |
+| 管理页 403 | root/管理员需要已完成强认证；完成 `/login/strong-setup` 后重新登录；检查会话新鲜度。 |
+| OAuth/管理端点 404 | 对应 `--enable-protocol`/`--enable-admin-api`/其他开关未开启；设备码/扫码已按 192/193 验收边界，introspection 已实现（145/160 验收边界；默认关闭，mTLS/故障等未实测）。 |
+| 邮件发送失败 | `mail.enabled` 未开、SMTP/CA/密码配置错误或投递失败；查看页面错误码、服务日志和 `mail_deliveries`；不要伪造成功。 |
+| 维护模式 503 | 服务处于维护/恢复状态；完成 `restore-apply` 并显式 `maintenance-exit`，不要绕过。 |
+| 忘记 root 密码/MFA | 使用本地 `loginctl root-recover`（停服/维护+排他锁），不要尝试远程匿名恢复。 |
+
+完整错误码与处理建议见本文第 3 节与 [../requirements/login_错误码与排障手册.md](../requirements/login_错误码与排障手册.md)。
+

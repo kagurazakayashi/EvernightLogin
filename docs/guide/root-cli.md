@@ -268,3 +268,40 @@ API 基路径）；在浏览器完成真实 Passkey 断言后，用
   请求头存在不等于放行；失败不留下可重放的证明。
 - 187 的管理强制下线等命令按 `.ai/lead/reports/step186-contract.md` 复用同一
   header/端点契约；操作/目标/参数必须与 `Sensitive.Authorize` 完全一致。
+
+## 11. 常用命令速查（迁移自根 README §5.2，步骤 244 阶段 A）
+
+> 本节原文迁移自根 `README.md` §5.2，保证信息不丢失；根 README 将在步骤 244 阶段 B 收敛为
+> 入口页。相对链接已按本文件位置调整；各命令的完整参数与边界见本文第 1～10 节。
+
+```bash
+# 配置/诊断/迁移
+loginctl config validate --config /etc/login/login.yaml
+loginctl config show --config /etc/login/login.yaml --json
+loginctl diag health --config /etc/login/login.yaml
+loginctl diag ready --config /etc/login/login.yaml --state-dir /var/lib/login-maintenance --keyring-file /etc/login/secrets/master.key
+loginctl migrate status --config /etc/login/login.yaml
+loginctl migrate apply --config /etc/login/login.yaml --confirm MIGRATE --service-stopped
+
+# 本地用户只读/禁用（需要本地管理员 operator 和版本）
+loginctl user list --operator local-admin --config /etc/login/login.yaml
+loginctl user get <user_id> --operator local-admin --config /etc/login/login.yaml
+loginctl user disable <user_id> --operator local-admin --expected-version <row_version> --confirm DISABLE --config /etc/login/login.yaml
+
+# 组/角色/应用/权限（读取与受控建组；部分写动作明确返回 MANAGEMENT_WRITE_NOT_EXPOSED）
+loginctl group list --operator local-admin --config /etc/login/login.yaml
+loginctl role list --operator local-admin --config /etc/login/login.yaml
+
+# 在线管理（需要运行中的服务和管理会话文件）
+loginctl audit events list --session-file /etc/login/secrets/admin-session.json --config /etc/login/login.yaml
+loginctl reports history list --session-file /etc/login/secrets/admin-session.json --config /etc/login/login.yaml
+loginctl backups artifacts list --session-file /etc/login/secrets/admin-session.json --config /etc/login/login.yaml
+loginctl session admin-revoke --user <user_id> --reason "离职紧急下线" --confirm ADMIN-REVOKE --session-file <protected>
+
+# root 应急恢复（服务停止/维护 + 排他锁；本地管理员边界）
+loginctl root-recover --database /var/lib/login/login.db --reason "root 锁定" --service-stopped --reset-password
+loginctl root-recover --database /var/lib/login/login.db --reason "MFA 丢失" --maintenance --reset-mfa
+```
+
+`loginctl` 的错误码/退出码与 JSON 输出约定见本文第 1～2 节与第 8 节。
+

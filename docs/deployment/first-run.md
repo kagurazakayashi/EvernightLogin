@@ -174,3 +174,132 @@ curl -s -o NUL -w "%{http_code}" http://127.0.0.1:8080/login        :: 期望 20
   `--enable-protocol`、`--enable-admin-api`）；设备码与扫码登录已按 192/193 验收；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测），默认关闭。
   启用后协议发现/令牌端点真实可用，关闭时 404、维护模式 503。
 - 迁移、诊断、备份命令均为本地工具，不提供远程执行；不要把本地工具包装成网络接口。
+
+## 6. 从根 README 迁移的首次部署速查（步骤 244 阶段 A）
+
+> 本节原文迁移自根 `README.md` §3.1、§3.2、§3.3、§3.5，保证信息不丢失；根 README
+> 将在步骤 244 阶段 B 收敛为入口页。相对链接已按本文件位置调整。
+
+### 6.1 准备目录（原 README §3.1）
+
+建议把配置、数据、秘密和日志分开：
+
+```text
+D:\login\
+  config\login.yaml
+  data\login.db
+  secrets\master.key
+  logs\access.log
+```
+
+目录只授予运行服务的账户；主密钥、数据库、备份不要放在同一目录。单用户测试可简化，但
+生产请用专用服务账户并收紧 ACL/文件权限。
+
+### 6.2 编写最小配置（原 README §3.2）
+
+复制发布包中的 `config/login.example.yaml` 或源码中的 `samples/login.server.example.yaml`，
+保存为 `D:\login\config\login.yaml`（文件名可自定义，如 `serv.yaml`；下文统一用
+`login.yaml`）。最小可用示例：
+
+```yaml
+server:
+  listen_addr: "127.0.0.1:8080"
+  public_base_url: "http://127.0.0.1:8080"
+  shutdown_timeout_seconds: 10
+
+logging:
+  level: info
+  format: text
+
+database:
+  driver: sqlite
+  path: "D:/login/data/login.db"
+  wal: true
+  busy_timeout_ms: 5000
+
+# 需要 OAuth/OIDC 时再启用：
+# protocol:
+#   enabled: true
+#   issuer: "https://login.example.com"
+
+# 需要邮件（验证/找回/告知）时再启用：
+# mail:
+#   enabled: true
+#   smtp:
+#     addr: "127.0.0.1:2525"
+#     host: "localhost"
+#     tls_mode: "starttls"   # starttls | implicit | none
+#     username: "tester"
+#     password: {env: "LOGIN_SMTP_PASSWORD"}
+#   from:
+#     address: "no-reply@example.com"
+#     name: "EvernightLogin"
+#   delivery:
+#     max_attempts: 3
+```
+
+关键字段说明：
+
+| 字段 | 说明 |
+|---|---|
+| `server.listen_addr` | 监听地址。默认只建议 `127.0.0.1:8080`；对外部署前先配置 TLS 或可信反向代理。 |
+| `server.public_base_url` | 对外可访问的基址，OAuth issuer 派生/Passkey 来源/邮件链接依赖它，生产必须是可信 https 地址。 |
+| `server.path_prefix` | 可挂在反向代理子路径下；改动后所有页面/端点路径同步。 |
+| `database.path` | SQLite 文件路径；目录必须可写且只允许服务账户访问。 |
+| `protocol.enabled` / `protocol.issuer` | 启用 OAuth/OIDC 协议端点；issuer 固定且必须与公开地址一致。 |
+| `mail.enabled` | 生产邮件总开关；默认 false，关闭时不读取秘密、不建立网络连接。 |
+| `mail.smtp.tls_mode` | `starttls`（默认）、`implicit` 或本地测试用 `none`；`none` 只允许显式回环本地。 |
+| `passkey.enabled` / `rp_id` / `allowed_origins` | 启用 Passkey 时必须配置 RP ID 与允许来源；Passkey 不跨域名通用。 |
+| 秘密来源 | 密码/密钥使用 `{env: NAME}` 或 `{file: 绝对路径}`，不要写明文到 YAML/命令行。 |
+
+配置优先级为 **内置默认 < YAML < 环境变量 < 显式代码选项**；未知字段、重复键、类型错误、
+越界或危险组合会拒绝启动。完整 52 个字段见 [../guide/configuration.md](../guide/configuration.md)。
+
+### 6.3 初始化命令与非交互密码文件（原 README §3.3）
+
+在交互式终端执行（root 密码不回显、需二次确认）：
+
+```bat
+D:\login\bin\login-server.exe init --config D:\login\config\login.yaml ^
+  --master-key-file D:\login\secrets\master.key ^
+  --operator os:deployer@myhost
+```
+
+没有交互终端时，可把 root 正式密码放入仅当前账户可读的受保护文件，再用 `--password-file`：
+
+```bat
+icacls D:\login\secrets\init-password.txt /inheritance:r /grant:r "%USERNAME%:F" SYSTEM:F Administrators:F
+D:\login\bin\login-server.exe init --config D:\login\config\login.yaml ^
+  --master-key-file D:\login\secrets\master.key ^
+  --password-file D:\login\secrets\init-password.txt ^
+  --operator os:deployer@myhost
+```
+
+预期：退出码 0，输出唯一 root 用户 ID、`初始化状态: setup_verified`、`security_version`、
+主密钥和维护状态路径；**不输出密码、主密钥或一次性凭证**。不要重复执行 `init`；重复初始化
+会被拒绝。
+
+> `init` 会创建数据库、执行迁移、生成/加载主密钥、创建唯一 root 并设置正式密码。root 仍
+> 要求绑定强认证因素。
+
+### 6.4 首次登录与 root 强认证（原 README §3.5）
+
+1. 浏览器打开 `http://127.0.0.1:8080/login`，用 `root` 和 init 设置的密码登录。
+2. 未绑定强因素时只能进入受限初始化会话；按页面提示打开 `/login/strong-setup` 完成
+   **Passkey** 注册。
+3. 重新登录后取得强认证管理会话，才能访问 `/admin/*` 等管理页面。root 的管理页面要求强认证
+   且在有效新鲜度窗口内。
+4. 若 Passkey 不可用，`loginctl root-recover` 是本地应急恢复通道；不要在远程匿名接口上尝试
+   恢复。
+
+> 当前 root 强认证绑定已接线，但真实浏览器/硬件认证器互操作未完成最终验收；执行前请阅读
+> 本文第 5 节与 [standalone-service.md](standalone-service.md) §3.9。
+
+### 6.5 首次部署相关交叉链接
+
+- 独立服务启动参数/单实例/日志轮转：[standalone-service.md](standalone-service.md)
+- 配置字段与秘密来源：[../guide/configuration.md](../guide/configuration.md)
+- 本地应急与诊断：[../guide/root-cli.md](../guide/root-cli.md)
+- 备份与恢复：[../guide/backup-and-restore.md](../guide/backup-and-restore.md)
+- 内置 Web 管理台操作：[../guide/admin-console.md](../guide/admin-console.md)
+

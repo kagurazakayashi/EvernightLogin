@@ -8,6 +8,9 @@
 > 的部分都会明确标注状态；请不要按功能清单（`docs/requirements/`）里的设计目标直接当
 > 成已上线能力。
 
+顶层文档索引见 [../README.md](../README.md)（`docs/` 文档中心）；嵌入模式的入口与宿主
+调用边界补充见 [../embedding/README.md](../embedding/README.md)。
+
 ## 1. 文档地图
 
 | 文档 | 读它做什么 |
@@ -24,15 +27,18 @@
 | [audit-and-reports.md](audit-and-reports.md) | 安全审计、统计看板与统计报告（HTML/PDF/CSV/JSON/Markdown）能力与边界 |
 | [backup-and-restore.md](backup-and-restore.md) | 加密热备份、离线校验与只读查看/导出、维护模式恢复流程 |
 | [troubleshooting.md](troubleshooting.md) | 48 个稳定错误码、按类别的排障顺序、CLI 退出码与常见“看起来坏了”的问题 |
+| [admin-console.md](admin-console.md) | 内置 Web 管理台操作：普通用户个人中心、root/授权管理员管理页与操作注意 |
 
 已有的详细文档（本指南会引用，不重复内容）：
 
 | 位置 | 内容 |
 |---|---|
+| [../README.md](../README.md) | `docs/` 文档中心：全部目录地图、阅读路径与文档约定 |
 | [../deployment/README.md](../deployment/README.md) | 部署总览、当前交付状态、平台口径、样例文件 |
 | [../deployment/first-run.md](../deployment/first-run.md) | 首次配置（root 受限初始化）的安全模型与防锁死清单 |
 | [../deployment/standalone-service.md](../deployment/standalone-service.md) | 独立服务启动前置条件与嵌入模式启动骨架 |
 | [../deployment/integration.md](../deployment/integration.md) | 业务接入的完整协议契约（OIDC、服务身份、设备码、扫码、Token 边界） |
+| [../embedding/README.md](../embedding/README.md) | 嵌入模式入口：文档索引、示例、宿主调用安全边界补充 |
 | [../embedding/host_integration.md](../embedding/host_integration.md) | 把 login 嵌入 Go 程序的公开 API 稳定范围与生命周期约束 |
 | [../requirements/login_功能列表_v1.1.md](../requirements/login_功能列表_v1.1.md) | 产品功能范围（设计目标，不等于全部已实现） |
 | [../requirements/login_错误码与排障手册.md](../requirements/login_错误码与排障手册.md) | 错误码权威手册（与 `error_codes.go` 自动比对） |
@@ -50,15 +56,29 @@
 | `config-load` | 只加载/校验 YAML，不监听、不写库 | 可运行 |
 | `external-consumer` | 独立外部 Go module，仅用公开包完成嵌入 | 可运行（138 A01） |
 | `embedded-runtime` | 嵌入式运行时与页面/HTTP 挂载骨架 | 可运行（138） |
+| `embedded-minimal` | 最小嵌入示例：打开→注册/登录→会话校验→HTTP/UI 挂载→关闭清理；`-self-test` 15 项 | 可运行；2026-11-25 自检 PASS（步骤 240） |
+| `custom-pages-profile-sync` | 宿主自定义页面与内置页面并存；`Profile()` 资料读写/受控改名；业务投影按稳定 UserID 同步；本地邮件验证/找回；`-self-test` 23 项 | 可运行；2026-11-25 自检 PASS（步骤 241，审计中） |
 | `deployment-minimal` | 最小独立部署配置样例 | 可运行 |
 | `oidc-login` | OIDC 授权码+PKCE 客户端演示 | 可运行；真实第三方互操作未测 |
 | `service-identity` | 服务身份 client credentials 演示 | 可运行；真实 HTTP 黑盒待 144 |
 | `app-qr-login` | APP 扫码确认接口演示 | 演示；142 完整闭环未验收 |
 | `app-support-demo` | 应用受限客服 API 示例 | 154 dev 已出；待审计/最终验收，默认关闭 |
 | `managed-api-client` | 业务托管管理 API 客户端 | 147/148；默认关闭 |
+| `password-reset-consumer` | 外部消费者走找回密码/邮箱验证链路（配合本地 EvernightMail） | 可运行（211 验收）；真实 SMTP 外发未测 |
+| `rbac-consumer` | 公开 RBAC Go 接口（角色/组/权限/授权查询/预设拒绝）外部消费 | 可运行（224） |
 | `ui-pages` | 内置页面/替换契约示例 | 可运行；不是生产页面 |
 | `task-schedule` / `report-schedule` | 任务调度/报告计划示例 | 可运行；非生产装配 |
 | `webhookverify` | Webhook 签名验证消费方示例 | 可运行；真实外发未测 |
+
+一键自检（统一短测试入口，仓库根执行；临时目录/动态端口/超时/清理由入口负责）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -List
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scenario embedded-minimal-selftest -TimeoutSeconds 180
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scenario custom-pages-profile-sync-selftest -TimeoutSeconds 240
+```
+
+场景与结构化结果说明见 [../acceptance/shorttest.md](../acceptance/shorttest.md)。
 
 ## 2. 当前能力总览（先读这一节）
 
@@ -78,7 +98,7 @@
 | 本地应急命令 `cmd/loginctl` | 已实现（部分写动作受限） | `root-recover`、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 可用；`group`/`role`/`app`/`permission`/`notify` 本地管理（读取与受控建组；受限写动作返回 `MANAGEMENT_WRITE_NOT_EXPOSED`）与 `audit`/`reports`/`backups`/`notifications`/`tasks` 在线管理（需 `--session-file`）已接通，详见 [root-cli.md](root-cli.md) 第 8 节 |
 | 备份工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
 | 一键构建与发布打包（179/202） | 已实现 | `build.ps1` 构建双产品 × 六目标 24 项 + `dist/build/build-summary.json`；`scripts/verify-build.ps1` 校验类型/架构/哈希；`scripts/package-release.ps1` 生成 12 个 per-target zip 并用 `verify-release.ps1` 校验（详见 [packaging.md](../deployment/packaging.md) §1.1/§9） |
-| SQLite 数据库与迁移 | 已实现 | 49 个内嵌迁移；SQLite 为唯一运行实测目标 |
+| SQLite 数据库与迁移 | 已实现 | 52 个内嵌迁移（`0001`…`0052`）；SQLite 为唯一运行实测目标 |
 | MySQL / PostgreSQL / SQL Server 适配 | 部分实现 | 有方言与迁移代码，**未运行实测** |
 | 多实例/集群、TCP 代理协议、OCSP/CRL、证书自动续期 | 未实现 | 第一版不含 |
 

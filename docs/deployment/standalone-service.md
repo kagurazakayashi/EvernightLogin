@@ -302,3 +302,118 @@ protocol:
 托管时必须确认进程账号、工作目录、秘密文件权限、数据库目录与日志轮转，不要把秘密放进
 命令行参数、环境文件的可读副本或服务描述。托管样例中的启动命令需按第 3.2 节替换为
 `serve --config ...`。
+
+## 8. 从根 README 迁移的部署与运维速查（步骤 244 阶段 A）
+
+> 本节原文迁移自根 `README.md` §3.4、§3.6、§3.7、§3.8、§5.1、§8.1、§8.3，保证信息不
+> 丢失；根 README 将在步骤 244 阶段 B 收敛为入口页。相对链接已按本文件位置调整。
+
+### 8.1 启动服务与验证（原 README §3.4）
+
+```bat
+D:\login\bin\login-server.exe serve --config D:\login\config\login.yaml ^
+  --master-key-file D:\login\secrets\master.key ^
+  --migrate=apply ^
+  --access-log D:\login\logs\access.log
+```
+
+- 首次启动或升级后必须显式 `--migrate=apply`；未迁移数据库默认拒绝启动。
+- 只允许一个 `serve` 进程使用同一 SQLite；第二个进程会因排他锁失败。
+- 停止用 `Ctrl+C`（Linux 用 SIGTERM/SIGINT），服务在 `shutdown_timeout_seconds` 内有界
+  关闭并释放端口。
+
+验证：
+
+```bat
+curl -s -o NUL -w "%%{http_code}" http://127.0.0.1:8080/healthz
+curl -s -o NUL -w "%%{http_code}" http://127.0.0.1:8080/login
+```
+
+预期 `/healthz` 和 `/login` 返回 200，未知路径 404。
+
+### 8.2 Linux systemd 示例（原 README §3.6）
+
+参考发布包 `deploy/evernight-login.service` 或源码
+[`samples/evernight-login.service`](samples/evernight-login.service)：
+
+```ini
+[Unit]
+Description=EvernightLogin
+After=network.target
+
+[Service]
+Type=simple
+User=login
+Group=login
+WorkingDirectory=/opt/login
+ExecStart=/opt/login/bin/login-server serve --config /etc/login/login.yaml --master-key-file /etc/login/secrets/master.key
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/login /var/log/login
+
+[Install]
+WantedBy=multi-user.target
+```
+
+将配置/秘密放到权限受限目录（如 `/etc/login`，`0600`）；数据库/日志放 `/var/lib/login`、
+`/var/log/login`。首次 `init` 用同一服务账户执行。
+
+### 8.3 TLS 与反向代理（原 README §3.7）
+
+- 小规模本机/内网：可直接在 `server.tls_cert_files` / `server.tls_key_files` 配置本地 TLS；
+  默认最低 TLS 1.2。
+- 对外推荐：nginx/Caddy 终止 TLS，应用只监听回环；配置 `server.tls_terminating_proxy: true`、
+  `server.trusted_proxies` 和 https 的 `public_base_url`，否则非回环明文监听会被拒绝。
+- mTLS 客户端证书、可信代理、证书到期状态等见 [standalone-service.md](standalone-service.md)
+  与 [reverse-proxy.md](reverse-proxy.md)。
+
+### 8.4 邮件配置（原 README §3.8）
+
+生产邮件用于注册邮箱验证、邮箱变更、邮件 MFA、密码找回、客服恢复和安全告知。
+
+1. 把 `mail.enabled` 设为 `true`，填写 SMTP 地址/TLS/发件地址；SMTP 密码只放 `env:`/`file:`。
+2. 首次启动会校验配置/秘密可读性；证书校验不可关闭，测试环境通过 `trusted_roots` 追加测试 CA。
+3. 开发/测试可启动本仓库的 **EvernightMail** 本地捕获器（独立子模块，仅用于测试），把
+   Login 的 `mail.smtp.addr` 指向它；不要向真实第三方地址发测试邮件。
+4. `mail.enabled=false` 时邮件功能会以明确错误失败，不会伪造发送成功。生产邮件实际送达、
+   外部反代等仍需自行验收。
+
+### 8.5 `login-server` 常用命令（原 README §5.1）
+
+```bash
+# 版本/帮助
+login-server --version
+login-server serve --help
+
+# 首次初始化（交互式密码）
+login-server init --config /etc/login/login.yaml --master-key-file /etc/login/secrets/master.key
+
+# 启动（需先迁移；日常路径）
+login-server serve --config /etc/login/login.yaml \
+  --master-key-file /etc/login/secrets/master.key --migrate=apply \
+  --access-log /var/log/login/access.log
+```
+
+常用 flag：`--config`、`--database`、`--master-key-file`、`--migrate=apply`、`--access-log`、
+`--maintenance-state-dir`、`--enable-protocol`、`--enable-admin-api`、`--enable-managed-api`、
+`--enable-app-support`。完整说明见本文第 3.3 节。
+
+### 8.6 安全建议（原 README §8.1）
+
+- 生产只监听回环并由可信反向代理终止 TLS；配置 `public_base_url`、可信代理和 Host 限制。
+- 主密钥、数据库、备份、会话秘密分开保存；只授予服务账户最小权限。
+- root/高权限管理员必须完成强认证（Passkey 等），敏感操作要求再次认证；不要关闭 fail-closed
+  策略。
+- 备份文件是认证加密的，但备份期间可能出现明文快照；输出目录必须由 ACL/权限保护。
+- 不要把秘密、Token、恢复码写进日志、工单、截图或仓库；测试只使用合成账户和本地捕获器。
+- 定期检查审计、失败登录、撤销/恢复事件；发现异常时先撤销会话/凭证，再调查。
+
+### 8.7 升级步骤（原 README §8.3）
+
+1. 先备份数据库、配置和主密钥；确认旧进程可回退。
+2. 替换 `login-server`/`loginctl`/`login-backup` 二进制。
+3. 启动时显式 `--migrate=apply`；迁移只向前，先看发布说明与备份。
+4. 检查 `/healthz`、登录页、管理页和关键协议端点；出现迁移/锁/维护错误先停止并保留现场。
+

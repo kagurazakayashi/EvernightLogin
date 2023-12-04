@@ -4,6 +4,9 @@
 真实状态，以及调用方应如何理解错误响应。**不要**把这里的最小 OpenAPI 文档当作完整
 业务 API 契约。
 
+文档中心见 [../README.md](../README.md)；嵌入模式入口与宿主调用边界补充见
+[../embedding/README.md](../embedding/README.md)。
+
 ## 1. GoDoc：已提供，且是权威接口说明
 
 - 根包名 `login`，导入路径 `github.com/kagurazakayashi/EvernightLogin`。
@@ -135,3 +138,41 @@ document, err := login.OpenAPIDocument("/login") // /login 是路径前缀，可
 
 新增公开 API、错误码或权限键时，必须同步更新 GoDoc、本文相关段落与错误码手册；不允许
 只在代码里加而不写文档。
+
+## 7. 公开契约补充（步骤 244 阶段 A 登记）
+
+以下条目把此前只存在于开发报告/内部约定中的公开契约固化为文档；实现细节与完整边界仍以
+源码 GoDoc、[../embedding/README.md](../embedding/README.md) 与错误码手册为准。
+
+### 7.1 宿主来源限流必须使用可信来源（R10-13，步骤 208）
+
+`Runtime.PasswordReset()` 的 `Request`、`ValidateTokenWithSource`、`Complete` 都带
+`ClientIP` 字段。宿主必须传入从可信边界（连接地址或已配置可信代理链）解析出的**单一 IP
+字面量**：
+
+- 空字符串 → 使用共享的“无来源”有界限流桶；不会按客户端可控字符串无限分桶；
+- 原始 `X-Forwarded-For` 链、`unknown`、任意伪造字符串等非 IP 值 → `REQ_INVALID`；
+- 来源只用于有界限流，不是身份/授权依据；日志与审计不得写入完整 token、密码或找回链接，
+  排障用 `request_id` 关联。
+
+### 7.2 找回令牌预检查统一失败语义（R10-02，步骤 204）
+
+`PasswordReset().ValidateToken` / `ValidateTokenWithSource` 是非消费预检查（不消费令牌、
+不改请求状态）。**领域判断的所有失败统一返回 `CHALLENGE_INVALID`**：包括令牌不存在、过期、
+已消费/撤销、用途/目标不匹配、账户当前不可恢复等，避免公开入口泄露账户状态；调用前校验
+保持各自稳定码（非法请求编号/非法来源 → `REQ_INVALID`，来源限流 → `RATE_LIMITED`，服务
+未装配 → `CONFIG_INVALID`）。宿主不能依据错误码区分领域失败的具体原因；内部诊断使用返回
+错误的 `request_id` 关联服务端日志与审计。最终提交 `Complete` 会重新验证完整状态，不存在
+“预检查通过即必然完成”的捷径。
+
+### 7.3 已授权查询的“未找到”契约（步骤 207）
+
+公开 `app` 包对“已通过调用身份与权限检查、但目标记录不存在”提供独立语义（但不加入根包
+48 个错误码注册表）：
+
+- `app.NotFoundCode`（公开稳定字符串常量）、`app.ErrNotFound`、`app.NotFoundError`、
+  `app.IsNotFound(err)`；
+- 权限/范围检查严格先于查询：未授权调用者无论目标是否存在都得到 `ACCESS_DENIED` 等拒绝码，
+  不能用该“未找到”结果探测存在性；
+- 参数非法仍返回 `REQ_INVALID`；`NotFoundError` 公开字段只含固定资源类别与 `request_id`，
+  不回显用户名/邮箱等查询值；HTTP 层建议映射 404。

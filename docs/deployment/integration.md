@@ -247,3 +247,78 @@ go run ./examples/app-qr-login      # 已有：APP 扫网页二维码确认登�
   宿主无法直接导入。
 - 示例中的宿主边界适配器（如授权判定、近期认证信号）用于演示；生产必须接入真实实现，
   不能把示例适配器当作安全默认。
+
+## 11. 从根 README 迁移的接入速查（步骤 244 阶段 A）
+
+> 本节原文迁移自根 `README.md` §6（HTTP API 与 OAuth2/OIDC 接入），保证信息不丢失；根
+> README 将在步骤 244 阶段 B 收敛为入口页。相对链接已按本文件位置调整。协议契约细节仍以
+> 本文第 1～10 节为准。
+
+### 11.1 启用协议端点（原 README §6.1）
+
+```yaml
+protocol:
+  enabled: true
+  issuer: "https://login.example.com"
+```
+
+```bash
+login-server serve --config /etc/login/login.yaml \
+  --master-key-file /etc/login/secrets/master.key \
+  --enable-protocol --enable-admin-api
+```
+
+- `--enable-protocol`：OAuth/OIDC 协议端点；**默认关闭**，关闭时 404。
+- `--enable-admin-api`：管理 JSON API `/admin/v1`；默认关闭。
+- `--enable-managed-api`：业务托管 API `/api/managed/v1`；默认关闭。
+- `--enable-app-support`：应用受限客服 API `/api/app/v1/support`；默认关闭，且需协议端点。
+
+### 11.2 OAuth/OIDC 端点（原 README §6.2）
+
+启用后常用路径（以 `public_base_url` 为基址）：
+
+| 端点 | 路径 | 说明 |
+|---|---|---|
+| Discovery | `/.well-known/openid-configuration` | 只声明真实启用能力 |
+| JWKS | `/jwks` | 验签公钥 |
+| 授权 | `/oauth/authorize` | 授权码 + PKCE（S256 强制） |
+| 令牌 | `/oauth/token` | 授权码兑换、刷新轮换、客户端凭证 |
+| UserInfo | `/oauth/userinfo` | Bearer Access Token |
+| 撤销 | `/oauth/revoke` | RFC 7009 |
+| 状态查询 | `/oauth/introspect` | RFC 7662，需显式启用 |
+| 设备码 | `/oauth/device_authorization` | RFC 8628（步骤 192 已验收其已实现边界；真实第三方客户端未测） |
+| 扫码 | `/oauth/qr/...` | 步骤 193 已验收其已实现边界（真实手机相机扫码未测） |
+
+注意：设备码与扫码登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）
+已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）。默认关闭；Discovery 只声明实际
+能力。真实第三方客户端互操作、标准 OIDC 客户端联调未完成，不能按“已全部交付”对待。详见
+[../guide/login-and-oauth.md](../guide/login-and-oauth.md)。
+
+### 11.3 注册应用与获取客户端（原 README §6.3）
+
+使用管理后台 `/admin/applications`（或对应管理 API）创建应用，填写名称、客户端类型
+（public/confidential）、回调地址、允许的 grant/scope/audience，然后登记客户端凭证。应用
+创建后默认停用，需要启用后再接入。
+
+`curl` 检查 Discovery（先把 `<issuer>` 换成实际地址）：
+
+```bash
+curl -s https://login.example.com/.well-known/openid-configuration | jq
+curl -s https://login.example.com/jwks | jq
+```
+
+完整参数、PKCE、刷新轮换、撤销、audience/scope 规则见本文第 2～9 节。
+
+### 11.4 管理/托管/客服 API（原 README §6.4）
+
+- 管理 API：`/admin/v1`，启用 `--enable-admin-api`，使用管理会话/CSRF；适合运维自动化，
+  不应暴露给业务应用。
+- 托管 API：`/api/managed/v1`，启用 `--enable-managed-api`；只允许应用在受限操作/对象/字段
+  白名单内管理自己的资源，默认关闭。
+- 应用客服 API：`/api/app/v1/support`，启用 `--enable-app-support`，只允许应用客服用户创建
+  本应用工单，不能审批或执行恢复。
+
+OpenAPI 当前只包含最小健康/错误契约，不是完整业务 API 文档；业务接口以
+[managed-api.md](managed-api.md)、[app-support-api.md](app-support-api.md) 和源码公开
+契约为准。
+

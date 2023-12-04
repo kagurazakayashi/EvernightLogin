@@ -83,8 +83,8 @@ if not exist %TEMP%\login-begin\data mkdir %TEMP%\login-begin\data
 
 - 第 1 条退出码 1，错误码 `DATABASE_NOT_INITIALIZED`，明确说明“不会创建新数据库”。
 - 不带 `--confirm MIGRATE` 的 `migrate apply` 退出码 2，错误码 `USAGE_INVALID`。
-- 带确认的 `migrate apply` 退出码 0，`data.applied` 列出 `0001`…`0049` 共 49 个迁移。
-- 复查 `migrate status`：`applied_count=49`、`applied_version="0049"`、`current=true`。
+- 带确认的 `migrate apply` 退出码 0，`data.applied` 列出 `0001`…`0052` 共 52 个迁移。
+- 复查 `migrate status`：`applied_count=52`、`applied_version="0052"`、`current=true`。
 
 迁移只作用于临时库；已应用的迁移不可改写，真实部署中迁移前必须先备份（见
 [backup-and-restore.md](backup-and-restore.md)）。

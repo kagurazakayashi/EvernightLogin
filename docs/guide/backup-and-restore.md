@@ -195,3 +195,26 @@ backup.Recovery()    // 仅 LocalAdmin 的受控本地恢复/维护
 - **旧 Access Token**：签名密钥记录与私钥已被删除，本服务对旧令牌的验签会失败。依赖方客户端可能仍缓存恢复前的 JWKS 公钥，但缓存只有公钥、不能伪造令牌；依赖方应在恢复后主动刷新 JWKS，并按令牌自然过期窗口停止接受旧 `kid`。不要仅依赖“客户端缓存已清空”来判定安全，服务端拒绝依据是密钥记录不存在。
 - **恢复失败或切换后回滚**：维护状态与恢复代际/库外审计日志位于数据库之外的独立状态目录，回退数据库本身不会让恢复流程被视为完成，也不会自动对外放行；只有再次成功恢复（重新执行凭据失效）才退出维护。恢复前请先验证库外状态目录与日志文件完整，缺失时按 fail-closed 拒绝（见 `TestOutsideStateAndJournalAnchorsFailClosed`）。
 - **审计合并失败**：恢复保持维护状态并记录失败；修复审计存储后重试合并成功才完成恢复，不会出现“凭证已换但审计缺失”的静默成功。
+
+## 7. 常用命令速查（迁移自根 README §5.3，步骤 244 阶段 A）
+
+> 本节原文迁移自根 `README.md` §5.3，保证信息不丢失；根 README 将在步骤 244 阶段 B 收敛为
+> 入口页。命令的真实参数、DACL/路径安全与失败语义见本文第 3～6 节。
+
+```bash
+# 创建加密热备份（SQLite 在线快照；主密钥与备份分开）
+login-backup create --database /var/lib/login/login.db \
+  --key-file /etc/login/secrets/master.key \
+  --output /var/backups/login --operator local-admin
+
+# 校验/查看/导出
+login-backup verify --file /var/backups/login/<backup>.elnbak --key-file /etc/login/secrets/master.key
+login-backup info --file /var/backups/login/<backup>.elnbak
+login-backup list --file /var/backups/login/<backup>.elnbak --key-file /etc/login/secrets/master.key
+login-backup preview --file ... --key-file ... --table users --limit 20
+login-backup export --file ... --key-file ... --table users --format json --output /tmp/users.json
+```
+
+备份与恢复流程、DACL/路径安全、旧凭证失效边界见本文第 3～6 节。恢复必须在维护模式/停服下
+执行，失败默认保持维护。
+
