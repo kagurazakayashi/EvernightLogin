@@ -1,0 +1,37 @@
+{{define "page-title"}}配置设置{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.settings}}
+<p class="ln-meta">只显示脱敏配置值。普通管理员只能修改常规运行设置；受信/root 字段、秘密字段与对象列表字段不可在此修改。保存后热更新字段需宿主重新加载，重启字段需重启进程。</p>
+<dl class="ln-stats-metrics">
+  <div class="ln-stats-metric"><dt>磁盘版本</dt><dd>{{.Version}}</dd></div>
+  <div class="ln-stats-metric"><dt>当前有效版本</dt><dd>{{.EffectiveVersion}}</dd></div>
+  <div class="ln-stats-metric"><dt>待宿主重载</dt><dd>{{if .HostReloadNeeded}}是{{else}}否{{end}}</dd></div>
+</dl>
+{{if .Note}}<p>{{.Note}}</p>{{end}}
+{{if .PendingRestart}}<p>待重启字段：{{range .PendingRestart}}<code>{{.}}</code> {{end}}</p>{{end}}
+<form method="post" action="{{route "admin.settings_update"}}">
+  {{csrf_field}}
+  <input type="hidden" name="version" value="{{.Version}}">
+  <table class="ln-table">
+    <caption>配置字段（秘密值固定遮盖，仅 root/受信字段对受信身份可写）</caption>
+    <thead><tr><th scope="col">字段</th><th scope="col">当前有效值</th><th scope="col">磁盘值</th><th scope="col">分类</th><th scope="col">可写</th></tr></thead>
+    <tbody>
+    {{range .Fields}}
+    <tr>
+      <td><code>{{.Field}}</code></td>
+      <td>{{if .Writable}}<input type="text" name="field.{{.Field}}" value="{{.Value}}" maxlength="4096">{{else}}{{.Value}}{{end}}</td>
+      <td>{{.DiskValue}}</td>
+      <td>{{.Class}}{{if .PendingRestart}}（待重载）{{end}}</td>
+      <td>{{if .Secret}}秘密遮盖{{else if .RootOnly}}仅 root/受信{{else if .Writable}}可写{{else}}不可写{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <label>变更原因 <input type="text" name="reason" maxlength="200" placeholder="可选，用于审计关联"></label>
+  <button type="submit" class="ln-button">保存配置</button>
+</form>
+{{end}}
+{{if eq .Data.status "saved"}}{{template "component.banner" (dict "tone" "success" "message" "配置已原子保存；请按分类重新加载或重启后生效。")}}{{end}}
+{{if eq .Data.status "unchanged"}}{{template "component.banner" (dict "tone" "info" "message" "没有字段变化。")}}{{end}}
+{{end}}

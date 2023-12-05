@@ -86,6 +86,11 @@
 //	POST /notifications/test                     本地捕获 notifier：执行前核验 LocalCapture/DeliveryMode=local_capture；reauth + 真实审计 + 确认；禁止真实外发；未装配或非本地捕获 503 NOTIFICATION_TEST_DISABLED
 //	GET  /sessions                               session.AdminListSessions：强认证管理会话 + sessions.revoke 范围授权 + root/受保护目标拒绝 + 真实读取审计（只返回公开摘要，不含秘密）
 //	POST /sessions/revoke                        session.AdminRevoke：session.revoke.other 敏感策略 + sessions.revoke 范围授权 + 确认/理由 + 原子撤销 + 真实操作者审计
+//	GET  /settings                                settings.Fields：settings.manage + 真实 system 范围；只返回脱敏字段/版本/待重载
+//	GET  /settings/status                         settings.Status：settings.manage；磁盘/有效版本、待重启与最近错误
+//	POST /settings/validate                       settings.Validate：settings.manage；不落盘，root-only 字段按真实身份拒绝
+//	PUT  /settings                                settings.Update：settings.manage + 原子写入 + 版本冲突 + 审计；root-only 字段按真实 root 判定
+//	POST /settings/sensitive-policy/restore       policy.Restore：仅真实 root 用户 + 再次认证 + 关键审计 + 版本冲突
 //
 // 凭据、路径与内部错误不进入响应：响应只包含领域服务公开视图的白名单字段，
 // 下载端点由本包打开受控文件并流式输出字节，绝不回显宿主路径。

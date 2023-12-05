@@ -231,3 +231,50 @@ secrets:
 | `CONFIG_INVALID` | 字段越界或组合冲突 | 按错误消息中的字段名逐项修正；不要打印秘密值排障 |
 
 配置错误统一使用稳定错误码 `CONFIG_INVALID`（见 [troubleshooting.md](troubleshooting.md)）。
+
+## 7. 公开 Go 设置接口（步骤 232）
+
+宿主可经 `Runtime.Settings()` 使用受认证、按字段白名单的配置查询/校验/变更/状态：
+
+```go
+settings := runtime.Settings()
+view, _ := settings.Fields(ctx, app.SettingsFieldsRequest{Caller: runtime.LocalAdmin()})
+result, _ := settings.Update(ctx, app.SettingsUpdateRequest{
+    Caller: runtime.LocalAdmin(), ExpectedVersion: view.Version,
+    Changes: map[string]string{"logging.level": "debug"}, Reason: "调整日志级别",
+})
+status, _ := settings.Status(ctx, app.SettingsStatusRequest{Caller: runtime.LocalAdmin()})
+```
+
+语义与边界：
+
+- 只管理 `Options.ConfigPath` 指向的 YAML 文件；内联 `Options.Config` 返回 `CONFIG_INVALID`，
+  不提供“内存覆盖一切”的后门。字段元数据来自 `config.Fields()`，未知/秘密/对象列表字段
+  拒绝公开写入。
+- 字段分权（步骤 232 M1 收紧）：
+  - 普通 `settings.manage` 仅可写 `logging.level`、`logging.format`、
+    `server.shutdown_timeout_seconds` 等非安全运行设置；
+  - root/受信字段（普通设置权限修改一律 `ACCESS_DENIED`）：`registration.*` 全部、
+    `protocol.*`、`app_qr_login.*`、`passkey.*`、`server.public_base_url`/`path_prefix`/
+    监听地址/Host/可信代理/TLS 等 `server.*`（关闭超时除外）、`database.*`、`secrets.*`、
+    `mail.*` 全部、`registration.default_role_ids`；
+  - **未知字段默认 root（fail-closed）**；秘密字段不可通过公开接口写入。
+  秘密字段（`secrets.*`、`mail.smtp.password`）默认显示 `[REDACTED]/[UNSET]`，公开接口
+  不接受任何秘密值（包括遮盖占位符），秘密来源只能由本地 `loginctl config set-secret` 修改。
+- 写入使用临时文件+fsync+rename 原子替换，`ExpectedVersion` 必须是最近读取的磁盘
+  SHA-256 版本，不匹配返回 `CONFLICT`；写后重新严格加载，校验/审计失败恢复旧文件并保留
+  最后有效配置。设置变更写真实安全审计（不含值/秘密/路径），审计不可用 `AUDIT_WRITE_FAILED`。
+- 明确区分磁盘值（`Fields().DiskValue`）、当前有效值（`Value`，进程已装配配置）与
+  `Status().PendingHot/PendingRestart`。当前运行时不会自动热重载：热更新字段也标记为
+  需宿主重新加载，不虚报已生效。
+- root 专属敏感操作策略默认值恢复走真实 policy 服务（真实 root 用户会话+再次认证+关键
+  审计+版本冲突），普通 `settings.manage` 无法获得该能力；本地 CLI 的 `config show/get/
+  validate/diff/set/set-secret` 继续作为受控本地入口，`set/set-secret` 支持可选
+  `--expected-version` 做并发版本冲突检查。
+- HTTP：`GET /admin/v1/settings`、`GET /admin/v1/settings/status`、`POST /admin/v1/settings/validate`、
+  `PUT /admin/v1/settings`、`POST /admin/v1/settings/sensitive-policy/restore`（仅真实 root + 再次认证）。
+  路由复用管理 API 的会话/CSRF/envelope，每请求重新判定 settings.manage 与真实 root/受信身份；
+  未配置可写 YAML 时不注册（404）。管理 API 文档见 `internal/adminapi/doc.go` 端点表。
+- 页面：`/admin/settings` 设置页（可选装配；未提供后端时 404）显示脱敏字段、字段分权与
+  “待宿主重载/待重启”提示，保存走同一 `internal/settings` 核心与同一 settings.manage 判定。
+  秘密字段固定遮盖且页面不可提交。

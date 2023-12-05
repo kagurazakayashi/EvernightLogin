@@ -337,6 +337,11 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	}
 	webOptions.PageAdmin = &login.UIPageAdminOptions{Backend: adminAdapter,
 		Diagnostics: &login.UIPageAdminDiagnosticsOptions{Backend: adminAdapter}}
+	if settingsBackend, settingsErr := newSettingsSettingsPageBackend(deps, managed); settingsErr != nil {
+		return nil, fmt.Errorf("构造配置设置页适配器失败: %w", settingsErr)
+	} else if settingsBackend != nil {
+		webOptions.PageAdmin.Settings = &login.UIPageAdminSettingsOptions{Backend: settingsBackend}
+	}
 	rbacAdapter, rbacErr := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
 		Roles: managed.Role, Permissions: managed.Permission,
 		Access: managed.Authz, Delegations: managed.Delegation,

@@ -28,6 +28,8 @@ type UIPageAdminOptions struct {
 	Backend UIAdminBackend
 	// Diagnostics 是可选的运行诊断页面入口；nil 时不注册该页面（404）。
 	Diagnostics *UIPageAdminDiagnosticsOptions
+	// Settings 是可选的配置设置页面入口；nil 时不注册该页面（404）。
+	Settings *UIPageAdminSettingsOptions
 }
 
 // UIAdminBackend 是管理页面调用真实管理服务的最小契约；适配器负责可信 Caller、
@@ -345,6 +347,15 @@ func newPageAdminPages(options UIPageAdminOptions) (*pageAdminPages, error) {
 			Access: UIAccessManagement, Layout: "layout/base",
 			Template: "page/admin/diagnostics"})
 	}
+	if options.Settings != nil && !isNilUIValue(options.Settings.Backend) {
+		routes = append(routes,
+			UIRoute{Name: "admin.settings", Method: http.MethodGet,
+				Path: "/admin/settings", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/settings"},
+			UIRoute{Name: "admin.settings_update", Method: http.MethodPost,
+				Path: "/admin/settings", Access: UIAccessManagement,
+				Layout: "layout/base", Template: "page/admin/settings"})
+	}
 	for _, route := range routes {
 		pages.routes = append(pages.routes, route)
 		pages.handlers[route.Name] = handler
@@ -406,6 +417,8 @@ func (h *adminPageHandlers) HandlePage(ctx context.Context, request *http.Reques
 		return h.userBatchReport(ctx, request, page)
 	case "admin.diagnostics":
 		return h.diagnostics(ctx, request, page)
+	case "admin.settings", "admin.settings_update":
+		return h.settings(ctx, request, page)
 	default:
 		return UIPageOutcome{}, nil
 	}

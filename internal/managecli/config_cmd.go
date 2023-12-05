@@ -14,6 +14,8 @@ import (
 	loginconfig "github.com/kagurazakayashi/EvernightLogin/config"
 
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -388,13 +390,14 @@ type configWriteOutput struct {
 	Backup       string `json:"backup,omitempty"`
 	File         string `json:"file"`
 	NeedsRestart bool   `json:"needs_restart"`
+	Version      string `json:"version,omitempty"`
 }
 
 // runConfigSet 实现 config set 与 config set-secret。secretOnly 为 true 时只允许
 // 秘密字段并写入来源引用；否则拒绝秘密字段。
 func (r *runner) runConfigSet(args []string, secretOnly bool) int {
 	defs := []flagDef{{name: "file", value: true}, {name: "json"},
-		{name: "dry-run"}}
+		{name: "dry-run"}, {name: "expected-version", value: true}}
 	if secretOnly {
 		defs = append(defs, flagDef{name: "source", value: true})
 	}
@@ -433,6 +436,20 @@ func (r *runner) runConfigSet(args []string, secretOnly bool) int {
 	absoluteFile, exit := r.configWritableFile(file)
 	if exit != ExitOK {
 		return exit
+	}
+	// 可选版本冲突检查：--expected-version 必须等于当前文件 SHA-256；不提供则不检查
+	// （本地操作者可控入口保持既有兼容）。版本只在探测/写入后根据真实文件计算。
+	currentVersion := ""
+	if data, readErr := os.ReadFile(absoluteFile); readErr == nil {
+		sum := sha256.Sum256(data)
+		currentVersion = hex.EncodeToString(sum[:])
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return r.fail("CONFIG_FILE_INVALID", ExitError, "无法读取配置文件版本", nil)
+	}
+	expectedVersion := strings.TrimSpace(stringFlag(values, "expected-version"))
+	if expectedVersion != "" && expectedVersion != currentVersion {
+		return r.fail("CONFIG_VERSION_CONFLICT", ExitError,
+			"配置已被其他操作修改，请重新读取版本后重试", nil)
 	}
 	var valueNode *yaml.Node
 	var renderedValue string
@@ -505,6 +522,10 @@ func (r *runner) runConfigSet(args []string, secretOnly bool) int {
 		}
 		output.Written = true
 		output.Backup = backup
+		if data, readErr := os.ReadFile(absoluteFile); readErr == nil {
+			sum := sha256.Sum256(data)
+			output.Version = hex.EncodeToString(sum[:])
+		}
 	}
 	if r.json {
 		return r.succeed(output)

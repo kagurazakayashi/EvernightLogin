@@ -4,6 +4,8 @@ package managecli
 // 原子写入与备份、秘密字段拒绝明文、秘密来源引用写入、差异分类与校验失败。
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,5 +255,39 @@ func TestConfigDiffClassifiesChanges(t *testing.T) {
 	}
 	if len(restart) != 1 || restart[0] != "database.wal" {
 		t.Fatalf("需重启差异 = %v", restart)
+	}
+}
+
+// TestConfigSetExpectedVersionConflict 验证 CLI 可选版本冲突检查与写入后版本输出。
+func TestConfigSetExpectedVersionConflict(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "login.yaml")
+	original := "logging:\n  level: info\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, exit := runCLI(t, "config", "set", "logging.level", "debug",
+		"--file", path, "--expected-version", strings.Repeat("0", 64))
+	if exit == ExitOK {
+		t.Fatal("旧版本号写入必须失败")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != original {
+		t.Fatalf("版本冲突不得修改文件: %s err=%v", content, err)
+	}
+	digest := sha256.Sum256(content)
+	version := hex.EncodeToString(digest[:])
+	stdout, stderr, exit := runCLI(t, "config", "set", "logging.level", "debug",
+		"--file", path, "--expected-version", version, "--json")
+	if exit != ExitOK {
+		t.Fatalf("正确版本写入失败: exit=%d stderr=%s", exit, stderr)
+	}
+	data := decodeEnvelope(t, stdout)["data"].(map[string]any)
+	if data["written"] != true || data["version"] == "" {
+		t.Fatalf("写入结果缺少新版本: %v", data)
+	}
+	updated, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(updated), "level: debug") {
+		t.Fatalf("写入后内容异常: %s err=%v", updated, err)
 	}
 }

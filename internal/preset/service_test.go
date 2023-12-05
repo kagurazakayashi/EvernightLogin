@@ -293,10 +293,9 @@ func TestCatalogIntegrity(t *testing.T) {
 	// 未实现的权限必须显式标记，不能伪装成功。逐键核对代码后：权限键对应的真实
 	// 服务端执行路径已实现的标 true；下列键没有真实执行路径，必须保持 false 且不
 	// 授予任何预设角色：
-	//   settings.manage（仍无服务端执行路径）；diagnostics.read 已在步骤 233 接通。
-	notImplemented := map[string]struct{}{
-		"settings.manage": {},
-	}
+	//   settings.manage 已在步骤 232 接通：公开 Go 门面、管理 API 设置路由与管理页面
+	//   共用真实执行路径；diagnostics.read 已在步骤 233 接通。
+	notImplemented := map[string]struct{}{}
 	for _, definition := range catalog.Permissions {
 		want := true
 		if _, missing := notImplemented[definition.Key]; missing {

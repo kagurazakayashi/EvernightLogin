@@ -390,7 +390,9 @@ func catalogV1() *Catalog {
 //   - sessions.revoke：internal/session.AdminRevoke 有权限授权器实现，但生产装配未注入
 //     ScopeAuthorizer，`loginctl session admin-revoke` 明确返回强认证不可用；当前只有
 //     本人会话撤销（self.sessions.manage）可用。
-//   - settings.manage：没有对应的服务端执行路径，保持 false 且不授予预设角色。
+//   - settings.manage 已接通：公开 Go 门面 Runtime.Settings、管理 API 设置路由与管理页面
+//     共用 internal/settings；普通管理员仅可改常规字段，root-only 字段/秘密/敏感操作策略
+//     默认值恢复仍拒绝或要求真实 root+再次认证。
 //   - diagnostics.read 已在步骤 233 接通：公开 Go 门面（Runtime.Diagnostics）、
 //     管理 API（GET /admin/v1/diagnostics 等）与管理页面均以该键在明确 system/应用
 //     范围重新判定；只返回脱敏诊断，默认授予系统管理员预设角色。
@@ -661,7 +663,7 @@ func catalogPermissionsV1() []PermissionDefinition {
 		{
 			Key: "settings.manage", Name: "修改常规设置", Summary: "修改常规运行设置。",
 			Scope: "仅常规设置，不包含敏感策略。", Limits: "不能修改敏感操作规则、主密钥或未脱敏秘密。",
-			Implemented: false,
+			Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "diagnostics.read", Name: "查看运行诊断", Summary: "查看脱敏的运行诊断信息。",
@@ -690,7 +692,7 @@ func catalogRolesV1() []RoleTemplate {
 				"applications.credentials.manage", "applications.members.manage",
 				"sessions.revoke", "audit.read", "audit.export", "reports.read",
 				"reports.generate", "reports.export", "reports.schedule.manage",
-				"reports.cleanup", "diagnostics.read",
+				"reports.cleanup", "diagnostics.read", "settings.manage",
 				"backups.create", "backups.read", "backups.cancel",
 				"backups.retention", "backups.cleanup",
 			},
