@@ -24,13 +24,15 @@
 <p class="ln-meta">{{t "page.admin.users.search_unavailable"}} {{t "page.admin.users.total_unknown"}}</p>
 <table class="ln-table">
   <caption>{{t "page.admin.users.title"}}</caption>
-  <thead><tr><th>{{t "common.label.username"}}</th><th>{{t "common.label.display_name"}}</th><th>{{t "common.label.status"}}</th><th>{{t "common.label.created"}}</th><th>{{t "common.label.updated"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
+  <thead><tr><th>{{t "common.label.username"}}</th><th>{{t "common.label.display_name"}}</th><th>{{t "common.label.status"}}</th><th>{{t "page.admin.users.validity_expiry_header"}}</th><th>{{t "page.admin.users.validity_status_header"}}</th><th>{{t "common.label.created"}}</th><th>{{t "common.label.updated"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
   <tbody>{{range .Data.users}}<tr>
     <td><a href="{{route "admin.user_detail"}}?user_id={{.UserID}}">{{.Username}}</a></td>
     <td>{{.Nickname}}</td><td>{{.Status}}</td>
+    <td>{{if .ValidUntil}}{{.ValidUntil}}{{else}}{{t "page.admin.users.validity_unlimited"}}{{end}}</td>
+    <td>{{if eq .Availability "available"}}{{t "page.admin.users.validity_available"}}{{else if eq .Availability "not_yet_valid"}}{{t "page.admin.users.validity_not_yet_valid"}}{{else if eq .Availability "expired"}}<span class="ln-field__error">{{t "page.admin.users.validity_expired"}}</span>{{else if eq .Availability "disabled"}}{{t "page.admin.users.validity_disabled"}}{{else if eq .Availability "pending"}}{{t "page.admin.users.validity_pending"}}{{else if eq .Availability "pending_delete"}}{{t "page.admin.users.validity_pending_delete"}}{{else}}{{t "page.admin.users.validity_unknown"}}{{end}}</td>
     <td>{{format_time .CreatedAt "UTC"}}</td><td>{{format_time .UpdatedAt "UTC"}}</td>
     <td><a href="{{route "admin.user_detail"}}?user_id={{.UserID}}">{{t "page.admin.users.open"}}</a></td>
-  </tr>{{else}}<tr><td colspan="6">{{t "page.admin.users.empty"}}</td></tr>{{end}}</tbody>
+  </tr>{{else}}<tr><td colspan="8">{{t "page.admin.users.empty"}}</td></tr>{{end}}</tbody>
 </table>
 <p><a class="ln-button" href="{{route "admin.user_create"}}">{{t "page.admin.users.create"}}</a></p>
 {{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.users"}}?status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&desc={{if .Data.query.Descending}}1{{else}}0{{end}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}

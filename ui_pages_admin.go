@@ -30,6 +30,8 @@ type UIPageAdminOptions struct {
 	Diagnostics *UIPageAdminDiagnosticsOptions
 	// Settings 是可选的配置设置页面入口；nil 时不注册该页面（404）。
 	Settings *UIPageAdminSettingsOptions
+	// Validity 是可选的账户有效期页面后端；nil 时不显示有效期设置入口。
+	Validity UIAdminUserValidityBackend
 }
 
 // UIAdminBackend 是管理页面调用真实管理服务的最小契约；适配器负责可信 Caller、
@@ -94,8 +96,14 @@ type UIAdminUserView struct {
 	Phone      string
 	Status     string
 	RowVersion int64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// ValidFrom/ValidUntil 是全局账户有效期 UTC 半开区间；nil 表示该端不限制。
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+	// Availability 是请求当刻计算出的可用性原因（available/not_yet_valid/expired/
+	// pending/disabled/pending_delete）；列表展示使用。
+	Availability string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // UIAdminCreateUser 是创建用户白名单。
@@ -356,6 +364,12 @@ func newPageAdminPages(options UIPageAdminOptions) (*pageAdminPages, error) {
 				Path: "/admin/settings", Access: UIAccessManagement,
 				Layout: "layout/base", Template: "page/admin/settings"})
 	}
+	if !isNilUIValue(options.Validity) {
+		routes = append(routes, UIRoute{Name: "admin.user_validity",
+			Method: http.MethodPost, Path: "/admin/users/validity",
+			Access: UIAccessManagement, Layout: "layout/base",
+			Template: "page/admin/user_detail"})
+	}
 	for _, route := range routes {
 		pages.routes = append(pages.routes, route)
 		pages.handlers[route.Name] = handler
@@ -419,6 +433,8 @@ func (h *adminPageHandlers) HandlePage(ctx context.Context, request *http.Reques
 		return h.diagnostics(ctx, request, page)
 	case "admin.settings", "admin.settings_update":
 		return h.settings(ctx, request, page)
+	case "admin.user_validity":
+		return h.userValidity(ctx, request, page)
 	default:
 		return UIPageOutcome{}, nil
 	}
@@ -490,8 +506,16 @@ func (h *adminPageHandlers) userDetail(ctx context.Context, request *http.Reques
 	if err != nil {
 		return adminErrorOutcome(err, nil, "page.admin.users.load_failed"), nil
 	}
-	return UIPageOutcome{Data: map[string]any{"user": view,
-		"status": request.URL.Query().Get("status")}}, nil
+	data := map[string]any{"user": view, "status": request.URL.Query().Get("status")}
+	if !isNilUIValue(h.pages.options.Validity) {
+		validity, validityErr := h.pages.options.Validity.GetUserValidity(ctx,
+			page.Session.UserID, userID)
+		if validityErr != nil {
+			return adminErrorOutcome(validityErr, nil, "page.admin.users.load_failed"), nil
+		}
+		data["validity"] = validity
+	}
+	return UIPageOutcome{Data: data}, nil
 }
 
 // userUpdate 编辑白名单资料（ExpectedRowVersion）。
@@ -859,30 +883,33 @@ func adminErrorOutcome(err error, data any, fallbackKey string) UIPageOutcome {
 
 // builtinAdminMessages 是管理页摘要使用的中文基线（模板静态文案仍走 i18n 键）。
 var builtinAdminMessages = map[string]string{
-	"page.admin.common.forbidden":               "你没有执行该管理操作的权限，或管理强认证已过期",
-	"page.admin.common.reauth_required":         "该管理操作需要重新完成强认证，请按提示重新验证",
-	"page.admin.common.conflict":                "数据已被其他操作修改，请重新读取后再试",
-	"page.admin.users.load_failed":              "无法读取用户列表，请稍后重试",
-	"page.admin.users.invalid":                  "用户请求参数无效",
-	"page.admin.users.create_failed":            "创建用户未完成，请检查输入",
-	"page.admin.users.update_failed":            "资料保存失败，请重新读取后再试",
-	"page.admin.users.state_failed":             "状态操作未完成，请重新读取后再试",
-	"page.admin.users.delete_preview_failed":    "无法读取删除影响，请稍后重试",
-	"page.admin.users.delete_confirm_required":  "请先确认删除影响",
-	"page.admin.users.delete_failed":            "删除未完成，请重新读取预览后再试",
-	"page.admin.reviews.load_failed":            "无法读取审核列表，请稍后重试",
-	"page.admin.reviews.invalid":                "审核请求参数无效",
-	"page.admin.reviews.reason_required":        "请填写审核理由",
-	"page.admin.reviews.decide_failed":          "审核未完成，请重新读取当前状态后再试",
-	"page.admin.groups.load_failed":             "无法读取用户组，请稍后重试",
-	"page.admin.groups.invalid":                 "用户组请求参数无效",
-	"page.admin.groups.create_failed":           "创建用户组未完成",
-	"page.admin.groups.update_failed":           "用户组更新未完成",
-	"page.admin.groups.members_invalid":         "成员请求参数无效（需 1～12 个稳定用户 ID）",
-	"page.admin.groups.members_failed":          "成员变更未完成",
-	"page.admin.groups.members_load_failed":     "无法读取成员列表",
-	"page.admin.groups.delete_confirm_required": "请先确认删除影响",
-	"page.admin.groups.delete_failed":           "删除用户组未完成",
+	"page.admin.common.forbidden":                "你没有执行该管理操作的权限，或管理强认证已过期",
+	"page.admin.common.reauth_required":          "该管理操作需要重新完成强认证，请按提示重新验证",
+	"page.admin.common.conflict":                 "数据已被其他操作修改，请重新读取后再试",
+	"page.admin.users.load_failed":               "无法读取用户列表，请稍后重试",
+	"page.admin.users.invalid":                   "用户请求参数无效",
+	"page.admin.users.create_failed":             "创建用户未完成，请检查输入",
+	"page.admin.users.update_failed":             "资料保存失败，请重新读取后再试",
+	"page.admin.users.state_failed":              "状态操作未完成，请重新读取后再试",
+	"page.admin.users.validity_failed":           "有效期操作未完成，请重新读取后再试",
+	"page.admin.users.validity_invalid":          "有效期参数无效：时间需为 UTC，且到期必须晚于可用起点",
+	"page.admin.users.validity_confirm_required": "请填写变更理由并勾选确认后再提交",
+	"page.admin.users.delete_preview_failed":     "无法读取删除影响，请稍后重试",
+	"page.admin.users.delete_confirm_required":   "请先确认删除影响",
+	"page.admin.users.delete_failed":             "删除未完成，请重新读取预览后再试",
+	"page.admin.reviews.load_failed":             "无法读取审核列表，请稍后重试",
+	"page.admin.reviews.invalid":                 "审核请求参数无效",
+	"page.admin.reviews.reason_required":         "请填写审核理由",
+	"page.admin.reviews.decide_failed":           "审核未完成，请重新读取当前状态后再试",
+	"page.admin.groups.load_failed":              "无法读取用户组，请稍后重试",
+	"page.admin.groups.invalid":                  "用户组请求参数无效",
+	"page.admin.groups.create_failed":            "创建用户组未完成",
+	"page.admin.groups.update_failed":            "用户组更新未完成",
+	"page.admin.groups.members_invalid":          "成员请求参数无效（需 1～12 个稳定用户 ID）",
+	"page.admin.groups.members_failed":           "成员变更未完成",
+	"page.admin.groups.members_load_failed":      "无法读取成员列表",
+	"page.admin.groups.delete_confirm_required":  "请先确认删除影响",
+	"page.admin.groups.delete_failed":            "删除用户组未完成",
 }
 
 func init() {

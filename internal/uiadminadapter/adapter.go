@@ -15,9 +15,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/diag"
 	"github.com/kagurazakayashi/EvernightLogin/internal/group"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
@@ -38,7 +40,11 @@ type Options struct {
 	// Diagnostics 是可选的脱敏运行诊断收集器；nil 时诊断页面返回不可用（不伪造
 	// 数据，也不越权读取）。
 	Diagnostics *diag.Collector
-	Logger      *slog.Logger
+	// Validity 复用同一账户服务（users.read/users.update）与审计；页面与 234
+	// 管理 API 使用相同授权判定。
+	Now    func() time.Time
+	Audit  *audit.Recorder
+	Logger *slog.Logger
 }
 
 // Adapter 实现 login.UIAdminBackend。
@@ -54,6 +60,9 @@ func New(options Options) (*Adapter, error) {
 	}
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if options.Now == nil {
+		options.Now = time.Now
 	}
 	return &Adapter{opts: options}, nil
 }
@@ -111,7 +120,7 @@ func (a *Adapter) ListUsers(ctx context.Context, adminUserID string,
 	page := login.UIAdminUserPage{HasMore: result.HasMore,
 		Users: make([]login.UIAdminUserView, 0, len(result.Users))}
 	for _, user := range result.Users {
-		page.Users = append(page.Users, toAdminUser(user))
+		page.Users = append(page.Users, a.toAdminUser(user))
 	}
 	return page, nil
 }
@@ -132,7 +141,7 @@ func (a *Adapter) CreateUser(ctx context.Context, adminUserID string,
 	if err != nil {
 		return login.UIAdminUserView{}, mapAccountError(err)
 	}
-	return toAdminUser(user), nil
+	return a.toAdminUser(user), nil
 }
 
 // GetUser 读取目标用户（服务端数据范围判定）。
@@ -152,7 +161,7 @@ func (a *Adapter) GetUser(ctx context.Context, adminUserID string,
 	if err != nil {
 		return login.UIAdminUserView{}, mapAccountError(err)
 	}
-	return toAdminUser(user), nil
+	return a.toAdminUser(user), nil
 }
 
 // UpdateUser 修改白名单资料（行版本条件；不含认证/角色字段）。
@@ -177,7 +186,7 @@ func (a *Adapter) UpdateUser(ctx context.Context, adminUserID, userID string,
 	if err != nil {
 		return login.UIAdminUserView{}, mapProfileError(err)
 	}
-	return toAdminUser(profileToAccount(updated)), nil
+	return a.toAdminUser(profileToAccount(updated)), nil
 }
 
 // SetUserState 执行禁用/启用/请求删除。
@@ -206,7 +215,7 @@ func (a *Adapter) SetUserState(ctx context.Context, adminUserID, userID, action 
 	if err != nil {
 		return login.UIAdminUserView{}, false, mapAccountError(err)
 	}
-	return toAdminUser(result.User), result.Changed, nil
+	return a.toAdminUser(result.User), result.Changed, nil
 }
 
 // PreviewDeletion 读取真实删除影响快照。
@@ -495,11 +504,17 @@ func (a *Adapter) mutateMembers(ctx context.Context, adminUserID, groupID string
 
 // ===== 映射 =====
 
-func toAdminUser(user account.User) login.UIAdminUserView {
+func (a *Adapter) toAdminUser(user account.User) login.UIAdminUserView {
+	now := time.Now
+	if a != nil && a.opts.Now != nil {
+		now = a.opts.Now
+	}
+	_, reason := user.AvailabilityAt(now().UTC(), false)
 	return login.UIAdminUserView{UserID: user.ID, Username: user.Username,
 		Nickname: user.Nickname, Biography: user.Biography, Language: user.Language,
 		Timezone: user.Timezone, Status: string(user.Status), RowVersion: user.RowVersion,
-		CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt}
+		ValidFrom: user.ValidFrom, ValidUntil: user.ValidUntil,
+		Availability: string(reason), CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt}
 }
 
 // profileToAccount 把资料快照转换为管理页用户视图使用的账户结构。
@@ -540,8 +555,11 @@ func mapAccountError(err error) error {
 	switch {
 	case errors.Is(err, account.ErrAccessDenied), errors.Is(err, account.ErrProtectedUser):
 		return adminErr("ACCESS_DENIED")
-	case errors.Is(err, account.ErrInvalidRequest), errors.Is(err, account.ErrInvalidTransition):
+	case errors.Is(err, account.ErrInvalidRequest), errors.Is(err, account.ErrInvalidTransition),
+		errors.Is(err, account.ErrValidityInvalid):
 		return adminErr("REQ_INVALID")
+	case errors.Is(err, account.ErrStateConflict):
+		return adminErr("CONFLICT")
 	case errors.Is(err, account.ErrUsernameTaken):
 		return adminErr("CONFLICT")
 	case errors.Is(err, account.ErrUserNotFound):

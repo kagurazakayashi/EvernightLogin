@@ -11,6 +11,38 @@
   <dt>{{t "common.label.username"}}</dt><dd><code>{{.Data.user.Username}}</code></dd>
   <dt>{{t "common.label.status"}}</dt><dd>{{.Data.user.Status}}</dd>
 </dl>
+{{with .Data.validity}}
+<h2>{{t "page.admin.users.validity_title"}}</h2>
+<p class="ln-meta">{{t "page.admin.users.validity_scope_hint"}}</p>
+<dl>
+  <dt>{{t "common.label.status"}}</dt><dd>{{.Status}}</dd>
+  <dt>{{t "page.admin.users.validity_current"}}</dt><dd>{{if eq .Reason "available"}}{{t "page.admin.users.validity_available"}}{{else if eq .Reason "not_yet_valid"}}{{t "page.admin.users.validity_not_yet_valid"}}{{else if eq .Reason "expired"}}<span class="ln-field__error">{{t "page.admin.users.validity_expired"}}</span>{{else if eq .Reason "disabled"}}{{t "page.admin.users.validity_disabled"}}{{else if eq .Reason "pending"}}{{t "page.admin.users.validity_pending"}}{{else if eq .Reason "pending_delete"}}{{t "page.admin.users.validity_pending_delete"}}{{else}}{{t "page.admin.users.validity_unknown"}}{{end}}</dd>
+  <dt>{{t "page.admin.users.validity_valid_from"}}</dt><dd>{{if .ValidFrom}}{{.ValidFrom}}{{else}}{{t "page.admin.users.validity_unlimited"}}{{end}}</dd>
+  <dt>{{t "page.admin.users.validity_valid_until"}}</dt><dd>{{if .ValidUntil}}{{.ValidUntil}}{{else}}{{t "page.admin.users.validity_unlimited"}}{{end}}</dd>
+  <dt>{{t "page.admin.users.validity_checked_at"}}</dt><dd>{{format_time .CheckedAt "UTC"}}</dd>
+</dl>
+{{if .IsRoot}}
+<p class="ln-meta">{{t "page.admin.users.validity_root_protected"}}</p>
+{{else}}
+<h3>{{t "page.admin.users.validity_set_title"}}</h3>
+<p class="ln-meta">{{t "page.admin.users.validity_hint"}}</p>
+<form method="post" action="{{route "admin.user_validity"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="user_id" value="{{.UserID}}">
+  <input type="hidden" name="expected_row_version" value="{{.RowVersion}}">
+  {{template "component.field" (dict "id" "admin-validity-from" "name" "valid_from" "label" (t "page.admin.users.validity_from_label") "value" "" "help" (t "page.admin.users.validity_hint"))}}
+  {{template "component.field" (dict "id" "admin-validity-until" "name" "valid_until" "label" (t "page.admin.users.validity_until_label") "value" "")}}
+  {{template "component.field" (dict "id" "admin-validity-reason" "name" "reason" "label" (t "page.admin.users.validity_reason_label") "value" "")}}
+  <div class="ln-field">
+    <label class="ln-field__label" for="admin-validity-confirm">
+      <input type="checkbox" id="admin-validity-confirm" name="confirm" value="yes">
+      {{t "page.admin.users.validity_confirm"}}
+    </label>
+  </div>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.users.validity_apply") "variant" "secondary" "type" "submit")}}</div>
+</form>
+{{end}}
+{{end}}
 <h2>{{t "page.admin.users.edit_title"}}</h2>
 <form method="post" action="{{route "admin.user_update"}}?user_id={{.Data.user.UserID}}" data-ln-module="async-form" novalidate>
   {{csrf_field}}

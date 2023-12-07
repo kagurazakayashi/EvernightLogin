@@ -330,13 +330,16 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		Batches:     managed.Batch,
 		Authorize:   managed.Checker.authorizePageAction,
 		Diagnostics: newDiagnosticsCollector(deps, func() string { return "running" }),
+		Now:         deps.Now,
+		Audit:       deps.Audit,
 		Logger:      logger,
 	})
 	if adminErr != nil {
 		return nil, fmt.Errorf("构造用户管理页适配器失败: %w", adminErr)
 	}
 	webOptions.PageAdmin = &login.UIPageAdminOptions{Backend: adminAdapter,
-		Diagnostics: &login.UIPageAdminDiagnosticsOptions{Backend: adminAdapter}}
+		Diagnostics: &login.UIPageAdminDiagnosticsOptions{Backend: adminAdapter},
+		Validity:    adminAdapter}
 	if settingsBackend, settingsErr := newSettingsSettingsPageBackend(deps, managed); settingsErr != nil {
 		return nil, fmt.Errorf("构造配置设置页适配器失败: %w", settingsErr)
 	} else if settingsBackend != nil {
