@@ -75,6 +75,16 @@
         "manual_recovery.policy"
       ],
       "notes": "构建并运行真实外部 Module examples/app-delegation-support（只导入公开包）：临时 SQLite + 临时主密钥，不监听端口/不访问网络；覆盖两个合成应用共享账户但成员/权限隔离（A 允许、B 在 A 拒绝）、应用范围权限/角色/委派资格授予与撤回（跨 scope 拒绝）、confidential OAuth 客户端一次性秘密、业务投影稳定 UserID/CreatedAt≠LinkedAt；客服工单在无真实客服会话时按三权分离 fail-closed、人工恢复制度只读报告（关闭时不提供绕过审批路径）；独立核验示例临时目录删除与构建产物清理。"
+    },
+    {
+      "id": "external-consumer-smoke",
+      "title": "external-consumer 外部消费示例冒烟（只导入公开包；配置/扩展/HTTP/生命周期/fail-closed）",
+      "program": "./scripts/shorttest/scenario/external_consumer_smoke",
+      "needs_server_binary": false,
+      "timeout_seconds": 90,
+      "arguments": ["-workdir", "{workdir}", "-timeout", "{timeout}", "-result", "{result}"],
+      "covers": ["runtime.embedded", "config.validation", "extension.registry", "http.mount", "authz.fail_closed"],
+      "notes": "构建并运行 examples/external-consumer 外部 Module（不读真实配置/数据库、不监听端口）：核对配置校验/公开 AppError、扩展注册与失败传播、HTTP 挂载、页面替换、生命周期与 fail-closed 授权判定；场景只核验成功输出与构建产物清理。"
     }
   ]
 }

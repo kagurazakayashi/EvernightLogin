@@ -158,3 +158,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
 客服工单在无真实客服会话时 fail-closed、人工恢复制度只读、跨应用/错误版本资料更新
 拒绝）→ 解析示例 JSON，断言至少 10 项检查全部 PASS，并独立核验示例临时数据目录与
 场景构建产物已删除。预期 `status=PASS`、`exit_code=0`。
+
+## 9. 场景：external-consumer-smoke（步骤 247）
+
+`external-consumer-smoke` 由步骤 247 登记，复跑 `examples/external-consumer/`
+外部消费示例（独立 go.mod，只导入公开包；不读真实配置/数据库、不监听端口）。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 `
+  -Scenario external-consumer-smoke -TimeoutSeconds 90 `
+  -Out docs\acceptance\evidence\step247\shorttest-external-consumer.json
+```
+
+场景行为：在入口临时目录内构建外部示例并运行，核对成功输出标识；覆盖配置校验/
+公开 AppError、扩展注册与失败传播、HTTP 挂载、页面替换、生命周期与 fail-closed
+授权判定；随后删除构建产物并输出结构化结果。预期 `status=PASS`、`exit_code=0`。
+
+步骤 247 回归时四个嵌入示例场景均复跑通过：`embedded-minimal-selftest`、
+`custom-pages-profile-sync-selftest`、`app-delegation-support-selftest`、
+`external-consumer-smoke`。
