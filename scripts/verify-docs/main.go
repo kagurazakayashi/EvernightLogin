@@ -10,12 +10,15 @@
 //   - 系统权限键（internal/preset/catalog.go）全部出现在
 //     docs/guide/applications-and-permissions.md；
 //   - docs/guide 内部相对链接可达，且必备文档齐全；
-//   - 传入 -cli-dir 时额外检查已构建 CLI 的帮助/版本输出包含文档依赖的命令。
+//   - 传入 -cli-dir 时额外检查已构建 CLI 的帮助/版本输出包含文档依赖的命令；
+//   - docs/reference 存在时（-reference=auto|require）逐字节校验由 scripts/reference 生成的
+//     接口参考与机器 JSON 是否与源码一致（Phase A 起）；-reference=off 可临时跳过。
 //
 // 用法（仓库根目录）：
 //
 //	go run ./scripts/verify-docs
 //	go run ./scripts/verify-docs -cli-dir %TEMP%\login-begin
+//	go run ./scripts/verify-docs -reference=off   // 临时跳过 docs/reference 校验
 //
 // 成功输出 "DOCS VERIFY: PASS checks=N failures=0" 并以 0 退出；存在失败时逐条打印并
 // 以非 0 退出。默认值快照镜像 login.Default()，修改默认值时必须同步本文件与
@@ -32,10 +35,13 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/kagurazakayashi/EvernightLogin/scripts/internal/apidoc"
 )
 
 func main() {
 	cliDir := flag.String("cli-dir", "", "可选：已构建的 login-server/loginctl/login-backup 所在目录")
+	referenceMode := flag.String("reference", "auto", "docs/reference 校验模式：auto（存在时校验）|off|require")
 	flag.Parse()
 
 	root, err := findRepoRoot()
@@ -50,6 +56,7 @@ func main() {
 	v.checkGuideErrorCodeReferences()
 	v.checkLinks()
 	v.checkRequiredDocs()
+	v.checkReference(*referenceMode)
 	if *cliDir != "" {
 		v.checkCLI(*cliDir)
 	}
@@ -578,6 +585,42 @@ func (v *verifier) checkCLI(dir string) {
 		}
 	}
 	v.pass()
+}
+
+// checkReference 校验 docs/reference 生成物与源码一致（由 scripts/reference 生成）。
+// auto：目录存在时才校验（Phase A 未生成时保持既有 12 项检查不变）；require：目录必须
+// 存在且一致；off：跳过。生成物逐字节比较，发现漂移即失败。
+func (v *verifier) checkReference(mode string) {
+	dir := v.path("docs/reference")
+	info, statErr := os.Stat(dir)
+	exists := statErr == nil && info.IsDir()
+	switch mode {
+	case "off":
+		return
+	case "auto":
+		if !exists {
+			return
+		}
+	case "require":
+		if !exists {
+			v.fail("reference 检查：docs/reference 不存在（-reference=require）；请运行 go run ./scripts/reference -write")
+			return
+		}
+	default:
+		v.fail("reference 检查：-reference 只支持 auto/off/require，实际为 %q", mode)
+		return
+	}
+	result, err := apidoc.Check(v.root)
+	if err != nil {
+		v.fail("reference 检查失败：%v", err)
+		return
+	}
+	for _, issue := range result.Issues {
+		v.fail("reference 检查：%s", issue)
+	}
+	if len(result.Issues) == 0 {
+		v.pass()
+	}
 }
 
 func runCLI(bin string, args ...string) (string, error) {
