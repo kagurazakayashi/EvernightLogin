@@ -113,6 +113,18 @@ go run . -self-test -json      # 预期 status=PASS（15 项检查），退出�
 go run . -demo                 # 显式启动演示，Ctrl+C 或 -duration 到期后清理
 ```
 
+## 5. 自包含协议与安全集成测试（开发/CI）
+
+无需外网、外部数据库或手工安装第三方软件，可直接运行真实协议/安全场景（OAuth/OIDC、
+会话权限、CSRF/来源、防枚举、软件 TOTP/WebAuthn）：
+
+```powershell
+go run ./scripts/protocol-selftest -out P:\go\tmp\protocol-selftest.json -verbose
+```
+
+场景、覆盖矩阵、JSON 结果与退出码见
+[`docs/deployment/protocol-selftest.md`](docs/deployment/protocol-selftest.md)。
+
 ## 5. 快速开始 B：独立部署（约 10 分钟）
 
 1. 准备目录：`config/login.yaml`、`data/login.db`、`secrets/master.key`、`logs/` 分开存放。
