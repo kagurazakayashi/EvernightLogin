@@ -1,6 +1,14 @@
 package protocolapi_test
 
 import (
+	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
+	"github.com/kagurazakayashi/EvernightLogin/internal/pagestate"
+	"github.com/kagurazakayashi/EvernightLogin/internal/protocolapi"
+	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,21 +17,12 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
-	"github.com/kagurazakayashi/EvernightLogin/internal/pagestate"
-	"github.com/kagurazakayashi/EvernightLogin/internal/protocolapi"
-	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
-	"github.com/kagurazakayashi/EvernightLogin/internal/session"
-	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
 )
 
 // 本文件是步骤 193 的“已登录 APP 扫码确认与网页领取闭环”验收。
 //
 // 证据来源：临时 SQLite（全量迁移）+ 真实会话/审计应用/扫码/会话签发服务 +
-// httptest 回环真实 HTTP 服务 + 真实内置网页（login.NewWebUI + 生产页面适配器
+// httptest 回环真实 HTTP 服务 + 真实内置网页（ui.NewWebUI + 生产页面适配器
 // uiauthadapter + 真实登录会话）：
 //   - 发起端是企业内网页匿名会话（只持有服务端签发的状态 Cookie，不登录）；
 //   - 确认端是另一个独立的已登录 APP 会话（真实普通会话 + 近期强认证事实）；
@@ -57,9 +56,9 @@ func (e *testEnv) qrPageServer() *httptest.Server {
 	if err != nil {
 		e.t.Fatalf("构造扫码页面适配器失败: %v", err)
 	}
-	ui, err := login.NewWebUI(login.WebUIOptions{
+	ui, err := ui.NewWebUI(ui.WebUIOptions{
 		Prefix: "", Session: devicePageSessions{service: e.sessions},
-		PageOAuth: &login.UIPageOAuthOptions{Backend: backend},
+		PageOAuth: &ui.UIPageOAuthOptions{Backend: backend},
 		Now:       e.clock.Now,
 	})
 	if err != nil {

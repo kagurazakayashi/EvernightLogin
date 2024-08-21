@@ -328,7 +328,7 @@
         {"package": "./internal/serverapp", "run": "TestManagementPagesRequireStrongAuthSession"},
         {"package": "./internal/serverapp", "run": "TestThirteenPagesProtocolAndAdminAPI"},
         {"package": "./internal/uiadminadapter", "run": "TestAuditAdapterQueryAndDetail"},
-        {"package": ".", "run": "TestUIPageManageRoutesContract"}
+        {"package": "./ui", "run": "TestUIPageManageRoutesContract"}
       ],
       "pagination": {"mode": "fixed", "reason": "页面命名路由是固定集合；页面内列表使用领域 API 分页：列表页固定每页 20（与 app 默认一致）并仅接受 offset 参数（上限 1000000，与 app 契约一致），不提供 limit 参数（明确例外），由分页审计自动核对这些参数。"}
     },

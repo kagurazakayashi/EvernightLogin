@@ -16,12 +16,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	accountsqlite "github.com/kagurazakayashi/EvernightLogin/internal/account/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
@@ -38,6 +32,11 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
 	rolesqlite "github.com/kagurazakayashi/EvernightLogin/internal/role/sqlite"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 // managedPolicyReaderID 是页面读取策略的受信系统通道标识。
@@ -96,7 +95,7 @@ func newManagedPolicyApprovals(now func() time.Time) *managedPolicyApprovals {
 }
 
 // Register 登记页面已通过强认证绑定的一次策略写。
-func (g *managedPolicyApprovals) Register(userID string, binding login.UIAppPolicyActionBinding) error {
+func (g *managedPolicyApprovals) Register(userID string, binding ui.UIAppPolicyActionBinding) error {
 	if g == nil {
 		return managedapi.ErrAccessDenied
 	}
@@ -164,7 +163,7 @@ func (g *managedPolicyApprovals) NotifyOutcome(context.Context, reauth.Result,
 // 只允许 root、管理强认证事实仍在短期窗口内，然后以 managed_api.policy.manage
 // 操作和 app/version/policy-digest 参数调用真实 reauth 服务。
 func (g *SecurityGate) ManagedPolicyReauth(ctx context.Context, userID string,
-	binding login.UIAppPolicyActionBinding) error {
+	binding ui.UIAppPolicyActionBinding) error {
 	if g == nil || g.Reauth == nil || g.Policy == nil {
 		return reauth.ErrReauthRequired
 	}

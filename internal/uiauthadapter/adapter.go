@@ -10,14 +10,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"net"
-	"net/http"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
@@ -35,6 +27,13 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+	"time"
 )
 
 // Options 是适配器依赖与策略快照。
@@ -78,7 +77,7 @@ type Options struct {
 	Logger           *slog.Logger
 }
 
-// Adapter 实现 login.UIPageAuthBackend。
+// Adapter 实现 ui.UIPageAuthBackend。
 type Adapter struct {
 	opts Options
 }
@@ -106,43 +105,43 @@ func New(options Options) (*Adapter, error) {
 // PasswordLogin 执行真实密码认证与会话签发；只有完整非受限结果才标记 Complete。
 // BeginPasskeyLogin 开始可发现凭证 Passkey 密码less 登录；不在本方法签发会话。
 func (a *Adapter) BeginPasskeyLogin(ctx context.Context,
-	request *http.Request) (login.UIPasskeyLoginStart, error) {
+	request *http.Request) (ui.UIPasskeyLoginStart, error) {
 	if a.opts.Passkeys == nil {
-		return login.UIPasskeyLoginStart{}, &login.UIPageAuthError{Code: "FEATURE_NOT_ENABLED"}
+		return ui.UIPasskeyLoginStart{}, &ui.UIPageAuthError{Code: "FEATURE_NOT_ENABLED"}
 	}
 	start, err := a.opts.Passkeys.BeginLogin(ctx, passkey.LoginStartRequest{
 		RequestID: requestIDFromRequest(request),
 		Client:    session.ClientInfo{UserAgent: request.UserAgent(), Address: request.RemoteAddr}})
 	if err != nil {
-		return login.UIPasskeyLoginStart{}, publicMFAError(err)
+		return ui.UIPasskeyLoginStart{}, publicMFAError(err)
 	}
-	return login.UIPasskeyLoginStart{CeremonyID: start.CeremonyID,
+	return ui.UIPasskeyLoginStart{CeremonyID: start.CeremonyID,
 		PublicKey: []byte(start.PublicKey), ExpiresAt: start.ExpiresAt, RPID: start.RPID}, nil
 }
 
 // FinishPasskeyLogin 校验断言并返回真实会话 Cookie；会话由 passkey 服务在真实
 // 认证器验证通过后签发，本方法不提升/伪造任何身份。
 func (a *Adapter) FinishPasskeyLogin(ctx context.Context, request *http.Request,
-	response []byte) (login.UIPageLoginResult, error) {
+	response []byte) (ui.UIPageLoginResult, error) {
 	if a.opts.Passkeys == nil {
-		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "FEATURE_NOT_ENABLED"}
+		return ui.UIPageLoginResult{}, &ui.UIPageAuthError{Code: "FEATURE_NOT_ENABLED"}
 	}
 	ceremonyID := strings.TrimSpace(request.PostForm.Get("passkey_ceremony_id"))
 	result, err := a.opts.Passkeys.FinishLogin(ctx, passkey.LoginFinishRequest{
 		CeremonyID: ceremonyID, Response: response, RequestID: requestIDFromRequest(request)})
 	if err != nil {
-		return login.UIPageLoginResult{}, publicMFAError(err)
+		return ui.UIPageLoginResult{}, publicMFAError(err)
 	}
 	cookie, cookieErr := a.opts.Sessions.NewCookie(result.Session)
 	if cookieErr != nil {
-		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageLoginResult{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
-	return login.UIPageLoginResult{UserID: result.Authenticated.UserID,
+	return ui.UIPageLoginResult{UserID: result.Authenticated.UserID,
 		Username: result.Authenticated.Username, Complete: true, Cookie: cookie}, nil
 }
 
 func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
-	loginRequest login.UIPasswordLoginRequest) (login.UIPageLoginResult, error) {
+	loginRequest ui.UIPasswordLoginRequest) (ui.UIPageLoginResult, error) {
 	clientIP, _ := transport.ClientIPFromContext(ctx)
 	if clientIP == "" {
 		// 嵌入式 Handler 未安装可信边界时 context 没有 ClientIP；仅把连接地址
@@ -156,10 +155,10 @@ func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
 		ClientIP: clientIP, RequestID: loginRequest.RequestID})
 	if err != nil {
 		if errors.Is(err, authn.ErrRateLimited) {
-			return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "RATE_LIMITED",
+			return ui.UIPageLoginResult{}, &ui.UIPageAuthError{Code: "RATE_LIMITED",
 				RetryAfterSeconds: 60}
 		}
-		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "AUTH_FAILED"}
+		return ui.UIPageLoginResult{}, &ui.UIPageAuthError{Code: "AUTH_FAILED"}
 	}
 	existing, _ := a.opts.Sessions.SessionSecretFromRequest(request)
 	userAgent := strings.TrimSpace(request.UserAgent())
@@ -180,24 +179,24 @@ func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
 			RequestID: loginRequest.RequestID, Client: session.ClientInfo{
 				UserAgent: userAgent, Address: clientIP}})
 		if startErr != nil {
-			return login.UIPageLoginResult{}, publicMFAError(startErr)
+			return ui.UIPageLoginResult{}, publicMFAError(startErr)
 		}
 		if start.RequiresSecondFactor || start.SetupRequired {
 			cookie, cookieErr := a.opts.Sessions.NewCookie(start.RestrictedSession)
 			if cookieErr != nil {
-				return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+				return ui.UIPageLoginResult{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 			}
 			view, stateCookie, stateErr := a.mfaView(start)
 			if stateErr != nil {
-				return login.UIPageLoginResult{}, stateErr
+				return ui.UIPageLoginResult{}, stateErr
 			}
-			return login.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
+			return ui.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
 				Restricted: true, RequiredSteps: steps, Cookie: cookie,
 				SecondFactor: &view, StateCookie: stateCookie}, nil
 		}
 		if !complete {
 			// 受限但非第二因素（如待改密）不能被本流程绕过：fail-closed 回页面提示。
-			return login.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
+			return ui.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
 				Restricted: true, RequiredSteps: steps}, nil
 		}
 	}
@@ -206,26 +205,26 @@ func (a *Adapter) PasswordLogin(ctx context.Context, request *http.Request,
 		RequestID: loginRequest.RequestID, Client: session.ClientInfo{UserAgent: userAgent,
 			Address: clientIP}})
 	if loginErr != nil {
-		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "AUTH_FAILED"}
+		return ui.UIPageLoginResult{}, &ui.UIPageAuthError{Code: "AUTH_FAILED"}
 	}
 	cookie, cookieErr := a.opts.Sessions.NewCookie(issued)
 	if cookieErr != nil {
-		return login.UIPageLoginResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageLoginResult{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
-	return login.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
+	return ui.UIPageLoginResult{UserID: result.UserID, Username: result.Username,
 		Complete: complete, Restricted: !complete, RequiredSteps: steps,
 		Cookie: cookie}, nil
 }
 
 // RegistrationAvailability 返回真实注册开关与邮箱策略。
-func (a *Adapter) RegistrationAvailability(ctx context.Context) (login.UIPageRegistrationAvailability, error) {
+func (a *Adapter) RegistrationAvailability(ctx context.Context) (ui.UIPageRegistrationAvailability, error) {
 	if err := ctx.Err(); err != nil {
-		return login.UIPageRegistrationAvailability{}, err
+		return ui.UIPageRegistrationAvailability{}, err
 	}
 	if a.opts.Registration == nil {
-		return login.UIPageRegistrationAvailability{}, nil
+		return ui.UIPageRegistrationAvailability{}, nil
 	}
-	return login.UIPageRegistrationAvailability{
+	return ui.UIPageRegistrationAvailability{
 		Enabled:                  a.opts.Registration.Enabled(),
 		EmailCapability:          a.opts.Registration.EmailCapabilityEnabled(),
 		RequireEmailVerification: a.opts.RequireEmailVerification,
@@ -234,7 +233,7 @@ func (a *Adapter) RegistrationAvailability(ctx context.Context) (login.UIPageReg
 }
 
 // Register 调用真实注册服务；邮箱发送失败与账户创建结果分开返回。
-func (a *Adapter) Register(ctx context.Context, request login.UIRegisterRequest) (login.UIPageRegisterResult, error) {
+func (a *Adapter) Register(ctx context.Context, request ui.UIRegisterRequest) (ui.UIPageRegisterResult, error) {
 	result, err := a.opts.Registration.Register(ctx, registration.RegisterRequest{
 		Username: request.Username, Password: request.Password, Email: request.Email,
 		Nickname: request.Nickname, Language: request.Language, Timezone: request.Timezone,
@@ -242,17 +241,17 @@ func (a *Adapter) Register(ctx context.Context, request login.UIRegisterRequest)
 	if err != nil {
 		switch {
 		case errors.Is(err, registration.ErrRegistrationClosed):
-			return login.UIPageRegisterResult{}, &login.UIPageAuthError{Code: "REQ_INVALID"}
+			return ui.UIPageRegisterResult{}, &ui.UIPageAuthError{Code: "REQ_INVALID"}
 		case errors.Is(err, registration.ErrRegistrationConflict):
-			return login.UIPageRegisterResult{}, &login.UIPageAuthError{Code: "CONFLICT"}
+			return ui.UIPageRegisterResult{}, &ui.UIPageAuthError{Code: "CONFLICT"}
 		case errors.Is(err, authn.ErrRateLimited):
-			return login.UIPageRegisterResult{}, &login.UIPageAuthError{Code: "RATE_LIMITED",
+			return ui.UIPageRegisterResult{}, &ui.UIPageAuthError{Code: "RATE_LIMITED",
 				RetryAfterSeconds: 60}
 		default:
-			return login.UIPageRegisterResult{}, &login.UIPageAuthError{Code: "REQ_INVALID"}
+			return ui.UIPageRegisterResult{}, &ui.UIPageAuthError{Code: "REQ_INVALID"}
 		}
 	}
-	view := login.UIPageRegisterResult{UserID: result.UserID, Username: result.Username,
+	view := ui.UIPageRegisterResult{UserID: result.UserID, Username: result.Username,
 		Status: string(result.Status), VerificationSent: result.VerificationSent,
 		VerificationExpiresAt: result.VerificationExpiresAt,
 		SendErrorCode:         result.VerificationErrorCode}
@@ -260,27 +259,27 @@ func (a *Adapter) Register(ctx context.Context, request login.UIRegisterRequest)
 }
 
 // VerifyEmail 原子消费邮箱验证入口。
-func (a *Adapter) VerifyEmail(ctx context.Context, request login.UIVerifyEmailRequest) (login.UIPageVerifyResult, error) {
+func (a *Adapter) VerifyEmail(ctx context.Context, request ui.UIVerifyEmailRequest) (ui.UIPageVerifyResult, error) {
 	_, err := a.opts.Registration.VerifyEmail(ctx, registration.VerifyEmailRequest{
 		UserID: request.UserID, CredentialID: request.CredentialID, Token: request.Token,
 		RequestID: request.RequestID})
 	if err != nil {
-		return login.UIPageVerifyResult{}, &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
+		return ui.UIPageVerifyResult{}, &ui.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	}
-	return login.UIPageVerifyResult{Verified: true}, nil
+	return ui.UIPageVerifyResult{Verified: true}, nil
 }
 
 // ResendVerification 复用真实发送服务与冷却，并对**匿名链接凭证**做只读绑定校验：
 // uid+cid+token 必须与当前 pending 验证票据及一次性凭证（不消费）匹配，校验通过才
 // 允许系统身份重发；任何失败都不改变状态、不写库。对外统一返回“已受理”，真实
 // 结果（成功/冷却/绑定失败/不存在）只写受限运行日志，避免账户与票据状态探测。
-func (a *Adapter) ResendVerification(ctx context.Context, request *http.Request) (login.UIPageResendResult, error) {
+func (a *Adapter) ResendVerification(ctx context.Context, request *http.Request) (ui.UIPageResendResult, error) {
 	if err := request.ParseForm(); err != nil {
 		a.opts.Logger.Info("页面重发验证未受理", "category", "invalid_form")
-		return login.UIPageResendResult{Accepted: true}, nil
+		return ui.UIPageResendResult{Accepted: true}, nil
 	}
 	a.resendBestEffort(ctx, request)
-	return login.UIPageResendResult{Accepted: true}, nil
+	return ui.UIPageResendResult{Accepted: true}, nil
 }
 
 // resendBestEffort 执行受控重发；所有差异只写运行日志。
@@ -356,14 +355,14 @@ func (a *Adapter) sendVerification(ctx context.Context, caller registration.Call
 
 // AcceptInvitation 以真实会话身份或匿名新用户身份接受邀请。
 func (a *Adapter) AcceptInvitation(ctx context.Context, request *http.Request,
-	accept login.UIPageInvitationAcceptRequest) (login.UIPageInvitationAcceptResult, error) {
+	accept ui.UIPageInvitationAcceptRequest) (ui.UIPageInvitationAcceptResult, error) {
 	var caller onboarding.Caller
 	if secret, ok := a.opts.Sessions.SessionSecretFromRequest(request); ok {
 		record, validateErr := a.opts.Sessions.Validate(ctx, secret)
 		if validateErr == nil && !record.IsRestricted() {
 			userCaller, callerErr := onboarding.UserCaller(record.UserID)
 			if callerErr != nil {
-				return login.UIPageInvitationAcceptResult{}, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+				return ui.UIPageInvitationAcceptResult{}, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
 			}
 			caller = userCaller
 		}
@@ -377,13 +376,13 @@ func (a *Adapter) AcceptInvitation(ctx context.Context, request *http.Request,
 	}
 	result, err := a.opts.Onboarding.AcceptInvitation(ctx, caller, acceptRequest)
 	if err != nil {
-		return login.UIPageInvitationAcceptResult{}, &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
+		return ui.UIPageInvitationAcceptResult{}, &ui.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	}
 	roles := make([]string, 0, len(result.Roles))
 	for _, role := range result.Roles {
 		roles = append(roles, role.RoleID)
 	}
-	return login.UIPageInvitationAcceptResult{InvitationID: result.InvitationID,
+	return ui.UIPageInvitationAcceptResult{InvitationID: result.InvitationID,
 		UserID: result.UserID, AppID: result.AppID, Roles: roles,
 		NewUser: result.NewUser}, nil
 }
@@ -401,4 +400,4 @@ func (a *Adapter) Logout(ctx context.Context, request *http.Request) (*http.Cook
 }
 
 // 确保接口实现。
-var _ login.UIPageAuthBackend = (*Adapter)(nil)
+var _ ui.UIPageAuthBackend = (*Adapter)(nil)

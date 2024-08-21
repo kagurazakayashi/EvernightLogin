@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+
+	"github.com/kagurazakayashi/EvernightLogin/correlation"
 )
 
 // identityContextKey 是可信身份在请求上下文中的键；类型不导出，避免其他包用
 // 普通字符串键覆盖或伪造身份。
 type identityContextKey struct{}
-
-// requestIDContextKey 是请求编号在请求上下文中的键。
-type requestIDContextKey struct{}
 
 // WithIdentity 把已由可信解析函数建立的身份放入上下文；公开包用它提供宿主与
 // 服务层的上下文传递接口。调用方必须先验证身份结构，不能把客户端自填字段当作
@@ -38,20 +37,13 @@ func IdentityFromContext(ctx context.Context) (Identity, bool) {
 
 // WithRequestID 把本次请求编号放入上下文。
 func WithRequestID(ctx context.Context, requestID string) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+	return correlation.WithRequestID(ctx, requestID)
 }
 
 // RequestIDFromContext 返回本次请求编号；没有时为空字符串。请求编号只用于
 // 关联与排障，不是凭证，也不能用于授权判断。
 func RequestIDFromContext(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
-	return requestID
+	return correlation.RequestIDFromContext(ctx)
 }
 
 // validIdentity 报告身份是否满足最低结构要求：已知类型、稳定非空 ID；应用

@@ -6,18 +6,17 @@ package serverapp
 
 import (
 	"context"
-	"testing"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"testing"
+	"time"
 )
 
 func TestManagedPolicyApprovalsOneTimeBinding(t *testing.T) {
 	now := time.Date(2026, 11, 21, 20, 0, 0, 0, time.UTC)
 	g := newManagedPolicyApprovals(func() time.Time { return now })
-	binding := login.UIAppPolicyActionBinding{
+	binding := ui.UIAppPolicyActionBinding{
 		ApplicationID:      "app_11111111111111111111111111111111",
 		ExpectedRowVersion: 4, PolicyDigest: "digest-one", RequestID: "req_146_approval",
 	}
@@ -59,7 +58,7 @@ func TestManagedPolicyApprovalsRejectsMismatch(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			g := newManagedPolicyApprovals(func() time.Time { return now })
-			binding := login.UIAppPolicyActionBinding{
+			binding := ui.UIAppPolicyActionBinding{
 				ApplicationID:      "app_11111111111111111111111111111111",
 				ExpectedRowVersion: 4, PolicyDigest: "digest-one", RequestID: "req_146_mismatch",
 			}
@@ -82,7 +81,7 @@ func TestManagedPolicyApprovalsRejectsMismatch(t *testing.T) {
 	}
 	// 主体不匹配：使用同一 request_id 的另一个用户不能消费。
 	g := newManagedPolicyApprovals(func() time.Time { return now })
-	binding := login.UIAppPolicyActionBinding{ApplicationID: "app_11111111111111111111111111111111",
+	binding := ui.UIAppPolicyActionBinding{ApplicationID: "app_11111111111111111111111111111111",
 		ExpectedRowVersion: 4, PolicyDigest: "digest-one", RequestID: "req_146_subject"}
 	if err := g.Register("usr_root", binding); err != nil {
 		t.Fatalf("登记批准失败: %v", err)
@@ -100,7 +99,7 @@ func TestManagedPolicyApprovalsRejectsMismatch(t *testing.T) {
 func TestManagedPolicyApprovalsExpiry(t *testing.T) {
 	now := time.Date(2026, 11, 21, 20, 0, 0, 0, time.UTC)
 	g := newManagedPolicyApprovals(func() time.Time { return now })
-	binding := login.UIAppPolicyActionBinding{ApplicationID: "app_11111111111111111111111111111111",
+	binding := ui.UIAppPolicyActionBinding{ApplicationID: "app_11111111111111111111111111111111",
 		ExpectedRowVersion: 1, PolicyDigest: "digest", RequestID: "req_146_expiry"}
 	if err := g.Register("usr_root", binding); err != nil {
 		t.Fatalf("登记批准失败: %v", err)

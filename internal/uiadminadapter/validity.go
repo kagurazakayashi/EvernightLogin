@@ -9,30 +9,29 @@ package uiadminadapter
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"strings"
+	"time"
 )
 
 // GetUserValidity 读取目标用户有效期与当前可用性（users.read）。
 func (a *Adapter) GetUserValidity(ctx context.Context, adminUserID,
-	userID string) (login.UIAdminUserValidityView, error) {
+	userID string) (ui.UIAdminUserValidityView, error) {
 	if err := a.check(ctx, adminUserID, "users.read"); err != nil {
-		return login.UIAdminUserValidityView{}, err
+		return ui.UIAdminUserValidityView{}, err
 	}
 	if !account.ValidUserID(userID) {
-		return login.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminUserValidityView{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminUserValidityView{}, adminErr("ACCESS_DENIED")
 	}
 	validity, err := a.opts.Account.GetUserValidity(ctx, caller, userID)
 	if err != nil {
-		return login.UIAdminUserValidityView{}, mapAccountError(err)
+		return ui.UIAdminUserValidityView{}, mapAccountError(err)
 	}
 	return toValidityView(validity), nil
 }
@@ -43,30 +42,30 @@ func (a *Adapter) GetUserValidity(ctx context.Context, adminUserID,
 // 理由、UTC 时间与请求编号），审计失败时不发起变更。领域服务随后在关键审计
 // 事务中记录操作者/请求编号与实际字段变化；root 由领域服务拒绝。
 func (a *Adapter) SetUserValidity(ctx context.Context, adminUserID, userID string,
-	change login.UIAdminUserValidityChange) (login.UIAdminUserValidityView, error) {
+	change ui.UIAdminUserValidityChange) (ui.UIAdminUserValidityView, error) {
 	if err := a.check(ctx, adminUserID, "users.update"); err != nil {
-		return login.UIAdminUserValidityView{}, err
+		return ui.UIAdminUserValidityView{}, err
 	}
 	if !account.ValidUserID(userID) {
-		return login.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
 	}
 	reason := strings.TrimSpace(change.Reason)
 	if reason == "" || len(reason) > 200 {
-		return login.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
 	}
 	if change.ValidFrom != nil && change.ValidUntil != nil &&
 		!change.ValidUntil.After(*change.ValidFrom) {
-		return login.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminUserValidityView{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminUserValidityView{}, adminErr("ACCESS_DENIED")
 	}
 	requestID := strings.TrimSpace(change.RequestID)
 	if requestID != "" {
 		caller, err = caller.WithRequestID(requestID)
 		if err != nil {
-			return login.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
+			return ui.UIAdminUserValidityView{}, adminErr("REQ_INVALID")
 		}
 	}
 	if a.opts.Audit != nil {
@@ -83,7 +82,7 @@ func (a *Adapter) SetUserValidity(ctx context.Context, adminUserID, userID strin
 			},
 		}
 		if err := a.opts.Audit.Record(ctx, event); err != nil {
-			return login.UIAdminUserValidityView{}, adminErr("AUDIT_WRITE_FAILED")
+			return ui.UIAdminUserValidityView{}, adminErr("AUDIT_WRITE_FAILED")
 		}
 	}
 	result, err := a.opts.Account.SetValidity(ctx, caller,
@@ -91,19 +90,19 @@ func (a *Adapter) SetUserValidity(ctx context.Context, adminUserID, userID strin
 			ExpectedRowVersion: change.ExpectedRowVersion,
 			ValidFrom:          change.ValidFrom, ValidUntil: change.ValidUntil})
 	if err != nil {
-		return login.UIAdminUserValidityView{}, mapAccountError(err)
+		return ui.UIAdminUserValidityView{}, mapAccountError(err)
 	}
 	// 领域服务返回 User 快照不含 root 标记；重新读取一次以拿到精确可用性/root。
 	validity, err := a.opts.Account.GetUserValidity(ctx, caller, result.User.ID)
 	if err != nil {
-		return login.UIAdminUserValidityView{}, mapAccountError(err)
+		return ui.UIAdminUserValidityView{}, mapAccountError(err)
 	}
 	return toValidityView(validity), nil
 }
 
 // toValidityView 投影页面有效期视图（不包含秘密或个人资料）。
-func toValidityView(validity account.UserValidity) login.UIAdminUserValidityView {
-	return login.UIAdminUserValidityView{UserID: validity.UserID,
+func toValidityView(validity account.UserValidity) ui.UIAdminUserValidityView {
+	return ui.UIAdminUserValidityView{UserID: validity.UserID,
 		Status: string(validity.Status), IsRoot: validity.IsRoot,
 		ValidFrom: validity.ValidFrom, ValidUntil: validity.ValidUntil,
 		RowVersion: validity.RowVersion, Available: validity.Available,

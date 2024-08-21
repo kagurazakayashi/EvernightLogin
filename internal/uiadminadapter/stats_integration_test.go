@@ -8,12 +8,6 @@ package uiadminadapter_test
 import (
 	"context"
 	"fmt"
-	"math"
-	"path/filepath"
-	"testing"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
@@ -28,6 +22,11 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"math"
+	"path/filepath"
+	"testing"
+	"time"
 )
 
 // statsNow 是统计适配器集成测试的固定时钟。
@@ -210,8 +209,8 @@ func (e *statsIntegrationEnv) seedSessionIssue(at time.Time, userID, appID strin
 }
 
 // closedWindow 返回已结束的固定窗口 [start,end)（UTC）。
-func closedWindow() login.UIStatsWindow {
-	return login.UIStatsWindow{TimeZone: "UTC",
+func closedWindow() ui.UIStatsWindow {
+	return ui.UIStatsWindow{TimeZone: "UTC",
 		Start:       time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC),
 		End:         time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC),
 		Granularity: "day", Range: "custom"}
@@ -262,7 +261,7 @@ func TestStatsDashboardCountsMatchAuditDetails(t *testing.T) {
 		t.Fatalf("能力位读取失败: %v caps=%+v", err, caps)
 	}
 	dashboard, err := env.statsAdpt.Dashboard(env.ctx, statsUserID(1),
-		login.UIStatsQuery{ScopeID: stats.ScopeSystem, Window: closedWindow()})
+		ui.UIStatsQuery{ScopeID: stats.ScopeSystem, Window: closedWindow()})
 	if err != nil {
 		t.Fatalf("看板读取失败: %v", err)
 	}
@@ -343,7 +342,7 @@ func TestStatsErrorSortingShareAndGrowth(t *testing.T) {
 	seedStatsPageFixtures(env)
 	env.grant(statsUserID(1), stats.ScopeSystem, stats.ScopeGrant{Allowed: true, AllData: true})
 	window := closedWindow()
-	page, err := env.statsAdpt.Errors(env.ctx, statsUserID(1), login.UIStatsQuery{
+	page, err := env.statsAdpt.Errors(env.ctx, statsUserID(1), ui.UIStatsQuery{
 		ScopeID: stats.ScopeSystem, Window: window, Sort: "raw_events", Order: "desc",
 		Limit: 20})
 	if err != nil {
@@ -352,7 +351,7 @@ func TestStatsErrorSortingShareAndGrowth(t *testing.T) {
 	if page.TotalRawEvents != 6 || page.ShareDenominator != 6 {
 		t.Fatalf("总数/占比分母 = %d/%d，期望 6/6", page.TotalRawEvents, page.ShareDenominator)
 	}
-	var backupRow login.UIStatsErrorRow
+	var backupRow ui.UIStatsErrorRow
 	for _, row := range page.Rows {
 		if row.ErrorCode == "BACKUP_FAILED" {
 			backupRow = row
@@ -368,7 +367,7 @@ func TestStatsErrorSortingShareAndGrowth(t *testing.T) {
 	if backupRow.GrowthKind != "new" {
 		t.Fatalf("零基数增幅 = %s，期望 new", backupRow.GrowthKind)
 	}
-	var webhookRow login.UIStatsErrorRow
+	var webhookRow ui.UIStatsErrorRow
 	for _, row := range page.Rows {
 		if row.ErrorCode == "WEBHOOK_DELIVERY_FAILED" {
 			webhookRow = row
@@ -378,7 +377,7 @@ func TestStatsErrorSortingShareAndGrowth(t *testing.T) {
 		t.Fatalf("Webhook 增幅 = %s，期望 percent", webhookRow.GrowthKind)
 	}
 	// 五种排序均由服务端执行且返回稳定字段；占比升序首行应是最小占比。
-	ascending, err := env.statsAdpt.Errors(env.ctx, statsUserID(1), login.UIStatsQuery{
+	ascending, err := env.statsAdpt.Errors(env.ctx, statsUserID(1), ui.UIStatsQuery{
 		ScopeID: stats.ScopeSystem, Window: window, Sort: "share", Order: "asc",
 		Limit: 20})
 	if err != nil {
@@ -404,7 +403,7 @@ func TestStatsCrossAppVisibilityAndDenied(t *testing.T) {
 		t.Fatalf("应用管理员可见范围不符: %+v", caps.Scopes)
 	}
 	dashboard, err := env.statsAdpt.Dashboard(env.ctx, statsUserID(2),
-		login.UIStatsQuery{ScopeID: stats.ScopeSystem, Window: closedWindow()})
+		ui.UIStatsQuery{ScopeID: stats.ScopeSystem, Window: closedWindow()})
 	if err != nil {
 		t.Fatalf("应用管理员看板读取失败: %v", err)
 	}
@@ -414,7 +413,7 @@ func TestStatsCrossAppVisibilityAndDenied(t *testing.T) {
 		t.Fatalf("应用范围去重活跃 = %d，期望 1", dashboard.Overview.ActiveUsers)
 	}
 	// 未授权应用范围直接拒绝，且不泄露目标是否存在。
-	if _, err := env.statsAdpt.Errors(env.ctx, statsUserID(2), login.UIStatsQuery{
+	if _, err := env.statsAdpt.Errors(env.ctx, statsUserID(2), ui.UIStatsQuery{
 		ScopeID: "app_beta", Window: closedWindow()}); err == nil {
 		t.Fatal("未授权应用范围应被拒绝")
 	}
@@ -427,7 +426,7 @@ func TestStatsCrossAppVisibilityAndDenied(t *testing.T) {
 	if caps.Read {
 		t.Fatal("未授权用户不应具有统计读取能力")
 	}
-	if _, err := env.statsAdpt.Dashboard(env.ctx, unpriv, login.UIStatsQuery{
+	if _, err := env.statsAdpt.Dashboard(env.ctx, unpriv, ui.UIStatsQuery{
 		ScopeID: stats.ScopeSystem, Window: closedWindow()}); err == nil {
 		t.Fatal("未授权用户读取应被拒绝")
 	}
@@ -439,7 +438,7 @@ func TestStatsStatisticsSameWindowAndTrend(t *testing.T) {
 	env := newStatsIntegrationEnv(t)
 	seedStatsPageFixtures(env)
 	env.grant(statsUserID(1), stats.ScopeSystem, stats.ScopeGrant{Allowed: true, AllData: true})
-	result, err := env.statsAdpt.Statistics(env.ctx, statsUserID(1), login.UIStatsQuery{
+	result, err := env.statsAdpt.Statistics(env.ctx, statsUserID(1), ui.UIStatsQuery{
 		ScopeID: stats.ScopeSystem, Window: closedWindow(), Metric: "dedup_failed_requests"})
 	if err != nil {
 		t.Fatalf("趋势读取失败: %v", err)

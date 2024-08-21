@@ -11,15 +11,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/manualrecovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"strings"
+	"time"
 )
 
 // SupportOptions 是客服页面适配器依赖。
@@ -32,10 +31,10 @@ type SupportOptions struct {
 	// Reauth 是宿主页面再次认证回调（步骤 188）：页面显式确认后取服务端认证事实，
 	// 适配器转换为 reauth.Signals 交给领域服务；nil 时写动作 fail-closed。
 	Reauth func(ctx context.Context, staffUserID string,
-		binding login.UISupportActionBinding) (login.UISupportEvidence, error)
+		binding ui.UISupportActionBinding) (ui.UISupportEvidence, error)
 }
 
-// SupportAdapter 实现 login.UISupportBackend。
+// SupportAdapter 实现 ui.UISupportBackend。
 type SupportAdapter struct {
 	opts SupportOptions
 }
@@ -48,10 +47,10 @@ func NewSupport(options SupportOptions) (*SupportAdapter, error) {
 	return &SupportAdapter{opts: options}, nil
 }
 
-var _ login.UISupportBackend = (*SupportAdapter)(nil)
+var _ ui.UISupportBackend = (*SupportAdapter)(nil)
 
 // supportErr 构造稳定公开错误。
-func supportErr(code string) error { return &login.UISupportError{Code: code} }
+func supportErr(code string) error { return &ui.UISupportError{Code: code} }
 
 // supportCheck 判定页面能力位（失败按无能力处理，不影响真实服务授权）。
 func (a *SupportAdapter) supportCheck(ctx context.Context, staffUserID, action string) bool {
@@ -70,7 +69,7 @@ func supportMapError(err error) error {
 	if code == "" {
 		code = "INTERNAL_ERROR"
 	}
-	return &login.UISupportError{Code: code}
+	return &ui.UISupportError{Code: code}
 }
 
 // recoveryMapError 把 manualrecovery 领域错误映射为页面稳定错误码。
@@ -80,21 +79,21 @@ func recoveryMapError(err error) error {
 	}
 	switch {
 	case errors.Is(err, manualrecovery.ErrDisabled):
-		return &login.UISupportError{Code: "DISABLED"}
+		return &ui.UISupportError{Code: "DISABLED"}
 	case errors.Is(err, manualrecovery.ErrSelfApproval):
-		return &login.UISupportError{Code: "ACCESS_DENIED"}
+		return &ui.UISupportError{Code: "ACCESS_DENIED"}
 	}
 	code := string(manualrecovery.CodeOf(err))
 	if code == "" {
 		code = "INTERNAL_ERROR"
 	}
-	return &login.UISupportError{Code: code}
+	return &ui.UISupportError{Code: code}
 }
 
 // withPageReauth 在页面路径把宿主再次认证证据转换为 reauth 信号；若请求 ctx 已有
 // 186 中间件注入的证明/认证事实则原样保留（CLI/API 路径）。
 func (a *SupportAdapter) withPageReauth(ctx context.Context, staffUserID string,
-	binding login.UISupportActionBinding) (context.Context, error) {
+	binding ui.UISupportActionBinding) (context.Context, error) {
 	signals := reauth.SignalsFromContext(ctx)
 	if signals.Complete || !signals.VerifiedAt.IsZero() || signals.ApprovalToken != "" {
 		return ctx, nil
@@ -116,22 +115,22 @@ func (a *SupportAdapter) withPageReauth(ctx context.Context, staffUserID string,
 	}), nil
 }
 
-// ListRecoveryForPage 实现 login.UISupportRecoveryLister（步骤 188 工作台列表）。
+// ListRecoveryForPage 实现 ui.UISupportRecoveryLister（步骤 188 工作台列表）。
 func (a *SupportAdapter) ListRecoveryForPage(ctx context.Context, staffUserID, mode, operation string,
-	offset, limit int) (login.UISupportRecoveryPage, error) {
+	offset, limit int) (ui.UISupportRecoveryPage, error) {
 	caller, err := manualrecovery.UserCaller(staffUserID)
 	if err != nil {
-		return login.UISupportRecoveryPage{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportRecoveryPage{}, supportErr("ACCESS_DENIED")
 	}
 	page, err := a.opts.Recovery.ListForPage(ctx, caller, manualrecovery.ListRequest{
 		Mode: manualrecovery.ListMode(mode), Operation: manualrecovery.OperationType(operation),
 		Offset: offset, Limit: limit})
 	if err != nil {
-		return login.UISupportRecoveryPage{}, recoveryMapError(err)
+		return ui.UISupportRecoveryPage{}, recoveryMapError(err)
 	}
-	result := login.UISupportRecoveryPage{HasMore: page.HasMore, NextOffset: page.NextOffset}
+	result := ui.UISupportRecoveryPage{HasMore: page.HasMore, NextOffset: page.NextOffset}
 	for _, item := range page.Items {
-		result.Items = append(result.Items, login.UISupportRecoveryListItem{
+		result.Items = append(result.Items, ui.UISupportRecoveryListItem{
 			RequestID: item.RequestID, SupportCaseID: item.SupportCaseID,
 			Operation: string(item.Operation), Status: string(item.Status),
 			TargetMasked: item.TargetMasked, CreatedAt: item.CreatedAt,
@@ -143,8 +142,8 @@ func (a *SupportAdapter) ListRecoveryForPage(ctx context.Context, staffUserID, m
 
 // Capabilities 返回当前工作人员的页面能力位（只影响呈现）。
 func (a *SupportAdapter) Capabilities(ctx context.Context,
-	staffUserID string) (login.UISupportCapabilities, error) {
-	caps := login.UISupportCapabilities{
+	staffUserID string) (ui.UISupportCapabilities, error) {
+	caps := ui.UISupportCapabilities{
 		ReadCases:       a.supportCheck(ctx, staffUserID, support.PermissionCasesRead),
 		CreateCase:      a.supportCheck(ctx, staffUserID, support.PermissionCasesCreate),
 		UpdateCase:      a.supportCheck(ctx, staffUserID, support.PermissionCasesUpdate),
@@ -164,10 +163,10 @@ func supportCaller(staffUserID string) (support.Caller, error) {
 
 // ListCases 列出当前工作人员被指派的求助单。
 func (a *SupportAdapter) ListCases(ctx context.Context, staffUserID string,
-	query login.UISupportCaseQuery) (login.UISupportCasePage, error) {
+	query ui.UISupportCaseQuery) (ui.UISupportCasePage, error) {
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
-		return login.UISupportCasePage{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportCasePage{}, supportErr("ACCESS_DENIED")
 	}
 	limit := query.Limit
 	if limit <= 0 {
@@ -177,21 +176,21 @@ func (a *SupportAdapter) ListCases(ctx context.Context, staffUserID string,
 		limit = 100
 	}
 	if query.Offset < 0 {
-		return login.UISupportCasePage{}, supportErr("REQ_INVALID")
+		return ui.UISupportCasePage{}, supportErr("REQ_INVALID")
 	}
 	var statuses []support.CaseStatus
 	if trimmed := strings.TrimSpace(query.Status); trimmed != "" {
 		status := support.CaseStatus(trimmed)
 		if !status.Valid() {
-			return login.UISupportCasePage{}, supportErr("REQ_INVALID")
+			return ui.UISupportCasePage{}, supportErr("REQ_INVALID")
 		}
 		statuses = append(statuses, status)
 	}
 	page, err := a.opts.Cases.ListCases(ctx, caller, statuses, query.Offset, limit)
 	if err != nil {
-		return login.UISupportCasePage{}, supportMapError(err)
+		return ui.UISupportCasePage{}, supportMapError(err)
 	}
-	result := login.UISupportCasePage{HasMore: page.HasMore, NextOffset: page.NextOffset}
+	result := ui.UISupportCasePage{HasMore: page.HasMore, NextOffset: page.NextOffset}
 	for _, item := range page.Cases {
 		result.Cases = append(result.Cases, supportCaseView(item))
 	}
@@ -199,8 +198,8 @@ func (a *SupportAdapter) ListCases(ctx context.Context, staffUserID string,
 }
 
 // supportCaseView 转换求助单公开视图。
-func supportCaseView(view support.CaseView) login.UISupportCaseView {
-	return login.UISupportCaseView{
+func supportCaseView(view support.CaseView) ui.UISupportCaseView {
+	return ui.UISupportCaseView{
 		ID: view.ID, TargetUserID: view.TargetUserID,
 		TargetMaskedUsername: view.TargetMaskedUsername,
 		TargetMaskedEmail:    view.TargetMaskedEmail,
@@ -211,8 +210,8 @@ func supportCaseView(view support.CaseView) login.UISupportCaseView {
 }
 
 // supportTargetView 转换目标脱敏视图。
-func supportTargetView(view support.TargetView) login.UISupportTargetView {
-	return login.UISupportTargetView{
+func supportTargetView(view support.TargetView) ui.UISupportTargetView {
+	return ui.UISupportTargetView{
 		UserID: view.UserID, MaskedUsername: view.MaskedUsername,
 		MaskedEmail: view.MaskedEmail, Status: view.Status,
 		HasPassword: view.HasPassword, HasVerifiedEmail: view.HasVerifiedEmail,
@@ -222,23 +221,23 @@ func supportTargetView(view support.TargetView) login.UISupportTargetView {
 
 // GetCase 读取求助单详情、追加式历史与实时目标摘要（目标读取失败不伪造数据）。
 func (a *SupportAdapter) GetCase(ctx context.Context, staffUserID,
-	caseID string) (login.UISupportCaseDetail, error) {
+	caseID string) (ui.UISupportCaseDetail, error) {
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
-		return login.UISupportCaseDetail{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportCaseDetail{}, supportErr("ACCESS_DENIED")
 	}
 	view, err := a.opts.Cases.GetCase(ctx, caller, caseID)
 	if err != nil {
-		return login.UISupportCaseDetail{}, supportMapError(err)
+		return ui.UISupportCaseDetail{}, supportMapError(err)
 	}
-	detail := login.UISupportCaseDetail{Case: supportCaseView(view)}
+	detail := ui.UISupportCaseDetail{Case: supportCaseView(view)}
 	history, historyErr := a.opts.Cases.ListEvents(ctx, caller, caseID, 0, 20)
 	if historyErr != nil {
 		detail.HistoryUnavailable = true
 	} else {
-		detail.History = login.UISupportHistoryPage{HasMore: history.HasMore, NextOffset: history.NextOffset}
+		detail.History = ui.UISupportHistoryPage{HasMore: history.HasMore, NextOffset: history.NextOffset}
 		for _, event := range history.Events {
-			detail.History.Events = append(detail.History.Events, login.UISupportEventView{
+			detail.History.Events = append(detail.History.Events, ui.UISupportEventView{
 				Seq: event.Seq, Action: event.Action, ActorType: string(event.ActorType),
 				ActorID: event.ActorID, FromStatus: string(event.FromStatus),
 				ToStatus: string(event.ToStatus), Detail: event.Detail, CreatedAt: event.CreatedAt,
@@ -259,112 +258,112 @@ func (a *SupportAdapter) GetCase(ctx context.Context, staffUserID,
 
 // LookupTarget 按稳定用户 ID 读取获准普通账户的必要脱敏摘要。
 func (a *SupportAdapter) LookupTarget(ctx context.Context, staffUserID, targetUserID,
-	requestID string) (login.UISupportTargetView, error) {
+	requestID string) (ui.UISupportTargetView, error) {
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
-		return login.UISupportTargetView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportTargetView{}, supportErr("ACCESS_DENIED")
 	}
 	view, err := a.opts.Cases.LookupTarget(ctx, caller, targetUserID, requestID)
 	if err != nil {
-		return login.UISupportTargetView{}, supportMapError(err)
+		return ui.UISupportTargetView{}, supportMapError(err)
 	}
 	return supportTargetView(view), nil
 }
 
 // CreateCase 登记求助单（不发送邮件、不批准恢复）。
 func (a *SupportAdapter) CreateCase(ctx context.Context, staffUserID, targetUserID, reason,
-	requestID string) (login.UISupportCaseView, error) {
+	requestID string) (ui.UISupportCaseView, error) {
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
-		return login.UISupportCaseView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportCaseView{}, supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "support.case.create", TargetUserID: targetUserID, Reason: reason,
 		RequestID: requestID})
 	if err != nil {
-		return login.UISupportCaseView{}, err
+		return ui.UISupportCaseView{}, err
 	}
 	view, err := a.opts.Cases.CreateCase(ctx, caller, support.CreateCaseRequest{
 		TargetUserID: targetUserID, Reason: reason, RequestID: requestID})
 	if err != nil {
-		return login.UISupportCaseView{}, supportMapError(err)
+		return ui.UISupportCaseView{}, supportMapError(err)
 	}
 	return supportCaseView(view), nil
 }
 
 // ReassignCase 转派求助单。
 func (a *SupportAdapter) ReassignCase(ctx context.Context, staffUserID, caseID,
-	newAssigneeUserID, requestID string) (login.UISupportCaseView, error) {
+	newAssigneeUserID, requestID string) (ui.UISupportCaseView, error) {
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
-		return login.UISupportCaseView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportCaseView{}, supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "support.case.update", TargetUserID: caseID, RequestID: requestID})
 	if err != nil {
-		return login.UISupportCaseView{}, err
+		return ui.UISupportCaseView{}, err
 	}
 	view, err := a.opts.Cases.ReassignCase(ctx, caller, support.ReassignRequest{
 		CaseID: caseID, NewAssigneeUserID: newAssigneeUserID, RequestID: requestID})
 	if err != nil {
-		return login.UISupportCaseView{}, supportMapError(err)
+		return ui.UISupportCaseView{}, supportMapError(err)
 	}
 	return supportCaseView(view), nil
 }
 
 // TransitionCase 变更求助单状态。
 func (a *SupportAdapter) TransitionCase(ctx context.Context, staffUserID, caseID, toStatus,
-	note, requestID string) (login.UISupportCaseView, error) {
+	note, requestID string) (ui.UISupportCaseView, error) {
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
-		return login.UISupportCaseView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportCaseView{}, supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "support.case.update", TargetUserID: caseID, RequestID: requestID})
 	if err != nil {
-		return login.UISupportCaseView{}, err
+		return ui.UISupportCaseView{}, err
 	}
 	view, err := a.opts.Cases.TransitionCase(ctx, caller, support.TransitionRequest{
 		CaseID: caseID, ToStatus: support.CaseStatus(toStatus), Note: note, RequestID: requestID})
 	if err != nil {
-		return login.UISupportCaseView{}, supportMapError(err)
+		return ui.UISupportCaseView{}, supportMapError(err)
 	}
 	return supportCaseView(view), nil
 }
 
 // SendReset 向原已验证邮箱发起一次性找回入口。
 func (a *SupportAdapter) SendReset(ctx context.Context, staffUserID, caseID,
-	requestID string) (login.UISupportSendResult, error) {
+	requestID string) (ui.UISupportSendResult, error) {
 	caller, err := supportCaller(staffUserID)
 	if err != nil {
-		return login.UISupportSendResult{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportSendResult{}, supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "support.reset.send", TargetUserID: caseID, RequestID: requestID})
 	if err != nil {
-		return login.UISupportSendResult{}, err
+		return ui.UISupportSendResult{}, err
 	}
 	result, err := a.opts.Cases.SendReset(ctx, caller, support.SendRequest{
 		CaseID: caseID, RequestID: requestID})
 	if err != nil {
-		return login.UISupportSendResult{}, supportMapError(err)
+		return ui.UISupportSendResult{}, supportMapError(err)
 	}
-	return login.UISupportSendResult{Sent: result.Sent, ManualReview: result.ManualReview,
+	return ui.UISupportSendResult{Sent: result.Sent, ManualReview: result.ManualReview,
 		Status: string(result.Status)}, nil
 }
 
 // RecoveryPolicy 返回人工恢复制度的真实摘要；无任何客服/审批能力时拒绝读取。
 func (a *SupportAdapter) RecoveryPolicy(ctx context.Context,
-	staffUserID string) (login.UISupportRecoveryPolicy, error) {
+	staffUserID string) (ui.UISupportRecoveryPolicy, error) {
 	allowed := a.supportCheck(ctx, staffUserID, support.PermissionCasesRead) ||
 		a.supportCheck(ctx, staffUserID, manualrecovery.PermissionRequest) ||
 		a.supportCheck(ctx, staffUserID, manualrecovery.PermissionApprove) ||
 		a.supportCheck(ctx, staffUserID, manualrecovery.PermissionMFAApprove)
 	if !allowed {
-		return login.UISupportRecoveryPolicy{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportRecoveryPolicy{}, supportErr("ACCESS_DENIED")
 	}
 	policy := a.opts.Recovery.PolicySummary()
-	result := login.UISupportRecoveryPolicy{
+	result := ui.UISupportRecoveryPolicy{
 		Enabled:                    policy.Enabled,
 		WaitPeriodSeconds:          int64(policy.WaitPeriod / time.Second),
 		ApprovalTTLSeconds:         int64(policy.ApprovalTTL / time.Second),
@@ -382,16 +381,16 @@ func (a *SupportAdapter) RecoveryPolicy(ctx context.Context,
 
 // CreateRecoveryRequest 登记人工恢复申请。
 func (a *SupportAdapter) CreateRecoveryRequest(ctx context.Context, staffUserID string,
-	create login.UISupportRecoveryCreate, requestID string) (login.UISupportRecoveryView, error) {
+	create ui.UISupportRecoveryCreate, requestID string) (ui.UISupportRecoveryView, error) {
 	caller, err := manualrecovery.UserCaller(staffUserID)
 	if err != nil {
-		return login.UISupportRecoveryView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportRecoveryView{}, supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "recovery.request", TargetUserID: create.TargetUserID,
 		Reason: create.Reason, RequestID: requestID})
 	if err != nil {
-		return login.UISupportRecoveryView{}, err
+		return ui.UISupportRecoveryView{}, err
 	}
 	record, err := a.opts.Recovery.Create(ctx, caller, manualrecovery.CreateRequest{
 		TargetUserID: create.TargetUserID, Operation: manualrecovery.OperationType(create.Operation),
@@ -401,7 +400,7 @@ func (a *SupportAdapter) CreateRecoveryRequest(ctx context.Context, staffUserID 
 		Delivery:      manualrecovery.DeliveryChannel(create.Delivery),
 		SupportCaseID: create.SupportCaseID, RequestID: requestID})
 	if err != nil {
-		return login.UISupportRecoveryView{}, recoveryMapError(err)
+		return ui.UISupportRecoveryView{}, recoveryMapError(err)
 	}
 	return a.recoveryView(ctx, staffUserID, record), nil
 }
@@ -409,16 +408,16 @@ func (a *SupportAdapter) CreateRecoveryRequest(ctx context.Context, staffUserID 
 // GetRecoveryRequest 读取人工恢复申请：发起者/审批人走参与人通道，候选审批人走
 // 受控待审批读取通道；随后补充批准与执行投影（读取失败不伪造数据）。
 func (a *SupportAdapter) GetRecoveryRequest(ctx context.Context, staffUserID,
-	requestID string) (login.UISupportRecoveryView, error) {
+	requestID string) (ui.UISupportRecoveryView, error) {
 	caller, err := manualrecovery.UserCaller(staffUserID)
 	if err != nil {
-		return login.UISupportRecoveryView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportRecoveryView{}, supportErr("ACCESS_DENIED")
 	}
 	// 统一受控读取：发起者/审批人/执行人/候选审批人一次判定，正常候选审批读取不会
 	// 被记录成误导性的“参与人读取被拒”审计。
 	record, err := a.opts.Recovery.GetRequestForPage(ctx, caller, requestID)
 	if err != nil {
-		return login.UISupportRecoveryView{}, recoveryMapError(err)
+		return ui.UISupportRecoveryView{}, recoveryMapError(err)
 	}
 	view := a.recoveryView(ctx, staffUserID, record)
 	if approval, found, approvalErr := a.opts.Recovery.GetApproval(ctx, caller, requestID); approvalErr == nil && found {
@@ -429,8 +428,8 @@ func (a *SupportAdapter) GetRecoveryRequest(ctx context.Context, staffUserID,
 
 // recoveryView 组合申请/批准/执行投影（只显示真实读取到的数据）。
 func (a *SupportAdapter) recoveryView(ctx context.Context, staffUserID string,
-	record manualrecovery.RequestRecord) login.UISupportRecoveryView {
-	view := login.UISupportRecoveryView{
+	record manualrecovery.RequestRecord) ui.UISupportRecoveryView {
+	view := ui.UISupportRecoveryView{
 		ID: record.ID, TargetUserID: record.TargetUserID,
 		InitiatorUserID: record.InitiatorUserID, Operation: string(record.Operation),
 		Status: string(record.Status), VerificationBasis: string(record.VerificationBasis),
@@ -457,7 +456,7 @@ func (a *SupportAdapter) recoveryView(ctx context.Context, staffUserID string,
 		return view
 	}
 	if approval, found, approvalErr := a.opts.Recovery.GetApproval(ctx, caller, record.ID); approvalErr == nil && found {
-		view.Approval = login.UISupportApprovalView{
+		view.Approval = ui.UISupportApprovalView{
 			ID: approval.ID, ApproverUserID: approval.ApproverUserID,
 			Status: string(approval.Status), ApprovedAt: approval.ApprovedAt,
 			NotBefore: approval.NotBefore, ExpiresAt: approval.ExpiresAt,
@@ -466,7 +465,7 @@ func (a *SupportAdapter) recoveryView(ctx context.Context, staffUserID string,
 		view.HasApproval = true
 	}
 	if execution, found, executionErr := a.opts.Recovery.GetExecution(ctx, caller, record.ID); executionErr == nil && found {
-		view.Execution = login.UISupportExecutionView{
+		view.Execution = ui.UISupportExecutionView{
 			ID: execution.ID, ExecutorUserID: execution.ExecutorUserID,
 			Status: execution.Status, SessionsRevoked: execution.SessionsRevoked,
 			FactorsReset: execution.FactorsReset, CredentialIssued: execution.ResetCredentialIssued,
@@ -480,22 +479,22 @@ func (a *SupportAdapter) recoveryView(ctx context.Context, staffUserID string,
 
 // ApproveRecovery 批准申请（不执行）。
 func (a *SupportAdapter) ApproveRecovery(ctx context.Context, staffUserID, requestID, note,
-	traceID string) (login.UISupportApprovalView, error) {
+	traceID string) (ui.UISupportApprovalView, error) {
 	caller, err := manualrecovery.UserCaller(staffUserID)
 	if err != nil {
-		return login.UISupportApprovalView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportApprovalView{}, supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "recovery.approve", RequestID: requestID, Reason: note})
 	if err != nil {
-		return login.UISupportApprovalView{}, err
+		return ui.UISupportApprovalView{}, err
 	}
 	approval, err := a.opts.Recovery.Approve(ctx, caller, manualrecovery.ApproveRequest{
 		RequestID: requestID, Note: note, TraceID: traceID})
 	if err != nil {
-		return login.UISupportApprovalView{}, recoveryMapError(err)
+		return ui.UISupportApprovalView{}, recoveryMapError(err)
 	}
-	return login.UISupportApprovalView{
+	return ui.UISupportApprovalView{
 		ID: approval.ID, ApproverUserID: approval.ApproverUserID, Status: string(approval.Status),
 		ApprovedAt: approval.ApprovedAt, NotBefore: approval.NotBefore,
 		ExpiresAt: approval.ExpiresAt, InvalidatedReason: approval.InvalidatedReason,
@@ -509,7 +508,7 @@ func (a *SupportAdapter) RejectRecovery(ctx context.Context, staffUserID, reques
 	if err != nil {
 		return supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "recovery.approve", RequestID: requestID, Reason: reason})
 	if err != nil {
 		return err
@@ -536,20 +535,20 @@ func (a *SupportAdapter) CancelRecovery(ctx context.Context, staffUserID, reques
 
 // ExecuteRecovery 执行一次性受控恢复（服务端唯一认领与复核）。
 func (a *SupportAdapter) ExecuteRecovery(ctx context.Context, staffUserID, requestID,
-	traceID string) (login.UISupportExecutionView, error) {
+	traceID string) (ui.UISupportExecutionView, error) {
 	caller, err := manualrecovery.UserCaller(staffUserID)
 	if err != nil {
-		return login.UISupportExecutionView{}, supportErr("ACCESS_DENIED")
+		return ui.UISupportExecutionView{}, supportErr("ACCESS_DENIED")
 	}
-	ctx, err = a.withPageReauth(ctx, staffUserID, login.UISupportActionBinding{
+	ctx, err = a.withPageReauth(ctx, staffUserID, ui.UISupportActionBinding{
 		Action: "recovery.execute", RequestID: requestID})
 	if err != nil {
-		return login.UISupportExecutionView{}, err
+		return ui.UISupportExecutionView{}, err
 	}
 	result, err := a.opts.Recovery.Execute(ctx, caller, manualrecovery.ExecuteRequest{
 		RequestID: requestID, TraceID: traceID})
 	if err != nil {
-		return login.UISupportExecutionView{}, recoveryMapError(err)
+		return ui.UISupportExecutionView{}, recoveryMapError(err)
 	}
 	// 通知状态如实透出：queued 表示已交给可靠投递队列（待投递），不是已发送。
 	notification := result.NotificationState
@@ -559,7 +558,7 @@ func (a *SupportAdapter) ExecuteRecovery(ctx context.Context, staffUserID, reque
 			notification = "sent"
 		}
 	}
-	return login.UISupportExecutionView{
+	return ui.UISupportExecutionView{
 		ID: result.ExecutionID, ExecutorUserID: staffUserID, Status: string(result.Status),
 		SessionsRevoked: result.SessionsRevoked, FactorsReset: result.FactorsReset,
 		CredentialIssued: result.CredentialIssued, Notification: notification,

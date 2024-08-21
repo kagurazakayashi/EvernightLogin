@@ -10,16 +10,6 @@ package serverapp
 
 import (
 	"context"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -38,6 +28,15 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
 )
 
 const (
@@ -96,8 +95,8 @@ func (allowSensitiveTestRunner) NotifyOutcome(context.Context, reauth.Result,
 type scopeTestSessions struct{ userID string }
 
 func (s scopeTestSessions) ResolvePageSession(context.Context,
-	*http.Request) (login.UISession, error) {
-	return login.UISession{Authenticated: true, UserID: s.userID, Kind: "management",
+	*http.Request) (ui.UISession, error) {
+	return ui.UISession{Authenticated: true, UserID: s.userID, Kind: "management",
 		ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
@@ -293,7 +292,7 @@ func newAppScopeTestEnv(t *testing.T) *appScopeTestEnv {
 }
 
 // appIDs 返回适配器列表中的应用 ID 集合。
-func appIDs(page login.UIAppPage) map[string]bool {
+func appIDs(page ui.UIAppPage) map[string]bool {
 	ids := make(map[string]bool, len(page.Applications))
 	for _, item := range page.Applications {
 		ids[item.ID] = true
@@ -308,7 +307,7 @@ func TestApplicationScopeIsolationAndReadWrite(t *testing.T) {
 	ctx := context.Background()
 
 	// 应用甲管理员：只看到甲；详情/成员仅本应用可读。
-	pageA, err := env.adapter.ListApplications(ctx, scopeTestAdminA, login.UIAppQuery{Limit: 20})
+	pageA, err := env.adapter.ListApplications(ctx, scopeTestAdminA, ui.UIAppQuery{Limit: 20})
 	if err != nil {
 		t.Fatalf("甲列表失败: %v", err)
 	}
@@ -326,7 +325,7 @@ func TestApplicationScopeIsolationAndReadWrite(t *testing.T) {
 		t.Fatal("甲读取乙应用详情必须拒绝")
 	}
 	if _, err := env.adapter.UpdateApplication(ctx, scopeTestAdminA, scopeTestAppB,
-		login.UIApplicationChange{Name: "越权改名"}, 1, "req-cross-write"); err == nil {
+		ui.UIApplicationChange{Name: "越权改名"}, 1, "req-cross-write"); err == nil {
 		t.Fatal("甲修改乙应用必须拒绝")
 	}
 	// 管理 API（/admin/v1 域路由）复用同一页面动作复核：列表读取按“任一应用范围”
@@ -346,16 +345,16 @@ func TestApplicationScopeIsolationAndReadWrite(t *testing.T) {
 		t.Fatal("甲跨应用写复核必须拒绝")
 	}
 	if _, err := env.adapter.ListMembers(ctx, scopeTestAdminA, scopeTestAppA,
-		login.UIAppMemberQuery{Limit: 20}); err != nil {
+		ui.UIAppMemberQuery{Limit: 20}); err != nil {
 		t.Fatalf("甲读取本应用成员失败: %v", err)
 	}
 	if _, err := env.adapter.ListMembers(ctx, scopeTestAdminA, scopeTestAppB,
-		login.UIAppMemberQuery{Limit: 20}); err == nil {
+		ui.UIAppMemberQuery{Limit: 20}); err == nil {
 		t.Fatal("甲读取乙应用成员必须拒绝")
 	}
 
 	// 应用乙管理员对称验证。
-	pageB, err := env.adapter.ListApplications(ctx, scopeTestAdminB, login.UIAppQuery{Limit: 20})
+	pageB, err := env.adapter.ListApplications(ctx, scopeTestAdminB, ui.UIAppQuery{Limit: 20})
 	if err != nil {
 		t.Fatalf("乙列表失败: %v", err)
 	}
@@ -364,13 +363,13 @@ func TestApplicationScopeIsolationAndReadWrite(t *testing.T) {
 		t.Fatalf("乙列表泄露/缺少应用: %v", idsB)
 	}
 	if _, err := env.adapter.ListMembers(ctx, scopeTestAdminB, scopeTestAppA,
-		login.UIAppMemberQuery{Limit: 20}); err == nil {
+		ui.UIAppMemberQuery{Limit: 20}); err == nil {
 		t.Fatal("乙读取甲应用成员必须拒绝")
 	}
 
 	// 分页：甲把 offset 推到 1 时不泄露乙应用（范围内仅 1 项 → 空页）。
 	watermark, err := env.adapter.ListApplications(ctx, scopeTestAdminA,
-		login.UIAppQuery{Limit: 1, Offset: 1})
+		ui.UIAppQuery{Limit: 1, Offset: 1})
 	if err != nil {
 		t.Fatalf("甲分页失败: %v", err)
 	}
@@ -379,7 +378,7 @@ func TestApplicationScopeIsolationAndReadWrite(t *testing.T) {
 	}
 
 	// 普通用户：列表与详情都拒绝。
-	if _, err := env.adapter.ListApplications(ctx, scopeTestOrdinary, login.UIAppQuery{Limit: 20}); err == nil {
+	if _, err := env.adapter.ListApplications(ctx, scopeTestOrdinary, ui.UIAppQuery{Limit: 20}); err == nil {
 		t.Fatal("普通用户列表应用必须拒绝")
 	}
 	if _, err := env.adapter.GetApplication(ctx, scopeTestOrdinary, scopeTestAppA); err == nil {
@@ -392,7 +391,7 @@ func TestApplicationScopeIsolationAndReadWrite(t *testing.T) {
 		t.Fatalf("只读用户读取本应用失败: %v", err)
 	}
 	if _, err := env.adapter.UpdateApplication(ctx, scopeTestReaderA, scopeTestAppA,
-		login.UIApplicationChange{Name: readOnly.Name}, readOnly.RowVersion, "req-readonly"); err == nil {
+		ui.UIApplicationChange{Name: readOnly.Name}, readOnly.RowVersion, "req-readonly"); err == nil {
 		t.Fatal("只有读取权限的用户修改应用必须拒绝")
 	}
 	if _, _, err := env.adapter.SetApplicationState(ctx, scopeTestReaderA, scopeTestAppA,
@@ -428,7 +427,7 @@ func TestApplicationScopeIsolationAndReadWrite(t *testing.T) {
 	// 撤销甲的角色分配后立即失效（不缓存授权）。
 	execScope(t, env.storage, `DELETE FROM user_roles WHERE user_id=? AND scope_id=?`,
 		scopeTestAdminA, scopeTestAppA)
-	if _, err := env.adapter.ListApplications(ctx, scopeTestAdminA, login.UIAppQuery{Limit: 20}); err == nil {
+	if _, err := env.adapter.ListApplications(ctx, scopeTestAdminA, ui.UIAppQuery{Limit: 20}); err == nil {
 		t.Fatal("撤销角色后应用列表必须立即拒绝")
 	}
 	if _, err := env.adapter.GetApplication(ctx, scopeTestAdminA, scopeTestAppA); err == nil {
@@ -450,18 +449,18 @@ func mustRoleCaller(t *testing.T, userID string) role.Caller {
 // 访问乙应用资料页返回 403；普通用户应用页 403。页面使用真实适配器与真实服务。
 func TestApplicationPageScopeRendering(t *testing.T) {
 	env := newAppScopeTestEnv(t)
-	pageFor := func(userID string) *login.WebUI {
+	pageFor := func(userID string) *ui.WebUI {
 		t.Helper()
-		ui, err := login.NewWebUI(login.WebUIOptions{
+		ui, err := ui.NewWebUI(ui.WebUIOptions{
 			Session:  scopeTestSessions{userID: userID},
-			PageApps: &login.UIPageAppsOptions{Backend: env.adapter},
+			PageApps: &ui.UIPageAppsOptions{Backend: env.adapter},
 		})
 		if err != nil {
 			t.Fatalf("页面框架: %v", err)
 		}
 		return ui
 	}
-	get := func(ui *login.WebUI, target string) *httptest.ResponseRecorder {
+	get := func(ui *ui.WebUI, target string) *httptest.ResponseRecorder {
 		t.Helper()
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, target, nil)

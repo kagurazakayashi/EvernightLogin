@@ -10,13 +10,12 @@ package uiadminadapter
 import (
 	"context"
 	"errors"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/backupadmin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"time"
 )
 
 // BackupsRecorder 是拒绝留痕契约（生产 *audit.Recorder）。
@@ -31,7 +30,7 @@ type BackupsOptions struct {
 	Now      func() time.Time
 }
 
-// BackupsAdapter 实现 login.UIPageBackupBackend。
+// BackupsAdapter 实现 ui.UIPageBackupBackend。
 type BackupsAdapter struct {
 	opts BackupsOptions
 }
@@ -50,7 +49,7 @@ func NewBackups(options BackupsOptions) (*BackupsAdapter, error) {
 // backupCaller 把页面已认证用户 ID 重建为可信 Caller。
 func backupCaller(userID string) (account.Caller, error) {
 	if userID == "" || !account.ValidUserID(userID) {
-		return account.Caller{}, &login.UIBackupError{Code: "ACCESS_DENIED"}
+		return account.Caller{}, &ui.UIBackupError{Code: "ACCESS_DENIED"}
 	}
 	return account.UserCaller(userID)
 }
@@ -62,18 +61,18 @@ func mapBackupError(err error) error {
 	}
 	switch {
 	case errors.Is(err, backupadmin.ErrAccessDenied):
-		return &login.UIBackupError{Code: "ACCESS_DENIED"}
+		return &ui.UIBackupError{Code: "ACCESS_DENIED"}
 	case errors.Is(err, backupadmin.ErrNotFound):
-		return &login.UIBackupError{Code: "NOT_FOUND"}
+		return &ui.UIBackupError{Code: "NOT_FOUND"}
 	case errors.Is(err, backupadmin.ErrConflict), errors.Is(err, backupadmin.ErrProtection),
 		errors.Is(err, backupadmin.ErrNotDownloadable),
 		errors.Is(err, backupadmin.ErrDownloadTooLarge):
-		return &login.UIBackupError{Code: "CONFLICT"}
+		return &ui.UIBackupError{Code: "CONFLICT"}
 	case errors.Is(err, backupadmin.ErrInvalidRequest),
 		errors.Is(err, backupadmin.ErrRetentionInvalid):
-		return &login.UIBackupError{Code: "INVALID"}
+		return &ui.UIBackupError{Code: "INVALID"}
 	default:
-		return &login.UIBackupError{Code: "UNAVAILABLE"}
+		return &ui.UIBackupError{Code: "UNAVAILABLE"}
 	}
 }
 
@@ -82,25 +81,25 @@ func actorText(actor audit.Actor) string {
 	return string(actor.Type) + " · " + actor.ID
 }
 
-// Capabilities 实现 login.UIPageBackupBackend。
+// Capabilities 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) Capabilities(ctx context.Context,
-	userID string) (login.UIBackupCapabilities, error) {
+	userID string) (ui.UIBackupCapabilities, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupCapabilities{}, err
+		return ui.UIBackupCapabilities{}, err
 	}
 	caps, err := a.opts.Admin.Capabilities(ctx, caller)
 	if err != nil {
-		return login.UIBackupCapabilities{}, mapBackupError(err)
+		return ui.UIBackupCapabilities{}, mapBackupError(err)
 	}
-	return login.UIBackupCapabilities{
+	return ui.UIBackupCapabilities{
 		Read: caps.Read, Create: caps.Create, Cancel: caps.Cancel,
 		Download: caps.Download, Retention: caps.Retention, Cleanup: caps.Cleanup,
 		DownloadTTL: caps.DownloadTTL,
 	}, nil
 }
 
-// RecordDenial 实现 login.UIPageBackupBackend。
+// RecordDenial 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) RecordDenial(ctx context.Context, userID, reason string) error {
 	if a.opts.Recorder == nil || userID == "" {
 		return nil
@@ -118,8 +117,8 @@ func (a *BackupsAdapter) RecordDenial(ctx context.Context, userID, reason string
 }
 
 // scheduleView 把领域计划视图映射为页面视图。
-func scheduleView(view backupadmin.ScheduleView) login.UIBackupSchedule {
-	return login.UIBackupSchedule{
+func scheduleView(view backupadmin.ScheduleView) ui.UIBackupSchedule {
+	return ui.UIBackupSchedule{
 		ID: view.ID, Name: view.Name, Enabled: view.Enabled,
 		ScheduleType: view.ScheduleType, Expression: view.Expression,
 		TimeZone: view.TimeZone, PeriodDescription: view.PeriodDescription,
@@ -134,9 +133,9 @@ func scheduleView(view backupadmin.ScheduleView) login.UIBackupSchedule {
 	}
 }
 
-// ListSchedules 实现 login.UIPageBackupBackend。
+// ListSchedules 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) ListSchedules(ctx context.Context,
-	userID string) ([]login.UIBackupSchedule, error) {
+	userID string) ([]ui.UIBackupSchedule, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
 		return nil, err
@@ -145,16 +144,16 @@ func (a *BackupsAdapter) ListSchedules(ctx context.Context,
 	if err != nil {
 		return nil, mapBackupError(err)
 	}
-	schedules := make([]login.UIBackupSchedule, 0, len(views))
+	schedules := make([]ui.UIBackupSchedule, 0, len(views))
 	for _, view := range views {
 		schedules = append(schedules, scheduleView(view))
 	}
 	return schedules, nil
 }
 
-// ListSchedulesPage 实现 login.UIBackupSchedulePagedBackend（步骤 218）。
+// ListSchedulesPage 实现 ui.UIBackupSchedulePagedBackend（步骤 218）。
 func (a *BackupsAdapter) ListSchedulesPage(ctx context.Context, userID string,
-	limit, offset int) ([]login.UIBackupSchedule, bool, error) {
+	limit, offset int) ([]ui.UIBackupSchedule, bool, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
 		return nil, false, err
@@ -163,30 +162,30 @@ func (a *BackupsAdapter) ListSchedulesPage(ctx context.Context, userID string,
 	if err != nil {
 		return nil, false, mapBackupError(err)
 	}
-	schedules := make([]login.UIBackupSchedule, 0, len(views))
+	schedules := make([]ui.UIBackupSchedule, 0, len(views))
 	for _, view := range views {
 		schedules = append(schedules, scheduleView(view))
 	}
 	return schedules, hasMore, nil
 }
 
-// GetSchedule 实现 login.UIPageBackupBackend。
+// GetSchedule 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) GetSchedule(ctx context.Context, userID,
-	scheduleID string) (login.UIBackupSchedule, error) {
+	scheduleID string) (ui.UIBackupSchedule, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupSchedule{}, err
+		return ui.UIBackupSchedule{}, err
 	}
 	view, err := a.opts.Admin.GetSchedule(ctx, caller, scheduleID)
 	if err != nil {
-		return login.UIBackupSchedule{}, mapBackupError(err)
+		return ui.UIBackupSchedule{}, mapBackupError(err)
 	}
 	return scheduleView(view), nil
 }
 
 // scheduleRequest 把页面请求映射为领域请求。
 func scheduleRequest(caller account.Caller, requestID string,
-	request login.UIBackupScheduleRequest) backupadmin.ScheduleRequest {
+	request ui.UIBackupScheduleRequest) backupadmin.ScheduleRequest {
 	return backupadmin.ScheduleRequest{
 		Caller: caller, Name: request.Name,
 		ScheduleType: task.ScheduleType(request.ScheduleType),
@@ -201,12 +200,12 @@ func scheduleRequest(caller account.Caller, requestID string,
 	}
 }
 
-// SaveSchedule 实现 login.UIPageBackupBackend：scheduleID 为空时创建，否则编辑。
+// SaveSchedule 实现 ui.UIPageBackupBackend：scheduleID 为空时创建，否则编辑。
 func (a *BackupsAdapter) SaveSchedule(ctx context.Context, userID, scheduleID string,
-	request login.UIBackupScheduleRequest, requestID string) (login.UIBackupSchedule, error) {
+	request ui.UIBackupScheduleRequest, requestID string) (ui.UIBackupSchedule, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupSchedule{}, err
+		return ui.UIBackupSchedule{}, err
 	}
 	domainRequest := scheduleRequest(caller, requestID, request)
 	var view backupadmin.ScheduleView
@@ -216,27 +215,27 @@ func (a *BackupsAdapter) SaveSchedule(ctx context.Context, userID, scheduleID st
 		view, err = a.opts.Admin.UpdateSchedule(ctx, scheduleID, domainRequest)
 	}
 	if err != nil {
-		return login.UIBackupSchedule{}, mapBackupError(err)
+		return ui.UIBackupSchedule{}, mapBackupError(err)
 	}
 	return scheduleView(view), nil
 }
 
-// SetScheduleEnabled 实现 login.UIPageBackupBackend。
+// SetScheduleEnabled 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) SetScheduleEnabled(ctx context.Context, userID, scheduleID string,
-	enabled bool, reason, requestID string) (login.UIBackupSchedule, error) {
+	enabled bool, reason, requestID string) (ui.UIBackupSchedule, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupSchedule{}, err
+		return ui.UIBackupSchedule{}, err
 	}
 	view, err := a.opts.Admin.SetScheduleEnabled(ctx, caller, scheduleID, enabled,
 		reason, requestID)
 	if err != nil {
-		return login.UIBackupSchedule{}, mapBackupError(err)
+		return ui.UIBackupSchedule{}, mapBackupError(err)
 	}
 	return scheduleView(view), nil
 }
 
-// DeleteSchedule 实现 login.UIPageBackupBackend。
+// DeleteSchedule 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) DeleteSchedule(ctx context.Context, userID, scheduleID, reason,
 	requestID string) error {
 	caller, err := backupCaller(userID)
@@ -246,27 +245,27 @@ func (a *BackupsAdapter) DeleteSchedule(ctx context.Context, userID, scheduleID,
 	return mapBackupError(a.opts.Admin.DeleteSchedule(ctx, caller, scheduleID, reason, requestID))
 }
 
-// EnqueueBackup 实现 login.UIPageBackupBackend。
+// EnqueueBackup 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) EnqueueBackup(ctx context.Context, userID,
-	requestID string) (login.UIBackupJobRef, error) {
+	requestID string) (ui.UIBackupJobRef, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupJobRef{}, err
+		return ui.UIBackupJobRef{}, err
 	}
 	ref, err := a.opts.Admin.EnqueueBackup(ctx, caller, requestID)
 	if err != nil {
-		return login.UIBackupJobRef{}, mapBackupError(err)
+		return ui.UIBackupJobRef{}, mapBackupError(err)
 	}
-	return login.UIBackupJobRef{JobID: ref.JobID, Existing: ref.Existing, State: ref.State}, nil
+	return ui.UIBackupJobRef{JobID: ref.JobID, Existing: ref.Existing, State: ref.State}, nil
 }
 
 // jobView 把领域任务视图映射为页面视图。
-func jobView(view backupadmin.JobView) login.UIBackupJob {
+func jobView(view backupadmin.JobView) ui.UIBackupJob {
 	canceller := ""
 	if view.Canceller != nil {
 		canceller = actorText(*view.Canceller)
 	}
-	return login.UIBackupJob{
+	return ui.UIBackupJob{
 		ID: view.ID, Kind: view.Kind, Origin: view.Origin,
 		ScheduleID: view.ScheduleID, State: view.State, StageCode: view.StageCode,
 		StageDescription: view.StageDescription, ProgressDone: view.ProgressDone,
@@ -282,9 +281,9 @@ func jobView(view backupadmin.JobView) login.UIBackupJob {
 	}
 }
 
-// ListJobs 实现 login.UIPageBackupBackend。
+// ListJobs 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) ListJobs(ctx context.Context, userID, kind string, limit,
-	offset int) ([]login.UIBackupJob, bool, error) {
+	offset int) ([]ui.UIBackupJob, bool, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
 		return nil, false, err
@@ -294,47 +293,47 @@ func (a *BackupsAdapter) ListJobs(ctx context.Context, userID, kind string, limi
 	if err != nil {
 		return nil, false, mapBackupError(err)
 	}
-	jobs := make([]login.UIBackupJob, 0, len(views))
+	jobs := make([]ui.UIBackupJob, 0, len(views))
 	for _, view := range views {
 		jobs = append(jobs, jobView(view))
 	}
 	return jobs, hasMore, nil
 }
 
-// GetJob 实现 login.UIPageBackupBackend。
+// GetJob 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) GetJob(ctx context.Context, userID,
-	jobID string) (login.UIBackupJob, error) {
+	jobID string) (ui.UIBackupJob, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupJob{}, err
+		return ui.UIBackupJob{}, err
 	}
 	view, err := a.opts.Admin.GetJob(ctx, caller, jobID)
 	if err != nil {
-		return login.UIBackupJob{}, mapBackupError(err)
+		return ui.UIBackupJob{}, mapBackupError(err)
 	}
 	return jobView(view), nil
 }
 
-// CancelJob 实现 login.UIPageBackupBackend：返回真实受理状态，不把请求写成已取消。
+// CancelJob 实现 ui.UIPageBackupBackend：返回真实受理状态，不把请求写成已取消。
 func (a *BackupsAdapter) CancelJob(ctx context.Context, userID, jobID, reason,
-	requestID string) (login.UIBackupCancelResult, error) {
+	requestID string) (ui.UIBackupCancelResult, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupCancelResult{}, err
+		return ui.UIBackupCancelResult{}, err
 	}
 	view, err := a.opts.Admin.CancelJob(ctx, caller, jobID, reason, requestID)
 	if err != nil {
-		return login.UIBackupCancelResult{}, mapBackupError(err)
+		return ui.UIBackupCancelResult{}, mapBackupError(err)
 	}
-	return login.UIBackupCancelResult{
+	return ui.UIBackupCancelResult{
 		JobID: view.JobID, Accepted: view.Accepted,
 		AlreadyRequested: view.AlreadyRequested, State: view.State, Note: view.Note,
 	}, nil
 }
 
 // artifactView 把领域产物视图映射为页面视图。
-func artifactView(view backupadmin.ArtifactView) login.UIBackupArtifact {
-	return login.UIBackupArtifact{
+func artifactView(view backupadmin.ArtifactView) ui.UIBackupArtifact {
+	return ui.UIBackupArtifact{
 		BackupID: view.BackupID, JobID: view.JobID, ScheduleID: view.ScheduleID,
 		Origin: view.Origin, SizeBytes: view.SizeBytes, FileSHA256: view.FileSHA256,
 		FormatVersion: view.FormatVersion, SchemaVersion: view.SchemaVersion,
@@ -349,9 +348,9 @@ func artifactView(view backupadmin.ArtifactView) login.UIBackupArtifact {
 	}
 }
 
-// ListArtifacts 实现 login.UIPageBackupBackend。
+// ListArtifacts 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) ListArtifacts(ctx context.Context, userID string,
-	query login.UIBackupArtifactQuery) ([]login.UIBackupArtifact, bool, error) {
+	query ui.UIBackupArtifactQuery) ([]ui.UIBackupArtifact, bool, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
 		return nil, false, err
@@ -366,50 +365,50 @@ func (a *BackupsAdapter) ListArtifacts(ctx context.Context, userID string,
 	if err != nil {
 		return nil, false, mapBackupError(err)
 	}
-	artifacts := make([]login.UIBackupArtifact, 0, len(views))
+	artifacts := make([]ui.UIBackupArtifact, 0, len(views))
 	for _, view := range views {
 		artifacts = append(artifacts, artifactView(view))
 	}
 	return artifacts, hasMore, nil
 }
 
-// GetArtifact 实现 login.UIPageBackupBackend。
+// GetArtifact 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) GetArtifact(ctx context.Context, userID,
-	backupID string) (login.UIBackupArtifact, error) {
+	backupID string) (ui.UIBackupArtifact, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupArtifact{}, err
+		return ui.UIBackupArtifact{}, err
 	}
 	view, err := a.opts.Admin.GetArtifact(ctx, caller, backupID)
 	if err != nil {
-		return login.UIBackupArtifact{}, mapBackupError(err)
+		return ui.UIBackupArtifact{}, mapBackupError(err)
 	}
 	return artifactView(view), nil
 }
 
-// Download 实现 login.UIPageBackupBackend：签发一次性令牌并立即兑换，领域服务在
+// Download 实现 ui.UIPageBackupBackend：签发一次性令牌并立即兑换，领域服务在
 // 签发与兑换时都重新检查独立下载权限与再次认证。
 func (a *BackupsAdapter) Download(ctx context.Context, userID,
-	backupID string) (login.UIBackupDownload, error) {
+	backupID string) (ui.UIBackupDownload, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupDownload{}, err
+		return ui.UIBackupDownload{}, err
 	}
 	ticket, err := a.opts.Admin.IssueDownloadTicket(ctx, caller, backupID, "")
 	if err != nil {
-		return login.UIBackupDownload{}, mapBackupError(err)
+		return ui.UIBackupDownload{}, mapBackupError(err)
 	}
 	file, err := a.opts.Admin.RedeemDownloadTicket(ctx, caller, ticket.Token, "")
 	if err != nil {
-		return login.UIBackupDownload{}, mapBackupError(err)
+		return ui.UIBackupDownload{}, mapBackupError(err)
 	}
-	return login.UIBackupDownload{BackupID: file.BackupID, FileName: file.FileName,
+	return ui.UIBackupDownload{BackupID: file.BackupID, FileName: file.FileName,
 		SHA256: file.SHA256, Size: file.Size, Data: file.Data}, nil
 }
 
-// ListNotifications 实现 login.UIPageBackupBackend。
+// ListNotifications 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) ListNotifications(ctx context.Context, userID, jobID,
-	backupID string) ([]login.UIBackupNotification, error) {
+	backupID string) ([]ui.UIBackupNotification, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
 		return nil, err
@@ -418,9 +417,9 @@ func (a *BackupsAdapter) ListNotifications(ctx context.Context, userID, jobID,
 	if err != nil {
 		return nil, mapBackupError(err)
 	}
-	notifications := make([]login.UIBackupNotification, 0, len(records))
+	notifications := make([]ui.UIBackupNotification, 0, len(records))
 	for _, record := range records {
-		notifications = append(notifications, login.UIBackupNotification{
+		notifications = append(notifications, ui.UIBackupNotification{
 			ID: record.ID, Kind: record.Kind, State: record.State,
 			Channel: record.Channel, RecipientMasked: record.RecipientMasked,
 			ErrorCode: record.ErrorCode, Attempts: record.Attempts,
@@ -431,15 +430,15 @@ func (a *BackupsAdapter) ListNotifications(ctx context.Context, userID, jobID,
 }
 
 // retentionView 把领域保留策略映射为页面视图。
-func retentionView(view backupadmin.RetentionView) login.UIBackupRetention {
-	result := login.UIBackupRetention{
+func retentionView(view backupadmin.RetentionView) ui.UIBackupRetention {
+	result := ui.UIBackupRetention{
 		Version: view.Policy.Version, MaxCount: view.Policy.MaxCount,
 		MaxAgeDays: view.Policy.MaxAgeDays, MaxTotalBytes: view.Policy.MaxTotalBytes,
 		IsDefault: view.IsDefault, UpdatedAt: view.Policy.UpdatedAt,
 		UpdatedBy: actorText(view.Policy.UpdatedBy), Reason: view.Policy.Reason,
 	}
 	if view.LastCleanup != nil {
-		result.LastCleanup = &login.UIBackupCleanupSummary{
+		result.LastCleanup = &ui.UIBackupCleanupSummary{
 			JobID: view.LastCleanup.JobID, State: view.LastCleanup.State,
 			RequestedCount: view.LastCleanup.RequestedCount,
 			CleanedCount:   view.LastCleanup.CleanedCount,
@@ -451,26 +450,26 @@ func retentionView(view backupadmin.RetentionView) login.UIBackupRetention {
 	return result
 }
 
-// Retention 实现 login.UIPageBackupBackend。
+// Retention 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) Retention(ctx context.Context,
-	userID string) (login.UIBackupRetention, error) {
+	userID string) (ui.UIBackupRetention, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupRetention{}, err
+		return ui.UIBackupRetention{}, err
 	}
 	view, err := a.opts.Admin.Retention(ctx, caller)
 	if err != nil {
-		return login.UIBackupRetention{}, mapBackupError(err)
+		return ui.UIBackupRetention{}, mapBackupError(err)
 	}
 	return retentionView(view), nil
 }
 
-// SaveRetention 实现 login.UIPageBackupBackend。
+// SaveRetention 实现 ui.UIPageBackupBackend。
 func (a *BackupsAdapter) SaveRetention(ctx context.Context, userID string,
-	request login.UIBackupRetentionRequest, requestID string) (login.UIBackupRetention, error) {
+	request ui.UIBackupRetentionRequest, requestID string) (ui.UIBackupRetention, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupRetention{}, err
+		return ui.UIBackupRetention{}, err
 	}
 	view, err := a.opts.Admin.SaveRetention(ctx, backupadmin.RetentionChange{
 		Caller: caller, MaxCount: request.MaxCount, MaxAgeDays: request.MaxAgeDays,
@@ -478,7 +477,7 @@ func (a *BackupsAdapter) SaveRetention(ctx context.Context, userID string,
 		Reason: request.Reason, RequestID: requestID,
 	})
 	if err != nil {
-		return login.UIBackupRetention{}, mapBackupError(err)
+		return ui.UIBackupRetention{}, mapBackupError(err)
 	}
 	// 保存后重新读取，确保最近清理摘要与页面数据来自真实服务。
 	refreshed, readErr := a.opts.Admin.Retention(ctx, caller)
@@ -488,68 +487,68 @@ func (a *BackupsAdapter) SaveRetention(ctx context.Context, userID string,
 	return retentionView(refreshed), nil
 }
 
-// CleanupPreview 实现 login.UIPageBackupBackend：预览不是删除授权。
+// CleanupPreview 实现 ui.UIPageBackupBackend：预览不是删除授权。
 func (a *BackupsAdapter) CleanupPreview(ctx context.Context,
-	userID string) (login.UIBackupCleanupPreview, error) {
+	userID string) (ui.UIBackupCleanupPreview, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupCleanupPreview{}, err
+		return ui.UIBackupCleanupPreview{}, err
 	}
 	preview, err := a.opts.Admin.CleanupPreview(ctx, caller)
 	if err != nil {
-		return login.UIBackupCleanupPreview{}, mapBackupError(err)
+		return ui.UIBackupCleanupPreview{}, mapBackupError(err)
 	}
-	result := login.UIBackupCleanupPreview{
+	result := ui.UIBackupCleanupPreview{
 		Policy:        retentionView(backupadmin.RetentionView{Policy: preview.Policy}),
 		TotalRetained: preview.TotalRetained, TotalBytes: preview.TotalBytes,
 		TargetBytes: preview.TargetBytes, PreviewedAt: preview.PreviewedAt,
 		Note:      preview.Note,
-		Targets:   make([]login.UIBackupCleanupCandidate, 0, len(preview.Targets)),
-		Protected: make([]login.UIBackupCleanupCandidate, 0, len(preview.Protected)),
+		Targets:   make([]ui.UIBackupCleanupCandidate, 0, len(preview.Targets)),
+		Protected: make([]ui.UIBackupCleanupCandidate, 0, len(preview.Protected)),
 	}
 	for _, target := range preview.Targets {
-		result.Targets = append(result.Targets, login.UIBackupCleanupCandidate{
+		result.Targets = append(result.Targets, ui.UIBackupCleanupCandidate{
 			Artifact: artifactView(target.ArtifactView), Reason: target.Reason})
 	}
 	for _, item := range preview.Protected {
-		result.Protected = append(result.Protected, login.UIBackupCleanupCandidate{
+		result.Protected = append(result.Protected, ui.UIBackupCleanupCandidate{
 			Artifact: artifactView(item.ArtifactView), Reason: item.Reason})
 	}
 	return result, nil
 }
 
-// RunCleanup 实现 login.UIPageBackupBackend：提交清理任务并返回真实任务编号。
+// RunCleanup 实现 ui.UIPageBackupBackend：提交清理任务并返回真实任务编号。
 func (a *BackupsAdapter) RunCleanup(ctx context.Context, userID,
-	requestID string) (login.UIBackupJobRef, error) {
+	requestID string) (ui.UIBackupJobRef, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupJobRef{}, err
+		return ui.UIBackupJobRef{}, err
 	}
 	ref, err := a.opts.Admin.EnqueueCleanup(ctx, caller, requestID)
 	if err != nil {
-		return login.UIBackupJobRef{}, mapBackupError(err)
+		return ui.UIBackupJobRef{}, mapBackupError(err)
 	}
-	return login.UIBackupJobRef{JobID: ref.JobID, Existing: ref.Existing, State: ref.State}, nil
+	return ui.UIBackupJobRef{JobID: ref.JobID, Existing: ref.Existing, State: ref.State}, nil
 }
 
-// Reconcile 实现 login.UIPageBackupBackend：只登记孤儿成品为“可用性未知”，不删除。
+// Reconcile 实现 ui.UIPageBackupBackend：只登记孤儿成品为“可用性未知”，不删除。
 func (a *BackupsAdapter) Reconcile(ctx context.Context,
-	userID string) (login.UIBackupReconcileResult, error) {
+	userID string) (ui.UIBackupReconcileResult, error) {
 	caller, err := backupCaller(userID)
 	if err != nil {
-		return login.UIBackupReconcileResult{}, err
+		return ui.UIBackupReconcileResult{}, err
 	}
 	// 对账是只读巡检 + 登记，要求查看权限即可；调用前仍由服务重新授权。
 	if err := a.opts.Admin.CheckReadAccess(ctx, caller); err != nil {
-		return login.UIBackupReconcileResult{}, mapBackupError(err)
+		return ui.UIBackupReconcileResult{}, mapBackupError(err)
 	}
 	result, err := a.opts.Admin.Reconcile(ctx)
 	if err != nil {
-		return login.UIBackupReconcileResult{}, mapBackupError(err)
+		return ui.UIBackupReconcileResult{}, mapBackupError(err)
 	}
-	return login.UIBackupReconcileResult{Scanned: result.Scanned,
+	return ui.UIBackupReconcileResult{Scanned: result.Scanned,
 		Orphans: result.Orphans, MissingFiles: result.MissingFiles}, nil
 }
 
 // 页面契约编译期断言：适配器必须完整实现备份管理页面后端。
-var _ login.UIPageBackupBackend = (*BackupsAdapter)(nil)
+var _ ui.UIPageBackupBackend = (*BackupsAdapter)(nil)

@@ -7,16 +7,15 @@ package serverapp
 
 import (
 	"context"
+	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
+	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
-	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 )
 
 // managePageEnv 打开真实共享装配并构造页面。
@@ -166,7 +165,7 @@ func TestManagePagesApplicationScopeA_B(t *testing.T) {
 	if rolesA.Code != http.StatusOK && rolesA.Code != http.StatusServiceUnavailable {
 		if env.pages != nil && env.pages.RBAC != nil {
 			_, rbacErr := env.pages.RBAC.ListRoles(context.Background(), scopeTestAdminA,
-				login.UIRBACRoleQuery{ScopeID: scopeTestAppA, Limit: 10})
+				ui.UIRBACRoleQuery{ScopeID: scopeTestAppA, Limit: 10})
 			t.Logf("RBAC.ListRoles 诊断: %v", rbacErr)
 		}
 		t.Fatalf("甲读取 A 角色失败: %d %s", rolesA.Code, truncateBody(rolesA.Body.String()))
@@ -263,4 +262,4 @@ func truncateBody(body string) string {
 }
 
 // 编译期确认页面装配使用了真实服务（避免未使用导入被误删）。
-var _ = login.UIAccessUser
+var _ = ui.UIAccessUser

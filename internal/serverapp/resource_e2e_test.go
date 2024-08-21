@@ -29,6 +29,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // TestResourceAuthorizeAndIntrospectE2E 使用真实 SQLite、真实领域服务与真实
@@ -190,10 +191,10 @@ VALUES(?,?,?,?,?,?)`, "ocs_e2e_resource", resourceApp.ID, resourceSecret[:8], di
 	if csrfErr != nil {
 		t.Fatalf("pagecsrf: %v", csrfErr)
 	}
-	webUI, uiErr := login.NewWebUI(login.WebUIOptions{
+	webUI, uiErr := ui.NewWebUI(ui.WebUIOptions{
 		Prefix: "", Session: pageSessions{service: services.Sessions, gate: gate, pathPrefix: ""},
 		FormTokens: csrfProvider,
-		PageOAuth:  &login.UIPageOAuthOptions{Backend: authAdapter, LoginPath: "/login", PostLoginPath: "/home"},
+		PageOAuth:  &ui.UIPageOAuthOptions{Backend: authAdapter, LoginPath: "/login", PostLoginPath: "/home"},
 		Now:        func() time.Time { return testNow }, Logger: deps.Logger,
 	})
 	if uiErr != nil {

@@ -2,7 +2,7 @@ package serverapp
 
 import (
 	"context"
-	login "github.com/kagurazakayashi/EvernightLogin"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 	"net/http"
 	"strconv"
 	"strings"
@@ -404,7 +404,7 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 					strings.TrimSpace(request.URL.Query().Get("operation")), offset, limit)
 				if err != nil {
 					return nil, adminDomainError(err, func(e error) string {
-						if typed, ok := e.(*login.UISupportError); ok {
+						if typed, ok := e.(*ui.UISupportError); ok {
 							return typed.Code
 						}
 						return "ACCESS_DENIED"
@@ -427,7 +427,7 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 					strings.TrimSpace(adminPathParam(request)))
 				if err != nil {
 					return nil, adminDomainError(err, func(e error) string {
-						if typed, ok := e.(*login.UISupportError); ok {
+						if typed, ok := e.(*ui.UISupportError); ok {
 							return typed.Code
 						}
 						return "ACCESS_DENIED"

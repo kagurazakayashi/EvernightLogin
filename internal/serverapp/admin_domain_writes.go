@@ -6,13 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/adminapi"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 	"io"
 	"net/http"
 	"strings"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/account"
-	"github.com/kagurazakayashi/EvernightLogin/internal/adminapi"
 )
 
 // buildAdminWriteRoutes 构造步骤 156 的管理写路由（用户/组/角色/应用/客服）。
@@ -39,7 +38,7 @@ func buildAdminWriteRoutes(managed *ManagedServices, pages *Pages) []adminapi.Do
 		if err != nil {
 			return nil, err
 		}
-		view, err := pages.Admin.CreateUser(ctx, caller.Actor().ID, login.UIAdminCreateUser{
+		view, err := pages.Admin.CreateUser(ctx, caller.Actor().ID, ui.UIAdminCreateUser{
 			Username: adminString(body, "username"), Nickname: adminString(body, "nickname"),
 			Biography: adminString(body, "biography"), Language: adminString(body, "language"),
 			Timezone: adminString(body, "timezone")})
@@ -85,7 +84,7 @@ func buildAdminWriteRoutes(managed *ManagedServices, pages *Pages) []adminapi.Do
 		if err != nil {
 			return nil, err
 		}
-		view, err := pages.RBAC.CreateRole(ctx, caller.Actor().ID, login.UIRBACCreateRole{
+		view, err := pages.RBAC.CreateRole(ctx, caller.Actor().ID, ui.UIRBACCreateRole{
 			ScopeID: adminString(body, "scope_id"), Key: adminString(body, "key"),
 			Name: adminString(body, "name"), Description: adminString(body, "description"),
 			Limits: adminString(body, "limits")}, adminRequestID(body, request))
@@ -122,7 +121,7 @@ func buildAdminWriteRoutes(managed *ManagedServices, pages *Pages) []adminapi.Do
 		}
 		appID := adminLastPathPart(request)
 		view, err := pages.Apps.UpdateApplication(ctx, caller.Actor().ID, appID,
-			login.UIApplicationChange{Name: adminString(body, "name"),
+			ui.UIApplicationChange{Name: adminString(body, "name"),
 				Description: adminString(body, "description"), Homepage: adminString(body, "homepage"),
 				OwnerUserID: adminString(body, "owner_user_id"),
 				ContactInfo: adminString(body, "contact_info")},
@@ -190,7 +189,7 @@ func buildAdminWriteRoutes(managed *ManagedServices, pages *Pages) []adminapi.Do
 			return nil, err
 		}
 		view, err := pages.Support.CreateRecoveryRequest(ctx, caller.Actor().ID,
-			login.UISupportRecoveryCreate{TargetUserID: adminString(body, "target_user_id"),
+			ui.UISupportRecoveryCreate{TargetUserID: adminString(body, "target_user_id"),
 				Operation: adminString(body, "operation"), VerificationBasis: adminString(body, "verification_basis"),
 				VerificationReference: adminString(body, "verification_reference"),
 				EvidenceSummary:       adminString(body, "evidence_summary"), Reason: adminString(body, "reason"),
@@ -317,7 +316,7 @@ func adminLastPathPartPrevious(request *http.Request) string {
 }
 
 // adminUserJSON 转换管理用户视图（脱敏）。
-func adminUserJSON(view login.UIAdminUserView) map[string]any {
+func adminUserJSON(view ui.UIAdminUserView) map[string]any {
 	return map[string]any{"id": view.UserID, "username": view.Username, "nickname": view.Nickname,
 		"status": view.Status, "row_version": view.RowVersion,
 		"created_at": view.CreatedAt, "updated_at": view.UpdatedAt}
@@ -327,19 +326,19 @@ func adminUserJSON(view login.UIAdminUserView) map[string]any {
 func adminUIError(err error) error {
 	type coded interface{ Error() string }
 	_ = coded(nil)
-	var accountErr *login.UIAdminError
+	var accountErr *ui.UIAdminError
 	if errors.As(err, &accountErr) {
 		return &adminapi.DomainError{Code: accountErr.Code, Cause: err}
 	}
-	var rbacErr *login.UIRBACError
+	var rbacErr *ui.UIRBACError
 	if errors.As(err, &rbacErr) {
 		return &adminapi.DomainError{Code: rbacErr.Code, Cause: err}
 	}
-	var appsErr *login.UIAppsError
+	var appsErr *ui.UIAppsError
 	if errors.As(err, &appsErr) {
 		return &adminapi.DomainError{Code: appsErr.Code, Cause: err}
 	}
-	var supportErr *login.UISupportError
+	var supportErr *ui.UISupportError
 	if errors.As(err, &supportErr) {
 		return &adminapi.DomainError{Code: supportErr.Code, Cause: err}
 	}

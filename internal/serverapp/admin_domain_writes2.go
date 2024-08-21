@@ -3,13 +3,12 @@ package serverapp
 import (
 	"context"
 	"encoding/json"
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
+	"github.com/kagurazakayashi/EvernightLogin/internal/adminapi"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 	"net/http"
 	"strconv"
 	"strings"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/account"
-	"github.com/kagurazakayashi/EvernightLogin/internal/adminapi"
 )
 
 // buildAdminWriteRoutesExtra 补齐步骤 156 的删除/更新/成员/组合/RBAC 与客服写路由；
@@ -88,7 +87,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 		var userIDs []string
 		_ = json.Unmarshal(body["user_ids"], &userIDs)
 		groupID := adminLastPathPartPrevious(request)
-		var result login.UIAdminMemberResult
+		var result ui.UIAdminMemberResult
 		if adminString(body, "action") == "remove" {
 			result, err = pages.Admin.RemoveMembers(ctx, caller.Actor().ID, groupID, userIDs,
 				adminRequestID(body, request))
@@ -128,7 +127,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			return nil, err
 		}
 		view, err := pages.RBAC.UpdateRole(ctx, caller.Actor().ID, adminLastPathPart(request),
-			login.UIRBACTextChange{Name: adminString(body, "name"),
+			ui.UIRBACTextChange{Name: adminString(body, "name"),
 				Description: adminString(body, "description"), Limits: adminString(body, "limits")},
 			adminRequestID(body, request))
 		if err != nil {
@@ -181,7 +180,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			return nil, err
 		}
 		view, err := pages.RBAC.UpdatePermission(ctx, caller.Actor().ID, adminLastPathPart(request),
-			login.UIRBACTextChange{Name: adminString(body, "name"),
+			ui.UIRBACTextChange{Name: adminString(body, "name"),
 				Description: adminString(body, "description"), Limits: adminString(body, "limits")},
 			adminRequestID(body, request))
 		if err != nil {
@@ -216,7 +215,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 		if err != nil {
 			return nil, err
 		}
-		view, err := pages.Apps.CreateApplication(ctx, caller.Actor().ID, login.UIApplicationCreate{
+		view, err := pages.Apps.CreateApplication(ctx, caller.Actor().ID, ui.UIApplicationCreate{
 			Name: adminString(body, "name"), Description: adminString(body, "description"),
 			IconRef: adminString(body, "icon_ref"), Homepage: adminString(body, "homepage"),
 			OwnerUserID: adminString(body, "owner_user_id"), ContactInfo: adminString(body, "contact_info"),
@@ -234,7 +233,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 		if pages.Apps == nil {
 			return nil, &adminapi.DomainError{Code: "INTERNAL_ERROR", Message: "应用适配器未装配"}
 		}
-		deleteBackend, ok := any(pages.Apps).(login.UIAppsDeleteBackend)
+		deleteBackend, ok := any(pages.Apps).(ui.UIAppsDeleteBackend)
 		if !ok {
 			return nil, &adminapi.DomainError{Code: "INTERNAL_ERROR",
 				Message: "应用删除能力未装配"}
@@ -253,7 +252,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			return nil, &adminapi.DomainError{Code: "REQ_INVALID",
 				Message: "row_version 必须是正整数"}
 		}
-		binding := login.UIAppDeleteBinding{ApplicationID: applicationID,
+		binding := ui.UIAppDeleteBinding{ApplicationID: applicationID,
 			ExpectedRowVersion: rowVersion, RequestID: adminRequestID(body, request)}
 		if reauthErr := applicationDeleteReauth(ctx, gate, caller.Actor().ID, binding); reauthErr != nil {
 			return nil, &adminapi.DomainError{Code: "REAUTH_REQUIRED", Cause: reauthErr}
@@ -286,7 +285,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			return map[string]any{"removed": true}, nil
 		}
 		view, err := pages.Apps.AddMember(ctx, caller.Actor().ID, appID,
-			adminString(body, "user_id"), login.UIAppMemberProfile{
+			adminString(body, "user_id"), ui.UIAppMemberProfile{
 				DisplayName: adminString(body, "display_name"), Title: adminString(body, "title"),
 				Note: adminString(body, "note")}, adminRequestID(body, request))
 		if err != nil {
@@ -392,10 +391,10 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			return nil, err
 		}
 		appID := adminLastPathPartPrevious(request)
-		change := login.UIAppPolicyChange{
+		change := ui.UIAppPolicyChange{
 			Allowed:        adminStringList(body, "allowed"),
 			ServiceAllowed: adminStringList(body, "service_allowed"),
-			Limits: login.UIAppPolicyLimits{MaxLimit: int(adminInt64(body, "max_limit")),
+			Limits: ui.UIAppPolicyLimits{MaxLimit: int(adminInt64(body, "max_limit")),
 				MaxOffset: int(adminInt64(body, "max_offset")), MaxBatch: int(adminInt64(body, "max_batch"))},
 		}
 		_ = json.Unmarshal(body["objects"], &change.Objects)
@@ -403,7 +402,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 		expected := adminInt64(body, "expected_row_version")
 		digest := change.Digest()
 		requestID := adminRequestID(body, request)
-		binding := login.UIAppPolicyActionBinding{ApplicationID: appID,
+		binding := ui.UIAppPolicyActionBinding{ApplicationID: appID,
 			ExpectedRowVersion: expected, PolicyDigest: digest, RequestID: requestID}
 		if err := gate.ManagedPolicyReauth(ctx, caller.Actor().ID, binding); err != nil {
 			return nil, &adminapi.DomainError{Code: "REAUTH_REQUIRED", Message: "策略写需要近期强认证", Cause: err}
@@ -430,7 +429,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 		}
 		appID := adminLastPathPartPrevious(request)
 		if adminString(body, "action") == "register" {
-			result, err := pages.Apps.RegisterClient(ctx, caller.Actor().ID, appID, login.UIOAuthRegister{
+			result, err := pages.Apps.RegisterClient(ctx, caller.Actor().ID, appID, ui.UIOAuthRegister{
 				GrantTypes:             adminStringList(body, "grant_types"),
 				RedirectURIs:           adminStringList(body, "redirect_uris"),
 				PostLogoutRedirectURIs: adminList(body, "post_logout_redirect_uris"),
@@ -443,7 +442,7 @@ func buildAdminWriteRoutesExtra(managed *ManagedServices, pages *Pages, gate *Se
 			return map[string]any{"client_id": result.Settings.ClientID, "has_secret": result.Secret != nil}, nil
 		}
 		settings, err := pages.Apps.UpdateClientSettings(ctx, caller.Actor().ID, appID,
-			login.UIOAuthChange{GrantTypes: adminStringList(body, "grant_types"),
+			ui.UIOAuthChange{GrantTypes: adminStringList(body, "grant_types"),
 				RedirectURIs:           adminStringList(body, "redirect_uris"),
 				PostLogoutRedirectURIs: adminList(body, "post_logout_redirect_uris"),
 				Scopes:                 adminStringList(body, "scopes"), Audiences: adminStringList(body, "audiences"),

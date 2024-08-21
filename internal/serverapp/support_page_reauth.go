@@ -11,11 +11,10 @@ package serverapp
 
 import (
 	"context"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // supportPageReauthActions 是允许绑定到支持/恢复敏感操作的页面动作白名单。
@@ -30,24 +29,24 @@ var supportPageReauthActions = map[string]string{
 
 // supportPageReauth 实现 uiadminadapter.SupportOptions.Reauth 的宿主实现。
 func supportPageReauth(ctx context.Context, gate *SecurityGate, userID string,
-	binding login.UISupportActionBinding) (login.UISupportEvidence, error) {
+	binding ui.UISupportActionBinding) (ui.UISupportEvidence, error) {
 	if gate == nil || gate.Reauth == nil || gate.Policy == nil {
-		return login.UISupportEvidence{}, reauth.ErrReauthRequired
+		return ui.UISupportEvidence{}, reauth.ErrReauthRequired
 	}
 	if !account.ValidUserID(userID) {
-		return login.UISupportEvidence{}, reauth.ErrAccessDenied
+		return ui.UISupportEvidence{}, reauth.ErrAccessDenied
 	}
 	operationID, ok := supportPageReauthActions[binding.Action]
 	if !ok {
-		return login.UISupportEvidence{}, reauth.ErrAccessDenied
+		return ui.UISupportEvidence{}, reauth.ErrAccessDenied
 	}
 	fact, ok := gate.takeManagementFact(userID)
 	if !ok || fact.verifiedAt.IsZero() {
-		return login.UISupportEvidence{}, reauth.ErrReauthRequired
+		return ui.UISupportEvidence{}, reauth.ErrReauthRequired
 	}
 	caller, err := reauth.UserCaller(userID)
 	if err != nil {
-		return login.UISupportEvidence{}, reauth.ErrAccessDenied
+		return ui.UISupportEvidence{}, reauth.ErrAccessDenied
 	}
 	safeRequestID := ""
 	if account.ValidateRequestID(binding.RequestID) == nil {
@@ -71,9 +70,9 @@ func supportPageReauth(ctx context.Context, gate *SecurityGate, userID string,
 	signals := reauth.Signals{VerifiedAt: fact.verifiedAt, Strength: policy.StrengthStrong,
 		Complete: true, Confirmed: true}
 	if _, err := gate.Reauth.Authorize(reauth.WithSignals(ctx, signals), caller, request); err != nil {
-		return login.UISupportEvidence{}, err
+		return ui.UISupportEvidence{}, err
 	}
-	return login.UISupportEvidence{
+	return ui.UISupportEvidence{
 		VerifiedAt: fact.verifiedAt, Strength: "strong", Complete: true, Confirmed: true,
 	}, nil
 }

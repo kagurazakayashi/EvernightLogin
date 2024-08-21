@@ -15,13 +15,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"log/slog"
+	"net/http"
 )
 
 // AdminSessionsOptions 是管理员强制下线页适配器依赖。
@@ -34,7 +33,7 @@ type AdminSessionsOptions struct {
 	Logger    *slog.Logger
 }
 
-// AdminSessionsAdapter 实现 login.UIAdminSessionsBackend。
+// AdminSessionsAdapter 实现 ui.UIAdminSessionsBackend。
 type AdminSessionsAdapter struct {
 	opts AdminSessionsOptions
 }
@@ -50,10 +49,10 @@ func NewAdminSessions(options AdminSessionsOptions) (*AdminSessionsAdapter, erro
 	return &AdminSessionsAdapter{opts: options}, nil
 }
 
-var _ login.UIAdminSessionsBackend = (*AdminSessionsAdapter)(nil)
+var _ ui.UIAdminSessionsBackend = (*AdminSessionsAdapter)(nil)
 
 // adminSessionsErr 构造稳定公开错误。
-func adminSessionsErr(code string) error { return &login.UIAdminSessionsError{Code: code} }
+func adminSessionsErr(code string) error { return &ui.UIAdminSessionsError{Code: code} }
 
 // adminSessionsMapError 把会话/领域错误映射为页面稳定错误码。
 func adminSessionsMapError(err error) error {
@@ -85,23 +84,23 @@ func adminSessionsMapError(err error) error {
 
 // Capabilities 返回页面能力位；授权依赖不可用时按无能力处理。
 func (a *AdminSessionsAdapter) Capabilities(ctx context.Context, request *http.Request,
-	userID string) (login.UIAdminSessionsCapabilities, error) {
+	userID string) (ui.UIAdminSessionsCapabilities, error) {
 	if a.opts.Authorize == nil || userID == "" {
-		return login.UIAdminSessionsCapabilities{}, nil
+		return ui.UIAdminSessionsCapabilities{}, nil
 	}
 	allowed := a.opts.Authorize(ctx, userID, "sessions.revoke") == nil
-	return login.UIAdminSessionsCapabilities{List: allowed, Revoke: allowed}, nil
+	return ui.UIAdminSessionsCapabilities{List: allowed, Revoke: allowed}, nil
 }
 
 // ListSessions 调用真实会话服务查询目标用户活动会话；不含秘密。
 func (a *AdminSessionsAdapter) ListSessions(ctx context.Context, request *http.Request,
-	userID string, query login.UIAdminSessionQuery) (login.UIAdminSessionPage, error) {
+	userID string, query ui.UIAdminSessionQuery) (ui.UIAdminSessionPage, error) {
 	if request == nil || userID == "" {
-		return login.UIAdminSessionPage{}, adminSessionsErr("ACCESS_DENIED")
+		return ui.UIAdminSessionPage{}, adminSessionsErr("ACCESS_DENIED")
 	}
 	secret, ok := a.opts.Sessions.SessionSecretFromRequest(request)
 	if !ok || secret == "" {
-		return login.UIAdminSessionPage{}, adminSessionsErr("SESSION_EXPIRED")
+		return ui.UIAdminSessionPage{}, adminSessionsErr("SESSION_EXPIRED")
 	}
 	result, err := a.opts.Sessions.AdminListSessions(ctx, secret, session.AdminSessionListRequest{
 		ScopeAppID:   query.ScopeAppID,
@@ -111,15 +110,15 @@ func (a *AdminSessionsAdapter) ListSessions(ctx context.Context, request *http.R
 		RequestID:    loginRequestID(request),
 	})
 	if err != nil {
-		return login.UIAdminSessionPage{}, adminSessionsMapError(err)
+		return ui.UIAdminSessionPage{}, adminSessionsMapError(err)
 	}
-	page := login.UIAdminSessionPage{
+	page := ui.UIAdminSessionPage{
 		TargetUserID: result.TargetUserID, ScopeAppID: result.ScopeAppID,
 		Page: result.Page, PageSize: result.PageSize,
 		Total: result.Total, HasMore: result.HasMore,
 	}
 	for _, item := range result.Sessions {
-		page.Sessions = append(page.Sessions, login.UIAdminSessionView{
+		page.Sessions = append(page.Sessions, ui.UIAdminSessionView{
 			ID: item.ID, AppID: item.AppID, Kind: string(item.Kind), Reason: string(item.Reason),
 			CreatedAt: item.CreatedAt, LastSeenAt: item.LastSeenAt,
 			IdleExpiresAt: item.IdleExpiresAt, AbsoluteExpiresAt: item.AbsoluteExpiresAt,
@@ -133,21 +132,21 @@ func (a *AdminSessionsAdapter) ListSessions(ctx context.Context, request *http.R
 // RevokeSessions 把已校验的页面再次认证证据转换为 reauth 信号后调用真实撤销。
 // 证据不完整/非强认证时拒绝；领域服务仍会重新判定敏感策略、权限、范围与保护。
 func (a *AdminSessionsAdapter) RevokeSessions(ctx context.Context, request *http.Request,
-	userID string, action login.UIAdminSessionRevokeAction,
-	evidence login.UIAdminSessionEvidence) (login.UIAdminSessionRevokeResult, error) {
+	userID string, action ui.UIAdminSessionRevokeAction,
+	evidence ui.UIAdminSessionEvidence) (ui.UIAdminSessionRevokeResult, error) {
 	if request == nil || userID == "" {
-		return login.UIAdminSessionRevokeResult{}, adminSessionsErr("ACCESS_DENIED")
+		return ui.UIAdminSessionRevokeResult{}, adminSessionsErr("ACCESS_DENIED")
 	}
 	if !action.Confirm {
-		return login.UIAdminSessionRevokeResult{}, adminSessionsErr("REQ_INVALID")
+		return ui.UIAdminSessionRevokeResult{}, adminSessionsErr("REQ_INVALID")
 	}
 	if evidence.Strength != "strong" || !evidence.Complete || !evidence.Confirmed ||
 		evidence.VerifiedAt.IsZero() {
-		return login.UIAdminSessionRevokeResult{}, adminSessionsErr("REAUTH_REQUIRED")
+		return ui.UIAdminSessionRevokeResult{}, adminSessionsErr("REAUTH_REQUIRED")
 	}
 	secret, ok := a.opts.Sessions.SessionSecretFromRequest(request)
 	if !ok || secret == "" {
-		return login.UIAdminSessionRevokeResult{}, adminSessionsErr("SESSION_EXPIRED")
+		return ui.UIAdminSessionRevokeResult{}, adminSessionsErr("SESSION_EXPIRED")
 	}
 	signals := reauth.Signals{
 		VerifiedAt: evidence.VerifiedAt,
@@ -165,9 +164,9 @@ func (a *AdminSessionsAdapter) RevokeSessions(ctx context.Context, request *http
 		})
 	if err != nil {
 		a.opts.Logger.Info("管理员会话页强制下线失败", "error_category", adminSessionsErrorCategory(err))
-		return login.UIAdminSessionRevokeResult{}, adminSessionsMapError(err)
+		return ui.UIAdminSessionRevokeResult{}, adminSessionsMapError(err)
 	}
-	return login.UIAdminSessionRevokeResult{
+	return ui.UIAdminSessionRevokeResult{
 		Revoked: result.Revoked, ScopeAppID: action.ScopeAppID,
 	}, nil
 }

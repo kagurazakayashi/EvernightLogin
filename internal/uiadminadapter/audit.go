@@ -22,6 +22,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/auditops"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // AuditRecorder 是拒绝审计写入契约（生产 *audit.Recorder）。
@@ -50,7 +51,7 @@ type AuditOptions struct {
 	Logger              *slog.Logger
 }
 
-// AuditAdapter 实现 login.UIPageAuditBackend。
+// AuditAdapter 实现 ui.UIPageAuditBackend。
 type AuditAdapter struct {
 	opts AuditOptions
 }
@@ -66,7 +67,7 @@ func NewAudit(options AuditOptions) (*AuditAdapter, error) {
 // auditCaller 把页面已认证用户 ID 重建为可信 Caller。
 func auditCaller(userID string) (account.Caller, error) {
 	if userID == "" || !account.ValidUserID(userID) {
-		return account.Caller{}, &login.UIAuditError{Code: "ACCESS_DENIED"}
+		return account.Caller{}, &ui.UIAuditError{Code: "ACCESS_DENIED"}
 	}
 	return account.UserCaller(userID)
 }
@@ -100,12 +101,12 @@ func (a *AuditAdapter) authorize(ctx context.Context, caller account.Caller,
 		}
 	}
 	if a.opts.Authorizer == nil {
-		return &login.UIAuditError{Code: "ACCESS_DENIED"}
+		return &ui.UIAuditError{Code: "ACCESS_DENIED"}
 	}
 	grant, err := a.opts.Authorizer.AuthorizeScope(ctx, caller, permissionKey,
 		auditops.ScopeSystem)
 	if err != nil || !grant.Allowed {
-		return &login.UIAuditError{Code: "ACCESS_DENIED"}
+		return &ui.UIAuditError{Code: "ACCESS_DENIED"}
 	}
 	return nil
 }
@@ -138,29 +139,29 @@ func mapAuditError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var publicErr *login.UIAuditError
+	var publicErr *ui.UIAuditError
 	if errors.As(err, &publicErr) {
 		return err
 	}
 	switch {
 	case errors.Is(err, auditops.ErrAccessDenied), errors.Is(err, auditops.ErrRootRequired):
-		return &login.UIAuditError{Code: "ACCESS_DENIED"}
+		return &ui.UIAuditError{Code: "ACCESS_DENIED"}
 	case errors.Is(err, auditops.ErrNotFound):
-		return &login.UIAuditError{Code: "NOT_FOUND", Disclosed: true}
+		return &ui.UIAuditError{Code: "NOT_FOUND", Disclosed: true}
 	case errors.Is(err, auditops.ErrRetentionExpired):
-		return &login.UIAuditError{Code: "RETENTION_EXPIRED", Disclosed: true}
+		return &ui.UIAuditError{Code: "RETENTION_EXPIRED", Disclosed: true}
 	case errors.Is(err, auditops.ErrConflict), errors.Is(err, auditops.ErrTaskTerminal):
-		return &login.UIAuditError{Code: "CONFLICT"}
+		return &ui.UIAuditError{Code: "CONFLICT"}
 	case errors.Is(err, auditops.ErrInvalidRequest), errors.Is(err, auditops.ErrOptionsInvalid):
-		return &login.UIAuditError{Code: "REQ_INVALID"}
+		return &ui.UIAuditError{Code: "REQ_INVALID"}
 	case errors.Is(err, auditops.ErrStoreUnavailable), errors.Is(err, auditops.ErrTaskRejected):
-		return &login.UIAuditError{Code: "DB_UNAVAILABLE"}
+		return &ui.UIAuditError{Code: "DB_UNAVAILABLE"}
 	case errors.Is(err, auditops.ErrAuditUnavailable):
-		return &login.UIAuditError{Code: "AUDIT_WRITE_FAILED"}
+		return &ui.UIAuditError{Code: "AUDIT_WRITE_FAILED"}
 	case errors.Is(err, auditops.ErrExportPathUnsafe):
-		return &login.UIAuditError{Code: "EXPORT_PATH_UNSAFE"}
+		return &ui.UIAuditError{Code: "EXPORT_PATH_UNSAFE"}
 	default:
-		return &login.UIAuditError{Code: "INTERNAL_ERROR"}
+		return &ui.UIAuditError{Code: "INTERNAL_ERROR"}
 	}
 }
 
@@ -168,12 +169,12 @@ func mapAuditError(err error) error {
 // 失败为 false），清理只对真实 root 显示。能力位仍只是呈现辅助，每次读取/写入由
 // 领域服务重新授权。
 func (a *AuditAdapter) Capabilities(ctx context.Context,
-	userID string) (login.UIAuditCapabilities, error) {
+	userID string) (ui.UIAuditCapabilities, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditCapabilities{}, err
+		return ui.UIAuditCapabilities{}, err
 	}
-	caps := login.UIAuditCapabilities{
+	caps := ui.UIAuditCapabilities{
 		Read:   a.authorize(ctx, caller, auditops.PermissionRead) == nil,
 		Export: a.authorize(ctx, caller, auditops.PermissionExport) == nil,
 	}
@@ -187,7 +188,7 @@ func (a *AuditAdapter) Capabilities(ctx context.Context,
 }
 
 // toAuditFilter 把页面筛选转换为 auditops 白名单筛选。
-func toAuditFilter(filter login.UIAuditFilter) auditops.Filter {
+func toAuditFilter(filter ui.UIAuditFilter) auditops.Filter {
 	result := auditops.Filter{
 		From: filter.From, To: filter.To, AppID: filter.AppID,
 		SystemOnly: filter.SystemOnly, ActorID: filter.ActorID, Action: filter.Action,
@@ -212,8 +213,8 @@ func toAuditOrder(order string) auditops.SortOrder {
 }
 
 // toAuditEventView 转换稳定事件字段。
-func toAuditEventView(event audit.Event) login.UIAuditEventView {
-	return login.UIAuditEventView{
+func toAuditEventView(event audit.Event) ui.UIAuditEventView {
+	return ui.UIAuditEventView{
 		ID: event.ID, OccurredAt: event.OccurredAt, ActorType: string(event.Actor.Type),
 		ActorID: event.Actor.ID, AppID: event.AppID, Action: event.Action,
 		TargetType: event.Target.Type, TargetID: event.Target.ID,
@@ -224,20 +225,20 @@ func toAuditEventView(event audit.Event) login.UIAuditEventView {
 
 // ListAudit 查询授权范围内审计列表。
 func (a *AuditAdapter) ListAudit(ctx context.Context, userID string,
-	query login.UIAuditQuery) (login.UIAuditPage, error) {
+	query ui.UIAuditQuery) (ui.UIAuditPage, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditPage{}, err
+		return ui.UIAuditPage{}, err
 	}
 	result, err := a.opts.Audit.Query(ctx, auditops.QueryRequest{
 		Caller: caller, ScopeID: query.ScopeID, Filter: toAuditFilter(query.Filter),
 		Order: toAuditOrder(query.Order), Limit: query.Limit, Offset: query.Offset,
 		Cursor: query.Cursor})
 	if err != nil {
-		return login.UIAuditPage{}, mapAuditError(err)
+		return ui.UIAuditPage{}, mapAuditError(err)
 	}
-	page := login.UIAuditPage{
-		Events:  make([]login.UIAuditEventView, 0, len(result.Events)),
+	page := ui.UIAuditPage{
+		Events:  make([]ui.UIAuditEventView, 0, len(result.Events)),
 		HasMore: result.HasMore, Limit: result.Limit, Offset: result.Offset,
 		NextCursor: result.NextCursor,
 		Order:      string(result.Order), ScopeID: result.Scope.ID, ScopeKind: result.Scope.Kind,
@@ -279,18 +280,18 @@ func (a *AuditAdapter) dataScope(ctx context.Context, caller account.Caller) str
 
 // GetAudit 读取单条审计事件详情（范围与披露由服务重判）。
 func (a *AuditAdapter) GetAudit(ctx context.Context, userID, eventID string,
-	occurredAtHint time.Time) (login.UIAuditDetail, error) {
+	occurredAtHint time.Time) (ui.UIAuditDetail, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditDetail{}, err
+		return ui.UIAuditDetail{}, err
 	}
 	detail, err := a.opts.Audit.GetEvent(ctx, auditops.GetRequest{
-		Caller: caller, ScopeID: login.UIAuditScopeSystem, EventID: eventID,
+		Caller: caller, ScopeID: ui.UIAuditScopeSystem, EventID: eventID,
 		OccurredAtHint: occurredAtHint})
 	if err != nil {
-		return login.UIAuditDetail{}, mapAuditError(err)
+		return ui.UIAuditDetail{}, mapAuditError(err)
 	}
-	result := login.UIAuditDetail{
+	result := ui.UIAuditDetail{
 		Event: toAuditEventView(detail.Event), ScopeID: detail.Scope.ID,
 		ScopeKind: detail.Scope.Kind, RetentionDays: detail.Retention.Days,
 		RetentionConfigured: detail.Retention.Configured,
@@ -300,7 +301,7 @@ func (a *AuditAdapter) GetAudit(ctx context.Context, userID, eventID string,
 	for _, change := range detail.Event.Changes {
 		redacted := strings.Contains(change.Before, "[REDACTED]") ||
 			strings.Contains(change.After, "[REDACTED]")
-		result.Changes = append(result.Changes, login.UIAuditChange{
+		result.Changes = append(result.Changes, ui.UIAuditChange{
 			Field: change.Field, Before: change.Before, After: change.After,
 			Redacted: redacted})
 	}
@@ -311,7 +312,7 @@ func (a *AuditAdapter) GetAudit(ctx context.Context, userID, eventID string,
 	// 显示“—”，不伪造任务状态）。
 	if detail.Event.TaskID != "" && a.opts.Tasks != nil {
 		if job, found, taskErr := a.opts.Tasks.Get(ctx, detail.Event.TaskID); taskErr == nil && found {
-			result.RelatedTask = &login.UIExportTaskSummary{ID: job.ID, Kind: job.Kind,
+			result.RelatedTask = &ui.UIExportTaskSummary{ID: job.ID, Kind: job.Kind,
 				State: string(job.State), Attempt: job.Attempt, MaxAttempts: job.MaxAttempts,
 				ErrorCode: job.ErrorCode, FailureReason: job.FailureReason,
 				RequestID: job.RequestID}
@@ -331,20 +332,20 @@ func (a *AuditAdapter) GetAudit(ctx context.Context, userID, eventID string,
 
 // QueryOwnActivity 查询调用者本人安全活动（服务端固定操作者本人，不接受他人筛选）。
 func (a *AuditAdapter) QueryOwnActivity(ctx context.Context, userID string,
-	query login.UIAuditQuery) (login.UIAuditPage, error) {
+	query ui.UIAuditQuery) (ui.UIAuditPage, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditPage{}, err
+		return ui.UIAuditPage{}, err
 	}
 	result, err := a.opts.Audit.QueryOwnActivity(ctx, auditops.OwnQueryRequest{
 		Caller: caller, Filter: toAuditFilter(query.Filter),
 		Order: toAuditOrder(query.Order), Limit: query.Limit, Offset: query.Offset,
 		Cursor: query.Cursor})
 	if err != nil {
-		return login.UIAuditPage{}, mapAuditError(err)
+		return ui.UIAuditPage{}, mapAuditError(err)
 	}
-	page := login.UIAuditPage{
-		Events:  make([]login.UIAuditEventView, 0, len(result.Events)),
+	page := ui.UIAuditPage{
+		Events:  make([]ui.UIAuditEventView, 0, len(result.Events)),
 		HasMore: result.HasMore, Limit: result.Limit, Offset: result.Offset,
 		NextCursor: result.NextCursor,
 		Order:      string(result.Order), ScopeID: result.Scope.ID, ScopeKind: result.Scope.Kind,
@@ -360,16 +361,16 @@ func (a *AuditAdapter) QueryOwnActivity(ctx context.Context, userID string,
 
 // GetOwnActivity 读取本人单条安全活动；他人事件由服务端按不存在处理。
 func (a *AuditAdapter) GetOwnActivity(ctx context.Context, userID, eventID string,
-	occurredAtHint time.Time) (login.UIAuditDetail, error) {
+	occurredAtHint time.Time) (ui.UIAuditDetail, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditDetail{}, err
+		return ui.UIAuditDetail{}, err
 	}
 	detail, err := a.opts.Audit.GetOwnEvent(ctx, caller, eventID, occurredAtHint)
 	if err != nil {
-		return login.UIAuditDetail{}, mapAuditError(err)
+		return ui.UIAuditDetail{}, mapAuditError(err)
 	}
-	result := login.UIAuditDetail{
+	result := ui.UIAuditDetail{
 		Event: toAuditEventView(detail.Event), ScopeID: detail.Scope.ID,
 		ScopeKind: detail.Scope.Kind, RetentionDays: detail.Retention.Days,
 		RetentionConfigured: detail.Retention.Configured,
@@ -379,7 +380,7 @@ func (a *AuditAdapter) GetOwnActivity(ctx context.Context, userID, eventID strin
 	for _, change := range detail.Event.Changes {
 		redacted := strings.Contains(change.Before, "[REDACTED]") ||
 			strings.Contains(change.After, "[REDACTED]")
-		result.Changes = append(result.Changes, login.UIAuditChange{
+		result.Changes = append(result.Changes, ui.UIAuditChange{
 			Field: change.Field, Before: change.Before, After: change.After,
 			Redacted: redacted})
 	}
@@ -391,19 +392,19 @@ func (a *AuditAdapter) GetOwnActivity(ctx context.Context, userID, eventID strin
 
 // SearchErrors 检索同一错误码注册表（公开说明；未知码不猜原因）。
 func (a *AuditAdapter) SearchErrors(ctx context.Context, userID string,
-	query login.UIErrorQuery) (login.UIErrorSearch, error) {
+	query ui.UIErrorQuery) (ui.UIErrorSearch, error) {
 	if _, err := auditCaller(userID); err != nil {
-		return login.UIErrorSearch{}, err
+		return ui.UIErrorSearch{}, err
 	}
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIErrorSearch{}, err
+		return ui.UIErrorSearch{}, err
 	}
 	// 错误码目录属审计读取能力：同样由真实权限引擎重新判定，未装配/失败 fail-closed。
 	if err := a.authorize(ctx, caller, auditops.PermissionRead); err != nil {
-		return login.UIErrorSearch{}, err
+		return ui.UIErrorSearch{}, err
 	}
-	result := login.UIErrorSearch{Searched: query.Code != "" || query.Keyword != "" ||
+	result := ui.UIErrorSearch{Searched: query.Code != "" || query.Keyword != "" ||
 		query.Category != ""}
 	keyword := strings.ToLower(query.Keyword)
 	for _, definition := range login.RegisteredErrorCodes() {
@@ -428,8 +429,8 @@ func (a *AuditAdapter) SearchErrors(ctx context.Context, userID string,
 }
 
 // errorEntryOf 从根包注册表与手册说明构造公开条目。
-func errorEntryOf(code string) login.UIErrorEntry {
-	entry := login.UIErrorEntry{Code: code}
+func errorEntryOf(code string) ui.UIErrorEntry {
+	entry := ui.UIErrorEntry{Code: code}
 	definition, ok := login.LookupErrorCode(login.ErrorCode(code))
 	if ok {
 		entry.Category = string(definition.Category)
@@ -445,19 +446,19 @@ func errorEntryOf(code string) login.UIErrorEntry {
 }
 
 // toTaskSummary 转换真实任务摘要（nil 保持 nil）。
-func toTaskSummary(summary *auditops.TaskSummary) *login.UIExportTaskSummary {
+func toTaskSummary(summary *auditops.TaskSummary) *ui.UIExportTaskSummary {
 	if summary == nil {
 		return nil
 	}
-	return &login.UIExportTaskSummary{ID: summary.ID, Kind: summary.Kind,
+	return &ui.UIExportTaskSummary{ID: summary.ID, Kind: summary.Kind,
 		State: summary.State, Attempt: summary.Attempt, MaxAttempts: summary.MaxAttempts,
 		ErrorCode: summary.ErrorCode, FailureReason: summary.FailureReason,
 		RequestID: summary.RequestID}
 }
 
 // toExportView 转换导出任务视图（不含服务器路径）。
-func toExportView(view auditops.ExportView) login.UIAuditExport {
-	return login.UIAuditExport{ID: view.ID, ScopeID: view.ScopeID,
+func toExportView(view auditops.ExportView) ui.UIAuditExport {
+	return ui.UIAuditExport{ID: view.ID, ScopeID: view.ScopeID,
 		ScopeKind: view.ScopeKind, Format: string(view.Format), State: view.State,
 		MaxRows: view.MaxRows, RowCount: view.RowCount, Truncated: view.Truncated,
 		TaskID: view.TaskID, FileAvailable: view.FileAvailable,
@@ -470,35 +471,35 @@ func toExportView(view auditops.ExportView) login.UIAuditExport {
 
 // CreateExport 创建真实异步导出任务；返回已受理而非已完成。
 func (a *AuditAdapter) CreateExport(ctx context.Context, userID string,
-	request login.UIAuditExportRequest) (login.UIAuditExport, error) {
+	request ui.UIAuditExportRequest) (ui.UIAuditExport, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditExport{}, err
+		return ui.UIAuditExport{}, err
 	}
 	view, err := a.opts.Audit.StartExport(ctx, auditops.StartExportRequest{
 		Caller: caller, ScopeID: request.ScopeID, Filter: toAuditFilter(request.Filter),
 		Order: toAuditOrder(request.Order), Format: auditops.ExportFormat(request.Format),
 		RequestID: request.RequestID})
 	if err != nil {
-		return login.UIAuditExport{}, mapAuditError(err)
+		return ui.UIAuditExport{}, mapAuditError(err)
 	}
 	return toExportView(view), nil
 }
 
 // ListExports 列出当前授权可见导出任务。
 func (a *AuditAdapter) ListExports(ctx context.Context, userID, scopeID, state string,
-	limit, offset int) (login.UIAuditExportPage, error) {
+	limit, offset int) (ui.UIAuditExportPage, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditExportPage{}, err
+		return ui.UIAuditExportPage{}, err
 	}
 	views, hasMore, err := a.opts.Audit.ListExports(ctx, auditops.ExportListRequest{
 		Caller: caller, ScopeID: scopeID, State: state, Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIAuditExportPage{}, mapAuditError(err)
+		return ui.UIAuditExportPage{}, mapAuditError(err)
 	}
-	page := login.UIAuditExportPage{HasMore: hasMore, Limit: limit, Offset: offset,
-		Exports: make([]login.UIAuditExport, 0, len(views))}
+	page := ui.UIAuditExportPage{HasMore: hasMore, Limit: limit, Offset: offset,
+		Exports: make([]ui.UIAuditExport, 0, len(views))}
 	for _, view := range views {
 		page.Exports = append(page.Exports, toExportView(view))
 	}
@@ -507,32 +508,32 @@ func (a *AuditAdapter) ListExports(ctx context.Context, userID, scopeID, state s
 
 // GetExport 读取单个导出任务真实状态。
 func (a *AuditAdapter) GetExport(ctx context.Context, userID,
-	exportID string) (login.UIAuditExport, error) {
+	exportID string) (ui.UIAuditExport, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditExport{}, err
+		return ui.UIAuditExport{}, err
 	}
 	view, err := a.opts.Audit.GetExport(ctx, caller, exportID)
 	if err != nil {
-		return login.UIAuditExport{}, mapAuditError(err)
+		return ui.UIAuditExport{}, mapAuditError(err)
 	}
 	return toExportView(view), nil
 }
 
 // CancelExport 请求取消导出任务；请求被接受不等于实际取消。
 func (a *AuditAdapter) CancelExport(ctx context.Context, userID, exportID, reason,
-	requestID string) (login.UIAuditExport, error) {
+	requestID string) (ui.UIAuditExport, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditExport{}, err
+		return ui.UIAuditExport{}, err
 	}
 	result, err := a.opts.Audit.CancelExport(ctx, caller, exportID, reason, requestID)
 	if err != nil {
-		return login.UIAuditExport{}, mapAuditError(err)
+		return ui.UIAuditExport{}, mapAuditError(err)
 	}
 	view, err := a.opts.Audit.GetExport(ctx, caller, exportID)
 	if err != nil {
-		return login.UIAuditExport{}, mapAuditError(err)
+		return ui.UIAuditExport{}, mapAuditError(err)
 	}
 	converted := toExportView(view)
 	// 取消请求被接受但尚未实际取消：真实任务状态是 cancel_requested，而导出记录
@@ -546,53 +547,53 @@ func (a *AuditAdapter) CancelExport(ctx context.Context, userID, exportID, reaso
 
 // DownloadExport 读取受控导出产物字节；产物路径永不进入页面结果。
 func (a *AuditAdapter) DownloadExport(ctx context.Context, userID,
-	exportID string) (login.UIAuditExportFile, error) {
+	exportID string) (ui.UIAuditExportFile, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIAuditExportFile{}, err
+		return ui.UIAuditExportFile{}, err
 	}
 	file, err := a.opts.Audit.OpenExportFile(ctx, caller, exportID)
 	if err != nil {
-		return login.UIAuditExportFile{}, mapAuditError(err)
+		return ui.UIAuditExportFile{}, mapAuditError(err)
 	}
 	if file.Size < 0 || file.Size > auditops.MaxExportBytes {
-		return login.UIAuditExportFile{}, &login.UIAuditError{Code: "REQ_INVALID"}
+		return ui.UIAuditExportFile{}, &ui.UIAuditError{Code: "REQ_INVALID"}
 	}
 	handle, err := os.Open(file.HostPath)
 	if err != nil {
-		return login.UIAuditExportFile{}, &login.UIAuditError{Code: "NOT_FOUND", Disclosed: true}
+		return ui.UIAuditExportFile{}, &ui.UIAuditError{Code: "NOT_FOUND", Disclosed: true}
 	}
 	defer handle.Close()
 	body, err := io.ReadAll(io.LimitReader(handle, auditops.MaxExportBytes+1))
 	if err != nil || int64(len(body)) > auditops.MaxExportBytes {
-		return login.UIAuditExportFile{}, &login.UIAuditError{Code: "INTERNAL_ERROR"}
+		return ui.UIAuditExportFile{}, &ui.UIAuditError{Code: "INTERNAL_ERROR"}
 	}
 	name := "audit_export_" + file.ID + "." + string(file.Format)
 	contentType := "text/csv; charset=utf-8"
 	if file.Format == auditops.FormatJSON {
 		contentType = "application/json; charset=utf-8"
 	}
-	return login.UIAuditExportFile{Name: name, ContentType: contentType, Body: body}, nil
+	return ui.UIAuditExportFile{Name: name, ContentType: contentType, Body: body}, nil
 }
 
 // PurgeContext 读取保留策略与最近清理运行。
 func (a *AuditAdapter) PurgeContext(ctx context.Context, userID, scopeID string,
-	limit, offset int) (login.UIPurgeContext, error) {
+	limit, offset int) (ui.UIPurgeContext, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIPurgeContext{}, err
+		return ui.UIPurgeContext{}, err
 	}
 	retention, err := a.opts.Audit.Retention(ctx, caller)
 	if err != nil {
-		return login.UIPurgeContext{}, mapAuditError(err)
+		return ui.UIPurgeContext{}, mapAuditError(err)
 	}
 	views, hasMore, err := a.opts.Audit.ListPurgeRuns(ctx, auditops.PurgeListRequest{
 		Caller: caller, Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIPurgeContext{}, mapAuditError(err)
+		return ui.UIPurgeContext{}, mapAuditError(err)
 	}
-	result := login.UIPurgeContext{
-		Retention: login.UIPurgeRetention{Days: retention.Days,
+	result := ui.UIPurgeContext{
+		Retention: ui.UIPurgeRetention{Days: retention.Days,
 			Configured: retention.Configured, Version: retention.Version,
 			Cutoff: retention.Cutoff, UpdatedAt: retention.UpdatedAt},
 		HasMore: hasMore, Limit: limit, Offset: offset}
@@ -603,8 +604,8 @@ func (a *AuditAdapter) PurgeContext(ctx context.Context, userID, scopeID string,
 }
 
 // toPurgeView 转换清理运行视图。
-func toPurgeView(view auditops.PurgeRunView) login.UIPurgeRun {
-	return login.UIPurgeRun{ID: view.ID, State: view.State, TaskID: view.TaskID,
+func toPurgeView(view auditops.PurgeRunView) ui.UIPurgeRun {
+	return ui.UIPurgeRun{ID: view.ID, State: view.State, TaskID: view.TaskID,
 		ScopeID: view.ScopeID, ScopeKind: view.ScopeKind, Cutoff: view.Cutoff,
 		BatchSize: view.BatchSize, MaxRecords: view.MaxRecords, Scanned: view.Scanned,
 		Cleaned: view.Cleaned, Skipped: view.Skipped, Failed: view.Failed,
@@ -618,22 +619,22 @@ func toPurgeView(view auditops.PurgeRunView) login.UIPurgeRun {
 
 // PreviewPurge 执行只读清理预估（不删除记录）。
 func (a *AuditAdapter) PreviewPurge(ctx context.Context, userID string,
-	request login.UIPurgeRequest) (login.UIPurgePreview, error) {
+	request ui.UIPurgeRequest) (ui.UIPurgePreview, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIPurgePreview{}, err
+		return ui.UIPurgePreview{}, err
 	}
 	preview, err := a.opts.Audit.PreviewPurge(ctx, auditops.PurgePreviewRequest{
 		Caller: caller, ScopeID: request.ScopeID, Cutoff: request.Cutoff,
 		BatchSize: request.BatchSize, MaxRecords: request.MaxRecords})
 	if err != nil {
-		return login.UIPurgePreview{}, mapAuditError(err)
+		return ui.UIPurgePreview{}, mapAuditError(err)
 	}
-	return login.UIPurgePreview{ScopeID: preview.ScopeID, ScopeKind: preview.ScopeKind,
+	return ui.UIPurgePreview{ScopeID: preview.ScopeID, ScopeKind: preview.ScopeKind,
 		Cutoff: preview.Cutoff, BatchSize: preview.BatchSize,
 		MaxRecords: preview.MaxRecords, EstimatedCount: preview.EstimatedCount,
 		AtLeast: preview.AtLeast,
-		Retention: login.UIPurgeRetention{Days: preview.Retention.Days,
+		Retention: ui.UIPurgeRetention{Days: preview.Retention.Days,
 			Configured: preview.Retention.Configured,
 			Version:    preview.Retention.Version, Cutoff: preview.Retention.Cutoff,
 			UpdatedAt: preview.Retention.UpdatedAt},
@@ -645,36 +646,36 @@ func (a *AuditAdapter) PreviewPurge(ctx context.Context, userID string,
 
 // StartPurge 提交真实清理任务；摘要不一致时服务端拒绝并要求重新预估。
 func (a *AuditAdapter) StartPurge(ctx context.Context, userID string,
-	request login.UIPurgeRequest, digest, reason,
-	requestID string) (login.UIPurgeRun, error) {
+	request ui.UIPurgeRequest, digest, reason,
+	requestID string) (ui.UIPurgeRun, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIPurgeRun{}, err
+		return ui.UIPurgeRun{}, err
 	}
 	run, err := a.opts.Audit.StartPurge(ctx, auditops.StartPurgeRequest{
 		Caller: caller, ScopeID: request.ScopeID, Cutoff: request.Cutoff,
 		BatchSize: request.BatchSize, MaxRecords: request.MaxRecords,
 		Reason: reason, Digest: digest, RequestID: requestID})
 	if err != nil {
-		return login.UIPurgeRun{}, mapAuditError(err)
+		return ui.UIPurgeRun{}, mapAuditError(err)
 	}
 	return toPurgeView(run), nil
 }
 
 // CancelPurge 请求取消清理任务。
 func (a *AuditAdapter) CancelPurge(ctx context.Context, userID, runID, reason,
-	requestID string) (login.UIPurgeRun, error) {
+	requestID string) (ui.UIPurgeRun, error) {
 	caller, err := auditCaller(userID)
 	if err != nil {
-		return login.UIPurgeRun{}, err
+		return ui.UIPurgeRun{}, err
 	}
 	result, err := a.opts.Audit.CancelPurge(ctx, caller, runID, reason, requestID)
 	if err != nil {
-		return login.UIPurgeRun{}, mapAuditError(err)
+		return ui.UIPurgeRun{}, mapAuditError(err)
 	}
 	run, err := a.opts.Audit.GetPurgeRun(ctx, caller, runID)
 	if err != nil {
-		return login.UIPurgeRun{}, mapAuditError(err)
+		return ui.UIPurgeRun{}, mapAuditError(err)
 	}
 	converted := toPurgeView(run)
 	if result.State == task.StateCancelRequested {

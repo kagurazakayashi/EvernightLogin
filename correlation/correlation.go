@@ -10,10 +10,34 @@
 // 控制字符与 Unicode，避免日志注入与歧义。
 package correlation
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // MaxCorrelationIDLength 是关联编号允许的最大长度（ASCII 字符）。
 const MaxCorrelationIDLength = 64
+
+// requestIDContextKey 是请求编号在上下文中的私有键；公开 HTTP/UI 契约与 internal
+// 传输实现共用同一键，避免请求编号在迁移后丢失。
+type requestIDContextKey struct{}
+
+// WithRequestID 把请求编号放入上下文；编号只用于关联与排障，不用于授权。
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+// RequestIDFromContext 返回上下文中的请求编号；没有时返回空字符串。
+func RequestIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
+	return requestID
+}
 
 // Validate 校验关联编号；label 用于错误说明（例如“请求编号”），不包含编号值。
 func Validate(label, id string) error {

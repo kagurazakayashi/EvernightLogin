@@ -19,16 +19,17 @@ import (
 	"strings"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // PageOverrides 是宿主页面替换/资源覆盖选项；由 BuildPagesWithOptions 应用。
 // 替换只改变页面内容与资源，不改变路由访问级别、会话/权限判定与 CSRF 校验。
 type PageOverrides struct {
-	HostTemplates       *login.UIHostTemplates
-	HostRenderer        login.UIPageRenderer
-	Brand               *login.UIBrand
+	HostTemplates       *ui.UIHostTemplates
+	HostRenderer        ui.UIPageRenderer
+	Brand               *ui.UIBrand
 	AssetOverlays       []fs.FS
-	Translations        login.UICatalogProvider
+	Translations        ui.UICatalogProvider
 	DisableBuiltinPages bool
 }
 

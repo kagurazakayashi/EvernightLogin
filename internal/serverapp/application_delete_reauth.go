@@ -10,13 +10,12 @@ package serverapp
 
 import (
 	"context"
-	"strconv"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"strconv"
 )
 
 // applicationDeleteOperationID 是应用删除对应的敏感操作目录稳定标识。
@@ -25,7 +24,7 @@ const applicationDeleteOperationID = "application.delete"
 // applicationDeleteReauth 校验应用逻辑删除前的再次认证。binding 必须与页面/API
 // 表单中的实际目标应用与行版本一致；页面确认框不是授权。
 func applicationDeleteReauth(ctx context.Context, gate *SecurityGate, userID string,
-	binding login.UIAppDeleteBinding) error {
+	binding ui.UIAppDeleteBinding) error {
 	if gate == nil || gate.Reauth == nil || gate.Policy == nil {
 		return reauth.ErrReauthRequired
 	}

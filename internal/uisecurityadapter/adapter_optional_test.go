@@ -6,9 +6,8 @@ package uisecurityadapter
 import (
 	"context"
 	"errors"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 	"testing"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 )
 
 // TestNewRequiresCoreOnly 验证适配器构造只强制核心服务；Passkey/OAuth 可选。
@@ -29,7 +28,7 @@ func TestOptionalCapabilityMethodsFailClosed(t *testing.T) {
 	if _, err := adapter.ListPasskeys(ctx, "usr_11111111111111111111111111111111"); err == nil {
 		t.Fatal("Passkey 未启用时 ListPasskeys 必须失败")
 	} else {
-		var publicErr *login.UIAccountError
+		var publicErr *ui.UIAccountError
 		if !errors.As(err, &publicErr) || publicErr.Code != "FEATURE_NOT_ENABLED" {
 			t.Fatalf("错误码 = %v，期望 FEATURE_NOT_ENABLED", err)
 		}
@@ -44,7 +43,7 @@ func TestOptionalCapabilityMethodsFailClosed(t *testing.T) {
 	if _, err := adapter.ListGrants(ctx, nil, 1, 20); err == nil {
 		t.Fatal("OAuth 未启用时授权列表必须失败")
 	} else {
-		var publicErr *login.UIAccountError
+		var publicErr *ui.UIAccountError
 		if !errors.As(err, &publicErr) || publicErr.Code != "FEATURE_NOT_ENABLED" {
 			t.Fatalf("OAuth 错误码 = %v，期望 FEATURE_NOT_ENABLED", err)
 		}

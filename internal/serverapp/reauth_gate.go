@@ -23,12 +23,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
@@ -44,6 +38,11 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	totpsqlite "github.com/kagurazakayashi/EvernightLogin/internal/totp/sqlite"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 // hostComponentID 是宿主系统组件标识（写入敏感操作审计主体）。
@@ -458,7 +457,7 @@ func policyWriteDigest(action, scopeID, operationID string, version int64,
 // 摘要/版本/作用域/操作）；本回调只复核绑定一致，不再重复认证、也不信任 context
 // 信号。通知类动作（邮件测试/秘密替换）在这里做真实再次认证。
 func (g *SecurityGate) SecurityPolicyReauth(ctx context.Context, userID string,
-	binding login.UISecurityPolicyActionBinding) error {
+	binding ui.UISecurityPolicyActionBinding) error {
 	if g == nil || g.Reauth == nil || g.Policy == nil {
 		return reauth.ErrReauthRequired
 	}

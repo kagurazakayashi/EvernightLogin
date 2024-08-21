@@ -11,17 +11,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/managedapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"strings"
+	"time"
 )
 
 // AppOptions 是应用管理页适配器依赖。Authorize 是宿主注入的页面层管理动作复核
@@ -65,7 +64,7 @@ type ManagedPolicyWriterService interface {
 		request managedapi.SetPolicyRequest) (managedapi.PolicyView, error)
 }
 
-// AppsAdapter 实现 login.UIAppsBackend。
+// AppsAdapter 实现 ui.UIAppsBackend。
 type AppsAdapter struct {
 	opts AppOptions
 }
@@ -85,7 +84,7 @@ func NewApps(options AppOptions) (*AppsAdapter, error) {
 }
 
 // appsErr 构造稳定公开错误。
-func appsErr(code string) error { return &login.UIAppsError{Code: code} }
+func appsErr(code string) error { return &ui.UIAppsError{Code: code} }
 
 // check 执行页面层管理动作复核；管理员标识非法一律拒绝。
 func (a *AppsAdapter) check(ctx context.Context, adminUserID, action, applicationID string) error {
@@ -175,15 +174,15 @@ var managedPolicyOperationDescriptions = map[string]string{
 
 // managedPolicyCatalog 返回完整操作目录（不受当前策略限制）；页面用复选框选择，
 // 提交后仍由 managedapi 严格校验未知操作/硬禁字段/上限。
-func managedPolicyCatalog() []login.UIAppPolicyOperationCatalog {
+func managedPolicyCatalog() []ui.UIAppPolicyOperationCatalog {
 	ids := managedapi.OperationIDs()
-	result := make([]login.UIAppPolicyOperationCatalog, 0, len(ids))
+	result := make([]ui.UIAppPolicyOperationCatalog, 0, len(ids))
 	for _, id := range ids {
 		operation, ok := managedapi.LookupOperation(id)
 		if !ok {
 			continue
 		}
-		result = append(result, login.UIAppPolicyOperationCatalog{
+		result = append(result, ui.UIAppPolicyOperationCatalog{
 			ID: id, Object: operation.ObjectType, Write: operation.Write,
 			ServiceOK:   operation.ServiceAllowed,
 			Description: managedPolicyOperationDescriptions[id],
@@ -194,7 +193,7 @@ func managedPolicyCatalog() []login.UIAppPolicyOperationCatalog {
 
 // managedPolicyFieldCatalog 返回对象字段目录与可写字段建议；读字段来自 managedapi
 // 的公开目录，写字段排除 id/scope/status/时间戳/builtin 等不可变标识。
-func managedPolicyFieldCatalog() []login.UIAppPolicyFieldCatalog {
+func managedPolicyFieldCatalog() []ui.UIAppPolicyFieldCatalog {
 	writable := map[string][]string{
 		"application": {"name", "description"},
 		"member":      {"display_name", "title", "note"},
@@ -203,9 +202,9 @@ func managedPolicyFieldCatalog() []login.UIAppPolicyFieldCatalog {
 		"role":        {"key", "name", "description", "limits", "enabled"},
 		"permission":  {"key", "name", "description", "limits", "enabled"},
 	}
-	result := make([]login.UIAppPolicyFieldCatalog, 0, len(managedapi.ObjectTypes))
+	result := make([]ui.UIAppPolicyFieldCatalog, 0, len(managedapi.ObjectTypes))
 	for _, object := range managedapi.ObjectTypes {
-		result = append(result, login.UIAppPolicyFieldCatalog{
+		result = append(result, ui.UIAppPolicyFieldCatalog{
 			Object: object, Read: managedapi.FieldsOf(object),
 			Write: append([]string{}, writable[object]...),
 		})
@@ -229,12 +228,12 @@ func mapAppsError(err error) error {
 	case managedCode != "" && managedCode != managedapi.CodeInternalError:
 		code = string(managedCode)
 	}
-	return &login.UIAppsError{Code: code}
+	return &ui.UIAppsError{Code: code}
 }
 
 // caps 读取宿主能力钩子（只是交互辅助；写操作仍由领域服务重新授权）。
-func (a *AppsAdapter) caps(ctx context.Context, adminUserID, applicationID string) login.UIApplicationCapabilities {
-	capabilities := login.UIApplicationCapabilities{Write: true, ManageMembers: true,
+func (a *AppsAdapter) caps(ctx context.Context, adminUserID, applicationID string) ui.UIApplicationCapabilities {
+	capabilities := ui.UIApplicationCapabilities{Write: true, ManageMembers: true,
 		ManageSecurity: true, ManageCredentials: true}
 	if a.opts.Authorize == nil {
 		return capabilities
@@ -255,8 +254,8 @@ func (a *AppsAdapter) caps(ctx context.Context, adminUserID, applicationID strin
 
 // toApplicationView 转换应用记录公开视图。
 func (a *AppsAdapter) toApplicationView(ctx context.Context, adminUserID string,
-	record app.Application) login.UIApplicationView {
-	view := login.UIApplicationView{
+	record app.Application) ui.UIApplicationView {
+	view := ui.UIApplicationView{
 		ID: record.ID, ScopeID: record.ScopeID, Name: record.Name,
 		Description: record.Description, IconRef: record.IconRef,
 		Homepage: record.Homepage, OwnerUserID: record.OwnerUserID,
@@ -275,23 +274,23 @@ func (a *AppsAdapter) toApplicationView(ctx context.Context, adminUserID string,
 // 应用范围持有 applications.read），再由 app.Service.ApplicationScope 返回真实可读
 // 应用集合过滤；分页/NextOffset/HasMore 只基于过滤后的集合，不泄露范围外应用。
 func (a *AppsAdapter) ListApplications(ctx context.Context, adminUserID string,
-	query login.UIAppQuery) (login.UIAppPage, error) {
+	query ui.UIAppQuery) (ui.UIAppPage, error) {
 	if adminUserID == "" || !account.ValidUserID(adminUserID) {
-		return login.UIAppPage{}, appsErr("ACCESS_DENIED")
+		return ui.UIAppPage{}, appsErr("ACCESS_DENIED")
 	}
 	if a.opts.AuthorizeAnyApp != nil {
 		if err := a.opts.AuthorizeAnyApp(ctx, adminUserID, "applications.read"); err != nil {
-			return login.UIAppPage{}, appsErr("ACCESS_DENIED")
+			return ui.UIAppPage{}, appsErr("ACCESS_DENIED")
 		}
 	} else if a.opts.Authorize != nil {
 		// 兼容未注入列表复核的宿主：保留既有空范围复核路径（fail-closed）。
 		if err := a.opts.Authorize(ctx, adminUserID, "applications.update", ""); err != nil {
-			return login.UIAppPage{}, appsErr("ACCESS_DENIED")
+			return ui.UIAppPage{}, appsErr("ACCESS_DENIED")
 		}
 	}
 	caller, err := a.appCaller(adminUserID, "")
 	if err != nil {
-		return login.UIAppPage{}, err
+		return ui.UIAppPage{}, err
 	}
 	limit := query.Limit
 	if limit <= 0 {
@@ -301,27 +300,27 @@ func (a *AppsAdapter) ListApplications(ctx context.Context, adminUserID string,
 		limit = app.MaxListLimit
 	}
 	if query.Offset < 0 || query.Offset > app.MaxListOffset {
-		return login.UIAppPage{}, appsErr("REQ_INVALID")
+		return ui.UIAppPage{}, appsErr("REQ_INVALID")
 	}
 	status := app.Status(strings.TrimSpace(query.Status))
 	if status != "" && !status.Valid() {
-		return login.UIAppPage{}, appsErr("REQ_INVALID")
+		return ui.UIAppPage{}, appsErr("REQ_INVALID")
 	}
 	sortField := app.SortField(strings.TrimSpace(query.Sort))
 	if sortField == "" {
 		sortField = app.SortUpdatedAt
 	}
 	if !sortField.Valid() {
-		return login.UIAppPage{}, appsErr("REQ_INVALID")
+		return ui.UIAppPage{}, appsErr("REQ_INVALID")
 	}
 	result, err := a.opts.Apps.ListApplications(ctx, caller, app.ListRequest{
 		Limit: limit, Offset: query.Offset, Status: status, Sort: sortField,
 		Descending: query.Descending})
 	if err != nil {
-		return login.UIAppPage{}, mapAppsError(err)
+		return ui.UIAppPage{}, mapAppsError(err)
 	}
-	page := login.UIAppPage{HasMore: result.HasMore,
-		Applications: make([]login.UIApplicationView, 0, len(result.Applications)),
+	page := ui.UIAppPage{HasMore: result.HasMore,
+		Applications: make([]ui.UIApplicationView, 0, len(result.Applications)),
 		NextOffset:   query.Offset + len(result.Applications)}
 	for _, record := range result.Applications {
 		page.Applications = append(page.Applications, a.toApplicationView(ctx, adminUserID, record))
@@ -331,17 +330,17 @@ func (a *AppsAdapter) ListApplications(ctx context.Context, adminUserID string,
 
 // GetApplication 读取单个应用资料（服务端重新判定管理范围）。
 func (a *AppsAdapter) GetApplication(ctx context.Context, adminUserID,
-	applicationID string) (login.UIApplicationView, error) {
+	applicationID string) (ui.UIApplicationView, error) {
 	if err := a.check(ctx, adminUserID, "applications.read", applicationID); err != nil {
-		return login.UIApplicationView{}, err
+		return ui.UIApplicationView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, "")
 	if err != nil {
-		return login.UIApplicationView{}, err
+		return ui.UIApplicationView{}, err
 	}
 	record, err := a.opts.Apps.GetApplication(ctx, caller, applicationID)
 	if err != nil {
-		return login.UIApplicationView{}, mapAppsError(err)
+		return ui.UIApplicationView{}, mapAppsError(err)
 	}
 	return a.toApplicationView(ctx, adminUserID, record), nil
 }
@@ -367,13 +366,13 @@ func (a *AppsAdapter) CanCreateApplication(ctx context.Context,
 // 成功后默认停用。页面层能力位只影响展示，实际授权由 applications.create 权限、
 // 应用服务 Authorizer 与审计共同判定。
 func (a *AppsAdapter) CreateApplication(ctx context.Context, adminUserID string,
-	create login.UIApplicationCreate, requestID string) (login.UIApplicationView, error) {
+	create ui.UIApplicationCreate, requestID string) (ui.UIApplicationView, error) {
 	if err := a.check(ctx, adminUserID, "applications.create", ""); err != nil {
-		return login.UIApplicationView{}, err
+		return ui.UIApplicationView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIApplicationView{}, err
+		return ui.UIApplicationView{}, err
 	}
 	record, err := a.opts.Apps.CreateApplication(ctx, caller, app.CreateRequest{
 		Name: create.Name, Description: create.Description, IconRef: create.IconRef,
@@ -381,21 +380,21 @@ func (a *AppsAdapter) CreateApplication(ctx context.Context, adminUserID string,
 		ContactInfo: create.ContactInfo, ClientType: app.ClientType(create.ClientType),
 	})
 	if err != nil {
-		return login.UIApplicationView{}, mapAppsError(err)
+		return ui.UIApplicationView{}, mapAppsError(err)
 	}
 	return a.toApplicationView(ctx, adminUserID, record), nil
 }
 
 // UpdateApplication 保存资料白名单；应用 ID/客户端类型/状态不进入本请求。
 func (a *AppsAdapter) UpdateApplication(ctx context.Context, adminUserID, applicationID string,
-	change login.UIApplicationChange, expectedRowVersion int64,
-	requestID string) (login.UIApplicationView, error) {
+	change ui.UIApplicationChange, expectedRowVersion int64,
+	requestID string) (ui.UIApplicationView, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIApplicationView{}, err
+		return ui.UIApplicationView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIApplicationView{}, err
+		return ui.UIApplicationView{}, err
 	}
 	record, err := a.opts.Apps.UpdateApplication(ctx, caller, applicationID,
 		app.UpdateRequest{Name: change.Name, Description: change.Description,
@@ -403,20 +402,20 @@ func (a *AppsAdapter) UpdateApplication(ctx context.Context, adminUserID, applic
 			OwnerUserID: change.OwnerUserID, ContactInfo: change.ContactInfo,
 			ExpectedRowVersion: expectedRowVersion})
 	if err != nil {
-		return login.UIApplicationView{}, mapAppsError(err)
+		return ui.UIApplicationView{}, mapAppsError(err)
 	}
 	return a.toApplicationView(ctx, adminUserID, record), nil
 }
 
 // SetApplicationState 停用/启用应用，返回真实 Changed 语义（幂等不算再次变更）。
 func (a *AppsAdapter) SetApplicationState(ctx context.Context, adminUserID, applicationID string,
-	enable bool, expectedRowVersion int64, requestID string) (login.UIApplicationView, bool, error) {
+	enable bool, expectedRowVersion int64, requestID string) (ui.UIApplicationView, bool, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIApplicationView{}, false, err
+		return ui.UIApplicationView{}, false, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIApplicationView{}, false, err
+		return ui.UIApplicationView{}, false, err
 	}
 	request := app.StatusRequest{ApplicationID: applicationID,
 		ExpectedRowVersion: expectedRowVersion}
@@ -427,7 +426,7 @@ func (a *AppsAdapter) SetApplicationState(ctx context.Context, adminUserID, appl
 		result, err = a.opts.Apps.DisableApplication(ctx, caller, request)
 	}
 	if err != nil {
-		return login.UIApplicationView{}, false, mapAppsError(err)
+		return ui.UIApplicationView{}, false, mapAppsError(err)
 	}
 	return a.toApplicationView(ctx, adminUserID, result.Application), result.Changed, nil
 }
@@ -436,19 +435,19 @@ func (a *AppsAdapter) SetApplicationState(ctx context.Context, adminUserID, appl
 // 立即失效/继续保留的数据范围，并给出当前是否可逻辑删除。预览只读；删除的最终
 // 判定由 app.Service 按当前状态重新执行。页面层先复核 applications.update。
 func (a *AppsAdapter) GetApplicationDeleteImpact(ctx context.Context, adminUserID,
-	applicationID string) (login.UIApplicationDeleteImpact, error) {
+	applicationID string) (ui.UIApplicationDeleteImpact, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIApplicationDeleteImpact{}, err
+		return ui.UIApplicationDeleteImpact{}, err
 	}
 	caller, err := a.appCaller(adminUserID, "")
 	if err != nil {
-		return login.UIApplicationDeleteImpact{}, err
+		return ui.UIApplicationDeleteImpact{}, err
 	}
 	impact, err := a.opts.Apps.PreviewDeletion(ctx, caller, applicationID)
 	if err != nil {
-		return login.UIApplicationDeleteImpact{}, mapAppsError(err)
+		return ui.UIApplicationDeleteImpact{}, mapAppsError(err)
 	}
-	return login.UIApplicationDeleteImpact{
+	return ui.UIApplicationDeleteImpact{
 		Application:               a.toApplicationView(ctx, adminUserID, impact.Application),
 		CanDelete:                 impact.CanDelete,
 		BlockReason:               impact.BlockReason,
@@ -472,25 +471,25 @@ func (a *AppsAdapter) GetApplicationDeleteImpact(ctx context.Context, adminUserI
 // 再次认证与显式确认由页面传输层在调用本方法前完成；本方法仍由领域服务重新鉴权
 // （管理范围、状态机、行版本）并写关键审计。
 func (a *AppsAdapter) DeleteApplication(ctx context.Context, adminUserID, applicationID string,
-	expectedRowVersion int64, requestID string) (login.UIApplicationView, bool, error) {
+	expectedRowVersion int64, requestID string) (ui.UIApplicationView, bool, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIApplicationView{}, false, err
+		return ui.UIApplicationView{}, false, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIApplicationView{}, false, err
+		return ui.UIApplicationView{}, false, err
 	}
 	result, err := a.opts.Apps.DeleteApplication(ctx, caller, app.DeletionRequest{
 		ApplicationID: applicationID, ExpectedRowVersion: expectedRowVersion})
 	if err != nil {
-		return login.UIApplicationView{}, false, mapAppsError(err)
+		return ui.UIApplicationView{}, false, mapAppsError(err)
 	}
 	return a.toApplicationView(ctx, adminUserID, result.Application), result.Changed, nil
 }
 
 // toMemberView 转换成员公开视图（只有稳定用户 ID 与应用内资料）。
-func toMemberView(record app.Membership) login.UIAppMemberView {
-	return login.UIAppMemberView{UserID: record.UserID,
+func toMemberView(record app.Membership) ui.UIAppMemberView {
+	return ui.UIAppMemberView{UserID: record.UserID,
 		DisplayName: record.Profile.DisplayName, Title: record.Profile.Title,
 		Note: record.Profile.Note, Status: string(record.Status),
 		RowVersion: record.RowVersion, CreatedAt: record.CreatedAt,
@@ -499,13 +498,13 @@ func toMemberView(record app.Membership) login.UIAppMemberView {
 
 // ListMembers 列出当前应用成员（只影响当前应用范围）。
 func (a *AppsAdapter) ListMembers(ctx context.Context, adminUserID, applicationID string,
-	query login.UIAppMemberQuery) (login.UIAppMemberPage, error) {
+	query ui.UIAppMemberQuery) (ui.UIAppMemberPage, error) {
 	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
-		return login.UIAppMemberPage{}, err
+		return ui.UIAppMemberPage{}, err
 	}
 	caller, err := a.appCaller(adminUserID, "")
 	if err != nil {
-		return login.UIAppMemberPage{}, err
+		return ui.UIAppMemberPage{}, err
 	}
 	limit := query.Limit
 	if limit <= 0 {
@@ -515,27 +514,27 @@ func (a *AppsAdapter) ListMembers(ctx context.Context, adminUserID, applicationI
 		limit = app.MaxListLimit
 	}
 	if query.Offset < 0 || query.Offset > app.MaxListOffset {
-		return login.UIAppMemberPage{}, appsErr("REQ_INVALID")
+		return ui.UIAppMemberPage{}, appsErr("REQ_INVALID")
 	}
 	status := app.MembershipStatus(strings.TrimSpace(query.Status))
 	if status != "" && !status.Valid() {
-		return login.UIAppMemberPage{}, appsErr("REQ_INVALID")
+		return ui.UIAppMemberPage{}, appsErr("REQ_INVALID")
 	}
 	sortField := app.MemberSortField(strings.TrimSpace(query.Sort))
 	if sortField == "" {
 		sortField = app.MemberSortCreatedAt
 	}
 	if !sortField.Valid() {
-		return login.UIAppMemberPage{}, appsErr("REQ_INVALID")
+		return ui.UIAppMemberPage{}, appsErr("REQ_INVALID")
 	}
 	result, err := a.opts.Apps.ListApplicationMembers(ctx, caller, app.MemberListRequest{
 		ApplicationID: applicationID, Limit: limit, Offset: query.Offset,
 		Status: status, Sort: sortField, Descending: query.Descending})
 	if err != nil {
-		return login.UIAppMemberPage{}, mapAppsError(err)
+		return ui.UIAppMemberPage{}, mapAppsError(err)
 	}
-	page := login.UIAppMemberPage{HasMore: result.HasMore,
-		Members:    make([]login.UIAppMemberView, 0, len(result.Members)),
+	page := ui.UIAppMemberPage{HasMore: result.HasMore,
+		Members:    make([]ui.UIAppMemberView, 0, len(result.Members)),
 		NextOffset: query.Offset + len(result.Members)}
 	for _, record := range result.Members {
 		page.Members = append(page.Members, toMemberView(record))
@@ -545,34 +544,34 @@ func (a *AppsAdapter) ListMembers(ctx context.Context, adminUserID, applicationI
 
 // AddMember 建立当前应用成员关系（目标必须是既有可用账户，不能是 root）。
 func (a *AppsAdapter) AddMember(ctx context.Context, adminUserID, applicationID, userID string,
-	profile login.UIAppMemberProfile, requestID string) (login.UIAppMemberView, error) {
+	profile ui.UIAppMemberProfile, requestID string) (ui.UIAppMemberView, error) {
 	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
-		return login.UIAppMemberView{}, err
+		return ui.UIAppMemberView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIAppMemberView{}, err
+		return ui.UIAppMemberView{}, err
 	}
 	record, err := a.opts.Apps.AddApplicationMember(ctx, caller, app.AddMemberRequest{
 		ApplicationID: applicationID, UserID: userID,
 		Profile: app.MemberProfile{DisplayName: profile.DisplayName,
 			Title: profile.Title, Note: profile.Note}})
 	if err != nil {
-		return login.UIAppMemberView{}, mapAppsError(err)
+		return ui.UIAppMemberView{}, mapAppsError(err)
 	}
 	return toMemberView(record), nil
 }
 
 // UpdateMemberProfile 保存应用内成员资料（不回写全局账户资料）。
 func (a *AppsAdapter) UpdateMemberProfile(ctx context.Context, adminUserID, applicationID,
-	userID string, profile login.UIAppMemberProfile, expectedRowVersion int64,
-	requestID string) (login.UIAppMemberView, error) {
+	userID string, profile ui.UIAppMemberProfile, expectedRowVersion int64,
+	requestID string) (ui.UIAppMemberView, error) {
 	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
-		return login.UIAppMemberView{}, err
+		return ui.UIAppMemberView{}, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIAppMemberView{}, err
+		return ui.UIAppMemberView{}, err
 	}
 	record, err := a.opts.Apps.UpdateApplicationMemberProfile(ctx, caller,
 		app.MemberProfileRequest{ApplicationID: applicationID, UserID: userID,
@@ -580,20 +579,20 @@ func (a *AppsAdapter) UpdateMemberProfile(ctx context.Context, adminUserID, appl
 				Title: profile.Title, Note: profile.Note},
 			ExpectedRowVersion: expectedRowVersion})
 	if err != nil {
-		return login.UIAppMemberView{}, mapAppsError(err)
+		return ui.UIAppMemberView{}, mapAppsError(err)
 	}
 	return toMemberView(record), nil
 }
 
 // SetMemberState 启用/停用当前应用成员关系（不改变全局账户与其他应用）。
 func (a *AppsAdapter) SetMemberState(ctx context.Context, adminUserID, applicationID, userID string,
-	enable bool, expectedRowVersion int64, requestID string) (login.UIAppMemberView, bool, error) {
+	enable bool, expectedRowVersion int64, requestID string) (ui.UIAppMemberView, bool, error) {
 	if err := a.check(ctx, adminUserID, "applications.members", applicationID); err != nil {
-		return login.UIAppMemberView{}, false, err
+		return ui.UIAppMemberView{}, false, err
 	}
 	caller, err := a.appCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIAppMemberView{}, false, err
+		return ui.UIAppMemberView{}, false, err
 	}
 	request := app.MemberStatusRequest{ApplicationID: applicationID, UserID: userID,
 		ExpectedRowVersion: expectedRowVersion}
@@ -604,7 +603,7 @@ func (a *AppsAdapter) SetMemberState(ctx context.Context, adminUserID, applicati
 		result, err = a.opts.Apps.DisableApplicationMember(ctx, caller, request)
 	}
 	if err != nil {
-		return login.UIAppMemberView{}, false, mapAppsError(err)
+		return ui.UIAppMemberView{}, false, mapAppsError(err)
 	}
 	return toMemberView(result.Membership), result.Changed, nil
 }
@@ -628,8 +627,8 @@ func (a *AppsAdapter) RemoveMember(ctx context.Context, adminUserID, application
 }
 
 // oauthSettings 把 oauthclient.Client 转换为脱敏视图。
-func (a *AppsAdapter) oauthSettings(client oauthclient.Client) login.UIOAuthSettings {
-	settings := login.UIOAuthSettings{Registered: true, ClientID: client.ClientID,
+func (a *AppsAdapter) oauthSettings(client oauthclient.Client) ui.UIOAuthSettings {
+	settings := ui.UIOAuthSettings{Registered: true, ClientID: client.ClientID,
 		ClientType:             string(client.ClientType),
 		GrantTypes:             make([]string, 0, len(client.GrantTypes)),
 		RedirectURIs:           append([]string{}, client.RedirectURIs...),
@@ -653,26 +652,26 @@ func (a *AppsAdapter) oauthSettings(client oauthclient.Client) login.UIOAuthSett
 // GetOAuthSettings 读取客户端安全设置；未登记返回 Registered=false（不是配置为
 // “没有任何权限”）。
 func (a *AppsAdapter) GetOAuthSettings(ctx context.Context, adminUserID,
-	applicationID string) (login.UIOAuthSettings, error) {
+	applicationID string) (ui.UIOAuthSettings, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIOAuthSettings{}, err
+		return ui.UIOAuthSettings{}, err
 	}
 	application, err := a.appForType(ctx, adminUserID, applicationID)
 	if err != nil {
-		return login.UIOAuthSettings{}, err
+		return ui.UIOAuthSettings{}, err
 	}
 	caller, err := a.oauthCaller(adminUserID, "")
 	if err != nil {
-		return login.UIOAuthSettings{}, err
+		return ui.UIOAuthSettings{}, err
 	}
 	client, err := a.opts.OAuth.GetClient(ctx, caller, applicationID)
 	if err != nil {
 		if errors.Is(err, oauthclient.ErrClientNotFound) {
-			return login.UIOAuthSettings{Registered: false, ClientID: applicationID,
+			return ui.UIOAuthSettings{Registered: false, ClientID: applicationID,
 				ClientType:              string(application.ClientType),
 				AudienceTrustUnverified: true}, nil
 		}
-		return login.UIOAuthSettings{}, mapAppsError(err)
+		return ui.UIOAuthSettings{}, mapAppsError(err)
 	}
 	return a.oauthSettings(client), nil
 }
@@ -692,14 +691,14 @@ func (a *AppsAdapter) appForType(ctx context.Context, adminUserID,
 }
 
 // toRevealedSecret 转换一次展示的密钥明文。
-func (a *AppsAdapter) toRevealedSecret(revealed oauthclient.RevealedClientSecret) login.UIAppRevealedSecret {
-	return login.UIAppRevealedSecret{Info: a.toSecretInfo(revealed.Info), Secret: revealed.Secret}
+func (a *AppsAdapter) toRevealedSecret(revealed oauthclient.RevealedClientSecret) ui.UIAppRevealedSecret {
+	return ui.UIAppRevealedSecret{Info: a.toSecretInfo(revealed.Info), Secret: revealed.Secret}
 }
 
 // toSecretInfo 转换密钥非秘密元数据并派生展示状态（服务端按真实时间计算）。
-func (a *AppsAdapter) toSecretInfo(info oauthclient.ClientSecretInfo) login.UIAppSecretInfo {
+func (a *AppsAdapter) toSecretInfo(info oauthclient.ClientSecretInfo) ui.UIAppSecretInfo {
 	now := a.opts.Now().UTC()
-	return login.UIAppSecretInfo{ID: info.ID, Prefix: info.Prefix,
+	return ui.UIAppSecretInfo{ID: info.ID, Prefix: info.Prefix,
 		CreatedAt: info.CreatedAt, ExpiresAt: info.ExpiresAt, RetireAt: info.RetireAt,
 		RevokedAt: info.RevokedAt, Status: secretStatus(info, now)}
 }
@@ -723,8 +722,8 @@ func secretStatus(info oauthclient.ClientSecretInfo, now time.Time) string {
 }
 
 // toCertificate 转换客户端公钥证书元数据。
-func toCertificate(info oauthclient.ClientCertificateInfo) login.UIAppCertificate {
-	return login.UIAppCertificate{ID: info.ID,
+func toCertificate(info oauthclient.ClientCertificateInfo) ui.UIAppCertificate {
+	return ui.UIAppCertificate{ID: info.ID,
 		FingerprintSHA256: info.FingerprintSHA256, Subject: info.Subject,
 		NotBefore: info.NotBefore, NotAfter: info.NotAfter,
 		CreatedAt: info.CreatedAt, RevokedAt: info.RevokedAt}
@@ -732,17 +731,17 @@ func toCertificate(info oauthclient.ClientCertificateInfo) login.UIAppCertificat
 
 // RegisterClient 首次登记客户端安全设置；秘密只在本次返回值出现一次。
 func (a *AppsAdapter) RegisterClient(ctx context.Context, adminUserID, applicationID string,
-	register login.UIOAuthRegister, requestID string) (login.UIOAuthRegisterResult, error) {
+	register ui.UIOAuthRegister, requestID string) (ui.UIOAuthRegisterResult, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIOAuthRegisterResult{}, err
+		return ui.UIOAuthRegisterResult{}, err
 	}
 	application, err := a.appForType(ctx, adminUserID, applicationID)
 	if err != nil {
-		return login.UIOAuthRegisterResult{}, err
+		return ui.UIOAuthRegisterResult{}, err
 	}
 	caller, err := a.oauthCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIOAuthRegisterResult{}, err
+		return ui.UIOAuthRegisterResult{}, err
 	}
 	requirePKCE := register.RequirePKCE
 	result, err := a.opts.OAuth.RegisterClient(ctx, caller, oauthclient.RegisterRequest{
@@ -753,9 +752,9 @@ func (a *AppsAdapter) RegisterClient(ctx context.Context, adminUserID, applicati
 		RequirePKCE: &requirePKCE, CertificatePEM: register.CertificatePEM,
 		RequestID: requestID})
 	if err != nil {
-		return login.UIOAuthRegisterResult{}, mapAppsError(err)
+		return ui.UIOAuthRegisterResult{}, mapAppsError(err)
 	}
-	out := login.UIOAuthRegisterResult{Settings: a.oauthSettings(result.Client)}
+	out := ui.UIOAuthRegisterResult{Settings: a.oauthSettings(result.Client)}
 	if result.Secret != nil {
 		secret := a.toRevealedSecret(*result.Secret)
 		out.Secret = &secret
@@ -769,14 +768,14 @@ func (a *AppsAdapter) RegisterClient(ctx context.Context, adminUserID, applicati
 
 // UpdateClientSettings 修改既有安全设置；身份验证方式与客户端类型不随本请求修改。
 func (a *AppsAdapter) UpdateClientSettings(ctx context.Context, adminUserID, applicationID string,
-	change login.UIOAuthChange, expectedRowVersion int64,
-	requestID string) (login.UIOAuthSettings, error) {
+	change ui.UIOAuthChange, expectedRowVersion int64,
+	requestID string) (ui.UIOAuthSettings, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIOAuthSettings{}, err
+		return ui.UIOAuthSettings{}, err
 	}
 	caller, err := a.oauthCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIOAuthSettings{}, err
+		return ui.UIOAuthSettings{}, err
 	}
 	requirePKCE := change.RequirePKCE
 	client, err := a.opts.OAuth.UpdateClientSettings(ctx, caller,
@@ -786,26 +785,26 @@ func (a *AppsAdapter) UpdateClientSettings(ctx context.Context, adminUserID, app
 			Audiences: change.Audiences, RequirePKCE: &requirePKCE,
 			ExpectedRowVersion: expectedRowVersion, RequestID: requestID})
 	if err != nil {
-		return login.UIOAuthSettings{}, mapAppsError(err)
+		return ui.UIOAuthSettings{}, mapAppsError(err)
 	}
 	return a.oauthSettings(client), nil
 }
 
 // GetCredentials 读取当前应用客户端秘密/证书元数据（永不含明文）。
 func (a *AppsAdapter) GetCredentials(ctx context.Context, adminUserID,
-	applicationID string) (login.UIAppCredentials, error) {
+	applicationID string) (ui.UIAppCredentials, error) {
 	if err := a.check(ctx, adminUserID, "applications.credentials.manage", applicationID); err != nil {
-		return login.UIAppCredentials{}, err
+		return ui.UIAppCredentials{}, err
 	}
 	application, err := a.appForType(ctx, adminUserID, applicationID)
 	if err != nil {
-		return login.UIAppCredentials{}, err
+		return ui.UIAppCredentials{}, err
 	}
 	caller, err := a.oauthCaller(adminUserID, "")
 	if err != nil {
-		return login.UIAppCredentials{}, err
+		return ui.UIAppCredentials{}, err
 	}
-	credentials := login.UIAppCredentials{ClientType: string(application.ClientType)}
+	credentials := ui.UIAppCredentials{ClientType: string(application.ClientType)}
 	settings, settingsErr := a.opts.OAuth.GetClient(ctx, caller, applicationID)
 	if settingsErr == nil {
 		credentials.Registered = true
@@ -813,14 +812,14 @@ func (a *AppsAdapter) GetCredentials(ctx context.Context, adminUserID,
 			credentials.AuthMethods = append(credentials.AuthMethods, string(method))
 		}
 	} else if !errors.Is(settingsErr, oauthclient.ErrClientNotFound) {
-		return login.UIAppCredentials{}, mapAppsError(settingsErr)
+		return ui.UIAppCredentials{}, mapAppsError(settingsErr)
 	}
 	secrets, err := a.opts.OAuth.ListClientSecrets(ctx, caller, applicationID)
 	if err != nil {
 		if errors.Is(err, oauthclient.ErrClientNotFound) {
 			return credentials, nil
 		}
-		return login.UIAppCredentials{}, mapAppsError(err)
+		return ui.UIAppCredentials{}, mapAppsError(err)
 	}
 	credentials.Registered = true
 	for _, info := range secrets {
@@ -829,7 +828,7 @@ func (a *AppsAdapter) GetCredentials(ctx context.Context, adminUserID,
 	certificates, err := a.opts.OAuth.ListClientCertificates(ctx, caller, applicationID)
 	if err != nil {
 		if !errors.Is(err, oauthclient.ErrClientNotFound) {
-			return login.UIAppCredentials{}, mapAppsError(err)
+			return ui.UIAppCredentials{}, mapAppsError(err)
 		}
 	} else {
 		for _, info := range certificates {
@@ -842,18 +841,18 @@ func (a *AppsAdapter) GetCredentials(ctx context.Context, adminUserID,
 
 // RotateSecret 轮换客户端秘密；新明文只在本次返回值出现一次。
 func (a *AppsAdapter) RotateSecret(ctx context.Context, adminUserID, applicationID,
-	requestID string) (login.UIAppRevealedSecret, error) {
+	requestID string) (ui.UIAppRevealedSecret, error) {
 	if err := a.check(ctx, adminUserID, "applications.credentials.manage", applicationID); err != nil {
-		return login.UIAppRevealedSecret{}, err
+		return ui.UIAppRevealedSecret{}, err
 	}
 	caller, err := a.oauthCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIAppRevealedSecret{}, err
+		return ui.UIAppRevealedSecret{}, err
 	}
 	revealed, err := a.opts.OAuth.RotateClientSecret(ctx, caller,
 		oauthclient.RotateSecretRequest{ClientID: applicationID, RequestID: requestID})
 	if err != nil {
-		return login.UIAppRevealedSecret{}, mapAppsError(err)
+		return ui.UIAppRevealedSecret{}, mapAppsError(err)
 	}
 	return a.toRevealedSecret(revealed), nil
 }
@@ -878,19 +877,19 @@ func (a *AppsAdapter) RevokeSecret(ctx context.Context, adminUserID, application
 
 // RegisterCertificate 登记客户端公钥证书；私钥材料由服务端拒绝。
 func (a *AppsAdapter) RegisterCertificate(ctx context.Context, adminUserID, applicationID,
-	certificatePEM, requestID string) (login.UIAppCertificate, error) {
+	certificatePEM, requestID string) (ui.UIAppCertificate, error) {
 	if err := a.check(ctx, adminUserID, "applications.credentials.manage", applicationID); err != nil {
-		return login.UIAppCertificate{}, err
+		return ui.UIAppCertificate{}, err
 	}
 	caller, err := a.oauthCaller(adminUserID, requestID)
 	if err != nil {
-		return login.UIAppCertificate{}, err
+		return ui.UIAppCertificate{}, err
 	}
 	info, err := a.opts.OAuth.RegisterClientCertificate(ctx, caller,
 		oauthclient.CertificateRequest{ClientID: applicationID,
 			CertificatePEM: certificatePEM, RequestID: requestID})
 	if err != nil {
-		return login.UIAppCertificate{}, mapAppsError(err)
+		return ui.UIAppCertificate{}, mapAppsError(err)
 	}
 	return toCertificate(info), nil
 }
@@ -916,16 +915,16 @@ func (a *AppsAdapter) RevokeCertificate(ctx context.Context, adminUserID, applic
 // GetManagedPolicy 读取应用真实托管管理 API 委托策略（受信系统只读通道）。写策略
 // 由 SetManagedPolicy 在页面一次性强认证绑定后提交，不在本读取路径放行。
 func (a *AppsAdapter) GetManagedPolicy(ctx context.Context, adminUserID,
-	applicationID string) (login.UIAppPolicyView, error) {
+	applicationID string) (ui.UIAppPolicyView, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIAppPolicyView{}, err
+		return ui.UIAppPolicyView{}, err
 	}
 	if a.opts.ManagedAPI == nil {
-		return login.UIAppPolicyView{State: "unavailable",
+		return ui.UIAppPolicyView{State: "unavailable",
 			Reason: "页面未装配受信策略读取通道（宿主未注入 managedapi 读取适配器）"}, nil
 	}
 	if err := a.opts.ManagedPolicyActor.Validate(); err != nil {
-		return login.UIAppPolicyView{State: "unavailable",
+		return ui.UIAppPolicyView{State: "unavailable",
 			Reason: "受信策略读取标识未配置或无效；未读取任何策略内容"}, nil
 	}
 	canWrite := a.canWriteManagedPolicy(ctx, adminUserID, applicationID)
@@ -933,28 +932,28 @@ func (a *AppsAdapter) GetManagedPolicy(ctx context.Context, adminUserID,
 	if err != nil {
 		switch {
 		case errors.Is(err, managedapi.ErrPolicyDisabled):
-			return login.UIAppPolicyView{State: "not_configured",
+			return ui.UIAppPolicyView{State: "not_configured",
 				ApplicationID: applicationID, CanWrite: canWrite,
-				Limits:  login.UIAppPolicyLimits{MaxLimit: 20, MaxOffset: 100000, MaxBatch: 10},
+				Limits:  ui.UIAppPolicyLimits{MaxLimit: 20, MaxOffset: 100000, MaxBatch: 10},
 				Catalog: managedPolicyCatalog(), FieldCatalog: managedPolicyFieldCatalog()}, nil
 		case errors.Is(err, managedapi.ErrAccessDenied):
-			return login.UIAppPolicyView{State: "unavailable",
+			return ui.UIAppPolicyView{State: "unavailable",
 				Reason: "受信策略读取通道未获准读取该应用策略；未展示任何策略内容"}, nil
 		default:
-			return login.UIAppPolicyView{}, mapAppsError(err)
+			return ui.UIAppPolicyView{}, mapAppsError(err)
 		}
 	}
-	result := login.UIAppPolicyView{State: "policy", ApplicationID: view.ApplicationID,
+	result := ui.UIAppPolicyView{State: "policy", ApplicationID: view.ApplicationID,
 		RowVersion: view.RowVersion, UpdatedBy: view.UpdatedBy,
-		Limits: login.UIAppPolicyLimits{MaxLimit: view.Policy.Limits.MaxLimit,
+		Limits: ui.UIAppPolicyLimits{MaxLimit: view.Policy.Limits.MaxLimit,
 			MaxOffset: view.Policy.Limits.MaxOffset, MaxBatch: view.Policy.Limits.MaxBatch},
 		CanWrite: canWrite}
 	result.Catalog = managedPolicyCatalog()
 	result.FieldCatalog = managedPolicyFieldCatalog()
-	appendOps := func(ids []string) []login.UIAppPolicyOperation {
-		operations := make([]login.UIAppPolicyOperation, 0, len(ids))
+	appendOps := func(ids []string) []ui.UIAppPolicyOperation {
+		operations := make([]ui.UIAppPolicyOperation, 0, len(ids))
 		for _, id := range ids {
-			item := login.UIAppPolicyOperation{ID: id}
+			item := ui.UIAppPolicyOperation{ID: id}
 			if operation, ok := managedapi.LookupOperation(id); ok {
 				item.Object = operation.ObjectType
 				item.Write = operation.Write
@@ -967,11 +966,11 @@ func (a *AppsAdapter) GetManagedPolicy(ctx context.Context, adminUserID,
 	result.Allowed = appendOps(view.Policy.Operations.Allowed)
 	result.ServiceAllowed = appendOps(view.Policy.Operations.ServiceAllowed)
 	for _, scope := range view.Policy.Objects {
-		result.Objects = append(result.Objects, login.UIAppPolicyObject{Object: scope.Object,
+		result.Objects = append(result.Objects, ui.UIAppPolicyObject{Object: scope.Object,
 			Mode: scope.Mode, Resources: append([]string{}, scope.Resources...)})
 	}
 	for _, fields := range view.Policy.Fields {
-		result.Fields = append(result.Fields, login.UIAppPolicyFields{Object: fields.Object,
+		result.Fields = append(result.Fields, ui.UIAppPolicyFields{Object: fields.Object,
 			Read: append([]string{}, fields.Read...), Write: append([]string{}, fields.Write...)})
 	}
 	return result, nil
@@ -995,18 +994,18 @@ func (a *AppsAdapter) canWriteManagedPolicy(ctx context.Context, adminUserID,
 // 管理权限，并由 managedapi.SetPolicy 做受信 PolicyAuthorizer、行版本、策略结构、
 // 审计同事务与应用状态校验。错误以稳定 UIAppsError 返回，页面不伪造成功。
 func (a *AppsAdapter) SetManagedPolicy(ctx context.Context, adminUserID, applicationID string,
-	change login.UIAppPolicyChange, expectedRowVersion int64, requestID,
-	policyDigest string) (login.UIAppPolicyView, error) {
+	change ui.UIAppPolicyChange, expectedRowVersion int64, requestID,
+	policyDigest string) (ui.UIAppPolicyView, error) {
 	if err := a.check(ctx, adminUserID, "applications.update", applicationID); err != nil {
-		return login.UIAppPolicyView{}, err
+		return ui.UIAppPolicyView{}, err
 	}
 	writer, writable := a.opts.ManagedAPI.(ManagedPolicyWriterService)
 	if a.opts.ManagedAPI == nil || !writable {
-		return login.UIAppPolicyView{}, appsErr("UNAVAILABLE")
+		return ui.UIAppPolicyView{}, appsErr("UNAVAILABLE")
 	}
 	if expectedRowVersion < 0 || requestID == "" ||
 		policyDigest == "" || change.Digest() != policyDigest {
-		return login.UIAppPolicyView{}, appsErr("REQ_INVALID")
+		return ui.UIAppPolicyView{}, appsErr("REQ_INVALID")
 	}
 	policy := managedapi.Policy{
 		Version: 1,
@@ -1034,11 +1033,11 @@ func (a *AppsAdapter) SetManagedPolicy(ctx context.Context, adminUserID, applica
 		ReauthBinding: policyDigest,
 	})
 	if err != nil {
-		return login.UIAppPolicyView{}, mapManagedPolicyError(err)
+		return ui.UIAppPolicyView{}, mapManagedPolicyError(err)
 	}
-	result := login.UIAppPolicyView{State: "policy", ApplicationID: view.ApplicationID,
+	result := ui.UIAppPolicyView{State: "policy", ApplicationID: view.ApplicationID,
 		RowVersion: view.RowVersion, UpdatedBy: view.UpdatedBy,
-		Limits: login.UIAppPolicyLimits{MaxLimit: view.Policy.Limits.MaxLimit,
+		Limits: ui.UIAppPolicyLimits{MaxLimit: view.Policy.Limits.MaxLimit,
 			MaxOffset: view.Policy.Limits.MaxOffset, MaxBatch: view.Policy.Limits.MaxBatch},
 		CanWrite: true}
 	result.Catalog = managedPolicyCatalog()

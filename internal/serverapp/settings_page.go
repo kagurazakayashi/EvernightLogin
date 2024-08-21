@@ -16,6 +16,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/settings"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 type settingsPageBackend struct {
@@ -25,7 +26,7 @@ type settingsPageBackend struct {
 
 // newSettingsSettingsPageBackend 构造管理页配置设置后端；没有可写配置文件时返回 nil。
 func newSettingsSettingsPageBackend(deps Deps,
-	managed *ManagedServices) (login.UIAdminSettingsBackend, error) {
+	managed *ManagedServices) (ui.UIAdminSettingsBackend, error) {
 	if strings.TrimSpace(deps.ConfigPath) == "" || managed == nil ||
 		managed.Checker == nil || managed.Roots == nil {
 		return nil, nil
@@ -53,23 +54,23 @@ func (b *settingsPageBackend) authorize(ctx context.Context, adminID string) (bo
 }
 
 func (b *settingsPageBackend) GetSettings(ctx context.Context,
-	adminID string) (login.UIAdminSettingsView, error) {
+	adminID string) (ui.UIAdminSettingsView, error) {
 	allowRoot, err := b.authorize(ctx, adminID)
 	if err != nil {
-		return login.UIAdminSettingsView{}, err
+		return ui.UIAdminSettingsView{}, err
 	}
 	view, err := b.service.Fields(ctx, allowRoot)
 	if err != nil {
-		return login.UIAdminSettingsView{}, pageSettingsError(err)
+		return ui.UIAdminSettingsView{}, pageSettingsError(err)
 	}
 	return settingsPageView(view), nil
 }
 
 func (b *settingsPageBackend) UpdateSettings(ctx context.Context, adminID string,
-	change login.UIAdminSettingsChange) (login.UIAdminSettingsView, error) {
+	change ui.UIAdminSettingsChange) (ui.UIAdminSettingsView, error) {
 	allowRoot, err := b.authorize(ctx, adminID)
 	if err != nil {
-		return login.UIAdminSettingsView{}, err
+		return ui.UIAdminSettingsView{}, err
 	}
 	requestID := strings.TrimSpace(change.RequestID)
 	if requestID == "" {
@@ -79,24 +80,24 @@ func (b *settingsPageBackend) UpdateSettings(ctx context.Context, adminID string
 		ExpectedVersion: change.ExpectedVersion, Changes: change.Changes,
 		Reason: change.Reason, Actor: audit.Actor{Type: audit.ActorUser, ID: adminID},
 		RequestID: requestID, AllowRoot: allowRoot}); err != nil {
-		return login.UIAdminSettingsView{}, pageSettingsError(err)
+		return ui.UIAdminSettingsView{}, pageSettingsError(err)
 	}
 	view, err := b.service.Fields(ctx, allowRoot)
 	if err != nil {
-		return login.UIAdminSettingsView{}, pageSettingsError(err)
+		return ui.UIAdminSettingsView{}, pageSettingsError(err)
 	}
 	return settingsPageView(view), nil
 }
 
-func settingsPageView(view settings.View) login.UIAdminSettingsView {
-	result := login.UIAdminSettingsView{Configured: view.Configured,
+func settingsPageView(view settings.View) ui.UIAdminSettingsView {
+	result := ui.UIAdminSettingsView{Configured: view.Configured,
 		Version: view.Version, EffectiveVersion: view.EffectiveVersion,
 		PendingHot: view.HotReloadable, PendingRestart: view.RestartRequired,
 		HostReloadNeeded: len(view.HotReloadable) > 0 || len(view.RestartRequired) > 0,
 		Note:             view.Note}
-	result.Fields = make([]login.UIAdminSettingsField, 0, len(view.Fields))
+	result.Fields = make([]ui.UIAdminSettingsField, 0, len(view.Fields))
 	for _, field := range view.Fields {
-		result.Fields = append(result.Fields, login.UIAdminSettingsField{
+		result.Fields = append(result.Fields, ui.UIAdminSettingsField{
 			Field: field.Field, Value: field.Value, DiskValue: field.DiskValue,
 			Class: field.Class, Secret: field.Secret, RootOnly: field.RootOnly,
 			Writable: field.Writable, PendingRestart: field.PendingRestart})

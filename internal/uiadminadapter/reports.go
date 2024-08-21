@@ -10,16 +10,15 @@ package uiadminadapter
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reports"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"os"
+	"strings"
+	"time"
 )
 
 // ReportsRecorder 是拒绝留痕契约（生产 *audit.Recorder）。
@@ -38,7 +37,7 @@ type ReportsOptions struct {
 	Now        func() time.Time
 }
 
-// ReportsAdapter 实现 login.UIPageReportsBackend。
+// ReportsAdapter 实现 ui.UIPageReportsBackend。
 type ReportsAdapter struct {
 	opts ReportsOptions
 }
@@ -60,7 +59,7 @@ func NewReports(options ReportsOptions) (*ReportsAdapter, error) {
 // reportsCaller 把页面已认证用户 ID 重建为可信 Caller。
 func reportsCaller(userID string) (account.Caller, error) {
 	if userID == "" || !account.ValidUserID(userID) {
-		return account.Caller{}, &login.UIReportsError{Code: "ACCESS_DENIED"}
+		return account.Caller{}, &ui.UIReportsError{Code: "ACCESS_DENIED"}
 	}
 	return account.UserCaller(userID)
 }
@@ -72,16 +71,16 @@ func mapReportsError(err error) error {
 	}
 	switch {
 	case errors.Is(err, reports.ErrAccessDenied):
-		return &login.UIReportsError{Code: "ACCESS_DENIED"}
+		return &ui.UIReportsError{Code: "ACCESS_DENIED"}
 	case errors.Is(err, reports.ErrNotFound):
-		return &login.UIReportsError{Code: "NOT_FOUND"}
+		return &ui.UIReportsError{Code: "NOT_FOUND"}
 	case errors.Is(err, reports.ErrConflict), errors.Is(err, reports.ErrTicketExpired),
 		errors.Is(err, reports.ErrTicketInvalid), errors.Is(err, reports.ErrTicketAccessDenied):
-		return &login.UIReportsError{Code: "CONFLICT"}
+		return &ui.UIReportsError{Code: "CONFLICT"}
 	case errors.Is(err, reports.ErrInvalidRequest), errors.Is(err, reports.ErrTicketNotAllowed):
-		return &login.UIReportsError{Code: "INVALID"}
+		return &ui.UIReportsError{Code: "INVALID"}
 	default:
-		return &login.UIReportsError{Code: "UNAVAILABLE"}
+		return &ui.UIReportsError{Code: "UNAVAILABLE"}
 	}
 }
 
@@ -98,14 +97,14 @@ func (a *ReportsAdapter) allow(ctx context.Context, caller account.Caller,
 	return err == nil && grant.Allowed
 }
 
-// Capabilities 实现 login.UIPageReportsBackend。
+// Capabilities 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) Capabilities(ctx context.Context,
-	userID string) (login.UIReportsCapabilities, error) {
+	userID string) (ui.UIReportsCapabilities, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportsCapabilities{}, err
+		return ui.UIReportsCapabilities{}, err
 	}
-	return login.UIReportsCapabilities{
+	return ui.UIReportsCapabilities{
 		Read:           a.allow(ctx, caller, reports.PermissionRead),
 		Generate:       a.allow(ctx, caller, reports.PermissionGenerate),
 		Export:         a.allow(ctx, caller, reports.PermissionExport),
@@ -115,7 +114,7 @@ func (a *ReportsAdapter) Capabilities(ctx context.Context,
 	}, nil
 }
 
-// RecordDenial 实现 login.UIPageReportsBackend。
+// RecordDenial 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) RecordDenial(ctx context.Context, userID, reason string) error {
 	if a.opts.Recorder == nil {
 		return nil
@@ -133,7 +132,7 @@ func (a *ReportsAdapter) RecordDenial(ctx context.Context, userID, reason string
 }
 
 // planView 把计划领域视图映射为页面视图。
-func planView(view reports.PlanView) login.UIReportPlan {
+func planView(view reports.PlanView) ui.UIReportPlan {
 	formats := make([]string, 0, len(view.Formats))
 	for _, format := range view.Formats {
 		formats = append(formats, string(format))
@@ -142,7 +141,7 @@ func planView(view reports.PlanView) login.UIReportPlan {
 	for _, category := range view.Categories {
 		categories = append(categories, string(category))
 	}
-	return login.UIReportPlan{
+	return ui.UIReportPlan{
 		ID: view.ID, ScheduleID: view.ScheduleID, Version: view.Version,
 		Name: view.Name, Enabled: view.Enabled,
 		PermissionState: view.PermissionState, PermissionReason: view.PermissionReason,
@@ -165,9 +164,9 @@ func planOwnerText(actor audit.Actor) string {
 	return string(actor.Type) + " · " + actor.ID
 }
 
-// ListPlans 实现 login.UIPageReportsBackend。
+// ListPlans 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) ListPlans(ctx context.Context,
-	userID string) ([]login.UIReportPlan, error) {
+	userID string) ([]ui.UIReportPlan, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
 		return nil, err
@@ -176,49 +175,49 @@ func (a *ReportsAdapter) ListPlans(ctx context.Context,
 	if err != nil {
 		return nil, mapReportsError(err)
 	}
-	plans := make([]login.UIReportPlan, 0, len(views))
+	plans := make([]ui.UIReportPlan, 0, len(views))
 	for _, view := range views {
 		plans = append(plans, planView(view))
 	}
 	return plans, nil
 }
 
-// ListPlansPage 实现 login.UIReportPlanPagedBackend（步骤 218）。
+// ListPlansPage 实现 ui.UIReportPlanPagedBackend（步骤 218）。
 func (a *ReportsAdapter) ListPlansPage(ctx context.Context, userID string, limit,
-	offset int) (login.UIReportPlanPage, error) {
+	offset int) (ui.UIReportPlanPage, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportPlanPage{}, err
+		return ui.UIReportPlanPage{}, err
 	}
 	result, err := a.opts.Plans.ListPage(ctx, reports.PlanListRequest{
 		Caller: caller, Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIReportPlanPage{}, mapReportsError(err)
+		return ui.UIReportPlanPage{}, mapReportsError(err)
 	}
-	plans := make([]login.UIReportPlan, 0, len(result.Plans))
+	plans := make([]ui.UIReportPlan, 0, len(result.Plans))
 	for _, view := range result.Plans {
 		plans = append(plans, planView(view))
 	}
-	return login.UIReportPlanPage{Plans: plans, HasMore: result.HasMore,
+	return ui.UIReportPlanPage{Plans: plans, HasMore: result.HasMore,
 		NextOffset: result.NextOffset}, nil
 }
 
-// GetPlan 实现 login.UIPageReportsBackend。
+// GetPlan 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) GetPlan(ctx context.Context, userID,
-	planID string) (login.UIReportPlan, error) {
+	planID string) (ui.UIReportPlan, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportPlan{}, err
+		return ui.UIReportPlan{}, err
 	}
 	view, err := a.opts.Plans.Get(ctx, caller, strings.TrimSpace(planID))
 	if err != nil {
-		return login.UIReportPlan{}, mapReportsError(err)
+		return ui.UIReportPlan{}, mapReportsError(err)
 	}
 	return planView(view), nil
 }
 
 // planRequest 把页面请求映射为领域创建请求。
-func planRequest(userID string, request login.UIReportPlanRequest,
+func planRequest(userID string, request ui.UIReportPlanRequest,
 	requestID string) (reports.PlanCreateRequest, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
@@ -228,7 +227,7 @@ func planRequest(userID string, request login.UIReportPlanRequest,
 	for _, rawFormat := range request.Formats {
 		format := reports.Format(rawFormat)
 		if !format.Valid() {
-			return reports.PlanCreateRequest{}, &login.UIReportsError{Code: "INVALID"}
+			return reports.PlanCreateRequest{}, &ui.UIReportsError{Code: "INVALID"}
 		}
 		formats = append(formats, format)
 	}
@@ -236,7 +235,7 @@ func planRequest(userID string, request login.UIReportPlanRequest,
 	for _, rawCategory := range request.Categories {
 		category := stats.Category(rawCategory)
 		if !category.Valid() {
-			return reports.PlanCreateRequest{}, &login.UIReportsError{Code: "INVALID"}
+			return reports.PlanCreateRequest{}, &ui.UIReportsError{Code: "INVALID"}
 		}
 		categories = append(categories, category)
 	}
@@ -266,65 +265,65 @@ func reportScopeOrDefault(scopeID string) string {
 	return scopeID
 }
 
-// CreatePlan 实现 login.UIPageReportsBackend。
+// CreatePlan 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) CreatePlan(ctx context.Context, userID string,
-	request login.UIReportPlanRequest, requestID string) (login.UIReportPlan, error) {
+	request ui.UIReportPlanRequest, requestID string) (ui.UIReportPlan, error) {
 	domainRequest, err := planRequest(userID, request, requestID)
 	if err != nil {
-		return login.UIReportPlan{}, err
+		return ui.UIReportPlan{}, err
 	}
 	view, err := a.opts.Plans.Create(ctx, domainRequest)
 	if err != nil {
-		return login.UIReportPlan{}, mapReportsError(err)
+		return ui.UIReportPlan{}, mapReportsError(err)
 	}
 	return planView(view), nil
 }
 
-// UpdatePlan 实现 login.UIPageReportsBackend。
+// UpdatePlan 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) UpdatePlan(ctx context.Context, userID, planID string,
-	version int64, request login.UIReportPlanRequest,
-	requestID string) (login.UIReportPlan, error) {
+	version int64, request ui.UIReportPlanRequest,
+	requestID string) (ui.UIReportPlan, error) {
 	domainRequest, err := planRequest(userID, request, requestID)
 	if err != nil {
-		return login.UIReportPlan{}, err
+		return ui.UIReportPlan{}, err
 	}
 	view, err := a.opts.Plans.Update(ctx, reports.PlanUpdateRequest{
 		PlanCreateRequest: domainRequest, PlanID: strings.TrimSpace(planID),
 		Version: version, Reason: strings.TrimSpace(request.Reason),
 	})
 	if err != nil {
-		return login.UIReportPlan{}, mapReportsError(err)
+		return ui.UIReportPlan{}, mapReportsError(err)
 	}
 	return planView(view), nil
 }
 
-// SetPlanEnabled 实现 login.UIPageReportsBackend。
+// SetPlanEnabled 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) SetPlanEnabled(ctx context.Context, userID, planID string,
-	enabled bool, reason, requestID string) (login.UIReportPlan, error) {
+	enabled bool, reason, requestID string) (ui.UIReportPlan, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportPlan{}, err
+		return ui.UIReportPlan{}, err
 	}
 	view, err := a.opts.Plans.SetEnabled(ctx, caller, strings.TrimSpace(planID),
 		enabled, strings.TrimSpace(reason), requestID)
 	if err != nil {
-		return login.UIReportPlan{}, mapReportsError(err)
+		return ui.UIReportPlan{}, mapReportsError(err)
 	}
 	return planView(view), nil
 }
 
-// PlanDeletePreview 实现 login.UIPageReportsBackend。
+// PlanDeletePreview 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) PlanDeletePreview(ctx context.Context, userID,
-	planID string) (login.UIReportPlanDeletePreview, error) {
+	planID string) (ui.UIReportPlanDeletePreview, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportPlanDeletePreview{}, err
+		return ui.UIReportPlanDeletePreview{}, err
 	}
 	preview, err := a.opts.Plans.DeletePreview(ctx, caller, strings.TrimSpace(planID))
 	if err != nil {
-		return login.UIReportPlanDeletePreview{}, mapReportsError(err)
+		return ui.UIReportPlanDeletePreview{}, mapReportsError(err)
 	}
-	return login.UIReportPlanDeletePreview{
+	return ui.UIReportPlanDeletePreview{
 		PlanID: preview.PlanID, Name: preview.Name, ScopeID: preview.ScopeID,
 		Enabled: preview.Enabled, NextRun: preview.NextRun,
 		NextRunUnknown: preview.NextRunUnknown, MissedPolicy: preview.MissedPolicy,
@@ -335,7 +334,7 @@ func (a *ReportsAdapter) PlanDeletePreview(ctx context.Context, userID,
 	}, nil
 }
 
-// DeletePlan 实现 login.UIPageReportsBackend。
+// DeletePlan 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) DeletePlan(ctx context.Context, userID, planID, reason,
 	requestID string) error {
 	caller, err := reportsCaller(userID)
@@ -346,12 +345,12 @@ func (a *ReportsAdapter) DeletePlan(ctx context.Context, userID, planID, reason,
 		strings.TrimSpace(reason), requestID))
 }
 
-// ListHistory 实现 login.UIPageReportsBackend。
+// ListHistory 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) ListHistory(ctx context.Context, userID string,
-	query login.UIReportHistoryQuery) (login.UIReportHistoryPage, error) {
+	query ui.UIReportHistoryQuery) (ui.UIReportHistoryPage, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportHistoryPage{}, err
+		return ui.UIReportHistoryPage{}, err
 	}
 	page, err := a.opts.Reports.HistoryList(ctx, reports.HistoryListRequest{
 		Caller: caller, PlanID: strings.TrimSpace(query.PlanID),
@@ -360,19 +359,19 @@ func (a *ReportsAdapter) ListHistory(ctx context.Context, userID string,
 		Cursor: strings.TrimSpace(query.Cursor),
 	})
 	if err != nil {
-		return login.UIReportHistoryPage{}, mapReportsError(err)
+		return ui.UIReportHistoryPage{}, mapReportsError(err)
 	}
-	records := make([]login.UIReportHistoryEntry, 0, len(page.Records))
+	records := make([]ui.UIReportHistoryEntry, 0, len(page.Records))
 	for _, record := range page.Records {
 		records = append(records, historyEntry(record))
 	}
-	return login.UIReportHistoryPage{Records: records, HasMore: page.HasMore,
+	return ui.UIReportHistoryPage{Records: records, HasMore: page.HasMore,
 		NextCursor: page.NextCursor}, nil
 }
 
 // historyEntry 把历史领域视图映射为页面条目。
-func historyEntry(record reports.ReportHistoryView) login.UIReportHistoryEntry {
-	entry := login.UIReportHistoryEntry{
+func historyEntry(record reports.ReportHistoryView) ui.UIReportHistoryEntry {
+	entry := ui.UIReportHistoryEntry{
 		ID: record.ID, PlanID: record.PlanID, Name: record.Name,
 		ScopeID: record.ScopeID, ScopeKind: record.ScopeKind, State: record.State,
 		Formats: make([]string, 0, len(record.Formats)),
@@ -399,18 +398,18 @@ func truncateReportText(value string) string {
 	return string(runes[:200]) + "…"
 }
 
-// GetReport 实现 login.UIPageReportsBackend：返回受控元数据与当前仍可用的格式。
+// GetReport 实现 ui.UIPageReportsBackend：返回受控元数据与当前仍可用的格式。
 func (a *ReportsAdapter) GetReport(ctx context.Context, userID,
-	reportID string) (login.UIReportDetail, error) {
+	reportID string) (ui.UIReportDetail, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportDetail{}, err
+		return ui.UIReportDetail{}, err
 	}
 	view, err := a.opts.Reports.Get(ctx, caller, strings.TrimSpace(reportID))
 	if err != nil {
-		return login.UIReportDetail{}, mapReportsError(err)
+		return ui.UIReportDetail{}, mapReportsError(err)
 	}
-	detail := login.UIReportDetail{
+	detail := ui.UIReportDetail{
 		ID: view.ID, ScopeID: view.ScopeID, ScopeKind: view.ScopeKind,
 		State: view.State, RequestedBy: planOwnerText(view.RequestedBy),
 		CreatedAt: view.CreatedAt, StartedAt: view.StartedAt,
@@ -423,14 +422,14 @@ func (a *ReportsAdapter) GetReport(ctx context.Context, userID,
 		TemplateVersion:   view.TemplateVersion,
 		ArtifactExpiresAt: view.ArtifactExpiresAt, RetryOf: view.RetryOf,
 		Formats:   make([]string, 0, len(view.Formats)),
-		Artifacts: make([]login.UIReportArtifact, 0, len(view.Artifacts)),
+		Artifacts: make([]ui.UIReportArtifact, 0, len(view.Artifacts)),
 	}
 	for _, format := range view.Formats {
 		detail.Formats = append(detail.Formats, string(format))
 	}
 	now := a.opts.Now()
 	for _, artifact := range view.Artifacts {
-		detail.Artifacts = append(detail.Artifacts, login.UIReportArtifact{
+		detail.Artifacts = append(detail.Artifacts, ui.UIReportArtifact{
 			Format:    string(artifact.Format),
 			Bytes:     artifact.Bytes,
 			SHA256:    artifact.SHA256,
@@ -441,35 +440,35 @@ func (a *ReportsAdapter) GetReport(ctx context.Context, userID,
 	return detail, nil
 }
 
-// Download 实现 login.UIPageReportsBackend：签发一次性令牌并立即兑换，读取受控
+// Download 实现 ui.UIPageReportsBackend：签发一次性令牌并立即兑换，读取受控
 // 产物字节；每次调用都由领域服务重新授权并写下载审计。
 func (a *ReportsAdapter) Download(ctx context.Context, userID, reportID,
-	formatText string) (login.UIReportFile, error) {
+	formatText string) (ui.UIReportFile, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportFile{}, err
+		return ui.UIReportFile{}, err
 	}
 	format := reports.Format(strings.TrimSpace(formatText))
 	if !format.Valid() {
-		return login.UIReportFile{}, &login.UIReportsError{Code: "INVALID"}
+		return ui.UIReportFile{}, &ui.UIReportsError{Code: "INVALID"}
 	}
 	ticket, err := a.opts.Reports.IssueDownloadTicket(ctx, caller,
 		strings.TrimSpace(reportID), format)
 	if err != nil {
-		return login.UIReportFile{}, mapReportsError(err)
+		return ui.UIReportFile{}, mapReportsError(err)
 	}
 	artifact, err := a.opts.Reports.RedeemDownloadTicket(ctx, caller, ticket.Token)
 	if err != nil {
-		return login.UIReportFile{}, mapReportsError(err)
+		return ui.UIReportFile{}, mapReportsError(err)
 	}
 	if artifact.Bytes < 1 || artifact.Bytes > reports.MaxArtifactBytes {
-		return login.UIReportFile{}, &login.UIReportsError{Code: "UNAVAILABLE"}
+		return ui.UIReportFile{}, &ui.UIReportsError{Code: "UNAVAILABLE"}
 	}
 	data, err := os.ReadFile(artifact.HostPath)
 	if err != nil || int64(len(data)) != artifact.Bytes {
-		return login.UIReportFile{}, &login.UIReportsError{Code: "UNAVAILABLE"}
+		return ui.UIReportFile{}, &ui.UIReportsError{Code: "UNAVAILABLE"}
 	}
-	return login.UIReportFile{
+	return ui.UIReportFile{
 		ReportID: artifact.ReportID, Format: string(artifact.Format),
 		FileName:    downloadFileName(artifact.ReportID, artifact.Format),
 		ContentType: downloadContentType(artifact.Format),
@@ -505,20 +504,20 @@ func downloadContentType(format reports.Format) string {
 	}
 }
 
-// Preview 实现 login.UIPageReportsBackend：从固定快照返回受控预览，缺失数据
+// Preview 实现 ui.UIPageReportsBackend：从固定快照返回受控预览，缺失数据
 // 以状态字段呈现，不用 0 填充。
 func (a *ReportsAdapter) Preview(ctx context.Context, userID,
-	reportID string) (login.UIReportPreview, error) {
+	reportID string) (ui.UIReportPreview, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportPreview{}, err
+		return ui.UIReportPreview{}, err
 	}
 	snapshot, err := a.opts.Reports.GetSnapshot(ctx, caller,
 		strings.TrimSpace(reportID))
 	if err != nil {
-		return login.UIReportPreview{}, mapReportsError(err)
+		return ui.UIReportPreview{}, mapReportsError(err)
 	}
-	preview := login.UIReportPreview{
+	preview := ui.UIReportPreview{
 		ReportID: snapshot.Report.ID, OverallStatus: string(snapshot.Overall),
 		GeneratedAt:           snapshot.Report.GeneratedAt,
 		ActivityTotal:         snapshot.Activity.Total,
@@ -534,13 +533,13 @@ func (a *ReportsAdapter) Preview(ctx context.Context, userID,
 		SourceTruncated:       snapshot.Completeness.SourceTruncated,
 		DetailRowsTruncated:   snapshot.Completeness.DetailRowsTruncated,
 		MissingReasons:        make([]string, 0, len(snapshot.Completeness.MissingIntervals)),
-		ErrorRows:             make([]login.UIReportPreviewRow, 0, len(snapshot.Errors.Rows)),
+		ErrorRows:             make([]ui.UIReportPreviewRow, 0, len(snapshot.Errors.Rows)),
 	}
 	for _, interval := range snapshot.Completeness.MissingIntervals {
 		preview.MissingReasons = append(preview.MissingReasons, interval.Reason)
 	}
 	for _, row := range snapshot.Errors.Rows {
-		preview.ErrorRows = append(preview.ErrorRows, login.UIReportPreviewRow{
+		preview.ErrorRows = append(preview.ErrorRows, ui.UIReportPreviewRow{
 			ErrorCode: row.ErrorCode, Category: row.Category,
 			Severity: row.Severity, RawEvents: row.RawEvents,
 			FailedRequests: row.FailedRequests, FailedTasks: row.FailedTasks,
@@ -550,61 +549,61 @@ func (a *ReportsAdapter) Preview(ctx context.Context, userID,
 	return preview, nil
 }
 
-// Retry 实现 login.UIPageReportsBackend：领域服务完成当前权限、数据范围与敏感操作
+// Retry 实现 ui.UIPageReportsBackend：领域服务完成当前权限、数据范围与敏感操作
 // 复核后创建新运行记录；成功后返回新报告详情。
 func (a *ReportsAdapter) Retry(ctx context.Context, userID, reportID, reason,
-	requestID string) (login.UIReportDetail, error) {
+	requestID string) (ui.UIReportDetail, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportDetail{}, err
+		return ui.UIReportDetail{}, err
 	}
 	view, err := a.opts.Reports.Retry(ctx, caller, strings.TrimSpace(reportID),
 		strings.TrimSpace(reason), requestID)
 	if err != nil {
-		return login.UIReportDetail{}, mapReportsError(err)
+		return ui.UIReportDetail{}, mapReportsError(err)
 	}
 	return a.GetReport(ctx, userID, view.ID)
 }
 
-// Cancel 实现 login.UIPageReportsBackend：调用领域服务取消任务（服务端重新授权、
+// Cancel 实现 ui.UIPageReportsBackend：调用领域服务取消任务（服务端重新授权、
 // 记录真实受理状态与审计）；返回结果不把“请求已受理”写成“已取消”。
 func (a *ReportsAdapter) Cancel(ctx context.Context, userID, reportID, reason,
-	requestID string) (login.UIReportCancelResult, error) {
+	requestID string) (ui.UIReportCancelResult, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportCancelResult{}, err
+		return ui.UIReportCancelResult{}, err
 	}
 	result, err := a.opts.Reports.Cancel(ctx, caller, strings.TrimSpace(reportID),
 		strings.TrimSpace(reason), requestID)
 	if err != nil {
-		return login.UIReportCancelResult{}, mapReportsError(err)
+		return ui.UIReportCancelResult{}, mapReportsError(err)
 	}
 	note := "取消请求已受理，等待任务状态收敛；受理不等于实际取消。"
 	if !result.Accepted {
 		note = "服务端未受理取消请求，任务状态以查询结果为准。"
 	}
-	return login.UIReportCancelResult{ReportID: strings.TrimSpace(reportID),
+	return ui.UIReportCancelResult{ReportID: strings.TrimSpace(reportID),
 		Accepted: result.Accepted, State: string(result.State), Note: note}, nil
 }
 
-// CleanupPreview 实现 login.UIPageReportsBackend。
+// CleanupPreview 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) CleanupPreview(ctx context.Context,
-	userID string) (login.UIReportCleanupPreview, error) {
+	userID string) (ui.UIReportCleanupPreview, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportCleanupPreview{}, err
+		return ui.UIReportCleanupPreview{}, err
 	}
 	preview, err := a.opts.Reports.CleanupPreview(ctx, caller)
 	if err != nil {
-		return login.UIReportCleanupPreview{}, mapReportsError(err)
+		return ui.UIReportCleanupPreview{}, mapReportsError(err)
 	}
-	result := login.UIReportCleanupPreview{
+	result := ui.UIReportCleanupPreview{
 		TargetCount: preview.TargetCount, TotalBytes: preview.TotalBytes,
 		Scopes:          append([]string(nil), preview.Scopes...),
 		OldestExpiresAt: preview.OldestExpiresAt,
 		NewestExpiresAt: preview.NewestExpiresAt,
 		PreviewedAt:     preview.PreviewedAt, Note: preview.Note,
-		Policy: login.UIReportRetentionPolicy{
+		Policy: ui.UIReportRetentionPolicy{
 			ArtifactTTL:    preview.Policy.ArtifactTTL,
 			CleanupGrace:   preview.Policy.CleanupGrace,
 			EligibleBefore: preview.Policy.EligibleBefore,
@@ -612,14 +611,14 @@ func (a *ReportsAdapter) CleanupPreview(ctx context.Context,
 			HistoryNote:    preview.Policy.HistoryNote,
 			RawAuditNote:   preview.Policy.RawAuditNote,
 		},
-		Targets: make([]login.UIReportCleanupTarget, 0, len(preview.Targets)),
+		Targets: make([]ui.UIReportCleanupTarget, 0, len(preview.Targets)),
 	}
 	for _, target := range preview.Targets {
 		formats := make([]string, 0, len(target.Formats))
 		for _, format := range target.Formats {
 			formats = append(formats, string(format))
 		}
-		result.Targets = append(result.Targets, login.UIReportCleanupTarget{
+		result.Targets = append(result.Targets, ui.UIReportCleanupTarget{
 			ReportID: target.ReportID, PlanID: target.PlanID, Name: target.Name,
 			ScopeID: target.ScopeID, State: target.State,
 			CleanupState: target.CleanupState, ExpiresAt: target.ExpiresAt,
@@ -630,12 +629,12 @@ func (a *ReportsAdapter) CleanupPreview(ctx context.Context,
 	return result, nil
 }
 
-// RunCleanup 实现 login.UIPageReportsBackend。
+// RunCleanup 实现 ui.UIPageReportsBackend。
 func (a *ReportsAdapter) RunCleanup(ctx context.Context, userID, reason,
-	requestID string) (login.UIReportCleanupResult, error) {
+	requestID string) (ui.UIReportCleanupResult, error) {
 	caller, err := reportsCaller(userID)
 	if err != nil {
-		return login.UIReportCleanupResult{}, err
+		return ui.UIReportCleanupResult{}, err
 	}
 	result, err := a.opts.Reports.CleanupExecute(ctx, reports.CleanupExecuteRequest{
 		Caller: caller, Reason: strings.TrimSpace(reason), RequestID: requestID,
@@ -645,19 +644,19 @@ func (a *ReportsAdapter) RunCleanup(ctx context.Context, userID, reason,
 		if result.RequestedCount > 0 || result.CleanedCount > 0 || result.FailedCount > 0 {
 			return uiCleanupResult(result), mapReportsError(err)
 		}
-		return login.UIReportCleanupResult{}, mapReportsError(err)
+		return ui.UIReportCleanupResult{}, mapReportsError(err)
 	}
 	return uiCleanupResult(result), nil
 }
 
 // uiCleanupResult 映射清理真实结果。
-func uiCleanupResult(result reports.CleanupResult) login.UIReportCleanupResult {
-	failures := make([]login.UIReportCleanupFailure, 0, len(result.Failures))
+func uiCleanupResult(result reports.CleanupResult) ui.UIReportCleanupResult {
+	failures := make([]ui.UIReportCleanupFailure, 0, len(result.Failures))
 	for _, failure := range result.Failures {
-		failures = append(failures, login.UIReportCleanupFailure{
+		failures = append(failures, ui.UIReportCleanupFailure{
 			ReportID: failure.ReportID, Reason: failure.Reason})
 	}
-	return login.UIReportCleanupResult{
+	return ui.UIReportCleanupResult{
 		RequestedCount: result.RequestedCount, CleanedCount: result.CleanedCount,
 		FailedCount: result.FailedCount, DeletedFiles: result.DeletedFiles,
 		FreedBytes: result.FreedBytes, SkippedCount: result.SkippedCount,

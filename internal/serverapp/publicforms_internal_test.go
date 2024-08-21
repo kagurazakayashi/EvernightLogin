@@ -1,9 +1,8 @@
 package serverapp
 
 import (
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 	"testing"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 )
 
 // TestPublicFormPathsIncludeMFAAndPasswordReset 回归步骤 140/141 真实 serve 发现
@@ -11,7 +10,7 @@ import (
 // /login/reset-password、第二因素等匿名表单被当作会话表单校验而恒 403。
 func TestPublicFormPathsIncludeMFAAndPasswordReset(t *testing.T) {
 	paths := publicFormPaths("/base")
-	mfa := login.UIPageMFAPublicFormPaths("/base")
+	mfa := ui.UIPageMFAPublicFormPaths("/base")
 	if len(mfa) == 0 {
 		t.Fatal("MFA 公开表单映射为空")
 	}
@@ -24,7 +23,7 @@ func TestPublicFormPathsIncludeMFAAndPasswordReset(t *testing.T) {
 			t.Fatalf("%s 用途 = %q，期望 %q", path, got, purpose)
 		}
 	}
-	account := login.UIPageAccountPublicFormPaths("/base")
+	account := ui.UIPageAccountPublicFormPaths("/base")
 	if len(account) == 0 {
 		t.Fatal("账户公开表单映射为空")
 	}
@@ -33,13 +32,13 @@ func TestPublicFormPathsIncludeMFAAndPasswordReset(t *testing.T) {
 			t.Fatalf("账户公开表单 %s 用途不符: %q", path, paths[path])
 		}
 	}
-	auth := login.UIPageAuthPublicFormPaths("/base")
+	auth := ui.UIPageAuthPublicFormPaths("/base")
 	for path, purpose := range auth {
 		if paths[path] != purpose {
 			t.Fatalf("认证公开表单 %s 用途不符", path)
 		}
 	}
-	oauth := login.UIPageOAuthPublicFormPaths("/base")
+	oauth := ui.UIPageOAuthPublicFormPaths("/base")
 	if len(oauth) == 0 {
 		t.Fatal("OAuth 公开表单映射为空")
 	}

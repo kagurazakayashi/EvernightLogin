@@ -37,6 +37,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // SecurityPolicyPermissionKey 是敏感策略页面使用的真实既有权限键（预设目录
@@ -92,13 +93,13 @@ type SecurityPolicyOptions struct {
 	Authorize func(ctx context.Context, userID, action string) error
 	// Reauth 是页面动作前的再次认证（参数摘要由 binding 携带）；nil 时写/替换/
 	// 测试动作 fail-closed 为 REAUTH_REQUIRED。
-	Reauth func(ctx context.Context, userID string, binding login.UISecurityPolicyActionBinding) error
+	Reauth func(ctx context.Context, userID string, binding ui.UISecurityPolicyActionBinding) error
 	// Audit 是秘密替换/测试邮件的安全审计；nil 时对应能力位为 false（不 fail-open）。
 	Audit SecurityPolicyAuditor
 	Mail  *NotificationMailOptions
 }
 
-// SecurityPolicyAdapter 实现 login.UISecurityPolicyBackend。
+// SecurityPolicyAdapter 实现 ui.UISecurityPolicyBackend。
 type SecurityPolicyAdapter struct {
 	opts   SecurityPolicyOptions
 	now    func() time.Time
@@ -112,7 +113,7 @@ type SecurityPolicyAdapter struct {
 }
 
 type previewEntry struct {
-	binding login.UISecurityPolicyActionBinding
+	binding ui.UISecurityPolicyActionBinding
 	expires time.Time
 }
 
@@ -138,11 +139,11 @@ func NewSecurityPolicy(options SecurityPolicyOptions) (*SecurityPolicyAdapter, e
 	return adapter, nil
 }
 
-var _ login.UISecurityPolicyBackend = (*SecurityPolicyAdapter)(nil)
+var _ ui.UISecurityPolicyBackend = (*SecurityPolicyAdapter)(nil)
 
 // securityPolicyErr 构造稳定公开错误。
 func securityPolicyErr(code string) error {
-	return &login.UISecurityPolicyError{Code: code}
+	return &ui.UISecurityPolicyError{Code: code}
 }
 
 // policyErr 把 policy 领域错误映射为页面稳定错误码（只复用既有公开错误码）。
@@ -154,7 +155,7 @@ func policyErr(err error) error {
 	if code == "" {
 		code = "INTERNAL_ERROR"
 	}
-	return &login.UISecurityPolicyError{Code: code}
+	return &ui.UISecurityPolicyError{Code: code}
 }
 
 // securityPolicyCheck 判定页面能力位（失败按无能力处理）。
@@ -224,9 +225,9 @@ func (a *SecurityPolicyAdapter) capabilityRoot(ctx context.Context, userID strin
 
 // Capabilities 返回当前管理员的页面能力位（只影响呈现）。
 func (a *SecurityPolicyAdapter) Capabilities(ctx context.Context,
-	userID string) (login.UISecurityPolicyCapabilities, error) {
+	userID string) (ui.UISecurityPolicyCapabilities, error) {
 	if a.opts.Authorize == nil || !account.ValidUserID(userID) {
-		return login.UISecurityPolicyCapabilities{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UISecurityPolicyCapabilities{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	read := a.securityPolicyCheck(ctx, userID, SecurityPolicyActionRead)
 	root := a.capabilityRoot(ctx, userID)
@@ -236,7 +237,7 @@ func (a *SecurityPolicyAdapter) Capabilities(ctx context.Context,
 		a.opts.Mail.Templates != nil && a.securityPolicyCheck(ctx, userID, NotificationActionTest)
 	replaceSecret := root && mailReady && a.opts.Mail.ReplaceSecret != nil &&
 		a.securityPolicyCheck(ctx, userID, NotificationActionSecretWrite)
-	return login.UISecurityPolicyCapabilities{
+	return ui.UISecurityPolicyCapabilities{
 		ReadPolicies:      read,
 		WritePolicies:     write,
 		ReadNotifications: read && a.securityPolicyCheck(ctx, userID, NotificationActionRead),
@@ -246,8 +247,8 @@ func (a *SecurityPolicyAdapter) Capabilities(ctx context.Context,
 }
 
 // policyValues 把领域策略转为页面机器值。
-func policyValues(value policy.Policy) login.UISecurityPolicyValues {
-	return login.UISecurityPolicyValues{
+func policyValues(value policy.Policy) ui.UISecurityPolicyValues {
+	return ui.UISecurityPolicyValues{
 		Sensitive:            value.Sensitive,
 		ReauthRequired:       value.ReauthRequired,
 		MaxAuthAgeSeconds:    value.MaxAuthAgeSeconds,
@@ -258,7 +259,7 @@ func policyValues(value policy.Policy) login.UISecurityPolicyValues {
 }
 
 // policyFromValues 把页面机器值转为领域策略（字段白名单由页面契约固定）。
-func policyFromValues(value login.UISecurityPolicyValues) policy.Policy {
+func policyFromValues(value ui.UISecurityPolicyValues) policy.Policy {
 	return policy.Policy{
 		Sensitive:            value.Sensitive,
 		ReauthRequired:       value.ReauthRequired,
@@ -271,7 +272,7 @@ func policyFromValues(value login.UISecurityPolicyValues) policy.Policy {
 
 // valuesDigest 计算六字段与目标/版本绑定的参数摘要。
 func valuesDigest(scopeID, operationID string, version int64,
-	values login.UISecurityPolicyValues) string {
+	values ui.UISecurityPolicyValues) string {
 	return digestStrings("policy.save", scopeID, operationID,
 		fmt.Sprintf("%d", version), fmt.Sprintf("%t", values.Sensitive),
 		fmt.Sprintf("%t", values.ReauthRequired),
@@ -282,8 +283,8 @@ func valuesDigest(scopeID, operationID string, version int64,
 
 // operationView 把有效操作转为页面视图。
 func (a *SecurityPolicyAdapter) operationView(operation policy.EffectiveOperation,
-	available map[policy.Strength]bool) login.UISecurityPolicyOperation {
-	view := login.UISecurityPolicyOperation{
+	available map[policy.Strength]bool) ui.UISecurityPolicyOperation {
+	view := ui.UISecurityPolicyOperation{
 		OperationID: operation.OperationID, Domain: string(operation.Domain),
 		Name: operation.Name, Description: operation.Description,
 		Default: policyValues(operation.Default), HasDefault: operation.HasDefault,
@@ -306,18 +307,18 @@ func (a *SecurityPolicyAdapter) operationView(operation policy.EffectiveOperatio
 }
 
 // snapshotView 把领域快照转为页面视图。
-func (a *SecurityPolicyAdapter) snapshotView(snapshot policy.Snapshot) login.UISecurityPolicySnapshot {
+func (a *SecurityPolicyAdapter) snapshotView(snapshot policy.Snapshot) ui.UISecurityPolicySnapshot {
 	available := map[policy.Strength]bool{}
 	strengths := []string{}
 	for _, strength := range a.opts.Policy.AvailableStrengths() {
 		available[strength] = true
 		strengths = append(strengths, string(strength))
 	}
-	view := login.UISecurityPolicySnapshot{
+	view := ui.UISecurityPolicySnapshot{
 		ScopeID: snapshot.ScopeID, ScopeName: snapshot.ScopeID,
 		Version: snapshot.Version, CatalogVersion: a.opts.Policy.CatalogVersion(),
 		AvailableStrengths: strengths,
-		Operations:         make([]login.UISecurityPolicyOperation, 0, len(snapshot.Operations)),
+		Operations:         make([]ui.UISecurityPolicyOperation, 0, len(snapshot.Operations)),
 	}
 	for _, operation := range snapshot.Operations {
 		item := a.operationView(operation, available)
@@ -332,24 +333,24 @@ func (a *SecurityPolicyAdapter) snapshotView(snapshot policy.Snapshot) login.UIS
 
 // readSnapshot 读取系统作用域快照（读取许可由 policy.Service 复核）。
 func (a *SecurityPolicyAdapter) readSnapshot(ctx context.Context,
-	userID, scopeID string) (policy.Snapshot, login.UISecurityPolicySnapshot, error) {
+	userID, scopeID string) (policy.Snapshot, ui.UISecurityPolicySnapshot, error) {
 	caller, err := policyCaller(userID, "")
 	if err != nil {
-		return policy.Snapshot{}, login.UISecurityPolicySnapshot{}, securityPolicyErr("ACCESS_DENIED")
+		return policy.Snapshot{}, ui.UISecurityPolicySnapshot{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	if scopeID == "" {
-		scopeID = login.UISecurityPolicySystemScope
+		scopeID = ui.UISecurityPolicySystemScope
 	}
 	snapshot, err := a.opts.Policy.Effective(ctx, caller, scopeID)
 	if err != nil {
-		return policy.Snapshot{}, login.UISecurityPolicySnapshot{}, policyErr(err)
+		return policy.Snapshot{}, ui.UISecurityPolicySnapshot{}, policyErr(err)
 	}
 	return snapshot, a.snapshotView(snapshot), nil
 }
 
 // Snapshot 读取系统作用域有效策略快照。
 func (a *SecurityPolicyAdapter) Snapshot(ctx context.Context, userID,
-	scopeID string) (login.UISecurityPolicySnapshot, error) {
+	scopeID string) (ui.UISecurityPolicySnapshot, error) {
 	_, view, err := a.readSnapshot(ctx, userID, scopeID)
 	return view, err
 }
@@ -370,7 +371,7 @@ func availableStrengthSet(service *policy.Service) map[policy.Strength]bool {
 }
 
 // issuePreview 保存一次性预览绑定并返回令牌。
-func (a *SecurityPolicyAdapter) issuePreview(binding login.UISecurityPolicyActionBinding) string {
+func (a *SecurityPolicyAdapter) issuePreview(binding ui.UISecurityPolicyActionBinding) string {
 	token := newPreviewToken()
 	if token == "" {
 		return ""
@@ -385,7 +386,7 @@ func (a *SecurityPolicyAdapter) issuePreview(binding login.UISecurityPolicyActio
 
 // consumePreview 校验并一次性消费预览令牌：目标/参数/版本任一变化或重复使用都拒绝。
 func (a *SecurityPolicyAdapter) consumePreview(token, userID string,
-	actual login.UISecurityPolicyActionBinding) error {
+	actual ui.UISecurityPolicyActionBinding) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return securityPolicyErr("REQ_INVALID")
@@ -430,7 +431,7 @@ func (a *SecurityPolicyAdapter) cleanupLocked(now time.Time) {
 
 // verifyReauth 调用宿主再次认证并绑定参数摘要；未装配即 fail-closed。
 func (a *SecurityPolicyAdapter) verifyReauth(ctx context.Context, userID string,
-	binding login.UISecurityPolicyActionBinding) error {
+	binding ui.UISecurityPolicyActionBinding) error {
 	if a.opts.Reauth == nil {
 		return securityPolicyErr("REAUTH_REQUIRED")
 	}
@@ -500,34 +501,34 @@ func (a *SecurityPolicyAdapter) storeIdempotent(key string, result any) {
 
 // PreviewPolicy 校验并计算提交前预览，同时签发一次性绑定令牌（不写入）。
 func (a *SecurityPolicyAdapter) PreviewPolicy(ctx context.Context, userID, scopeID,
-	operationID string, change login.UISecurityPolicyValues) (login.UISecurityPolicyPreview, error) {
+	operationID string, change ui.UISecurityPolicyValues) (ui.UISecurityPolicyPreview, error) {
 	caller, err := policyCaller(userID, "")
 	if err != nil {
-		return login.UISecurityPolicyPreview{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UISecurityPolicyPreview{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	if scopeID == "" {
-		scopeID = login.UISecurityPolicySystemScope
+		scopeID = ui.UISecurityPolicySystemScope
 	}
 	snapshot, err := a.opts.Policy.Effective(ctx, caller, scopeID)
 	if err != nil {
-		return login.UISecurityPolicyPreview{}, policyErr(err)
+		return ui.UISecurityPolicyPreview{}, policyErr(err)
 	}
 	operation, found := findOperation(snapshot, operationID)
 	if !found {
-		return login.UISecurityPolicyPreview{}, securityPolicyErr("REQ_INVALID")
+		return ui.UISecurityPolicyPreview{}, securityPolicyErr("REQ_INVALID")
 	}
 	normalized, derived := login.NormalizeSecurityPolicyChange(change)
 	next := policyFromValues(normalized)
 	if definition, ok := a.opts.Policy.Operation(operation.OperationID); ok &&
 		definition.ImmutableSensitive && !next.Sensitive {
-		return login.UISecurityPolicyPreview{}, securityPolicyErr("REQ_INVALID")
+		return ui.UISecurityPolicyPreview{}, securityPolicyErr("REQ_INVALID")
 	}
 	if validateErr := policy.ValidatePolicy(next); validateErr != nil {
-		return login.UISecurityPolicyPreview{}, securityPolicyErr("REQ_INVALID")
+		return ui.UISecurityPolicyPreview{}, securityPolicyErr("REQ_INVALID")
 	}
 	available := availableStrengthSet(a.opts.Policy)
 	strengthWarning := next.Sensitive && next.ReauthRequired && !available[next.Strength]
-	preview := login.UISecurityPolicyPreview{
+	preview := ui.UISecurityPolicyPreview{
 		OperationID: operation.OperationID, HasDefault: operation.HasDefault,
 		Default: policyValues(operation.Default), Current: policyValues(operation.Effective),
 		Proposed: normalized, DerivedFields: derived,
@@ -536,20 +537,20 @@ func (a *SecurityPolicyAdapter) PreviewPolicy(ctx context.Context, userID, scope
 		StrengthWarning: strengthWarning,
 	}
 	preview.NoChanges = len(preview.ChangedFields) == 0
-	preview.Token = a.issuePreview(login.UISecurityPolicyActionBinding{
+	preview.Token = a.issuePreview(ui.UISecurityPolicyActionBinding{
 		Action: "policy.save", UserID: userID, ScopeID: scopeID,
 		OperationID: operation.OperationID, Version: snapshot.Version,
 		ChangeDigest:   valuesDigest(scopeID, operation.OperationID, snapshot.Version, normalized),
 		SelfProtection: preview.SelfProtection,
 	})
 	if preview.Token == "" {
-		return login.UISecurityPolicyPreview{}, securityPolicyErr("INTERNAL_ERROR")
+		return ui.UISecurityPolicyPreview{}, securityPolicyErr("INTERNAL_ERROR")
 	}
 	return preview, nil
 }
 
 // fullChange 把页面机器值转为完整六字段修改（不依赖默认值/覆盖作为 base）。
-func fullChange(value login.UISecurityPolicyValues) policy.PolicyChange {
+func fullChange(value ui.UISecurityPolicyValues) policy.PolicyChange {
 	sensitive := value.Sensitive
 	reauth := value.ReauthRequired
 	age := value.MaxAuthAgeSeconds
@@ -565,40 +566,40 @@ func fullChange(value login.UISecurityPolicyValues) policy.PolicyChange {
 
 // SavePolicy 校验预览绑定与再次认证后执行真实策略写入。
 func (a *SecurityPolicyAdapter) SavePolicy(ctx context.Context, userID, scopeID,
-	operationID string, change login.UISecurityPolicyValues, expectedVersion int64,
-	previewToken, requestID string) (login.UISecurityPolicyWriteResult, error) {
+	operationID string, change ui.UISecurityPolicyValues, expectedVersion int64,
+	previewToken, requestID string) (ui.UISecurityPolicyWriteResult, error) {
 	caller, err := policyCaller(userID, requestID)
 	if err != nil {
-		return login.UISecurityPolicyWriteResult{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UISecurityPolicyWriteResult{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	if scopeID == "" {
-		scopeID = login.UISecurityPolicySystemScope
+		scopeID = ui.UISecurityPolicySystemScope
 	}
 	before, err := a.opts.Policy.Effective(ctx, caller, scopeID)
 	if err != nil {
-		return login.UISecurityPolicyWriteResult{}, policyErr(err)
+		return ui.UISecurityPolicyWriteResult{}, policyErr(err)
 	}
 	normalized, _ := login.NormalizeSecurityPolicyChange(change)
-	binding := login.UISecurityPolicyActionBinding{
+	binding := ui.UISecurityPolicyActionBinding{
 		Action: "policy.save", UserID: userID, ScopeID: scopeID,
 		OperationID: operationID, Version: expectedVersion,
 		ChangeDigest:   valuesDigest(scopeID, operationID, expectedVersion, normalized),
 		SelfProtection: operationID == policy.OperationPolicyChange,
 	}
 	if err := a.consumePreview(previewToken, userID, binding); err != nil {
-		return login.UISecurityPolicyWriteResult{}, err
+		return ui.UISecurityPolicyWriteResult{}, err
 	}
 	if err := a.verifyReauth(ctx, userID, binding); err != nil {
-		return login.UISecurityPolicyWriteResult{}, err
+		return ui.UISecurityPolicyWriteResult{}, err
 	}
 	after, err := a.opts.Policy.Set(ctx, caller, policy.SetRequest{
 		ScopeID: scopeID, OperationID: operationID, Change: fullChange(normalized),
 		ExpectedVersion: expectedVersion, RequestID: requestID,
 	})
 	if err != nil {
-		return login.UISecurityPolicyWriteResult{}, policyErr(err)
+		return ui.UISecurityPolicyWriteResult{}, policyErr(err)
 	}
-	return login.UISecurityPolicyWriteResult{
+	return ui.UISecurityPolicyWriteResult{
 		Snapshot: a.snapshotView(after), Changed: after.Version != before.Version,
 		NotificationStatus: "unknown",
 	}, nil
@@ -606,7 +607,7 @@ func (a *SecurityPolicyAdapter) SavePolicy(ctx context.Context, userID, scopeID,
 
 // restoreBinding 由当前真实覆盖快照计算恢复绑定（含清单摘要）。
 func (a *SecurityPolicyAdapter) restoreBinding(userID, scopeID, operationID string,
-	all bool, snapshot policy.Snapshot) login.UISecurityPolicyActionBinding {
+	all bool, snapshot policy.Snapshot) ui.UISecurityPolicyActionBinding {
 	operations := []string{}
 	selfProtection := false
 	for _, operation := range snapshot.Operations {
@@ -622,7 +623,7 @@ func (a *SecurityPolicyAdapter) restoreBinding(userID, scopeID, operationID stri
 		}
 	}
 	sortStrings(operations)
-	return login.UISecurityPolicyActionBinding{
+	return ui.UISecurityPolicyActionBinding{
 		Action: "policy.restore", UserID: userID, ScopeID: scopeID,
 		OperationID: operationID, Version: snapshot.Version, All: all,
 		AffectedOperations: operations, AffectedCount: len(operations),
@@ -643,30 +644,30 @@ func sortStrings(values []string) {
 
 // PreviewRestore 计算逐项/整体恢复默认的提交前预览并签发一次性令牌。
 func (a *SecurityPolicyAdapter) PreviewRestore(ctx context.Context, userID, scopeID,
-	operationID string, all bool) (login.UISecurityPolicyRestorePreview, error) {
+	operationID string, all bool) (ui.UISecurityPolicyRestorePreview, error) {
 	caller, err := policyCaller(userID, "")
 	if err != nil {
-		return login.UISecurityPolicyRestorePreview{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UISecurityPolicyRestorePreview{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	if scopeID == "" {
-		scopeID = login.UISecurityPolicySystemScope
+		scopeID = ui.UISecurityPolicySystemScope
 	}
 	snapshot, err := a.opts.Policy.Effective(ctx, caller, scopeID)
 	if err != nil {
-		return login.UISecurityPolicyRestorePreview{}, policyErr(err)
+		return ui.UISecurityPolicyRestorePreview{}, policyErr(err)
 	}
 	view := a.snapshotView(snapshot)
-	preview := login.UISecurityPolicyRestorePreview{
+	preview := ui.UISecurityPolicyRestorePreview{
 		ScopeID: view.ScopeID, ScopeName: view.ScopeName, Version: view.Version,
 		All: all, OperationID: operationID, Declared: view.Declared,
 	}
 	if !all {
 		operation, found := findOperation(snapshot, operationID)
 		if !found {
-			return login.UISecurityPolicyRestorePreview{}, securityPolicyErr("REQ_INVALID")
+			return ui.UISecurityPolicyRestorePreview{}, securityPolicyErr("REQ_INVALID")
 		}
 		if !operation.HasDefault {
-			return login.UISecurityPolicyRestorePreview{}, securityPolicyErr("REQ_INVALID")
+			return ui.UISecurityPolicyRestorePreview{}, securityPolicyErr("REQ_INVALID")
 		}
 	}
 	binding := a.restoreBinding(userID, scopeID, operationID, all, snapshot)
@@ -683,7 +684,7 @@ func (a *SecurityPolicyAdapter) PreviewRestore(ctx context.Context, userID, scop
 	preview.NoChanges = len(preview.Operations) == 0
 	preview.Token = a.issuePreview(binding)
 	if preview.Token == "" {
-		return login.UISecurityPolicyRestorePreview{}, securityPolicyErr("INTERNAL_ERROR")
+		return ui.UISecurityPolicyRestorePreview{}, securityPolicyErr("INTERNAL_ERROR")
 	}
 	return preview, nil
 }
@@ -691,17 +692,17 @@ func (a *SecurityPolicyAdapter) PreviewRestore(ctx context.Context, userID, scop
 // RestorePolicy 校验预览绑定与再次认证后执行真实恢复默认。
 func (a *SecurityPolicyAdapter) RestorePolicy(ctx context.Context, userID, scopeID,
 	operationID string, all bool, expectedVersion int64, previewToken,
-	requestID string) (login.UISecurityPolicyWriteResult, error) {
+	requestID string) (ui.UISecurityPolicyWriteResult, error) {
 	caller, err := policyCaller(userID, requestID)
 	if err != nil {
-		return login.UISecurityPolicyWriteResult{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UISecurityPolicyWriteResult{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	if scopeID == "" {
-		scopeID = login.UISecurityPolicySystemScope
+		scopeID = ui.UISecurityPolicySystemScope
 	}
 	before, err := a.opts.Policy.Effective(ctx, caller, scopeID)
 	if err != nil {
-		return login.UISecurityPolicyWriteResult{}, policyErr(err)
+		return ui.UISecurityPolicyWriteResult{}, policyErr(err)
 	}
 	binding := a.restoreBinding(userID, scopeID, operationID, all, before)
 	binding.Version = expectedVersion
@@ -709,19 +710,19 @@ func (a *SecurityPolicyAdapter) RestorePolicy(ctx context.Context, userID, scope
 		fmt.Sprintf("%d", expectedVersion), fmt.Sprintf("%t", all)},
 		binding.AffectedOperations...)...)
 	if err := a.consumePreview(previewToken, userID, binding); err != nil {
-		return login.UISecurityPolicyWriteResult{}, err
+		return ui.UISecurityPolicyWriteResult{}, err
 	}
 	if err := a.verifyReauth(ctx, userID, binding); err != nil {
-		return login.UISecurityPolicyWriteResult{}, err
+		return ui.UISecurityPolicyWriteResult{}, err
 	}
 	after, err := a.opts.Policy.Restore(ctx, caller, policy.RestoreRequest{
 		ScopeID: scopeID, OperationID: operationID, All: all,
 		ExpectedVersion: expectedVersion, RequestID: requestID,
 	})
 	if err != nil {
-		return login.UISecurityPolicyWriteResult{}, policyErr(err)
+		return ui.UISecurityPolicyWriteResult{}, policyErr(err)
 	}
-	return login.UISecurityPolicyWriteResult{
+	return ui.UISecurityPolicyWriteResult{
 		Snapshot: a.snapshotView(after), Changed: after.Version != before.Version,
 		NotificationStatus: "unknown",
 	}, nil
@@ -731,16 +732,16 @@ func (a *SecurityPolicyAdapter) RestorePolicy(ctx context.Context, userID, scope
 
 // NotificationSettings 返回安全通知设置页的真实只读事实。
 func (a *SecurityPolicyAdapter) NotificationSettings(ctx context.Context,
-	userID string) (login.UINotificationSettings, error) {
+	userID string) (ui.UINotificationSettings, error) {
 	caps, err := a.Capabilities(ctx, userID)
 	if err != nil {
-		return login.UINotificationSettings{}, err
+		return ui.UINotificationSettings{}, err
 	}
 	if !caps.ReadNotifications {
-		return login.UINotificationSettings{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UINotificationSettings{}, securityPolicyErr("ACCESS_DENIED")
 	}
-	settings := login.UINotificationSettings{
-		Capabilities: login.UINotificationCapabilities{
+	settings := ui.UINotificationSettings{
+		Capabilities: ui.UINotificationCapabilities{
 			Read: true, TestMail: caps.TestMail, ReplaceSecret: caps.ReplaceSecret,
 		},
 	}
@@ -780,7 +781,7 @@ func (a *SecurityPolicyAdapter) NotificationSettings(ctx context.Context,
 			if !ok {
 				continue
 			}
-			settings.Templates = append(settings.Templates, login.UINotificationTemplate{
+			settings.Templates = append(settings.Templates, ui.UINotificationTemplate{
 				Kind: string(kind), Subject: tmpl.Subject, Body: tmpl.Body,
 				Source: settings.TemplateSource, Editable: false,
 			})
@@ -801,7 +802,7 @@ func (a *SecurityPolicyAdapter) notificationRequiredOperations(ctx context.Conte
 	if err != nil {
 		return 0, err
 	}
-	snapshot, err := a.opts.Policy.Effective(ctx, caller, login.UISecurityPolicySystemScope)
+	snapshot, err := a.opts.Policy.Effective(ctx, caller, ui.UISecurityPolicySystemScope)
 	if err != nil {
 		return 0, err
 	}
@@ -816,7 +817,7 @@ func (a *SecurityPolicyAdapter) notificationRequiredOperations(ctx context.Conte
 
 // loadNotices 读取当前操作者本人最近的安全告知记录。
 func (a *SecurityPolicyAdapter) loadNotices(ctx context.Context, userID string,
-	settings *login.UINotificationSettings) {
+	settings *ui.UINotificationSettings) {
 	caller, err := reauth.UserCaller(userID)
 	if err != nil {
 		return
@@ -828,7 +829,7 @@ func (a *SecurityPolicyAdapter) loadNotices(ctx context.Context, userID string,
 	}
 	settings.NoticesAvailable = true
 	for _, record := range records {
-		settings.Notices = append(settings.Notices, login.UINotificationNotice{
+		settings.Notices = append(settings.Notices, ui.UINotificationNotice{
 			OperationID: record.OperationID, Outcome: string(record.Outcome),
 			State: notificationNoticeState(record), ErrorCode: notificationNoticeErrorCode(record),
 			RecipientMasked: record.RecipientMasked, CreatedAt: record.CreatedAt,
@@ -876,19 +877,19 @@ func notificationNoticeErrorCode(record reauth.NotificationRecord) string {
 
 // PreviewTemplate 使用合成数据渲染模板（不保存、不发送）。
 func (a *SecurityPolicyAdapter) PreviewTemplate(ctx context.Context, userID,
-	kind string) (login.UINotificationTemplatePreview, error) {
+	kind string) (ui.UINotificationTemplatePreview, error) {
 	caps, err := a.Capabilities(ctx, userID)
 	if err != nil {
-		return login.UINotificationTemplatePreview{}, err
+		return ui.UINotificationTemplatePreview{}, err
 	}
 	if !caps.ReadNotifications {
-		return login.UINotificationTemplatePreview{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UINotificationTemplatePreview{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	templateKind := mailer.Kind(kind)
 	if !templateKind.Valid() {
-		return login.UINotificationTemplatePreview{}, securityPolicyErr("REQ_INVALID")
+		return ui.UINotificationTemplatePreview{}, securityPolicyErr("REQ_INVALID")
 	}
-	preview := login.UINotificationTemplatePreview{Kind: kind}
+	preview := ui.UINotificationTemplatePreview{Kind: kind}
 	if a.opts.Mail == nil || a.opts.Mail.Templates == nil {
 		preview.ErrorCode = "MAIL_NOT_CONFIGURED"
 		return preview, nil
@@ -959,38 +960,38 @@ func (a *SecurityPolicyAdapter) allowTestSend(userID string, now time.Time) bool
 
 // SendTestMail 向用户明确指定的目标发送一封合成测试邮件。
 func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipient, kind,
-	idempotencyKeyValue, requestID string) (login.UINotificationTestResult, error) {
+	idempotencyKeyValue, requestID string) (ui.UINotificationTestResult, error) {
 	caps, err := a.Capabilities(ctx, userID)
 	if err != nil {
-		return login.UINotificationTestResult{}, err
+		return ui.UINotificationTestResult{}, err
 	}
 	if !caps.TestMail {
-		return login.UINotificationTestResult{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UINotificationTestResult{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	templateKind := mailer.Kind(kind)
 	if !templateKind.Valid() {
-		return login.UINotificationTestResult{}, securityPolicyErr("REQ_INVALID")
+		return ui.UINotificationTestResult{}, securityPolicyErr("REQ_INVALID")
 	}
 	target, err := mailer.ParseAddress(recipient)
 	if err != nil {
-		return login.UINotificationTestResult{}, securityPolicyErr("MAIL_ADDRESS_REJECTED")
+		return ui.UINotificationTestResult{}, securityPolicyErr("MAIL_ADDRESS_REJECTED")
 	}
 	key := idempotencyKey("mail.test", userID, idempotencyKeyValue, requestID)
 	if stored, ok := a.lookupIdempotent(key); ok {
-		result, _ := stored.(login.UINotificationTestResult)
+		result, _ := stored.(ui.UINotificationTestResult)
 		result.Duplicate = true
 		return result, nil
 	}
-	binding := login.UISecurityPolicyActionBinding{
+	binding := ui.UISecurityPolicyActionBinding{
 		Action: "mail.test", UserID: userID, Kind: kind,
 		RecipientDigest: digestStrings("recipient", strings.ToLower(target.Spec)),
 	}
 	if err := a.verifyReauth(ctx, userID, binding); err != nil {
 		_ = a.recordAudit(ctx, userID, "notification.mail.test", string(audit.OutcomeDenied),
 			"REAUTH_REQUIRED", requestID)
-		return login.UINotificationTestResult{}, err
+		return ui.UINotificationTestResult{}, err
 	}
-	result := login.UINotificationTestResult{
+	result := ui.UINotificationTestResult{
 		Status: "failed", Kind: kind, RecipientMasked: maskNotificationAddress(target.Spec),
 		AttemptedAt: a.now().UTC(),
 	}
@@ -999,7 +1000,7 @@ func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipi
 		result.Status = "not_configured"
 		if auditErr := a.recordAudit(ctx, userID, "notification.mail.test",
 			string(audit.OutcomeFailure), "MAIL_NOT_CONFIGURED", requestID); auditErr != nil {
-			return login.UINotificationTestResult{}, auditErr
+			return ui.UINotificationTestResult{}, auditErr
 		}
 		a.storeIdempotent(key, result)
 		return result, nil
@@ -1009,7 +1010,7 @@ func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipi
 		result.Status = "not_configured"
 		if auditErr := a.recordAudit(ctx, userID, "notification.mail.test",
 			string(audit.OutcomeFailure), "MAIL_NOT_CONFIGURED", requestID); auditErr != nil {
-			return login.UINotificationTestResult{}, auditErr
+			return ui.UINotificationTestResult{}, auditErr
 		}
 		a.storeIdempotent(key, result)
 		return result, nil
@@ -1017,7 +1018,7 @@ func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipi
 	if !a.allowTestSend(userID, a.now()) {
 		_ = a.recordAudit(ctx, userID, "notification.mail.test", string(audit.OutcomeDenied),
 			"RATE_LIMITED", requestID)
-		return login.UINotificationTestResult{}, &login.UISecurityPolicyError{
+		return ui.UINotificationTestResult{}, &ui.UISecurityPolicyError{
 			Code: "RATE_LIMITED", RetryAfterSeconds: int(testMailWindow / time.Second),
 		}
 	}
@@ -1029,7 +1030,7 @@ func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipi
 		}
 		if auditErr := a.recordAudit(ctx, userID, "notification.mail.test",
 			string(audit.OutcomeFailure), result.ErrorCode, requestID); auditErr != nil {
-			return login.UINotificationTestResult{}, auditErr
+			return ui.UINotificationTestResult{}, auditErr
 		}
 		a.storeIdempotent(key, result)
 		return result, nil
@@ -1046,7 +1047,7 @@ func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipi
 		}
 		if auditErr := a.recordAudit(ctx, userID, "notification.mail.test",
 			string(audit.OutcomeFailure), result.ErrorCode, requestID); auditErr != nil {
-			return login.UINotificationTestResult{}, auditErr
+			return ui.UINotificationTestResult{}, auditErr
 		}
 		a.storeIdempotent(key, result)
 		return result, nil
@@ -1054,7 +1055,7 @@ func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipi
 	result.Status = "accepted"
 	if auditErr := a.recordAudit(ctx, userID, "notification.mail.test",
 		string(audit.OutcomeSuccess), "", requestID); auditErr != nil {
-		return login.UINotificationTestResult{}, auditErr
+		return ui.UINotificationTestResult{}, auditErr
 	}
 	a.storeIdempotent(key, result)
 	return result, nil
@@ -1062,51 +1063,51 @@ func (a *SecurityPolicyAdapter) SendTestMail(ctx context.Context, userID, recipi
 
 // ReplaceSMTPSecret 校验绑定/再次认证/审计后调用宿主真实替换契约；不回显秘密。
 func (a *SecurityPolicyAdapter) ReplaceSMTPSecret(ctx context.Context, userID, newSecret,
-	idempotencyKeyValue, requestID string) (login.UINotificationSecretResult, error) {
+	idempotencyKeyValue, requestID string) (ui.UINotificationSecretResult, error) {
 	caps, err := a.Capabilities(ctx, userID)
 	if err != nil {
-		return login.UINotificationSecretResult{}, err
+		return ui.UINotificationSecretResult{}, err
 	}
 	if !caps.ReplaceSecret {
-		return login.UINotificationSecretResult{}, securityPolicyErr("ACCESS_DENIED")
+		return ui.UINotificationSecretResult{}, securityPolicyErr("ACCESS_DENIED")
 	}
 	if strings.TrimSpace(newSecret) == "" {
-		return login.UINotificationSecretResult{}, securityPolicyErr("REQ_INVALID")
+		return ui.UINotificationSecretResult{}, securityPolicyErr("REQ_INVALID")
 	}
 	key := idempotencyKey("mail.secret.replace", userID, idempotencyKeyValue, requestID)
 	if stored, ok := a.lookupIdempotent(key); ok {
-		result, _ := stored.(login.UINotificationSecretResult)
+		result, _ := stored.(ui.UINotificationSecretResult)
 		result.Duplicate = true
 		return result, nil
 	}
-	binding := login.UISecurityPolicyActionBinding{
+	binding := ui.UISecurityPolicyActionBinding{
 		Action: "mail.secret.replace", UserID: userID,
 		ChangeDigest: digestStrings("secret.replace", newSecret),
 	}
 	if err := a.verifyReauth(ctx, userID, binding); err != nil {
 		_ = a.recordAudit(ctx, userID, "notification.mail.secret.replace",
 			string(audit.OutcomeDenied), "REAUTH_REQUIRED", requestID)
-		return login.UINotificationSecretResult{}, err
+		return ui.UINotificationSecretResult{}, err
 	}
 	if err := a.opts.Mail.ReplaceSecret(ctx, userID, newSecret, requestID); err != nil {
-		var publicErr *login.UISecurityPolicyError
+		var publicErr *ui.UISecurityPolicyError
 		if errors.As(err, &publicErr) {
 			_ = a.recordAudit(ctx, userID, "notification.mail.secret.replace",
 				string(audit.OutcomeFailure), publicErr.Code, requestID)
-			return login.UINotificationSecretResult{}, publicErr
+			return ui.UINotificationSecretResult{}, publicErr
 		}
 		_ = a.recordAudit(ctx, userID, "notification.mail.secret.replace",
 			string(audit.OutcomeFailure), "INTERNAL_ERROR", requestID)
-		return login.UINotificationSecretResult{}, securityPolicyErr("INTERNAL_ERROR")
+		return ui.UINotificationSecretResult{}, securityPolicyErr("INTERNAL_ERROR")
 	}
 	if auditErr := a.recordAudit(ctx, userID, "notification.mail.secret.replace",
 		string(audit.OutcomeSuccess), "", requestID); auditErr != nil {
-		return login.UINotificationSecretResult{}, auditErr
+		return ui.UINotificationSecretResult{}, auditErr
 	}
 	a.mu.Lock()
 	a.secret = true
 	a.mu.Unlock()
-	result := login.UINotificationSecretResult{Replaced: true, SecretConfigured: true}
+	result := ui.UINotificationSecretResult{Replaced: true, SecretConfigured: true}
 	a.storeIdempotent(key, result)
 	return result, nil
 }

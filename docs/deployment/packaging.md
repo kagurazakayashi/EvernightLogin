@@ -51,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-build.ps1 -Bu
 - 退出码：0 成功；10 预检失败；20 工具构建失败；21 Login 构建失败；22 Mail 构建失败；
   30 manifest/聚合字段不符；31 产物缺失/类型/尺寸/SHA 不符；40 内部错误。任何必需项
   缺失或类型/哈希不符都不得返回 0。
-- **发布包压缩不属于本入口**：每目标一个 zip（12 个）由步骤202 基于 24 项目录生成。
+- **发布包压缩不属于本入口**：每目标一个 zip（12 个）由步骤 202/248 基于 24 项目录生成。
 
 ## 2. 发布包内容
 
@@ -63,22 +63,33 @@ evernight-login-<version>-<os>-<arch>/
 │   ├── login-server[.exe]     服务进程入口（serve：HTTP 服务；init：本地首次初始化）
 │   ├── loginctl[.exe]         本地管理/应急命令
 │   └── login-backup[.exe]     备份创建与离线查看工具
-├── config/
-│   ├── login.example.yaml     配置样例（不含真实秘密）
-│   └── proxy/                 Nginx、Caddy 反向代理样例
-├── deploy/                    容器、Windows 服务、systemd、launchd 样例
-├── docs/deployment/           部署文档（本目录全部文件，含 samples/ 便于文档内链接）
-├── docs/licenses/             THIRD_PARTY_NOTICES、字体 OFL 与依赖许可证全文
+├── LICENSE                    Mulan PSL v2 与项目署名
+├── README.md                  产品入口说明
+├── THIRD_PARTY_NOTICES.txt    第三方组件/字体许可声明（兼容根文件）
+├── README-PACKAGE.txt         本包内容与解压说明
+├── docs/
+│   ├── README.md              产品文档中心
+│   ├── guide/                 使用/配置/权限/审计/备份/排障等产品文档
+│   ├── deployment/            部署文档（含 samples/ 配置与部署样例）
+│   ├── embedding/             嵌入与公开 Go API 文档
+│   ├── database/              存储模型/迁移/方言边界
+│   ├── requirements/          需求基线与错误码手册
+│   ├── licenses/              第三方/字体许可证全文
+│   └── reference/             步骤 245 建立的接口参考（存在时随包）
 ├── VERSION.txt                版本/提交/构建时间/目标/包说明
-├── README.txt                 同 VERSION.txt（便于开箱查看）
 ├── BUILDINFO.txt              go version -m 输出与 ldflags
 ├── DEPENDENCIES.txt           模块依赖清单（含许可证文件名）
 └── SHA256SUMS.txt             包内每个文件的 SHA-256
 ```
 
+> 248 起产品文档随 Login 包分发；`docs/acceptance/`、`docs/evidence/`、`examples/`
+> 等源码仓库专用材料不进包。包内文档中指向这些目录的相对链接会被 `package-release.ps1`
+> 改写成纯文本，并由包内链接自检拒绝残留逃逸链接。
+
 **不包含**（按构造排除，不靠事后删除）：
 
 - AI 专用文件：`.ai/`、`.agents/`、`AGENTS.md`、`MEMORY.md`、AI 步骤提示词；
+- 源码仓库专用材料：`docs/acceptance/`、`docs/evidence/`、`examples/`；
 - 运行数据：`database/*.db`、`*.db-wal`/`*.db-shm`、`*.sqlite*`；
 - 日志：`*.log`、`logs/`；
 - 测试密钥与秘密：`*.key`、`*.pem`、`*.p12`、`*.pfx`、`.env`、`secrets/`；
@@ -92,16 +103,16 @@ evernight-login-<version>-<os>-<arch>/
 
 `EvernightMail` 子模块的前置初始化、提交顺序、脚本检查与隔离副本复现见
 [docs/deployment/mail-submodule.md](mail-submodule.md)。发布脚本
-`scripts/build-release.ps1` 保持只构建三个 Login 命令的显式清单，不会因仓库中存在
-Mail 子模块而把 Mail/testkit 打进发布包。
+`build.ps1`/`scripts/package-release.ps1` 使用显式产品清单，不会因仓库中存在 Mail
+子模块而把 Mail/testkit 源码打进 Login 包。
 
 脚本使用**显式复制清单**组装包内容，因此仓库里新增的文件不会被自动打进包；需要新增
-运行时资源时应显式修改 `scripts/build-release.ps1` 的复制清单。
+运行时资源时应显式修改 `scripts/package-release.ps1` 的复制清单。
 
-包内 `VERSION.txt`/`README.txt` 描述当前运行时边界：本包含可嵌入 Go 库与三个 CLI；
-`login-server` 支持 `serve`（真实 HTTP 服务）与 `init`（本地首次初始化），OAuth2/OIDC
-协议端点与管理 JSON API 已装配但默认关闭；`loginctl` 提供本地与在线管理命令；内置
-Web 页面可选且可由宿主替换。
+包内 `VERSION.txt`/`README-PACKAGE.txt`/`README.md` 描述当前运行时边界：本包含可嵌入
+Go 库与三个 CLI；`login-server` 支持 `serve`（真实 HTTP 服务）与 `init`（本地首次初始化），
+OAuth2/OIDC 协议端点与管理 JSON API 已装配但默认关闭；`loginctl` 提供本地与在线管理命令；
+内置 Web 页面可选且可由宿主替换。
 
 ### 2.1 Unix 执行位（Linux/macOS 解压后必须处理）
 
@@ -225,7 +236,7 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 
 | 资源 | 解析方式 | 结果 |
 |---|---|---|
-| 内置页面模板/静态资源/中文文案 | `go:embed`（`ui_embed.go`）内嵌进二进制，运行时从 `embed.FS` 读取 | 通过根包单元测试验证（`TestWebUIRenderBuiltinPages`、`TestWebUIAssetsAndI18n`） |
+| 内置页面模板/静态资源/中文文案 | `go:embed`（`ui/embed.go`）内嵌进二进制，运行时从 `embed.FS` 读取 | 通过根包单元测试验证（`TestWebUIRenderBuiltinPages`、`TestWebUIAssetsAndI18n`） |
 | 迁移脚本 | `migrations/` 内嵌（`go:embed`），启动/迁移时按版本读取 | 通过迁移加载测试与本次构建的 `go build` 验证 |
 | 报告 PDF 字体 | 不内嵌；宿主通过受信配置 `reports.Options.FontPath` 提供绝对路径，构造时校验大小/SHA-256/TrueType 轮廓 | 字体文件不随包（体积/许可证约束）；`TestPDFFontValidation` 实测通过（相对路径、缺失文件、非预审摘要、非 TrueType 均被拒绝）；**本次未做真实 PDF 渲染**（本机无字体文件） |
 | 运行配置 | 显式路径（`-config`/`LOGIN_*` 环境变量/代码选项），不依赖工作目录以外的隐式位置 | 样例配置经真实加载器校验通过 |
@@ -256,26 +267,30 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 - 发布包应由干净工作树构建（`VERSION.txt` 标注 `worktree_dirty: no`）；若为 `yes` 说明包含
   未提交改动，不得作为正式发布，应由维护者在提交后重新构建。
 
-## 9. 双产品发布打包与独立校验（步骤202）
+## 9. 双产品发布打包与独立校验（步骤 202，248 修订）
 
 步骤 202 在步骤 179 的 `dist/build/` + `build-summary.json`（format=1，24/24 已验证、
 无 dirty/SKIPPED/FAILED）之上生成**两个产品 x 六个目标 = 12 个 zip**。正式发布包必须由
 干净最终提交的隔离树构建；本机隔离树产出的哈希只是验收快照，最终发布哈希以 Lead 在 202
-提交后的干净 HEAD 重新执行为准。
+提交后的干净 HEAD 重新执行为准。248 起 Login 包随附产品 `docs/`，并强制生成四段式
+`RELEASE-NOTES.md`。
 
 ### 9.1 包内容来源（以真实 `git ls-files` 为准）
 
 旧规范中的 `config/login.example.yaml`、`config/proxy/`、`deploy/` 在仓库中**从未被跟踪**；
-202 按真实存在路径调整，不伪造、不新增不存在的目录（本文第 2 节的旧布局以此节为准）：
+202 按真实存在路径调整，不伪造、不新增不存在的目录；248 按真实产品文档目录补充 docs
+（本文第 2 节已同步当前布局）：
 
 | 包 | 内容（显式复制，非 glob 仓库） |
 |---|---|
-| Login | `bin/{login-server,loginctl,login-backup}[.exe]`；`LICENSE`；`README.md`；`THIRD_PARTY_NOTICES.txt`（来自 `docs/licenses/THIRD_PARTY_NOTICES.md`）；`docs/deployment/samples/` 全部样例（Caddyfile、Dockerfile、docker-compose.yml、nginx-login.conf、*.service、*.plist、install-windows-service.ps1、winsw-*.xml、login.server.example.yaml，以 `git ls-files` 为准）；`README-PACKAGE.txt`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、包内 `SHA256SUMS.txt`。 |
+| Login | `bin/{login-server,loginctl,login-backup}[.exe]`；`LICENSE`；`README.md`；`THIRD_PARTY_NOTICES.txt`（来自 `docs/licenses/THIRD_PARTY_NOTICES.md`）；**产品文档** `docs/README.md`、`docs/guide/`、`docs/deployment/`（含 samples/）、`docs/embedding/`、`docs/database/`、`docs/requirements/`、`docs/licenses/`、`docs/reference/`（步骤 245 存在时）；`README-PACKAGE.txt`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、包内 `SHA256SUMS.txt`。 |
 | Mail | `bin/evernightmail[.exe]`；子模块 `EvernightMail/LICENSE`、`EvernightMail/README.md` → 包根 `LICENSE`/`README.md`；`EvernightMail.example.yaml` → `evernightmail.example.yaml`；`EvernightMail/THIRD_PARTY_NOTICES.md` → `THIRD_PARTY_NOTICES.txt`；选定文档 `docs/{README,config-reference,cli-reference,protocol-matrix,offline-security}.md`；`README-PACKAGE.txt`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、包内 `SHA256SUMS.txt`。 |
 
-明确不随包：`examples/`（含 external-consumer 示例）、`scripts/`、`tools/`、`_tools/`、
+明确不随包：`docs/acceptance/`、`docs/evidence/`、`examples/`、`scripts/`、`tools/`、`_tools/`、
 `.ai/`/AGENTS/MEMORY/步骤提示词、`database/`/DB/日志/密钥、子模块源码树、字体本体；
-`docs/deployment/samples/` 以样例配置/部署文件形式进包，不自动生效。
+`docs/deployment/samples/` 以样例配置/部署文件形式进包，不自动生效。包内产品文档中
+指向这些源码专属目录的相对链接由 `package-release.ps1` 改写成纯文本，并由链接自检拒绝
+残留逃逸；`tests` 中故意删除产品 docs/`RELEASE-NOTES.md` 四段应使 verify FAIL。
 
 ### 9.2 打包命令
 
@@ -285,13 +300,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-release.ps1 
   -Version 0.1.0 `
   -BuildDir dist\build `
   -BuildSummary dist\build\build-summary.json `
-  -OutputDir dist\release\evernight-0.1.0
+  -OutputDir dist\release\evernight-0.1.0 `
+  -ReleaseNotes docs\release-notes\round10.md
 ```
 
 输出：12 个 per-target zip；顶层 `SHA256SUMS.txt`（GNU 格式、LF、字节序排序、不含自身）、
 `build-matrix.txt`、`release-summary.json`（format=1，含 zip 与包内文件 size/sha256）、
-`RELEASE-NOTES.md` 模板。安全边界：只读 Git/构建树，不做 commit/tag/push/upload，不启动服务/
-端口，不联网；显式复制清单 + 写前禁止项扫描；任何**真实存在的必需文件**缺失退出 30，不静默省略。
+四段式 `RELEASE-NOTES.md`（版本/三 commit/12 zip 表由真实 summary 注入，四段内容来自
+`docs/release-notes/round10.md`；缺四段或仍有 TODO-248 标记直接失败）。安全边界：只读
+Git/构建树，不做 commit/tag/push/upload，不启动服务/端口，不联网；显式复制清单 + 写前
+禁止项扫描 + 包内 docs 链接自检；任何真实存在的必需文件缺失退出 30，不静默省略。
 
 ### 9.3 校验命令与退出码
 
@@ -301,14 +319,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-release.ps1 `
   -BuildSummary dist\build\build-summary.json
 ```
 
-校验：顶层文件集合/校验和/矩阵；解压后文件集合、禁止项、必需许可/元数据；包内 SHA256SUMS；
-PE/ELF/Mach-O magic+架构、size/sha256 对照 build-summary；Windows/amd64 四命令短冒烟
-（login-server `--version`/`--help`、loginctl `--version`、login-backup `version`、
-evernightmail `--version`），不启动 `serve`/`init`、不监听端口。
+校验：顶层文件集合/校验和/矩阵；`RELEASE-NOTES.md` 四段标题、版本与三 commit、12 zip
+数量；解压后文件集合、禁止项、必需许可/元数据；Login 包必需产品 docs（README/guide/
+deployment/embedding/database/requirements/licenses，reference 按 245 实际产物）；包内
+SHA256SUMS；PE/ELF/Mach-O magic+架构、size/sha256 对照 build-summary；Windows/amd64
+四命令短冒烟（login-server `--version`/`--help`、loginctl `--version`、
+login-backup `version`、evernightmail `--version`），不启动 `serve`/`init`、不监听端口。
 
 退出码：0 通过；10 发布目录/前置/矩阵结构不符；20 build-summary 不合格（非 24/24、dirty、
-SKIPPED/FAILED）；21 解压/文件集合/禁止项；22 顶层或包内校验和不符；30 许可/元数据缺失；
-31 二进制类型/架构/冒烟失败；40 内部错误。
+SKIPPED/FAILED）；21 解压/文件集合/禁止项；22 顶层或包内校验和不符；30 许可/元数据/
+产品 docs/发布说明缺失或结构不符；31 二进制类型/架构/冒烟失败；40 内部错误。
 
 ### 9.4 隔离树验证记录（2026-11-23，HEAD `e4e6f304`）
 

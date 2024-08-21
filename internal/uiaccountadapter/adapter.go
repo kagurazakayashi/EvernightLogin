@@ -12,13 +12,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
-	"strconv"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
@@ -30,6 +23,12 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"time"
 )
 
 // Options 是适配器依赖。
@@ -55,7 +54,7 @@ type ReauthChallenger interface {
 	NotifyOutcome(ctx context.Context, result reauth.Result, outcome reauth.Outcome) error
 }
 
-// Adapter 实现 login.UIAccountBackend。
+// Adapter 实现 ui.UIAccountBackend。
 type Adapter struct {
 	opts Options
 }
@@ -121,84 +120,84 @@ func checkSignals(ctx context.Context, now time.Time) error {
 }
 
 // GetProfile 读取本人全局资料。
-func (a *Adapter) GetProfile(ctx context.Context, userID string) (login.UIProfileView, error) {
+func (a *Adapter) GetProfile(ctx context.Context, userID string) (ui.UIProfileView, error) {
 	caller, err := profile.UserCaller(userID)
 	if err != nil {
-		return login.UIProfileView{}, accountErr("ACCESS_DENIED")
+		return ui.UIProfileView{}, accountErr("ACCESS_DENIED")
 	}
 	view, err := a.opts.Profile.GetProfile(ctx, caller, userID)
 	if err != nil {
-		return login.UIProfileView{}, mapProfileError(err)
+		return ui.UIProfileView{}, mapProfileError(err)
 	}
 	return toProfileView(view), nil
 }
 
 // UpdateProfile 更新全局资料白名单字段（行版本条件）。
 func (a *Adapter) UpdateProfile(ctx context.Context, userID string,
-	change login.UIProfileChange, expectedRowVersion int64,
-	requestID string) (login.UIProfileView, error) {
+	change ui.UIProfileChange, expectedRowVersion int64,
+	requestID string) (ui.UIProfileView, error) {
 	caller, err := profile.UserCaller(userID)
 	if err != nil {
-		return login.UIProfileView{}, accountErr("ACCESS_DENIED")
+		return ui.UIProfileView{}, accountErr("ACCESS_DENIED")
 	}
 	update := profile.ProfileChange{Nickname: change.Nickname, Biography: change.Biography,
 		Language: change.Language, Timezone: change.Timezone, Phone: change.Phone}
 	view, err := a.opts.Profile.UpdateSelf(ctx, caller, update, expectedRowVersion, requestID)
 	if err != nil {
-		return login.UIProfileView{}, mapProfileError(err)
+		return ui.UIProfileView{}, mapProfileError(err)
 	}
 	return toProfileView(view), nil
 }
 
 // ChangeUsername 执行受控更名：当前密码先完成绑定操作的 reauth 挑战。
 func (a *Adapter) ChangeUsername(ctx context.Context, userID, newUsername string,
-	expectedRowVersion int64, currentPassword, requestID string) (login.UIProfileView, error) {
+	expectedRowVersion int64, currentPassword, requestID string) (ui.UIProfileView, error) {
 	normalized, _, err := account.NormalizeUsername(newUsername)
 	if err != nil {
-		return login.UIProfileView{}, accountErr("REQ_INVALID")
+		return ui.UIProfileView{}, accountErr("REQ_INVALID")
 	}
 	params := map[string]string{"new_username": normalized,
 		"expected_row_version": strconv.FormatInt(expectedRowVersion, 10)}
 	ctx, sensitiveResult, err := a.approve(ctx, userID, "profile.username.change",
 		params, currentPassword, requestID, "修改用户名")
 	if err != nil {
-		return login.UIProfileView{}, err
+		return ui.UIProfileView{}, err
 	}
 	caller, callerErr := profile.UserCaller(userID)
 	if callerErr != nil {
-		return login.UIProfileView{}, accountErr("ACCESS_DENIED")
+		return ui.UIProfileView{}, accountErr("ACCESS_DENIED")
 	}
 	view, changeErr := a.opts.Profile.ChangeUsername(ctx, caller,
 		profile.ChangeUsernameRequest{TargetUserID: userID, NewUsername: newUsername,
 			ExpectedRowVersion: expectedRowVersion, RequestID: requestID})
 	a.notify(sensitiveResult, changeErr)
 	if changeErr != nil {
-		return login.UIProfileView{}, mapProfileError(changeErr)
+		return ui.UIProfileView{}, mapProfileError(changeErr)
 	}
 	return toProfileView(view), nil
 }
 
 // GetAppProfile 读取当前应用成员资料。
 func (a *Adapter) GetAppProfile(ctx context.Context, userID,
-	appID string) (login.UIAppProfileView, error) {
+	appID string) (ui.UIAppProfileView, error) {
 	caller, err := app.UserCaller(userID)
 	if err != nil {
-		return login.UIAppProfileView{}, accountErr("ACCESS_DENIED")
+		return ui.UIAppProfileView{}, accountErr("ACCESS_DENIED")
 	}
 	membership, err := a.opts.App.GetApplicationMember(ctx, caller, appID, userID)
 	if err != nil {
-		return login.UIAppProfileView{}, mapAppError(err)
+		return ui.UIAppProfileView{}, mapAppError(err)
 	}
 	return toAppProfileView(membership), nil
 }
 
 // UpdateAppProfile 更新当前应用成员资料（只写本应用白名单字段）。
 func (a *Adapter) UpdateAppProfile(ctx context.Context, userID, appID string,
-	change login.UIAppProfileChange, expectedRowVersion int64,
-	requestID string) (login.UIAppProfileView, error) {
+	change ui.UIAppProfileChange, expectedRowVersion int64,
+	requestID string) (ui.UIAppProfileView, error) {
 	caller, err := app.UserCaller(userID)
 	if err != nil {
-		return login.UIAppProfileView{}, accountErr("ACCESS_DENIED")
+		return ui.UIAppProfileView{}, accountErr("ACCESS_DENIED")
 	}
 	membership, err := a.opts.App.UpdateApplicationMemberProfile(ctx, caller,
 		app.MemberProfileRequest{ApplicationID: appID, UserID: userID,
@@ -206,43 +205,43 @@ func (a *Adapter) UpdateAppProfile(ctx context.Context, userID, appID string,
 				Title: change.Title, Note: change.Note},
 			ExpectedRowVersion: expectedRowVersion})
 	if err != nil {
-		return login.UIAppProfileView{}, mapAppError(err)
+		return ui.UIAppProfileView{}, mapAppError(err)
 	}
 	return toAppProfileView(membership), nil
 }
 
 // GetAvatar 读取当前头像摘要。
-func (a *Adapter) GetAvatar(ctx context.Context, userID string) (login.UIAvatarView, error) {
+func (a *Adapter) GetAvatar(ctx context.Context, userID string) (ui.UIAvatarView, error) {
 	caller, err := avatar.UserCaller(userID)
 	if err != nil {
-		return login.UIAvatarView{}, accountErr("ACCESS_DENIED")
+		return ui.UIAvatarView{}, accountErr("ACCESS_DENIED")
 	}
 	record, found, err := a.opts.Avatar.Current(ctx, caller, userID)
 	if err != nil {
-		return login.UIAvatarView{}, mapAvatarError(err)
+		return ui.UIAvatarView{}, mapAvatarError(err)
 	}
 	if !found {
-		return login.UIAvatarView{}, nil
+		return ui.UIAvatarView{}, nil
 	}
-	return login.UIAvatarView{Present: true, MediaType: record.MediaType,
+	return ui.UIAvatarView{Present: true, MediaType: record.MediaType,
 		Width: record.Width, Height: record.Height, RowVersion: record.RowVersion}, nil
 }
 
 // UploadAvatar 上传并替换头像（真实字节校验/重编码由头像服务执行）。
 func (a *Adapter) UploadAvatar(ctx context.Context, userID string, data []byte,
 	declaredMediaType string, expectedRowVersion int64,
-	requestID string) (login.UIAvatarView, error) {
+	requestID string) (ui.UIAvatarView, error) {
 	caller, err := avatar.UserCaller(userID)
 	if err != nil {
-		return login.UIAvatarView{}, accountErr("ACCESS_DENIED")
+		return ui.UIAvatarView{}, accountErr("ACCESS_DENIED")
 	}
 	record, err := a.opts.Avatar.Upload(ctx, caller, avatar.UploadRequest{
 		TargetUserID: userID, Data: data, DeclaredMediaType: declaredMediaType,
 		ExpectedRowVersion: expectedRowVersion, RequestID: requestID})
 	if err != nil {
-		return login.UIAvatarView{}, mapAvatarError(err)
+		return ui.UIAvatarView{}, mapAvatarError(err)
 	}
-	return login.UIAvatarView{Present: true, MediaType: record.MediaType,
+	return ui.UIAvatarView{Present: true, MediaType: record.MediaType,
 		Width: record.Width, Height: record.Height, RowVersion: record.RowVersion}, nil
 }
 
@@ -261,31 +260,31 @@ func (a *Adapter) RemoveAvatar(ctx context.Context, userID string,
 }
 
 // ReadAvatar 读取受控头像字节与安全响应头。
-func (a *Adapter) ReadAvatar(ctx context.Context, userID string) (login.UIAvatarContent, error) {
+func (a *Adapter) ReadAvatar(ctx context.Context, userID string) (ui.UIAvatarContent, error) {
 	caller, err := avatar.UserCaller(userID)
 	if err != nil {
-		return login.UIAvatarContent{}, accountErr("ACCESS_DENIED")
+		return ui.UIAvatarContent{}, accountErr("ACCESS_DENIED")
 	}
 	content, err := a.opts.Avatar.Read(ctx, caller, userID)
 	if err != nil {
-		return login.UIAvatarContent{}, mapAvatarError(err)
+		return ui.UIAvatarContent{}, mapAvatarError(err)
 	}
 	headers := http.Header{}
 	content.SetResponseHeaders(headers)
-	return login.UIAvatarContent{MediaType: content.Avatar.MediaType,
+	return ui.UIAvatarContent{MediaType: content.Avatar.MediaType,
 		Headers: headers, Data: content.Data}, nil
 }
 
 // GetEmailChangeState 读取当前已验证邮箱与 pending 申请。
-func (a *Adapter) GetEmailChangeState(ctx context.Context, userID string) (login.UIEmailChangeState, error) {
+func (a *Adapter) GetEmailChangeState(ctx context.Context, userID string) (ui.UIEmailChangeState, error) {
 	caller, err := emailchange.UserCaller(userID)
 	if err != nil {
-		return login.UIEmailChangeState{}, accountErr("ACCESS_DENIED")
+		return ui.UIEmailChangeState{}, accountErr("ACCESS_DENIED")
 	}
-	state := login.UIEmailChangeState{}
+	state := ui.UIEmailChangeState{}
 	pending, found, err := a.opts.EmailChange.GetPending(ctx, caller)
 	if err != nil {
-		return login.UIEmailChangeState{}, mapEmailChangeError(err)
+		return ui.UIEmailChangeState{}, mapEmailChangeError(err)
 	}
 	if found {
 		state.HasEmail = pending.OldEmail != ""
@@ -301,27 +300,27 @@ func (a *Adapter) GetEmailChangeState(ctx context.Context, userID string) (login
 
 // RequestEmailChange 发起邮箱变更：当前密码完成绑定新邮箱摘要的 reauth 挑战。
 func (a *Adapter) RequestEmailChange(ctx context.Context, userID, newEmail, currentPassword,
-	requestID string) (login.UIEmailChangeState, error) {
+	requestID string) (ui.UIEmailChangeState, error) {
 	normalized, _, err := authn.NormalizeEmail(newEmail)
 	if err != nil {
-		return login.UIEmailChangeState{}, accountErr("REQ_INVALID")
+		return ui.UIEmailChangeState{}, accountErr("REQ_INVALID")
 	}
 	ctx, sensitiveResult, err := a.approve(ctx, userID, "email.change.request",
 		map[string]string{"new_email": normalized, "request_id": requestID},
 		currentPassword, requestID, "变更邮箱")
 	if err != nil {
-		return login.UIEmailChangeState{}, err
+		return ui.UIEmailChangeState{}, err
 	}
 	caller, callerErr := emailchange.UserCaller(userID)
 	if callerErr != nil {
-		return login.UIEmailChangeState{}, accountErr("ACCESS_DENIED")
+		return ui.UIEmailChangeState{}, accountErr("ACCESS_DENIED")
 	}
 	result, changeErr := a.opts.EmailChange.RequestChange(ctx, caller, newEmail, requestID)
 	a.notify(sensitiveResult, changeErr)
 	if changeErr != nil {
-		return login.UIEmailChangeState{}, mapEmailChangeError(changeErr)
+		return ui.UIEmailChangeState{}, mapEmailChangeError(changeErr)
 	}
-	return login.UIEmailChangeState{HasEmail: result.Request.OldEmail != "",
+	return ui.UIEmailChangeState{HasEmail: result.Request.OldEmail != "",
 		OldEmail: result.Request.OldEmail, Pending: true,
 		NewEmail: result.Request.NewEmail, ExpiresAt: result.Request.ExpiresAt,
 		VerificationSent: result.VerificationSent, ErrorCode: result.ErrorCode}, nil
@@ -342,14 +341,14 @@ func (a *Adapter) CancelEmailChange(ctx context.Context, userID, requestID strin
 
 // VerifyEmailChange 消费一次性验证入口并切换邮箱（GET 不调用此方法）。
 func (a *Adapter) VerifyEmailChange(ctx context.Context, requestID, credentialID, token,
-	requestIDLog string) (login.UIEmailChangeVerified, error) {
+	requestIDLog string) (ui.UIEmailChangeVerified, error) {
 	result, err := a.opts.EmailChange.Verify(ctx, emailchange.VerifyRequest{
 		RequestID: requestID, CredentialID: credentialID, Token: token,
 		RequestIDLog: requestIDLog})
 	if err != nil {
-		return login.UIEmailChangeVerified{}, mapEmailChangeError(err)
+		return ui.UIEmailChangeVerified{}, mapEmailChangeError(err)
 	}
-	return login.UIEmailChangeVerified{UserID: result.UserID, Email: result.Email,
+	return ui.UIEmailChangeVerified{UserID: result.UserID, Email: result.Email,
 		SwitchedAt: result.SwitchedAt, OldEmail: result.OldEmail,
 		Notified: result.Notified, NotifyError: result.ErrorCode}, nil
 }
@@ -357,25 +356,25 @@ func (a *Adapter) VerifyEmailChange(ctx context.Context, requestID, credentialID
 // ChangePassword 修改密码：当前密码先完成绑定目标账户的 reauth 挑战，再调用真实
 // passwordreset 服务（内部再复核当前密码并递增安全版本、撤销会话）。
 func (a *Adapter) ChangePassword(ctx context.Context, userID, currentPassword, newPassword,
-	requestID string) (login.UIPasswordChangeResult, error) {
+	requestID string) (ui.UIPasswordChangeResult, error) {
 	ctx, sensitiveResult, err := a.approve(ctx, userID, "password.change",
 		map[string]string{"target_user_id": userID}, currentPassword, requestID, "修改密码")
 	if err != nil {
-		return login.UIPasswordChangeResult{}, err
+		return ui.UIPasswordChangeResult{}, err
 	}
 	clientIP, _ := transportClientIP(ctx)
 	caller, callerErr := passwordreset.UserCaller(userID)
 	if callerErr != nil {
-		return login.UIPasswordChangeResult{}, accountErr("ACCESS_DENIED")
+		return ui.UIPasswordChangeResult{}, accountErr("ACCESS_DENIED")
 	}
 	result, changeErr := a.opts.Passwords.ChangePassword(ctx, caller,
 		passwordreset.ChangeRequest{CurrentPassword: currentPassword,
 			NewPassword: newPassword, ClientIP: clientIP, RequestID: requestID})
 	a.notify(sensitiveResult, changeErr)
 	if changeErr != nil {
-		return login.UIPasswordChangeResult{}, mapPasswordResetError(changeErr)
+		return ui.UIPasswordChangeResult{}, mapPasswordResetError(changeErr)
 	}
-	return login.UIPasswordChangeResult{RequiresRelogin: result.RequiresRelogin,
+	return ui.UIPasswordChangeResult{RequiresRelogin: result.RequiresRelogin,
 		SessionsRevoked: result.SessionsRevoked, ChangedAt: result.ChangedAt}, nil
 }
 
@@ -444,29 +443,29 @@ func transportClientIP(ctx context.Context) (string, bool) {
 
 // ===== 映射 =====
 
-func toProfileView(view profile.UserProfile) login.UIProfileView {
-	return login.UIProfileView{UserID: view.UserID, IsRoot: view.IsRoot,
+func toProfileView(view profile.UserProfile) ui.UIProfileView {
+	return ui.UIProfileView{UserID: view.UserID, IsRoot: view.IsRoot,
 		Username: view.Username, Nickname: view.Nickname, Biography: view.Biography,
 		Language: view.Language, Timezone: view.Timezone, Phone: view.Phone,
 		PhoneVerified: view.PhoneVerified, RowVersion: view.RowVersion,
 		UsernameChangedAt: view.UsernameChangedAt, UpdatedAt: view.UpdatedAt}
 }
 
-func toAppProfileView(membership app.Membership) login.UIAppProfileView {
-	return login.UIAppProfileView{AppID: membership.ApplicationID, UserID: membership.UserID,
+func toAppProfileView(membership app.Membership) ui.UIAppProfileView {
+	return ui.UIAppProfileView{AppID: membership.ApplicationID, UserID: membership.UserID,
 		Status: string(membership.Status), DisplayName: membership.Profile.DisplayName,
 		Title: membership.Profile.Title, Note: membership.Profile.Note,
 		RowVersion: membership.RowVersion}
 }
 
-func accountErr(code string) error { return &login.UIAccountError{Code: code} }
+func accountErr(code string) error { return &ui.UIAccountError{Code: code} }
 
 func mapProfileError(err error) error {
 	switch {
 	case errors.Is(err, profile.ErrVersionConflict), errors.Is(err, profile.ErrUsernameTaken):
 		return accountErr("CONFLICT")
 	case errors.Is(err, profile.ErrRenameTooSoon):
-		return &login.UIAccountError{Code: "RATE_LIMITED", RetryAfterSeconds: 3600}
+		return &ui.UIAccountError{Code: "RATE_LIMITED", RetryAfterSeconds: 3600}
 	case errors.Is(err, profile.ErrRenameReauthRequired):
 		return accountErr("REAUTH_REQUIRED")
 	case errors.Is(err, profile.ErrAccessDenied):
@@ -536,7 +535,7 @@ func mapPasswordResetError(err error) error {
 	case errors.Is(err, passwordreset.ErrAccessDenied):
 		return accountErr("ACCESS_DENIED")
 	case errors.Is(err, passwordreset.ErrRateLimited):
-		return &login.UIAccountError{Code: "RATE_LIMITED", RetryAfterSeconds: 60}
+		return &ui.UIAccountError{Code: "RATE_LIMITED", RetryAfterSeconds: 60}
 	case errors.Is(err, authn.ErrWeakPassword), errors.Is(err, authn.ErrPasswordReused),
 		errors.Is(err, passwordreset.ErrInvalidRequest):
 		return accountErr("REQ_INVALID")
@@ -556,7 +555,7 @@ func mapReauthError(err error) error {
 	case errors.Is(err, reauth.ErrMFARequired):
 		return accountErr("MFA_REQUIRED")
 	case errors.Is(err, reauth.ErrRateLimited), errors.Is(err, reauth.ErrAttemptsExceeded):
-		return &login.UIAccountError{Code: "RATE_LIMITED", RetryAfterSeconds: 60}
+		return &ui.UIAccountError{Code: "RATE_LIMITED", RetryAfterSeconds: 60}
 	case errors.Is(err, reauth.ErrAccessDenied):
 		return accountErr("ACCESS_DENIED")
 	case errors.Is(err, reauth.ErrStoreUnavailable), errors.Is(err, reauth.ErrAuditUnavailable):

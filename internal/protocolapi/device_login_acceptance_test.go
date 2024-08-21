@@ -20,13 +20,14 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // 本文件是步骤 192 的设备码登录边界与重放验收。
 //
 // 证据来源：临时 SQLite（全量迁移）+ 真实会话/审计/OAuth 客户端/令牌/授权流程服务 +
 // httptest 回环真实 HTTP 服务；设备端只通过 HTTP 端点申请/轮询/取消，不接触领域
-// 服务内部状态。用户确认走**真实内置确认页面**（login.NewWebUI + 生产页面适配器
+// 服务内部状态。用户确认走**真实内置确认页面**（ui.NewWebUI + 生产页面适配器
 // uiauthadapter + 真实登录会话）：页面 HTML 由真实模板渲染真实应用名与 scope 说明，
 // 批准/拒绝经页面处理器调用真实 oauthflow 决定接口。页面 POST 的传输层 CSRF/Origin
 // 中间件由 serverapp 装配（步骤 160 已有真实页面证据），本测试聚焦页面数据与业务
@@ -36,26 +37,26 @@ import (
 // 不接受任何客户端自报身份）。
 type devicePageSessions struct{ service *session.Service }
 
-// ResolvePageSession 实现 login.UISessionService。
+// ResolvePageSession 实现 ui.UISessionService。
 func (p devicePageSessions) ResolvePageSession(ctx context.Context,
-	request *http.Request) (login.UISession, error) {
+	request *http.Request) (ui.UISession, error) {
 	secret, ok := p.service.SessionSecretFromRequest(request)
 	if !ok {
-		return login.UISession{}, login.ErrUISessionExpired
+		return ui.UISession{}, login.ErrUISessionExpired
 	}
 	record, err := p.service.Validate(ctx, secret)
 	if err != nil {
-		return login.UISession{}, login.ErrUISessionExpired
+		return ui.UISession{}, login.ErrUISessionExpired
 	}
 	kind := "normal"
 	if record.IsRestricted() {
 		kind = "restricted"
 	}
-	return login.UISession{Authenticated: true, UserID: record.UserID, AppID: record.AppID,
+	return ui.UISession{Authenticated: true, UserID: record.UserID, AppID: record.AppID,
 		Kind: kind, ExpiresAt: record.AbsoluteExpiresAt}, nil
 }
 
-// IssueCSRFToken 实现 login.UISessionService：令牌只在服务端会话绑定下签发。
+// IssueCSRFToken 实现 ui.UISessionService：令牌只在服务端会话绑定下签发。
 func (p devicePageSessions) IssueCSRFToken(ctx context.Context,
 	request *http.Request) (string, error) {
 	secret, ok := p.service.SessionSecretFromRequest(request)
@@ -106,9 +107,9 @@ func (e *testEnv) devicePageServer() *httptest.Server {
 	if err != nil {
 		e.t.Fatalf("构造设备确认页适配器失败: %v", err)
 	}
-	ui, err := login.NewWebUI(login.WebUIOptions{
+	ui, err := ui.NewWebUI(ui.WebUIOptions{
 		Prefix: "", Session: devicePageSessions{service: e.sessions},
-		PageOAuth: &login.UIPageOAuthOptions{Backend: backend},
+		PageOAuth: &ui.UIPageOAuthOptions{Backend: backend},
 		Now:       e.clock.Now,
 	})
 	if err != nil {

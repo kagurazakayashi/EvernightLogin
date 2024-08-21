@@ -12,12 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
@@ -25,6 +19,11 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/preset"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"strings"
+	"time"
 )
 
 // RBACOptions 是角色/权限/委派/有效权限页适配器依赖。Roles/Permissions/Access/
@@ -53,7 +52,7 @@ type RBACOptions struct {
 	Logger *slog.Logger
 }
 
-// RBACAdapter 实现 login.UIRBACBackend。
+// RBACAdapter 实现 ui.UIRBACBackend。
 type RBACAdapter struct {
 	opts    RBACOptions
 	catalog *preset.Catalog
@@ -159,7 +158,7 @@ func (a *RBACAdapter) appNames(ctx context.Context, adminUserID string) map[stri
 
 // ListScopes 返回当前管理员可选作用范围（系统+可读取角色/权限出现的应用范围）。
 func (a *RBACAdapter) ListScopes(ctx context.Context,
-	adminUserID string) ([]login.UIRBACScope, error) {
+	adminUserID string) ([]ui.UIRBACScope, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesRead); err != nil {
 		return nil, err
 	}
@@ -190,13 +189,13 @@ func (a *RBACAdapter) ListScopes(ctx context.Context,
 		seen[record.ScopeID] = struct{}{}
 	}
 	names := a.appNames(ctx, adminUserID)
-	result := make([]login.UIRBACScope, 0, len(seen)+1)
+	result := make([]ui.UIRBACScope, 0, len(seen)+1)
 	for scopeID := range seen {
 		scope, parseErr := authz.ParseScope(scopeID)
 		if parseErr != nil {
 			continue
 		}
-		view := login.UIRBACScope{ScopeID: scopeID, Kind: string(scope.Kind),
+		view := ui.UIRBACScope{ScopeID: scopeID, Kind: string(scope.Kind),
 			Active: true}
 		if scope.Kind == authz.ScopeKindApplication {
 			view.ApplicationID = scope.ApplicationID
@@ -211,42 +210,42 @@ func (a *RBACAdapter) ListScopes(ctx context.Context,
 
 // ListRoles 列出角色（含默认/当前权限与分配数量）。
 func (a *RBACAdapter) ListRoles(ctx context.Context, adminUserID string,
-	query login.UIRBACRoleQuery) (login.UIRBACRolePage, error) {
+	query ui.UIRBACRoleQuery) (ui.UIRBACRolePage, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesRead); err != nil {
-		return login.UIRBACRolePage{}, err
+		return ui.UIRBACRolePage{}, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACRolePage{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACRolePage{}, rbacErr("ACCESS_DENIED")
 	}
 	limit := query.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
 	if query.Offset < 0 || query.Offset > role.MaxListOffset {
-		return login.UIRBACRolePage{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACRolePage{}, rbacErr("REQ_INVALID")
 	}
 	sortField := role.SortField(strings.TrimSpace(query.Sort))
 	if sortField == "" {
 		sortField = role.SortCreatedAt
 	}
 	if !sortField.Valid() {
-		return login.UIRBACRolePage{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACRolePage{}, rbacErr("REQ_INVALID")
 	}
 	result, err := a.opts.Roles.ListRoles(ctx, caller, role.ListRequest{
 		ScopeID: strings.TrimSpace(query.ScopeID), Limit: limit, Offset: query.Offset,
 		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending})
 	if err != nil {
-		return login.UIRBACRolePage{}, mapRBACError(err)
+		return ui.UIRBACRolePage{}, mapRBACError(err)
 	}
 	names := a.appNames(ctx, adminUserID)
-	page := login.UIRBACRolePage{HasMore: result.HasMore,
+	page := ui.UIRBACRolePage{HasMore: result.HasMore,
 		NextOffset: query.Offset + len(result.Roles),
-		Roles:      make([]login.UIRBACRoleView, 0, len(result.Roles))}
+		Roles:      make([]ui.UIRBACRoleView, 0, len(result.Roles))}
 	for _, record := range result.Roles {
 		view, viewErr := a.buildRoleView(ctx, caller, adminUserID, record, names)
 		if viewErr != nil {
-			return login.UIRBACRolePage{}, viewErr
+			return ui.UIRBACRolePage{}, viewErr
 		}
 		page.Roles = append(page.Roles, view)
 	}
@@ -255,22 +254,22 @@ func (a *RBACAdapter) ListRoles(ctx context.Context, adminUserID string,
 
 // GetRole 读取角色详情（默认/当前权限、可组合权限、分配）。
 func (a *RBACAdapter) GetRole(ctx context.Context, adminUserID,
-	roleID string) (login.UIRBACRoleDetail, error) {
+	roleID string) (ui.UIRBACRoleDetail, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesRead); err != nil {
-		return login.UIRBACRoleDetail{}, err
+		return ui.UIRBACRoleDetail{}, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACRoleDetail{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACRoleDetail{}, rbacErr("ACCESS_DENIED")
 	}
 	record, err := a.opts.Roles.GetRole(ctx, caller, strings.TrimSpace(roleID))
 	if err != nil {
-		return login.UIRBACRoleDetail{}, mapRBACError(err)
+		return ui.UIRBACRoleDetail{}, mapRBACError(err)
 	}
 	names := a.appNames(ctx, adminUserID)
 	view, err := a.buildRoleView(ctx, caller, adminUserID, record, names)
 	if err != nil {
-		return login.UIRBACRoleDetail{}, err
+		return ui.UIRBACRoleDetail{}, err
 	}
 	currentIDs := make(map[string]struct{}, len(view.CurrentPermissions))
 	for _, item := range view.CurrentPermissions {
@@ -278,9 +277,9 @@ func (a *RBACAdapter) GetRole(ctx context.Context, adminUserID,
 	}
 	allByID, detailsAvailable, err := a.permissionDetails(ctx, adminUserID, record.ScopeID)
 	if err != nil {
-		return login.UIRBACRoleDetail{}, err
+		return ui.UIRBACRoleDetail{}, err
 	}
-	available := make([]login.UIRBACPermissionView, 0, len(allByID))
+	available := make([]ui.UIRBACPermissionView, 0, len(allByID))
 	for _, item := range allByID {
 		if item.RootOnly || !item.Enabled {
 			continue
@@ -293,62 +292,62 @@ func (a *RBACAdapter) GetRole(ctx context.Context, adminUserID,
 	sortRBACPermissionViews(available)
 	assignments, err := a.assignmentViews(ctx, caller, record.ID)
 	if err != nil {
-		return login.UIRBACRoleDetail{}, err
+		return ui.UIRBACRoleDetail{}, err
 	}
-	return login.UIRBACRoleDetail{Role: view, Available: available,
+	return ui.UIRBACRoleDetail{Role: view, Available: available,
 		Assignments:                  assignments,
 		PermissionCatalogUnavailable: !detailsAvailable}, nil
 }
 
 // CreateRole 创建自定义角色（机器键/范围创建后不可变）。
 func (a *RBACAdapter) CreateRole(ctx context.Context, adminUserID string,
-	create login.UIRBACCreateRole, requestID string) (login.UIRBACRoleView, error) {
+	create ui.UIRBACCreateRole, requestID string) (ui.UIRBACRoleView, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesManage); err != nil {
-		return login.UIRBACRoleView{}, err
+		return ui.UIRBACRoleView{}, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACRoleView{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACRoleView{}, rbacErr("ACCESS_DENIED")
 	}
 	created, err := a.opts.Roles.CreateRole(ctx, caller, role.CreateRequest{
 		ScopeID: strings.TrimSpace(create.ScopeID), Key: strings.TrimSpace(create.Key),
 		Name: strings.TrimSpace(create.Name), Description: strings.TrimSpace(create.Description),
 		Limits: strings.TrimSpace(create.Limits)})
 	if err != nil {
-		return login.UIRBACRoleView{}, mapRBACError(err)
+		return ui.UIRBACRoleView{}, mapRBACError(err)
 	}
 	return a.buildRoleView(ctx, caller, adminUserID, created, a.appNames(ctx, adminUserID))
 }
 
 // UpdateRole 修改角色直白名称/说明/明确限制（机器键/范围不可改）。
 func (a *RBACAdapter) UpdateRole(ctx context.Context, adminUserID, roleID string,
-	change login.UIRBACTextChange, requestID string) (login.UIRBACRoleView, error) {
+	change ui.UIRBACTextChange, requestID string) (ui.UIRBACRoleView, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesManage); err != nil {
-		return login.UIRBACRoleView{}, err
+		return ui.UIRBACRoleView{}, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACRoleView{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACRoleView{}, rbacErr("ACCESS_DENIED")
 	}
 	updated, err := a.opts.Roles.UpdateRole(ctx, caller, strings.TrimSpace(roleID),
 		role.UpdateRequest{Name: strings.TrimSpace(change.Name),
 			Description: strings.TrimSpace(change.Description),
 			Limits:      strings.TrimSpace(change.Limits)})
 	if err != nil {
-		return login.UIRBACRoleView{}, mapRBACError(err)
+		return ui.UIRBACRoleView{}, mapRBACError(err)
 	}
 	return a.buildRoleView(ctx, caller, adminUserID, updated, a.appNames(ctx, adminUserID))
 }
 
 // SetRoleState 启用/停用角色并返回是否实际变化。
 func (a *RBACAdapter) SetRoleState(ctx context.Context, adminUserID, roleID string,
-	enable bool, requestID string) (login.UIRBACRoleView, bool, error) {
+	enable bool, requestID string) (ui.UIRBACRoleView, bool, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesManage); err != nil {
-		return login.UIRBACRoleView{}, false, err
+		return ui.UIRBACRoleView{}, false, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACRoleView{}, false, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACRoleView{}, false, rbacErr("ACCESS_DENIED")
 	}
 	var updated role.Role
 	var changed bool
@@ -358,41 +357,41 @@ func (a *RBACAdapter) SetRoleState(ctx context.Context, adminUserID, roleID stri
 		updated, changed, err = a.opts.Roles.DisableRole(ctx, caller, strings.TrimSpace(roleID))
 	}
 	if err != nil {
-		return login.UIRBACRoleView{}, false, mapRBACError(err)
+		return ui.UIRBACRoleView{}, false, mapRBACError(err)
 	}
 	view, viewErr := a.buildRoleView(ctx, caller, adminUserID, updated, a.appNames(ctx, adminUserID))
 	if viewErr != nil {
-		return login.UIRBACRoleView{}, false, viewErr
+		return ui.UIRBACRoleView{}, false, viewErr
 	}
 	return view, changed, nil
 }
 
 // ComposeRolePermission 组合/移除角色权限，返回改动前后真实权限与受影响分配。
 func (a *RBACAdapter) ComposeRolePermission(ctx context.Context, adminUserID, roleID,
-	permissionID string, add bool, requestID string) (login.UIRBACComposeResult, error) {
+	permissionID string, add bool, requestID string) (ui.UIRBACComposeResult, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesManage); err != nil {
-		return login.UIRBACComposeResult{}, err
+		return ui.UIRBACComposeResult{}, err
 	}
 	permissionID = strings.TrimSpace(permissionID)
 	if !permission.ValidPermissionID(permissionID) {
-		return login.UIRBACComposeResult{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACComposeResult{}, rbacErr("REQ_INVALID")
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACComposeResult{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACComposeResult{}, rbacErr("ACCESS_DENIED")
 	}
 	record, err := a.opts.Roles.GetRole(ctx, caller, strings.TrimSpace(roleID))
 	if err != nil {
-		return login.UIRBACComposeResult{}, mapRBACError(err)
+		return ui.UIRBACComposeResult{}, mapRBACError(err)
 	}
 	names := a.appNames(ctx, adminUserID)
 	before, err := a.rolePermissionViews(ctx, caller, adminUserID, record, names)
 	if err != nil {
-		return login.UIRBACComposeResult{}, err
+		return ui.UIRBACComposeResult{}, err
 	}
 	assignments, err := a.assignmentViews(ctx, caller, record.ID)
 	if err != nil {
-		return login.UIRBACComposeResult{}, err
+		return ui.UIRBACComposeResult{}, err
 	}
 	var changed bool
 	if add {
@@ -401,13 +400,13 @@ func (a *RBACAdapter) ComposeRolePermission(ctx context.Context, adminUserID, ro
 		changed, err = a.opts.Roles.RemoveRolePermission(ctx, caller, record.ID, permissionID)
 	}
 	if err != nil {
-		return login.UIRBACComposeResult{}, mapRBACError(err)
+		return ui.UIRBACComposeResult{}, mapRBACError(err)
 	}
 	after, err := a.rolePermissionViews(ctx, caller, adminUserID, record, names)
 	if err != nil {
-		return login.UIRBACComposeResult{}, err
+		return ui.UIRBACComposeResult{}, err
 	}
-	result := login.UIRBACComposeResult{Before: before, After: after,
+	result := ui.UIRBACComposeResult{Before: before, After: after,
 		AffectedUsers: len(assignments.Users), AffectedGroups: len(assignments.Groups)}
 	if add {
 		result.Action = "add"
@@ -415,11 +414,11 @@ func (a *RBACAdapter) ComposeRolePermission(ctx context.Context, adminUserID, ro
 		result.Action = "remove"
 	}
 	_ = changed
-	beforeSet := map[string]login.UIRBACPermissionView{}
+	beforeSet := map[string]ui.UIRBACPermissionView{}
 	for _, item := range before {
 		beforeSet[item.PermissionID] = item
 	}
-	afterSet := map[string]login.UIRBACPermissionView{}
+	afterSet := map[string]ui.UIRBACPermissionView{}
 	for _, item := range after {
 		afterSet[item.PermissionID] = item
 	}
@@ -438,29 +437,29 @@ func (a *RBACAdapter) ComposeRolePermission(ctx context.Context, adminUserID, ro
 
 // ListAssignments 读取角色直接用户/用户组分配（用户组名称由有效权限页展示）。
 func (a *RBACAdapter) ListAssignments(ctx context.Context, adminUserID,
-	roleID string) (login.UIRBACAssignments, error) {
+	roleID string) (ui.UIRBACAssignments, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesRead); err != nil {
-		return login.UIRBACAssignments{}, err
+		return ui.UIRBACAssignments{}, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACAssignments{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACAssignments{}, rbacErr("ACCESS_DENIED")
 	}
 	return a.assignmentViews(ctx, caller, strings.TrimSpace(roleID))
 }
 
 // AssignRole 分配/撤回角色到实际用户或用户组（目标与自我提权由服务端 Guard 判定）。
 func (a *RBACAdapter) AssignRole(ctx context.Context, adminUserID, roleID, targetKind,
-	targetID, requestID string, assign bool) (login.UIRBACAssignResult, error) {
+	targetID, requestID string, assign bool) (ui.UIRBACAssignResult, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesAssign); err != nil {
-		return login.UIRBACAssignResult{}, err
+		return ui.UIRBACAssignResult{}, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACAssignResult{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACAssignResult{}, rbacErr("ACCESS_DENIED")
 	}
 	targetID = strings.TrimSpace(targetID)
-	result := login.UIRBACAssignResult{TargetKind: targetKind, TargetID: targetID}
+	result := ui.UIRBACAssignResult{TargetKind: targetKind, TargetID: targetID}
 	if assign {
 		result.Action = "assign"
 	} else {
@@ -469,7 +468,7 @@ func (a *RBACAdapter) AssignRole(ctx context.Context, adminUserID, roleID, targe
 	switch targetKind {
 	case "user":
 		if !account.ValidUserID(targetID) {
-			return login.UIRBACAssignResult{}, rbacErr("REQ_INVALID")
+			return ui.UIRBACAssignResult{}, rbacErr("REQ_INVALID")
 		}
 		if assign {
 			result.Changed, err = a.opts.Roles.AssignUserRole(ctx, caller,
@@ -480,7 +479,7 @@ func (a *RBACAdapter) AssignRole(ctx context.Context, adminUserID, roleID, targe
 		}
 	case "group":
 		if !validRBACGroupID(targetID) {
-			return login.UIRBACAssignResult{}, rbacErr("REQ_INVALID")
+			return ui.UIRBACAssignResult{}, rbacErr("REQ_INVALID")
 		}
 		if assign {
 			result.Changed, err = a.opts.Roles.AssignGroupRole(ctx, caller,
@@ -490,10 +489,10 @@ func (a *RBACAdapter) AssignRole(ctx context.Context, adminUserID, roleID, targe
 				strings.TrimSpace(roleID), targetID)
 		}
 	default:
-		return login.UIRBACAssignResult{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACAssignResult{}, rbacErr("REQ_INVALID")
 	}
 	if err != nil {
-		return login.UIRBACAssignResult{}, mapRBACError(err)
+		return ui.UIRBACAssignResult{}, mapRBACError(err)
 	}
 	// 数据范围来自真实分配记录（服务端当前不接受页面自定义数据范围）。
 	assignments, assignErr := a.assignmentViews(ctx, caller, strings.TrimSpace(roleID))
@@ -516,38 +515,38 @@ func (a *RBACAdapter) AssignRole(ctx context.Context, adminUserID, roleID, targe
 
 // ListPermissions 列出权限目录（应用同名权限带应用上下文）。
 func (a *RBACAdapter) ListPermissions(ctx context.Context, adminUserID string,
-	query login.UIRBACPermissionQuery) (login.UIRBACPermissionPage, error) {
+	query ui.UIRBACPermissionQuery) (ui.UIRBACPermissionPage, error) {
 	if err := a.check(ctx, adminUserID, rbacActionPermissionsRead); err != nil {
-		return login.UIRBACPermissionPage{}, err
+		return ui.UIRBACPermissionPage{}, err
 	}
 	caller, err := permission.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACPermissionPage{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACPermissionPage{}, rbacErr("ACCESS_DENIED")
 	}
 	limit := query.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
 	if query.Offset < 0 || query.Offset > permission.MaxListOffset {
-		return login.UIRBACPermissionPage{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACPermissionPage{}, rbacErr("REQ_INVALID")
 	}
 	sortField := permission.SortField(strings.TrimSpace(query.Sort))
 	if sortField == "" {
 		sortField = permission.SortCreatedAt
 	}
 	if !sortField.Valid() {
-		return login.UIRBACPermissionPage{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACPermissionPage{}, rbacErr("REQ_INVALID")
 	}
 	result, err := a.opts.Permissions.ListPermissions(ctx, caller, permission.ListRequest{
 		ScopeID: strings.TrimSpace(query.ScopeID), Limit: limit, Offset: query.Offset,
 		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending})
 	if err != nil {
-		return login.UIRBACPermissionPage{}, mapRBACError(err)
+		return ui.UIRBACPermissionPage{}, mapRBACError(err)
 	}
 	names := a.appNames(ctx, adminUserID)
-	page := login.UIRBACPermissionPage{HasMore: result.HasMore,
+	page := ui.UIRBACPermissionPage{HasMore: result.HasMore,
 		NextOffset:  query.Offset + len(result.Permissions),
-		Permissions: make([]login.UIRBACPermissionView, 0, len(result.Permissions))}
+		Permissions: make([]ui.UIRBACPermissionView, 0, len(result.Permissions))}
 	for _, record := range result.Permissions {
 		page.Permissions = append(page.Permissions, a.permissionView(record, names))
 	}
@@ -556,17 +555,17 @@ func (a *RBACAdapter) ListPermissions(ctx context.Context, adminUserID string,
 
 // GetPermission 读取权限详情（含预设默认授予角色）。
 func (a *RBACAdapter) GetPermission(ctx context.Context, adminUserID,
-	permissionID string) (login.UIRBACPermissionDetail, error) {
+	permissionID string) (ui.UIRBACPermissionDetail, error) {
 	if err := a.check(ctx, adminUserID, rbacActionPermissionsRead); err != nil {
-		return login.UIRBACPermissionDetail{}, err
+		return ui.UIRBACPermissionDetail{}, err
 	}
 	caller, err := permission.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACPermissionDetail{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACPermissionDetail{}, rbacErr("ACCESS_DENIED")
 	}
 	record, err := a.opts.Permissions.GetPermission(ctx, caller, strings.TrimSpace(permissionID))
 	if err != nil {
-		return login.UIRBACPermissionDetail{}, mapRBACError(err)
+		return ui.UIRBACPermissionDetail{}, mapRBACError(err)
 	}
 	roles := []string{}
 	// 默认授予角色属于系统预设目录语义：应用范围同名权限绝不能回退到系统目录，
@@ -576,26 +575,26 @@ func (a *RBACAdapter) GetPermission(ctx context.Context, adminUserID,
 			roles = append(roles, definition.DefaultRoles...)
 		}
 	}
-	return login.UIRBACPermissionDetail{Permission: a.permissionView(record,
+	return ui.UIRBACPermissionDetail{Permission: a.permissionView(record,
 		a.appNames(ctx, adminUserID)), DefaultRoles: roles}, nil
 }
 
 // UpdatePermission 修改自定义权限直白名称/说明/明确限制（内置/root_only 由后端保护）。
 func (a *RBACAdapter) UpdatePermission(ctx context.Context, adminUserID, permissionID string,
-	change login.UIRBACTextChange, requestID string) (login.UIRBACPermissionView, error) {
+	change ui.UIRBACTextChange, requestID string) (ui.UIRBACPermissionView, error) {
 	if err := a.check(ctx, adminUserID, rbacActionPermissionsManage); err != nil {
-		return login.UIRBACPermissionView{}, err
+		return ui.UIRBACPermissionView{}, err
 	}
 	caller, err := permission.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACPermissionView{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACPermissionView{}, rbacErr("ACCESS_DENIED")
 	}
 	updated, err := a.opts.Permissions.UpdatePermission(ctx, caller,
 		strings.TrimSpace(permissionID), permission.UpdateRequest{
 			Name: strings.TrimSpace(change.Name), Description: strings.TrimSpace(change.Description),
 			Limits: strings.TrimSpace(change.Limits)})
 	if err != nil {
-		return login.UIRBACPermissionView{}, mapRBACError(err)
+		return ui.UIRBACPermissionView{}, mapRBACError(err)
 	}
 	return a.permissionView(updated, a.appNames(ctx, adminUserID)), nil
 }
@@ -607,27 +606,27 @@ func (a *RBACAdapter) UpdatePermission(ctx context.Context, adminUserID, permiss
 // 委派资格、作用范围与审计判定。启用会让已组合该权限的角色重新生效，服务端在
 // 事务内继续复核可转授范围与目标。
 func (a *RBACAdapter) SetPermissionState(ctx context.Context, adminUserID, permissionID string,
-	enable bool, requestID string) (login.UIRBACPermissionView, bool, error) {
+	enable bool, requestID string) (ui.UIRBACPermissionView, bool, error) {
 	if err := a.check(ctx, adminUserID, rbacActionPermissionsManage); err != nil {
-		return login.UIRBACPermissionView{}, false, err
+		return ui.UIRBACPermissionView{}, false, err
 	}
 	caller, err := permission.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACPermissionView{}, false, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACPermissionView{}, false, rbacErr("ACCESS_DENIED")
 	}
 	id := strings.TrimSpace(permissionID)
 	if !permission.ValidPermissionID(id) {
-		return login.UIRBACPermissionView{}, false, rbacErr("REQ_INVALID")
+		return ui.UIRBACPermissionView{}, false, rbacErr("REQ_INVALID")
 	}
 	// 先读取真实记录：内置/root_only 语义不能由页面自报；读取同时写真实读取审计。
 	current, err := a.opts.Permissions.GetPermission(ctx, caller, id)
 	if err != nil {
-		return login.UIRBACPermissionView{}, false, mapRBACError(err)
+		return ui.UIRBACPermissionView{}, false, mapRBACError(err)
 	}
 	if current.IsBuiltin {
 		if err := a.verifyReauth(ctx, adminUserID,
 			rbacReauthActionPermissionStateBuiltin, id, requestID); err != nil {
-			return login.UIRBACPermissionView{}, false, err
+			return ui.UIRBACPermissionView{}, false, err
 		}
 	}
 	var updated permission.Permission
@@ -638,7 +637,7 @@ func (a *RBACAdapter) SetPermissionState(ctx context.Context, adminUserID, permi
 		updated, changed, err = a.opts.Permissions.DisablePermission(ctx, caller, id)
 	}
 	if err != nil {
-		return login.UIRBACPermissionView{}, false, mapRBACError(err)
+		return ui.UIRBACPermissionView{}, false, mapRBACError(err)
 	}
 	return a.permissionView(updated, a.appNames(ctx, adminUserID)), changed, nil
 }
@@ -649,18 +648,18 @@ func (a *RBACAdapter) SetPermissionState(ctx context.Context, adminUserID, permi
 // 属于高风险目录变更，必须先通过宿主再次认证；最终作用范围、调用者资格、机器标识
 // 与文本校验由真实 permission 服务判定并写关键审计。
 func (a *RBACAdapter) CreatePermission(ctx context.Context, adminUserID string,
-	create login.UIRBACCreatePermission, requestID string) (login.UIRBACPermissionView, error) {
+	create ui.UIRBACCreatePermission, requestID string) (ui.UIRBACPermissionView, error) {
 	if err := a.check(ctx, adminUserID, rbacActionPermissionsManage); err != nil {
-		return login.UIRBACPermissionView{}, err
+		return ui.UIRBACPermissionView{}, err
 	}
 	caller, err := permission.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACPermissionView{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACPermissionView{}, rbacErr("ACCESS_DENIED")
 	}
 	scopeID := strings.TrimSpace(create.ScopeID)
 	if err := a.verifyReauth(ctx, adminUserID, rbacReauthActionPermissionCreate, scopeID,
 		requestID); err != nil {
-		return login.UIRBACPermissionView{}, err
+		return ui.UIRBACPermissionView{}, err
 	}
 	record, err := a.opts.Permissions.CreatePermission(ctx, caller, permission.CreateRequest{
 		ScopeID: scopeID, Key: strings.TrimSpace(create.Key),
@@ -671,7 +670,7 @@ func (a *RBACAdapter) CreatePermission(ctx context.Context, adminUserID string,
 		IsBuiltin: false, RootOnly: false,
 	})
 	if err != nil {
-		return login.UIRBACPermissionView{}, mapRBACError(err)
+		return ui.UIRBACPermissionView{}, mapRBACError(err)
 	}
 	return a.permissionView(record, a.appNames(ctx, adminUserID)), nil
 }
@@ -715,24 +714,24 @@ func (a *RBACAdapter) DeletePermission(ctx context.Context, adminUserID, permiss
 // 启停状态与删除阻塞原因。角色列表依赖 roles.read；缺少该权限时只降级隐藏列表，不
 // 影响 permissions.read 详情读取，也不改变任何写操作的授权判定。
 func (a *RBACAdapter) PermissionImpact(ctx context.Context, adminUserID,
-	permissionID string) (login.UIRBACPermissionImpact, error) {
+	permissionID string) (ui.UIRBACPermissionImpact, error) {
 	if err := a.check(ctx, adminUserID, rbacActionPermissionsRead); err != nil {
-		return login.UIRBACPermissionImpact{}, err
+		return ui.UIRBACPermissionImpact{}, err
 	}
 	caller, err := permission.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACPermissionImpact{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACPermissionImpact{}, rbacErr("ACCESS_DENIED")
 	}
 	id := strings.TrimSpace(permissionID)
 	if !permission.ValidPermissionID(id) {
-		return login.UIRBACPermissionImpact{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACPermissionImpact{}, rbacErr("REQ_INVALID")
 	}
 	record, err := a.opts.Permissions.GetPermission(ctx, caller, id)
 	if err != nil {
-		return login.UIRBACPermissionImpact{}, mapRBACError(err)
+		return ui.UIRBACPermissionImpact{}, mapRBACError(err)
 	}
 	names := a.appNames(ctx, adminUserID)
-	impact := login.UIRBACPermissionImpact{Permission: a.permissionView(record, names)}
+	impact := ui.UIRBACPermissionImpact{Permission: a.permissionView(record, names)}
 	if record.IsBuiltin {
 		impact.DeleteBlockedReason = "内置权限不可删除；只能按规则启用或停用"
 	} else {
@@ -746,32 +745,32 @@ func (a *RBACAdapter) PermissionImpact(ctx context.Context, adminUserID,
 	roles, err := a.allRoles(ctx, roleCaller, record.ScopeID)
 	if err != nil {
 		mapped := mapRBACError(err)
-		var publicErr *login.UIRBACError
+		var publicErr *ui.UIRBACError
 		if errors.As(mapped, &publicErr) && publicErr.Code == "ACCESS_DENIED" {
 			impact.RolesUnavailableReason = "缺少读取角色的权限，无法列出引用该权限的角色"
 			return impact, nil
 		}
-		return login.UIRBACPermissionImpact{}, mapped
+		return ui.UIRBACPermissionImpact{}, mapped
 	}
 	impact.RolesAvailable = true
-	referencing := make([]login.UIRBACImpactRole, 0, len(roles))
+	referencing := make([]ui.UIRBACImpactRole, 0, len(roles))
 	for _, item := range roles {
 		current, listErr := a.opts.Roles.ListRolePermissions(ctx, roleCaller, item.ID)
 		if listErr != nil {
 			mapped := mapRBACError(listErr)
-			var publicErr *login.UIRBACError
+			var publicErr *ui.UIRBACError
 			if errors.As(mapped, &publicErr) && publicErr.Code == "ACCESS_DENIED" {
 				impact.RolesAvailable = false
 				impact.RolesUnavailableReason = "缺少读取角色权限组合的资格，无法列出引用该权限的角色"
 				return impact, nil
 			}
-			return login.UIRBACPermissionImpact{}, mapped
+			return ui.UIRBACPermissionImpact{}, mapped
 		}
 		for _, summary := range current {
 			if summary.PermissionID != id {
 				continue
 			}
-			referencing = append(referencing, login.UIRBACImpactRole{
+			referencing = append(referencing, ui.UIRBACImpactRole{
 				RoleID: item.ID, RoleKey: item.Key, RoleName: item.Name,
 				ScopeID: item.ScopeID, Builtin: item.IsBuiltin, Enabled: item.Enabled})
 			break
@@ -793,13 +792,13 @@ func (a *RBACAdapter) PermissionImpact(ctx context.Context, adminUserID,
 // 普通用户 Caller 只能读取自己的资格与可转授权限；签发/撤回只允许受信本地/系统
 // 通道，页面因此只读，不提供发放入口，也不把页面确认当作转授授权。
 func (a *RBACAdapter) DelegationView(ctx context.Context, adminUserID, scopeID string,
-	includeRevoked bool, limit, offset int) (login.UIRBACDelegationView, error) {
+	includeRevoked bool, limit, offset int) (ui.UIRBACDelegationView, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesRead); err != nil {
-		return login.UIRBACDelegationView{}, err
+		return ui.UIRBACDelegationView{}, err
 	}
 	caller, err := delegation.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACDelegationView{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACDelegationView{}, rbacErr("ACCESS_DENIED")
 	}
 	scopeID = strings.TrimSpace(scopeID)
 	if scopeID == "" {
@@ -807,29 +806,29 @@ func (a *RBACAdapter) DelegationView(ctx context.Context, adminUserID, scopeID s
 	}
 	kind, _, err := delegation.ParseScope(scopeID)
 	if err != nil {
-		return login.UIRBACDelegationView{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACDelegationView{}, rbacErr("REQ_INVALID")
 	}
 	if limit <= 0 || limit > delegation.MaxListLimit {
 		limit = 20
 	}
 	if offset < 0 || offset > delegation.MaxListOffset {
-		return login.UIRBACDelegationView{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACDelegationView{}, rbacErr("REQ_INVALID")
 	}
 	delegatable, err := a.opts.Delegations.DelegatablePermissions(ctx, caller, scopeID)
 	if err != nil {
-		return login.UIRBACDelegationView{}, mapRBACError(err)
+		return ui.UIRBACDelegationView{}, mapRBACError(err)
 	}
 	grants, err := a.opts.Delegations.List(ctx, caller, delegation.ListRequest{
 		IncludeRevoked: includeRevoked, Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIRBACDelegationView{}, mapRBACError(err)
+		return ui.UIRBACDelegationView{}, mapRBACError(err)
 	}
-	view := login.UIRBACDelegationView{ScopeID: scopeID, ScopeKind: string(kind),
+	view := ui.UIRBACDelegationView{ScopeID: scopeID, ScopeKind: string(kind),
 		IncludeRevoked: includeRevoked, TrustedWriteRequired: true,
 		GrantsHasMore: len(grants) == limit, NextOffset: offset + len(grants),
-		Delegatable: make([]login.UIRBACDelegatable, 0, len(delegatable))}
+		Delegatable: make([]ui.UIRBACDelegatable, 0, len(delegatable))}
 	for _, item := range delegatable {
-		entry := login.UIRBACDelegatable{PermissionID: item.PermissionID, Key: item.Key,
+		entry := ui.UIRBACDelegatable{PermissionID: item.PermissionID, Key: item.Key,
 			Name: item.Name, MaxDataScope: item.MaxDataScope,
 			MaxDataScopeText: dataScopeText(item.MaxDataScope),
 			AllowSelf:        item.AllowSelf}
@@ -840,7 +839,7 @@ func (a *RBACAdapter) DelegationView(ctx context.Context, adminUserID, scopeID s
 		view.Delegatable = append(view.Delegatable, entry)
 	}
 	for _, item := range grants {
-		entry := login.UIRBACGrant{ID: item.ID, DelegatorUserID: item.DelegatorUserID,
+		entry := ui.UIRBACGrant{ID: item.ID, DelegatorUserID: item.DelegatorUserID,
 			ScopeID: item.ScopeID, PermissionKey: item.PermissionKey,
 			PermissionName: item.PermissionName, MaxDataScope: item.MaxDataScope,
 			MaxDataScopeText: dataScopeText(item.MaxDataScope),
@@ -866,27 +865,27 @@ func (a *RBACAdapter) now() time.Time { return time.Now() }
 
 // EffectivePermissions 查询主体当前实际权限、来源（直接角色/组）与数据范围。
 func (a *RBACAdapter) EffectivePermissions(ctx context.Context, adminUserID, subjectUserID,
-	scopeID string, limit, offset int) (login.UIRBACEffectiveView, error) {
+	scopeID string, limit, offset int) (ui.UIRBACEffectiveView, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesRead); err != nil {
-		return login.UIRBACEffectiveView{}, err
+		return ui.UIRBACEffectiveView{}, err
 	}
 	caller, err := authz.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACEffectiveView{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACEffectiveView{}, rbacErr("ACCESS_DENIED")
 	}
 	if limit <= 0 || limit > authz.MaxListLimit {
 		limit = 20
 	}
 	if offset < 0 || offset > authz.MaxListOffset {
-		return login.UIRBACEffectiveView{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACEffectiveView{}, rbacErr("REQ_INVALID")
 	}
 	result, err := a.opts.Access.EffectivePermissions(ctx, caller,
 		strings.TrimSpace(subjectUserID), strings.TrimSpace(scopeID),
 		authz.ListOptions{Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIRBACEffectiveView{}, mapRBACError(err)
+		return ui.UIRBACEffectiveView{}, mapRBACError(err)
 	}
-	view := login.UIRBACEffectiveView{SubjectUserID: result.SubjectUserID,
+	view := ui.UIRBACEffectiveView{SubjectUserID: result.SubjectUserID,
 		ScopeID: result.Scope.ID, ScopeKind: string(result.Scope.Kind),
 		AccountStatus:         string(result.AccountStatus),
 		AccountStatusText:     accountStatusText(string(result.AccountStatus)),
@@ -899,12 +898,12 @@ func (a *RBACAdapter) EffectivePermissions(ctx context.Context, adminUserID, sub
 		DeniedReasonText:      deniedReasonText(result.DeniedReason),
 		HasMore:               result.HasMore, NextOffset: offset + len(result.Permissions),
 		SourceLimitReached: result.SourceLimitReached,
-		Permissions:        make([]login.UIRBACEffectivePermission, 0, len(result.Permissions))}
+		Permissions:        make([]ui.UIRBACEffectivePermission, 0, len(result.Permissions))}
 	for _, item := range result.Permissions {
-		entry := login.UIRBACEffectivePermission{Key: item.Key, Name: item.Name,
+		entry := ui.UIRBACEffectivePermission{Key: item.Key, Name: item.Name,
 			ScopeID: item.ScopeID, DataScope: toUIRBACDataScope(item.DataScope)}
 		for _, source := range item.Sources {
-			entry.Sources = append(entry.Sources, login.UIRBACSource{
+			entry.Sources = append(entry.Sources, ui.UIRBACSource{
 				Kind: string(source.Kind), RoleID: source.RoleID, RoleKey: source.RoleKey,
 				RoleName: source.RoleName, GroupID: source.GroupID, GroupKey: source.GroupKey,
 				GroupName: source.GroupName, Included: source.Included,
@@ -923,13 +922,13 @@ func (a *RBACAdapter) EffectivePermissions(ctx context.Context, adminUserID, sub
 // 新增/移除；目录权限缺失与停用单独计数。自定义角色/权限不在恢复范围。实际恢复
 // 只允许受信通道执行，本方法不写任何状态、不签发确认令牌。
 func (a *RBACAdapter) PresetDiff(ctx context.Context, adminUserID,
-	scopeID string) (login.UIRBACPresetDiff, error) {
+	scopeID string) (ui.UIRBACPresetDiff, error) {
 	if err := a.check(ctx, adminUserID, rbacActionRolesRead); err != nil {
-		return login.UIRBACPresetDiff{}, err
+		return ui.UIRBACPresetDiff{}, err
 	}
 	caller, err := role.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIRBACPresetDiff{}, rbacErr("ACCESS_DENIED")
+		return ui.UIRBACPresetDiff{}, rbacErr("ACCESS_DENIED")
 	}
 	scopeID = strings.TrimSpace(scopeID)
 	if scopeID == "" {
@@ -937,10 +936,10 @@ func (a *RBACAdapter) PresetDiff(ctx context.Context, adminUserID,
 	}
 	kind, _, err := preset.ParseScope(scopeID)
 	if err != nil {
-		return login.UIRBACPresetDiff{}, rbacErr("REQ_INVALID")
+		return ui.UIRBACPresetDiff{}, rbacErr("REQ_INVALID")
 	}
 	names := a.appNames(ctx, adminUserID)
-	diff := login.UIRBACPresetDiff{CatalogVersion: a.catalog.Version, ScopeID: scopeID,
+	diff := ui.UIRBACPresetDiff{CatalogVersion: a.catalog.Version, ScopeID: scopeID,
 		ScopeKind: string(kind), Available: true, ExecutionRestricted: true}
 	definitions := []preset.PermissionDefinition{}
 	templates := a.catalog.Roles
@@ -981,7 +980,7 @@ func (a *RBACAdapter) PresetDiff(ctx context.Context, adminUserID,
 		rolesByKey[item.Key] = item
 	}
 	for _, template := range templates {
-		entry := login.UIRBACPresetRoleDiff{RoleKey: template.Key, Name: template.Name,
+		entry := ui.UIRBACPresetRoleDiff{RoleKey: template.Key, Name: template.Name,
 			Protected: template.Core}
 		diff.Summary.RoleCount++
 		record, exists := rolesByKey[template.Key]
@@ -990,12 +989,12 @@ func (a *RBACAdapter) PresetDiff(ctx context.Context, adminUserID,
 			entry.RoleID = record.ID
 			current, listErr := a.opts.Roles.ListRolePermissions(ctx, caller, record.ID)
 			if listErr != nil {
-				return login.UIRBACPresetDiff{}, mapRBACError(listErr)
+				return ui.UIRBACPresetDiff{}, mapRBACError(listErr)
 			}
 			currentByKey := make(map[string]struct{}, len(current))
 			for _, item := range current {
 				currentByKey[item.Key] = struct{}{}
-				view := login.UIRBACPermissionView{Key: item.Key, Name: item.Name,
+				view := ui.UIRBACPermissionView{Key: item.Key, Name: item.Name,
 					PermissionID: item.PermissionID, ScopeID: scopeID,
 					Enabled: item.Enabled, RootOnly: item.RootOnly}
 				entry.CurrentPermissions = append(entry.CurrentPermissions, view)
@@ -1013,7 +1012,7 @@ func (a *RBACAdapter) PresetDiff(ctx context.Context, adminUserID,
 				if _, keep := wanted[item.Key]; keep {
 					continue
 				}
-				view := login.UIRBACPermissionView{Key: item.Key, Name: item.Name,
+				view := ui.UIRBACPermissionView{Key: item.Key, Name: item.Name,
 					PermissionID: item.PermissionID, ScopeID: scopeID,
 					Enabled: item.Enabled, RootOnly: item.RootOnly}
 				entry.RemovePermissions = append(entry.RemovePermissions, view)
@@ -1069,7 +1068,7 @@ func (a *RBACAdapter) permissionDetails(ctx context.Context, adminUserID,
 	permissions, err := a.allPermissions(ctx, adminUserID, scopeID)
 	if err != nil {
 		mapped := mapRBACError(err)
-		var publicErr *login.UIRBACError
+		var publicErr *ui.UIRBACError
 		if errors.As(mapped, &publicErr) && publicErr.Code == "ACCESS_DENIED" {
 			return map[string]permission.Permission{}, false, nil
 		}
@@ -1108,8 +1107,8 @@ func (a *RBACAdapter) allPermissions(ctx context.Context, adminUserID,
 
 // buildRoleView 构造角色视图：默认值来自目录、当前值来自真实组合与分配。
 func (a *RBACAdapter) buildRoleView(ctx context.Context, caller role.Caller,
-	adminUserID string, record role.Role, names map[string]string) (login.UIRBACRoleView, error) {
-	view := login.UIRBACRoleView{ID: record.ID, ScopeID: record.ScopeID,
+	adminUserID string, record role.Role, names map[string]string) (ui.UIRBACRoleView, error) {
+	view := ui.UIRBACRoleView{ID: record.ID, ScopeID: record.ScopeID,
 		ScopeKind: string(record.ScopeKind), ApplicationID: record.ApplicationID,
 		Key: record.Key, Name: record.Name, Description: record.Description,
 		Limits: record.Limits, Builtin: record.IsBuiltin, Enabled: record.Enabled,
@@ -1119,7 +1118,7 @@ func (a *RBACAdapter) buildRoleView(ctx context.Context, caller role.Caller,
 	}
 	current, err := a.rolePermissionViews(ctx, caller, adminUserID, record, names)
 	if err != nil {
-		return login.UIRBACRoleView{}, err
+		return ui.UIRBACRoleView{}, err
 	}
 	view.CurrentPermissions = current
 	template := a.catalogRole(record.ScopeKind, record.Key)
@@ -1135,7 +1134,7 @@ func (a *RBACAdapter) buildRoleView(ctx context.Context, caller role.Caller,
 	}
 	assignments, err := a.assignmentViews(ctx, caller, record.ID)
 	if err != nil {
-		return login.UIRBACRoleView{}, err
+		return ui.UIRBACRoleView{}, err
 	}
 	view.UserAssignments = len(assignments.Users)
 	view.GroupAssignments = len(assignments.Groups)
@@ -1148,7 +1147,7 @@ func (a *RBACAdapter) buildRoleView(ctx context.Context, caller role.Caller,
 // 预设目录补充“默认名称/默认生效范围”等默认值。应用范围的同名权限绝不回退系统
 // 目录，缺失说明时保持“未提供”，并始终带应用上下文。
 func (a *RBACAdapter) rolePermissionViews(ctx context.Context, caller role.Caller,
-	adminUserID string, record role.Role, names map[string]string) ([]login.UIRBACPermissionView, error) {
+	adminUserID string, record role.Role, names map[string]string) ([]ui.UIRBACPermissionView, error) {
 	current, err := a.opts.Roles.ListRolePermissions(ctx, caller, record.ID)
 	if err != nil {
 		return nil, mapRBACError(err)
@@ -1158,7 +1157,7 @@ func (a *RBACAdapter) rolePermissionViews(ctx context.Context, caller role.Calle
 		return nil, err
 	}
 	systemScope := record.ScopeKind == role.ScopeKindSystem
-	result := make([]login.UIRBACPermissionView, 0, len(current))
+	result := make([]ui.UIRBACPermissionView, 0, len(current))
 	for _, summary := range current {
 		if item, exists := byID[summary.PermissionID]; exists {
 			entry := a.permissionView(item, names)
@@ -1172,7 +1171,7 @@ func (a *RBACAdapter) rolePermissionViews(ctx context.Context, caller role.Calle
 			continue
 		}
 		// 权限记录已不可读时退化为摘要（仍带范围与应用上下文，不补系统文案）。
-		entry := login.UIRBACPermissionView{PermissionID: summary.PermissionID,
+		entry := ui.UIRBACPermissionView{PermissionID: summary.PermissionID,
 			ScopeID: summary.ScopeID, ScopeKind: string(record.ScopeKind),
 			Key: summary.Key, Name: summary.Name,
 			Enabled: summary.Enabled, RootOnly: summary.RootOnly}
@@ -1188,21 +1187,21 @@ func (a *RBACAdapter) rolePermissionViews(ctx context.Context, caller role.Calle
 
 // assignmentViews 读取角色分配并转换为公开视图。
 func (a *RBACAdapter) assignmentViews(ctx context.Context, caller role.Caller,
-	roleID string) (login.UIRBACAssignments, error) {
+	roleID string) (ui.UIRBACAssignments, error) {
 	assignments, err := a.opts.Roles.ListRoleAssignments(ctx, caller, roleID)
 	if err != nil {
-		return login.UIRBACAssignments{}, mapRBACError(err)
+		return ui.UIRBACAssignments{}, mapRBACError(err)
 	}
-	view := login.UIRBACAssignments{Users: make([]login.UIRBACUserAssignment, 0,
-		len(assignments.Users)), Groups: make([]login.UIRBACGroupAssignment, 0,
+	view := ui.UIRBACAssignments{Users: make([]ui.UIRBACUserAssignment, 0,
+		len(assignments.Users)), Groups: make([]ui.UIRBACGroupAssignment, 0,
 		len(assignments.Groups))}
 	for _, item := range assignments.Users {
-		view.Users = append(view.Users, login.UIRBACUserAssignment{UserID: item.UserID,
+		view.Users = append(view.Users, ui.UIRBACUserAssignment{UserID: item.UserID,
 			DataScope: item.DataScope, DataScopeText: dataScopeText(item.DataScope),
 			AssignedBy: item.AssignedBy, CreatedAt: item.CreatedAt})
 	}
 	for _, item := range assignments.Groups {
-		view.Groups = append(view.Groups, login.UIRBACGroupAssignment{GroupID: item.GroupID,
+		view.Groups = append(view.Groups, ui.UIRBACGroupAssignment{GroupID: item.GroupID,
 			ScopeID: item.ScopeID, DataScope: item.DataScope,
 			DataScopeText: dataScopeText(item.DataScope), CreatedAt: item.CreatedAt})
 	}
@@ -1211,8 +1210,8 @@ func (a *RBACAdapter) assignmentViews(ctx context.Context, caller role.Caller,
 
 // permissionView 构造权限公开视图（应用同名权限带应用上下文与稳定 ID）。
 func (a *RBACAdapter) permissionView(record permission.Permission,
-	names map[string]string) login.UIRBACPermissionView {
-	view := login.UIRBACPermissionView{PermissionID: record.ID, ScopeID: record.ScopeID,
+	names map[string]string) ui.UIRBACPermissionView {
+	view := ui.UIRBACPermissionView{PermissionID: record.ID, ScopeID: record.ScopeID,
 		ScopeKind: string(record.ScopeKind), ApplicationID: record.ApplicationID,
 		Key: record.Key, Group: record.Group, Name: record.Name,
 		Description: record.Description, Limits: record.Limits,
@@ -1239,11 +1238,11 @@ func (a *RBACAdapter) permissionView(record permission.Permission,
 // presetPermissionView 按目录键构造权限视图（目录键在当前目录缺失时仍可显示）。
 func (a *RBACAdapter) presetPermissionView(scopeID, key string,
 	permissionsByKey map[string]permission.Permission,
-	names map[string]string) login.UIRBACPermissionView {
+	names map[string]string) ui.UIRBACPermissionView {
 	if record, exists := permissionsByKey[key]; exists {
 		return a.permissionView(record, names)
 	}
-	view := login.UIRBACPermissionView{Key: key, ScopeID: scopeID,
+	view := ui.UIRBACPermissionView{Key: key, ScopeID: scopeID,
 		Name: key, Enabled: true, DefaultEnabled: true}
 	if scopeID != "system" {
 		return view
@@ -1288,8 +1287,8 @@ func (a *RBACAdapter) catalogRole(kind role.ScopeKind, key string) *preset.RoleT
 }
 
 // toUIRBACDataScope 转换数据范围公开视图，并给出直白中文说明（页面不显示裸枚举）。
-func toUIRBACDataScope(scope authz.DataScope) login.UIRBACDataScope {
-	view := login.UIRBACDataScope{Mode: string(scope.Mode), Legacy: scope.LegacyUndefined}
+func toUIRBACDataScope(scope authz.DataScope) ui.UIRBACDataScope {
+	view := ui.UIRBACDataScope{Mode: string(scope.Mode), Legacy: scope.LegacyUndefined}
 	if scope.Mode == "" {
 		view.Mode = string(authz.DataScopeUndefined)
 	}
@@ -1427,7 +1426,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 // rbacErr 构造稳定公开错误。
-func rbacErr(code string) error { return &login.UIRBACError{Code: code} }
+func rbacErr(code string) error { return &ui.UIRBACError{Code: code} }
 
 // mapRBACError 把角色/权限/委派/授权领域错误映射为稳定公开错误码。
 //
@@ -1483,7 +1482,7 @@ func mapRBACError(err error) error {
 }
 
 // sortRBACImpactRoles 按角色机器键稳定排序影响预览中的引用角色。
-func sortRBACImpactRoles(roles []login.UIRBACImpactRole) {
+func sortRBACImpactRoles(roles []ui.UIRBACImpactRole) {
 	for index := 1; index < len(roles); index++ {
 		for position := index; position > 0 &&
 			roles[position].RoleKey < roles[position-1].RoleKey; position-- {
@@ -1493,7 +1492,7 @@ func sortRBACImpactRoles(roles []login.UIRBACImpactRole) {
 }
 
 // sortRBACScopes 稳定排序作用范围（system 最前）。
-func sortRBACScopes(scopes []login.UIRBACScope) {
+func sortRBACScopes(scopes []ui.UIRBACScope) {
 	for index := 1; index < len(scopes); index++ {
 		for position := index; position > 0; position-- {
 			left, right := scopes[position-1], scopes[position]
@@ -1506,7 +1505,7 @@ func sortRBACScopes(scopes []login.UIRBACScope) {
 }
 
 // rbacScopeLess 比较两个作用范围排序（system 优先，其余按 ID）。
-func rbacScopeLess(left, right login.UIRBACScope) bool {
+func rbacScopeLess(left, right ui.UIRBACScope) bool {
 	if left.ScopeID == "system" {
 		return right.ScopeID != "system"
 	}
@@ -1517,7 +1516,7 @@ func rbacScopeLess(left, right login.UIRBACScope) bool {
 }
 
 // sortRBACPermissionViews 按 Key 稳定排序权限视图。
-func sortRBACPermissionViews(views []login.UIRBACPermissionView) {
+func sortRBACPermissionViews(views []ui.UIRBACPermissionView) {
 	for index := 1; index < len(views); index++ {
 		for position := index; position > 0 && views[position].Key < views[position-1].Key; position-- {
 			views[position], views[position-1] = views[position-1], views[position]
@@ -1526,7 +1525,7 @@ func sortRBACPermissionViews(views []login.UIRBACPermissionView) {
 }
 
 // sortRBACPresetRoles 按角色机器键稳定排序预设差异。
-func sortRBACPresetRoles(entries []login.UIRBACPresetRoleDiff) {
+func sortRBACPresetRoles(entries []ui.UIRBACPresetRoleDiff) {
 	for index := 1; index < len(entries); index++ {
 		for position := index; position > 0 &&
 			entries[position].RoleKey < entries[position-1].RoleKey; position-- {

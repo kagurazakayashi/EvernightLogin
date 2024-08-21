@@ -11,13 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/diag"
@@ -25,6 +18,12 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
 	"github.com/kagurazakayashi/EvernightLogin/internal/userbatch"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
 )
 
 // Options 是管理页适配器依赖。Authorize 由宿主实现（authz + 管理强认证），
@@ -47,7 +46,7 @@ type Options struct {
 	Logger *slog.Logger
 }
 
-// Adapter 实现 login.UIAdminBackend。
+// Adapter 实现 ui.UIAdminBackend。
 type Adapter struct {
 	opts Options
 }
@@ -82,13 +81,13 @@ func (a *Adapter) check(ctx context.Context, adminUserID, action string) error {
 
 // ListUsers 列出当前管理范围内用户（状态筛选/受控排序/分页）。
 func (a *Adapter) ListUsers(ctx context.Context, adminUserID string,
-	query login.UIAdminUserQuery) (login.UIAdminUserPage, error) {
+	query ui.UIAdminUserQuery) (ui.UIAdminUserPage, error) {
 	if err := a.check(ctx, adminUserID, "users.read"); err != nil {
-		return login.UIAdminUserPage{}, err
+		return ui.UIAdminUserPage{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminUserPage{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminUserPage{}, adminErr("ACCESS_DENIED")
 	}
 	limit := query.Limit
 	if limit <= 0 {
@@ -98,27 +97,27 @@ func (a *Adapter) ListUsers(ctx context.Context, adminUserID string,
 		limit = 100
 	}
 	if query.Offset < 0 {
-		return login.UIAdminUserPage{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserPage{}, adminErr("REQ_INVALID")
 	}
 	status := account.Status(strings.TrimSpace(query.Status))
 	if status != "" && !status.Valid() {
-		return login.UIAdminUserPage{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserPage{}, adminErr("REQ_INVALID")
 	}
 	sortField := account.SortField(strings.TrimSpace(query.Sort))
 	if sortField == "" {
 		sortField = account.SortCreatedAt
 	}
 	if !sortField.Valid() {
-		return login.UIAdminUserPage{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserPage{}, adminErr("REQ_INVALID")
 	}
 	result, err := a.opts.Account.ListUsers(ctx, caller, account.ListRequest{
 		Limit: limit, Offset: query.Offset, Status: status, Sort: sortField,
 		Descending: query.Descending})
 	if err != nil {
-		return login.UIAdminUserPage{}, mapAccountError(err)
+		return ui.UIAdminUserPage{}, mapAccountError(err)
 	}
-	page := login.UIAdminUserPage{HasMore: result.HasMore,
-		Users: make([]login.UIAdminUserView, 0, len(result.Users))}
+	page := ui.UIAdminUserPage{HasMore: result.HasMore,
+		Users: make([]ui.UIAdminUserView, 0, len(result.Users))}
 	for _, user := range result.Users {
 		page.Users = append(page.Users, a.toAdminUser(user))
 	}
@@ -127,56 +126,56 @@ func (a *Adapter) ListUsers(ctx context.Context, adminUserID string,
 
 // CreateUser 创建账户资料（五字段白名单，不设密码/角色/成员）。
 func (a *Adapter) CreateUser(ctx context.Context, adminUserID string,
-	create login.UIAdminCreateUser) (login.UIAdminUserView, error) {
+	create ui.UIAdminCreateUser) (ui.UIAdminUserView, error) {
 	if err := a.check(ctx, adminUserID, "users.create"); err != nil {
-		return login.UIAdminUserView{}, err
+		return ui.UIAdminUserView{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminUserView{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminUserView{}, adminErr("ACCESS_DENIED")
 	}
 	user, err := a.opts.Account.CreateUser(ctx, caller, account.CreateRequest{
 		Username: create.Username, Nickname: create.Nickname, Biography: create.Biography,
 		Language: create.Language, Timezone: create.Timezone})
 	if err != nil {
-		return login.UIAdminUserView{}, mapAccountError(err)
+		return ui.UIAdminUserView{}, mapAccountError(err)
 	}
 	return a.toAdminUser(user), nil
 }
 
 // GetUser 读取目标用户（服务端数据范围判定）。
 func (a *Adapter) GetUser(ctx context.Context, adminUserID string,
-	userID string) (login.UIAdminUserView, error) {
+	userID string) (ui.UIAdminUserView, error) {
 	if err := a.check(ctx, adminUserID, "users.read"); err != nil {
-		return login.UIAdminUserView{}, err
+		return ui.UIAdminUserView{}, err
 	}
 	if !account.ValidUserID(userID) {
-		return login.UIAdminUserView{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserView{}, adminErr("REQ_INVALID")
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminUserView{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminUserView{}, adminErr("ACCESS_DENIED")
 	}
 	user, err := a.opts.Account.GetUser(ctx, caller, userID)
 	if err != nil {
-		return login.UIAdminUserView{}, mapAccountError(err)
+		return ui.UIAdminUserView{}, mapAccountError(err)
 	}
 	return a.toAdminUser(user), nil
 }
 
 // UpdateUser 修改白名单资料（行版本条件；不含认证/角色字段）。
 func (a *Adapter) UpdateUser(ctx context.Context, adminUserID, userID string,
-	change login.UIProfileChange, expectedRowVersion int64,
-	requestID string) (login.UIAdminUserView, error) {
+	change ui.UIProfileChange, expectedRowVersion int64,
+	requestID string) (ui.UIAdminUserView, error) {
 	if err := a.check(ctx, adminUserID, "users.update"); err != nil {
-		return login.UIAdminUserView{}, err
+		return ui.UIAdminUserView{}, err
 	}
 	if !account.ValidUserID(userID) {
-		return login.UIAdminUserView{}, adminErr("REQ_INVALID")
+		return ui.UIAdminUserView{}, adminErr("REQ_INVALID")
 	}
 	caller, err := profile.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminUserView{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminUserView{}, adminErr("ACCESS_DENIED")
 	}
 	updated, err := a.opts.Profile.UpdateUser(ctx, caller, profile.UpdateRequest{
 		TargetUserID: userID,
@@ -184,20 +183,20 @@ func (a *Adapter) UpdateUser(ctx context.Context, adminUserID, userID string,
 			Language: change.Language, Timezone: change.Timezone, Phone: change.Phone},
 		ExpectedRowVersion: expectedRowVersion, RequestID: requestID})
 	if err != nil {
-		return login.UIAdminUserView{}, mapProfileError(err)
+		return ui.UIAdminUserView{}, mapProfileError(err)
 	}
 	return a.toAdminUser(profileToAccount(updated)), nil
 }
 
 // SetUserState 执行禁用/启用/请求删除。
 func (a *Adapter) SetUserState(ctx context.Context, adminUserID, userID, action string,
-	expectedRowVersion int64, requestID string) (login.UIAdminUserView, bool, error) {
+	expectedRowVersion int64, requestID string) (ui.UIAdminUserView, bool, error) {
 	if err := a.check(ctx, adminUserID, "users.update"); err != nil {
-		return login.UIAdminUserView{}, false, err
+		return ui.UIAdminUserView{}, false, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminUserView{}, false, adminErr("ACCESS_DENIED")
+		return ui.UIAdminUserView{}, false, adminErr("ACCESS_DENIED")
 	}
 	request := account.StateCommandRequest{UserID: userID,
 		ExpectedRowVersion: expectedRowVersion}
@@ -210,45 +209,45 @@ func (a *Adapter) SetUserState(ctx context.Context, adminUserID, userID, action 
 	case "request_delete":
 		result, err = a.opts.Account.RequestDeletion(ctx, caller, request)
 	default:
-		return login.UIAdminUserView{}, false, adminErr("REQ_INVALID")
+		return ui.UIAdminUserView{}, false, adminErr("REQ_INVALID")
 	}
 	if err != nil {
-		return login.UIAdminUserView{}, false, mapAccountError(err)
+		return ui.UIAdminUserView{}, false, mapAccountError(err)
 	}
 	return a.toAdminUser(result.User), result.Changed, nil
 }
 
 // PreviewDeletion 读取真实删除影响快照。
 func (a *Adapter) PreviewDeletion(ctx context.Context, adminUserID,
-	userID string) (login.UIAdminDeletionPreview, error) {
+	userID string) (ui.UIAdminDeletionPreview, error) {
 	if err := a.check(ctx, adminUserID, "users.delete"); err != nil {
-		return login.UIAdminDeletionPreview{}, err
+		return ui.UIAdminDeletionPreview{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminDeletionPreview{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminDeletionPreview{}, adminErr("ACCESS_DENIED")
 	}
 	preview, err := a.opts.Account.PreviewDeletion(ctx, caller, userID)
 	if err != nil {
-		return login.UIAdminDeletionPreview{}, mapAccountError(err)
+		return ui.UIAdminDeletionPreview{}, mapAccountError(err)
 	}
 	return toPreview(preview), nil
 }
 
 // CompleteDeletion 完成不可逆删除（服务端再次校验状态/版本/保护）。
 func (a *Adapter) CompleteDeletion(ctx context.Context, adminUserID, userID string,
-	expectedRowVersion int64, requestID string) (login.UIAdminDeletionPreview, error) {
+	expectedRowVersion int64, requestID string) (ui.UIAdminDeletionPreview, error) {
 	if err := a.check(ctx, adminUserID, "users.delete"); err != nil {
-		return login.UIAdminDeletionPreview{}, err
+		return ui.UIAdminDeletionPreview{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminDeletionPreview{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminDeletionPreview{}, adminErr("ACCESS_DENIED")
 	}
 	result, err := a.opts.Account.CompleteDeletion(ctx, caller, account.StateCommandRequest{
 		UserID: userID, ExpectedRowVersion: expectedRowVersion})
 	if err != nil {
-		return login.UIAdminDeletionPreview{}, mapAccountError(err)
+		return ui.UIAdminDeletionPreview{}, mapAccountError(err)
 	}
 	preview := toPreview(result.Preview)
 	preview.DeletedAt = result.DeletedAt
@@ -257,13 +256,13 @@ func (a *Adapter) CompleteDeletion(ctx context.Context, adminUserID, userID stri
 
 // ListReviews 列出待审核注册申请。
 func (a *Adapter) ListReviews(ctx context.Context, adminUserID string,
-	limit, offset int) (login.UIAdminReviewPage, error) {
+	limit, offset int) (ui.UIAdminReviewPage, error) {
 	if err := a.check(ctx, adminUserID, "users.review"); err != nil {
-		return login.UIAdminReviewPage{}, err
+		return ui.UIAdminReviewPage{}, err
 	}
 	caller, err := onboarding.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminReviewPage{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminReviewPage{}, adminErr("ACCESS_DENIED")
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -271,10 +270,10 @@ func (a *Adapter) ListReviews(ctx context.Context, adminUserID string,
 	result, err := a.opts.Reviews.ListPendingReviews(ctx, caller,
 		onboarding.ReviewQuery{Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIAdminReviewPage{}, mapOnboardingError(err)
+		return ui.UIAdminReviewPage{}, mapOnboardingError(err)
 	}
-	page := login.UIAdminReviewPage{HasMore: result.HasMore,
-		Reviews: make([]login.UIAdminReview, 0, len(result.Users))}
+	page := ui.UIAdminReviewPage{HasMore: result.HasMore,
+		Reviews: make([]ui.UIAdminReview, 0, len(result.Users))}
 	for _, review := range result.Users {
 		page.Reviews = append(page.Reviews, toReview(review))
 	}
@@ -283,17 +282,17 @@ func (a *Adapter) ListReviews(ctx context.Context, adminUserID string,
 
 // GetReview 读取单个待审核申请。
 func (a *Adapter) GetReview(ctx context.Context, adminUserID,
-	userID string) (login.UIAdminReview, error) {
+	userID string) (ui.UIAdminReview, error) {
 	if err := a.check(ctx, adminUserID, "users.review"); err != nil {
-		return login.UIAdminReview{}, err
+		return ui.UIAdminReview{}, err
 	}
 	caller, err := onboarding.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminReview{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminReview{}, adminErr("ACCESS_DENIED")
 	}
 	review, err := a.opts.Reviews.GetReview(ctx, caller, userID)
 	if err != nil {
-		return login.UIAdminReview{}, mapOnboardingError(err)
+		return ui.UIAdminReview{}, mapOnboardingError(err)
 	}
 	return toReview(review), nil
 }
@@ -301,19 +300,19 @@ func (a *Adapter) GetReview(ctx context.Context, adminUserID,
 // DecideReview 批准/拒绝注册（理由必填由页面与服务共同校验）。
 func (a *Adapter) DecideReview(ctx context.Context, adminUserID, userID string,
 	approve bool, reason, appID string, roles []string,
-	requestID string) (login.UIAdminReviewDecision, error) {
+	requestID string) (ui.UIAdminReviewDecision, error) {
 	if err := a.check(ctx, adminUserID, "users.review"); err != nil {
-		return login.UIAdminReviewDecision{}, err
+		return ui.UIAdminReviewDecision{}, err
 	}
 	caller, err := onboarding.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminReviewDecision{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminReviewDecision{}, adminErr("ACCESS_DENIED")
 	}
 	roleRefs := make([]onboarding.Role, 0, len(roles))
 	for _, role := range roles {
 		roleRefs = append(roleRefs, onboarding.Role{RoleID: strings.TrimSpace(role)})
 		if strings.TrimSpace(role) == "" {
-			return login.UIAdminReviewDecision{}, adminErr("REQ_INVALID")
+			return ui.UIAdminReviewDecision{}, adminErr("REQ_INVALID")
 		}
 	}
 	request := onboarding.ReviewRequest{UserID: userID, Reason: reason,
@@ -324,26 +323,26 @@ func (a *Adapter) DecideReview(ctx context.Context, adminUserID, userID string,
 		result, err = a.opts.Reviews.ApproveRegistration(ctx, caller, request)
 	default:
 		if appID != "" || len(roleRefs) > 0 {
-			return login.UIAdminReviewDecision{}, adminErr("REQ_INVALID")
+			return ui.UIAdminReviewDecision{}, adminErr("REQ_INVALID")
 		}
 		result, err = a.opts.Reviews.RejectRegistration(ctx, caller, request)
 	}
 	if err != nil {
-		return login.UIAdminReviewDecision{}, mapOnboardingError(err)
+		return ui.UIAdminReviewDecision{}, mapOnboardingError(err)
 	}
-	return login.UIAdminReviewDecision{Review: toReview(result.Review),
+	return ui.UIAdminReviewDecision{Review: toReview(result.Review),
 		Notified: result.Notified, ErrorCode: result.ErrorCode}, nil
 }
 
 // ListGroups 列出当前范围用户组。
 func (a *Adapter) ListGroups(ctx context.Context, adminUserID, scopeID string,
-	limit, offset int) (login.UIAdminGroupPage, error) {
+	limit, offset int) (ui.UIAdminGroupPage, error) {
 	if err := a.check(ctx, adminUserID, "groups.read"); err != nil {
-		return login.UIAdminGroupPage{}, err
+		return ui.UIAdminGroupPage{}, err
 	}
 	caller, err := group.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminGroupPage{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminGroupPage{}, adminErr("ACCESS_DENIED")
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -351,10 +350,10 @@ func (a *Adapter) ListGroups(ctx context.Context, adminUserID, scopeID string,
 	result, err := a.opts.Groups.ListGroups(ctx, caller,
 		group.ListRequest{ScopeID: strings.TrimSpace(scopeID), Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIAdminGroupPage{}, mapGroupError(err)
+		return ui.UIAdminGroupPage{}, mapGroupError(err)
 	}
-	page := login.UIAdminGroupPage{HasMore: result.HasMore,
-		Groups: make([]login.UIAdminGroup, 0, len(result.Groups))}
+	page := ui.UIAdminGroupPage{HasMore: result.HasMore,
+		Groups: make([]ui.UIAdminGroup, 0, len(result.Groups))}
 	for _, record := range result.Groups {
 		page.Groups = append(page.Groups, toGroup(record))
 	}
@@ -363,54 +362,54 @@ func (a *Adapter) ListGroups(ctx context.Context, adminUserID, scopeID string,
 
 // CreateGroup 创建用户组（Scope/GroupKey 创建后不可变）。
 func (a *Adapter) CreateGroup(ctx context.Context, adminUserID, scopeID, groupKey, name,
-	description, requestID string) (login.UIAdminGroup, error) {
+	description, requestID string) (ui.UIAdminGroup, error) {
 	if err := a.check(ctx, adminUserID, "groups.update"); err != nil {
-		return login.UIAdminGroup{}, err
+		return ui.UIAdminGroup{}, err
 	}
 	caller, err := group.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminGroup{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminGroup{}, adminErr("ACCESS_DENIED")
 	}
 	created, err := a.opts.Groups.CreateGroup(ctx, caller, group.CreateRequest{
 		ScopeID: strings.TrimSpace(scopeID), GroupKey: strings.TrimSpace(groupKey),
 		Name: strings.TrimSpace(name), Description: description})
 	if err != nil {
-		return login.UIAdminGroup{}, mapGroupError(err)
+		return ui.UIAdminGroup{}, mapGroupError(err)
 	}
 	return toGroup(created), nil
 }
 
 // GetGroup 读取组详情。
 func (a *Adapter) GetGroup(ctx context.Context, adminUserID,
-	groupID string) (login.UIAdminGroup, error) {
+	groupID string) (ui.UIAdminGroup, error) {
 	if err := a.check(ctx, adminUserID, "groups.read"); err != nil {
-		return login.UIAdminGroup{}, err
+		return ui.UIAdminGroup{}, err
 	}
 	caller, err := group.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminGroup{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminGroup{}, adminErr("ACCESS_DENIED")
 	}
 	record, err := a.opts.Groups.GetGroup(ctx, caller, groupID)
 	if err != nil {
-		return login.UIAdminGroup{}, mapGroupError(err)
+		return ui.UIAdminGroup{}, mapGroupError(err)
 	}
 	return toGroup(record), nil
 }
 
 // UpdateGroup 只更新名称/说明。
 func (a *Adapter) UpdateGroup(ctx context.Context, adminUserID, groupID, name, description,
-	requestID string) (login.UIAdminGroup, error) {
+	requestID string) (ui.UIAdminGroup, error) {
 	if err := a.check(ctx, adminUserID, "groups.update"); err != nil {
-		return login.UIAdminGroup{}, err
+		return ui.UIAdminGroup{}, err
 	}
 	caller, err := group.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminGroup{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminGroup{}, adminErr("ACCESS_DENIED")
 	}
 	updated, err := a.opts.Groups.UpdateGroup(ctx, caller, groupID,
 		group.UpdateRequest{Name: strings.TrimSpace(name), Description: description})
 	if err != nil {
-		return login.UIAdminGroup{}, mapGroupError(err)
+		return ui.UIAdminGroup{}, mapGroupError(err)
 	}
 	return toGroup(updated), nil
 }
@@ -433,13 +432,13 @@ func (a *Adapter) DeleteGroup(ctx context.Context, adminUserID, groupID,
 
 // ListMembers 分页读取组成员。
 func (a *Adapter) ListMembers(ctx context.Context, adminUserID, groupID string,
-	limit, offset int) (login.UIAdminMemberPage, error) {
+	limit, offset int) (ui.UIAdminMemberPage, error) {
 	if err := a.check(ctx, adminUserID, "groups.read"); err != nil {
-		return login.UIAdminMemberPage{}, err
+		return ui.UIAdminMemberPage{}, err
 	}
 	caller, err := group.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminMemberPage{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminMemberPage{}, adminErr("ACCESS_DENIED")
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -447,12 +446,12 @@ func (a *Adapter) ListMembers(ctx context.Context, adminUserID, groupID string,
 	result, err := a.opts.Groups.ListMembers(ctx, caller,
 		group.MemberListRequest{GroupID: groupID, Limit: limit, Offset: offset})
 	if err != nil {
-		return login.UIAdminMemberPage{}, mapGroupError(err)
+		return ui.UIAdminMemberPage{}, mapGroupError(err)
 	}
-	page := login.UIAdminMemberPage{HasMore: result.HasMore,
-		Members: make([]login.UIAdminMember, 0, len(result.Members))}
+	page := ui.UIAdminMemberPage{HasMore: result.HasMore,
+		Members: make([]ui.UIAdminMember, 0, len(result.Members))}
 	for _, member := range result.Members {
-		page.Members = append(page.Members, login.UIAdminMember{GroupID: member.GroupID,
+		page.Members = append(page.Members, ui.UIAdminMember{GroupID: member.GroupID,
 			UserID: member.UserID, CreatedAt: member.CreatedAt})
 	}
 	return page, nil
@@ -460,33 +459,33 @@ func (a *Adapter) ListMembers(ctx context.Context, adminUserID, groupID string,
 
 // AddMembers 原子加入成员（≤12，稳定 UserID）。
 func (a *Adapter) AddMembers(ctx context.Context, adminUserID, groupID string,
-	userIDs []string, requestID string) (login.UIAdminMemberResult, error) {
+	userIDs []string, requestID string) (ui.UIAdminMemberResult, error) {
 	return a.mutateMembers(ctx, adminUserID, groupID, userIDs, requestID, true)
 }
 
 // RemoveMembers 原子移除成员（≤12，稳定 UserID）。
 func (a *Adapter) RemoveMembers(ctx context.Context, adminUserID, groupID string,
-	userIDs []string, requestID string) (login.UIAdminMemberResult, error) {
+	userIDs []string, requestID string) (ui.UIAdminMemberResult, error) {
 	return a.mutateMembers(ctx, adminUserID, groupID, userIDs, requestID, false)
 }
 
 // mutateMembers 校验并执行成员批量变更；服务端保证原子性。
 func (a *Adapter) mutateMembers(ctx context.Context, adminUserID, groupID string,
-	userIDs []string, requestID string, add bool) (login.UIAdminMemberResult, error) {
+	userIDs []string, requestID string, add bool) (ui.UIAdminMemberResult, error) {
 	if err := a.check(ctx, adminUserID, "groups.update"); err != nil {
-		return login.UIAdminMemberResult{}, err
+		return ui.UIAdminMemberResult{}, err
 	}
 	if len(userIDs) == 0 || len(userIDs) > 12 || groupID == "" {
-		return login.UIAdminMemberResult{}, adminErr("REQ_INVALID")
+		return ui.UIAdminMemberResult{}, adminErr("REQ_INVALID")
 	}
 	for _, userID := range userIDs {
 		if !account.ValidUserID(userID) {
-			return login.UIAdminMemberResult{}, adminErr("REQ_INVALID")
+			return ui.UIAdminMemberResult{}, adminErr("REQ_INVALID")
 		}
 	}
 	caller, err := group.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminMemberResult{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminMemberResult{}, adminErr("ACCESS_DENIED")
 	}
 	request := group.MemberBatchRequest{GroupID: groupID, UserIDs: userIDs}
 	var result group.MemberBatchResult
@@ -496,21 +495,21 @@ func (a *Adapter) mutateMembers(ctx context.Context, adminUserID, groupID string
 		result, err = a.opts.Groups.RemoveMembers(ctx, caller, request)
 	}
 	if err != nil {
-		return login.UIAdminMemberResult{}, mapGroupError(err)
+		return ui.UIAdminMemberResult{}, mapGroupError(err)
 	}
-	return login.UIAdminMemberResult{Added: result.Added, Removed: result.Removed,
+	return ui.UIAdminMemberResult{Added: result.Added, Removed: result.Removed,
 		Skipped: result.Skipped}, nil
 }
 
 // ===== 映射 =====
 
-func (a *Adapter) toAdminUser(user account.User) login.UIAdminUserView {
+func (a *Adapter) toAdminUser(user account.User) ui.UIAdminUserView {
 	now := time.Now
 	if a != nil && a.opts.Now != nil {
 		now = a.opts.Now
 	}
 	_, reason := user.AvailabilityAt(now().UTC(), false)
-	return login.UIAdminUserView{UserID: user.ID, Username: user.Username,
+	return ui.UIAdminUserView{UserID: user.ID, Username: user.Username,
 		Nickname: user.Nickname, Biography: user.Biography, Language: user.Language,
 		Timezone: user.Timezone, Status: string(user.Status), RowVersion: user.RowVersion,
 		ValidFrom: user.ValidFrom, ValidUntil: user.ValidUntil,
@@ -525,8 +524,8 @@ func profileToAccount(view profile.UserProfile) account.User {
 		CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt}
 }
 
-func toPreview(preview account.DeletionPreview) login.UIAdminDeletionPreview {
-	return login.UIAdminDeletionPreview{UserID: preview.UserID, Username: preview.Username,
+func toPreview(preview account.DeletionPreview) ui.UIAdminDeletionPreview {
+	return ui.UIAdminDeletionPreview{UserID: preview.UserID, Username: preview.Username,
 		Status: string(preview.Status), RowVersion: preview.RowVersion,
 		SecurityVersion: preview.SecurityVersion, IsRoot: preview.IsRoot,
 		AppMemberships: preview.AppMemberships, UserRoles: preview.UserRoles,
@@ -535,21 +534,21 @@ func toPreview(preview account.DeletionPreview) login.UIAdminDeletionPreview {
 		OwnedApplications:  preview.OwnedApplications}
 }
 
-func toReview(review onboarding.ReviewUser) login.UIAdminReview {
-	return login.UIAdminReview{UserID: review.UserID, Username: review.Username,
+func toReview(review onboarding.ReviewUser) ui.UIAdminReview {
+	return ui.UIAdminReview{UserID: review.UserID, Username: review.Username,
 		Status: string(review.Status), ReviewStatus: string(review.ReviewStatus),
 		Reason: review.Reason, CreatedAt: review.CreatedAt,
 		NotifyState: string(review.NotifyState), NotifyError: review.NotifyError}
 }
 
-func toGroup(record group.Group) login.UIAdminGroup {
-	return login.UIAdminGroup{ID: record.ID, ScopeID: record.ScopeID,
+func toGroup(record group.Group) ui.UIAdminGroup {
+	return ui.UIAdminGroup{ID: record.ID, ScopeID: record.ScopeID,
 		ScopeKind: string(record.ScopeKind), AppID: record.ApplicationID,
 		GroupKey: record.GroupKey, Name: record.Name, Description: record.Description,
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 }
 
-func adminErr(code string) error { return &login.UIAdminError{Code: code} }
+func adminErr(code string) error { return &ui.UIAdminError{Code: code} }
 
 func mapAccountError(err error) error {
 	switch {
@@ -625,68 +624,68 @@ var _ = context.Background
 
 // PrecheckImport 只解析校验 CSV，不创建任务、不写库。
 func (a *Adapter) PrecheckImport(ctx context.Context, adminUserID string,
-	content []byte) (login.UIAdminParseReport, error) {
+	content []byte) (ui.UIAdminParseReport, error) {
 	if err := a.check(ctx, adminUserID, "users.import"); err != nil {
-		return login.UIAdminParseReport{}, err
+		return ui.UIAdminParseReport{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminParseReport{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminParseReport{}, adminErr("ACCESS_DENIED")
 	}
 	report, err := a.opts.Batches.PrecheckImport(ctx, caller, content)
 	if err != nil {
-		return login.UIAdminParseReport{}, mapBatchError(err)
+		return ui.UIAdminParseReport{}, mapBatchError(err)
 	}
 	return toParseReport(report), nil
 }
 
 // StartImport 创建幂等导入任务（不执行批处理，执行由真实任务执行器负责）。
 func (a *Adapter) StartImport(ctx context.Context, adminUserID string, content []byte,
-	idempotencyKey, requestID string) (login.UIAdminBatchStart, error) {
+	idempotencyKey, requestID string) (ui.UIAdminBatchStart, error) {
 	if err := a.check(ctx, adminUserID, "users.import"); err != nil {
-		return login.UIAdminBatchStart{}, err
+		return ui.UIAdminBatchStart{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminBatchStart{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminBatchStart{}, adminErr("ACCESS_DENIED")
 	}
 	result, err := a.opts.Batches.StartImport(ctx, userbatch.ImportRequest{
 		Caller: caller, IdempotencyKey: idempotencyKey, Content: content, RequestID: requestID})
 	if err != nil {
-		return login.UIAdminBatchStart{}, mapBatchError(err)
+		return ui.UIAdminBatchStart{}, mapBatchError(err)
 	}
 	return toBatchStart(result), nil
 }
 
 // StartExport 创建导出任务（文件不出服务器；仅展示摘要/校验和）。
 func (a *Adapter) StartExport(ctx context.Context, adminUserID string,
-	options login.UIAdminExportOptions, requestID string) (login.UIAdminBatchStart, error) {
+	options ui.UIAdminExportOptions, requestID string) (ui.UIAdminBatchStart, error) {
 	if err := a.check(ctx, adminUserID, "users.export"); err != nil {
-		return login.UIAdminBatchStart{}, err
+		return ui.UIAdminBatchStart{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminBatchStart{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminBatchStart{}, adminErr("ACCESS_DENIED")
 	}
 	result, err := a.opts.Batches.StartExport(ctx, userbatch.ExportRequest{
 		Caller: caller, IdempotencyKey: options.IdempotencyKey, Fields: options.Fields,
 		IncludeFreeText: options.IncludeFreeText, MaxRows: options.MaxRows,
 		RequestID: requestID})
 	if err != nil {
-		return login.UIAdminBatchStart{}, mapBatchError(err)
+		return ui.UIAdminBatchStart{}, mapBatchError(err)
 	}
 	return toBatchStart(result), nil
 }
 
 // ListJobs 列出调用者可访问的批量任务。
 func (a *Adapter) ListJobs(ctx context.Context, adminUserID, kind string, limit,
-	offset int) (login.UIAdminBatchPage, error) {
+	offset int) (ui.UIAdminBatchPage, error) {
 	if err := a.check(ctx, adminUserID, "users.read"); err != nil {
-		return login.UIAdminBatchPage{}, err
+		return ui.UIAdminBatchPage{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminBatchPage{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminBatchPage{}, adminErr("ACCESS_DENIED")
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -702,13 +701,13 @@ func (a *Adapter) ListJobs(ctx context.Context, adminUserID, kind string, limit,
 		query.Kind = userbatch.KindExport
 	case "":
 	default:
-		return login.UIAdminBatchPage{}, adminErr("REQ_INVALID")
+		return ui.UIAdminBatchPage{}, adminErr("REQ_INVALID")
 	}
 	jobs, hasMore, err := a.opts.Batches.ListJobs(ctx, caller, query)
 	if err != nil {
-		return login.UIAdminBatchPage{}, mapBatchError(err)
+		return ui.UIAdminBatchPage{}, mapBatchError(err)
 	}
-	page := login.UIAdminBatchPage{Jobs: make([]login.UIAdminBatchJob, 0, len(jobs)),
+	page := ui.UIAdminBatchPage{Jobs: make([]ui.UIAdminBatchJob, 0, len(jobs)),
 		HasMore: hasMore}
 	for _, job := range jobs {
 		page.Jobs = append(page.Jobs, toBatchJob(job))
@@ -718,24 +717,24 @@ func (a *Adapter) ListJobs(ctx context.Context, adminUserID, kind string, limit,
 
 // GetJob 读取任务真实状态。
 func (a *Adapter) GetJob(ctx context.Context, adminUserID,
-	jobID string) (login.UIAdminBatchJob, error) {
+	jobID string) (ui.UIAdminBatchJob, error) {
 	if err := a.check(ctx, adminUserID, "users.read"); err != nil {
-		return login.UIAdminBatchJob{}, err
+		return ui.UIAdminBatchJob{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminBatchJob{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminBatchJob{}, adminErr("ACCESS_DENIED")
 	}
 	job, err := a.opts.Batches.GetJob(ctx, caller, jobID)
 	if err != nil {
-		return login.UIAdminBatchJob{}, mapBatchError(err)
+		return ui.UIAdminBatchJob{}, mapBatchError(err)
 	}
 	return toBatchJob(job), nil
 }
 
 // ListRows 读取逐行结果（不含原始行/秘密）。
 func (a *Adapter) ListRows(ctx context.Context, adminUserID, jobID string, limit,
-	offset int) ([]login.UIAdminBatchRow, bool, error) {
+	offset int) ([]ui.UIAdminBatchRow, bool, error) {
 	if err := a.check(ctx, adminUserID, "users.read"); err != nil {
 		return nil, false, err
 	}
@@ -748,9 +747,9 @@ func (a *Adapter) ListRows(ctx context.Context, adminUserID, jobID string, limit
 	if err != nil {
 		return nil, false, mapBatchError(err)
 	}
-	result := make([]login.UIAdminBatchRow, 0, len(rows))
+	result := make([]ui.UIAdminBatchRow, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, login.UIAdminBatchRow{RowNumber: row.RowNumber,
+		result = append(result, ui.UIAdminBatchRow{RowNumber: row.RowNumber,
 			Action: string(row.Action), ErrorCode: string(row.ErrorCode),
 			ReasonCode: row.ReasonCode, UsernameNormalized: row.UsernameNormalized,
 			UserID: row.UserID})
@@ -787,40 +786,40 @@ func (a *Adapter) CancelJob(ctx context.Context, adminUserID, jobID, reason, req
 
 // RetryJob 对可续跑失败任务重新入队。
 func (a *Adapter) RetryJob(ctx context.Context, adminUserID, jobID,
-	requestID string) (login.UIAdminBatchJob, error) {
+	requestID string) (ui.UIAdminBatchJob, error) {
 	if err := a.check(ctx, adminUserID, "users.import"); err != nil {
-		return login.UIAdminBatchJob{}, err
+		return ui.UIAdminBatchJob{}, err
 	}
 	caller, err := account.UserCaller(adminUserID)
 	if err != nil {
-		return login.UIAdminBatchJob{}, adminErr("ACCESS_DENIED")
+		return ui.UIAdminBatchJob{}, adminErr("ACCESS_DENIED")
 	}
 	job, err := a.opts.Batches.Retry(ctx, caller, jobID, requestID)
 	if err != nil {
-		return login.UIAdminBatchJob{}, mapBatchError(err)
+		return ui.UIAdminBatchJob{}, mapBatchError(err)
 	}
 	return toBatchJob(job), nil
 }
 
-func toParseReport(report userbatch.ParseReport) login.UIAdminParseReport {
-	view := login.UIAdminParseReport{Headers: report.Headers, TotalRows: report.TotalRows,
+func toParseReport(report userbatch.ParseReport) ui.UIAdminParseReport {
+	view := ui.UIAdminParseReport{Headers: report.Headers, TotalRows: report.TotalRows,
 		RejectedRows: report.RejectedRows, CanImport: report.CanImport,
 		Truncated: report.Truncated}
 	for _, parseErr := range report.Errors {
-		view.Errors = append(view.Errors, login.UIAdminParseError{Line: parseErr.Line,
+		view.Errors = append(view.Errors, ui.UIAdminParseError{Line: parseErr.Line,
 			Column: parseErr.Column, Code: string(parseErr.Code), Reason: parseErr.Reason})
 	}
 	return view
 }
 
-func toBatchStart(result userbatch.StartResult) login.UIAdminBatchStart {
-	return login.UIAdminBatchStart{JobID: result.Job.ID, Kind: string(result.Job.Kind),
+func toBatchStart(result userbatch.StartResult) ui.UIAdminBatchStart {
+	return ui.UIAdminBatchStart{JobID: result.Job.ID, Kind: string(result.Job.Kind),
 		State: string(result.Job.State), TotalRows: result.Job.TotalRows,
 		Duplicate: result.Duplicate, Report: toParseReport(result.Report)}
 }
 
-func toBatchJob(job userbatch.Job) login.UIAdminBatchJob {
-	return login.UIAdminBatchJob{JobID: job.ID, Kind: string(job.Kind),
+func toBatchJob(job userbatch.Job) ui.UIAdminBatchJob {
+	return ui.UIAdminBatchJob{JobID: job.ID, Kind: string(job.Kind),
 		State: string(job.State), TotalRows: job.TotalRows,
 		CreatedCount: job.CreatedCount, SkippedCount: job.SkippedCount,
 		ConflictCount: job.ConflictCount, FailedCount: job.FailedCount,

@@ -5,12 +5,6 @@ package uiauthadapter
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/url"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
@@ -18,6 +12,11 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/qrlogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
 )
 
 const qrStatePurpose = "qr.claim"
@@ -39,7 +38,7 @@ func splitOAuthValues(values []string) []string {
 }
 
 // scopeDescriptions 是 scope 的中文动作说明；未知自定义 scope fail-closed 不引导批准。
-var scopeDescriptions = map[string]login.UIPageScopeInfo{
+var scopeDescriptions = map[string]ui.UIPageScopeInfo{
 	"openid": {Value: "openid", Description: "确认你的身份标识（OIDC）",
 		Limits: "不包含密码或长期令牌"},
 	"profile": {Value: "profile", Description: "读取你的公开资料（显示名称等）",
@@ -51,12 +50,12 @@ var scopeDescriptions = map[string]login.UIPageScopeInfo{
 }
 
 // consentScopes 把 scope 转中文说明；未知值拒绝。
-func consentScopes(scopes []string) ([]login.UIPageScopeInfo, error) {
-	result := make([]login.UIPageScopeInfo, 0, len(scopes))
+func consentScopes(scopes []string) ([]ui.UIPageScopeInfo, error) {
+	result := make([]ui.UIPageScopeInfo, 0, len(scopes))
 	for _, scope := range scopes {
 		info, ok := scopeDescriptions[scope]
 		if !ok {
-			return nil, &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+			return nil, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
 		}
 		result = append(result, info)
 	}
@@ -64,10 +63,10 @@ func consentScopes(scopes []string) ([]login.UIPageScopeInfo, error) {
 }
 
 // audienceInfos 把 audience 转稳定值 + 通用说明（不虚构数据范围）。
-func audienceInfos(audiences []string) []login.UIPageAudienceInfo {
-	result := make([]login.UIPageAudienceInfo, 0, len(audiences))
+func audienceInfos(audiences []string) []ui.UIPageAudienceInfo {
+	result := make([]ui.UIPageAudienceInfo, 0, len(audiences))
 	for _, audience := range audiences {
-		result = append(result, login.UIPageAudienceInfo{Value: audience,
+		result = append(result, ui.UIPageAudienceInfo{Value: audience,
 			Description: "目标资源服务（audience）"})
 	}
 	return result
@@ -78,7 +77,7 @@ func publicOAuthError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var publicErr *login.UIPageAuthError
+	var publicErr *ui.UIPageAuthError
 	if errors.As(err, &publicErr) {
 		return publicErr
 	}
@@ -97,33 +96,33 @@ func publicOAuthError(err error) error {
 		case "invalid_client", "unauthorized_client":
 			code = "AUTH_FAILED"
 		}
-		return &login.UIPageAuthError{Code: code}
+		return &ui.UIPageAuthError{Code: code}
 	}
 	switch {
 	case errors.Is(err, oauthflow.ErrDeviceAuthorizationReauthRequired):
-		return &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+		return &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
 	case errors.Is(err, oauthflow.ErrConsentNotFound):
-		return &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
+		return &ui.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	case errors.Is(err, qrlogin.ErrRequestNotFound), errors.Is(err, qrlogin.ErrRequestExpired),
 		errors.Is(err, qrlogin.ErrAlreadyClaimed), errors.Is(err, qrlogin.ErrVersionConflict):
-		return &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
+		return &ui.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	case errors.Is(err, qrlogin.ErrRateLimited):
-		return &login.UIPageAuthError{Code: "RATE_LIMITED"}
+		return &ui.UIPageAuthError{Code: "RATE_LIMITED"}
 	case errors.Is(err, qrlogin.ErrAccessDenied):
-		return &login.UIPageAuthError{Code: "ACCESS_DENIED"}
+		return &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
 	case errors.Is(err, oauthflow.ErrStoreUnavailable), errors.Is(err, qrlogin.ErrStoreUnavailable):
-		return &login.UIPageAuthError{Code: "DB_UNAVAILABLE"}
+		return &ui.UIPageAuthError{Code: "DB_UNAVAILABLE"}
 	case errors.Is(err, oauthflow.ErrAuditUnavailable), errors.Is(err, qrlogin.ErrAuditUnavailable):
-		return &login.UIPageAuthError{Code: "AUDIT_WRITE_FAILED"}
+		return &ui.UIPageAuthError{Code: "AUDIT_WRITE_FAILED"}
 	}
-	return &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+	return &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 }
 
 // sessionSecretOrError 从请求读取会话秘密（页面不解析用户身份，只转发给真实服务）。
 func (a *Adapter) sessionSecretOrError(request *http.Request) (string, error) {
 	secret, ok := a.opts.Sessions.SessionSecretFromRequest(request)
 	if !ok {
-		return "", &login.UIPageAuthError{Code: "AUTH_FAILED"}
+		return "", &ui.UIPageAuthError{Code: "AUTH_FAILED"}
 	}
 	return secret, nil
 }
@@ -146,13 +145,13 @@ func (a *Adapter) withSessionReauthSignals(ctx context.Context, secret string) c
 
 // BeginConsent 从授权请求参数创建真实确认请求并补充受控应用名/scope 说明。
 func (a *Adapter) BeginConsent(ctx context.Context, request *http.Request,
-	params url.Values) (login.UIPageConsentPrompt, error) {
+	params url.Values) (ui.UIPageConsentPrompt, error) {
 	if a.opts.OAuth == nil {
-		return login.UIPageConsentPrompt{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageConsentPrompt{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
 	secret, err := a.sessionSecretOrError(request)
 	if err != nil {
-		return login.UIPageConsentPrompt{}, err
+		return ui.UIPageConsentPrompt{}, err
 	}
 	requestID := strings.TrimSpace(params.Get("request_id"))
 	prompt, beginErr := a.opts.OAuth.BeginAuthorization(ctx, secret, oauthflow.AuthorizeRequest{
@@ -163,11 +162,11 @@ func (a *Adapter) BeginConsent(ctx context.Context, request *http.Request,
 		CodeChallenge:       params.Get("code_challenge"),
 		CodeChallengeMethod: params.Get("code_challenge_method"), RequestID: requestID})
 	if beginErr != nil {
-		return login.UIPageConsentPrompt{}, publicOAuthError(beginErr)
+		return ui.UIPageConsentPrompt{}, publicOAuthError(beginErr)
 	}
 	scopes, scopeErr := consentScopes(prompt.Scopes)
 	if scopeErr != nil {
-		return login.UIPageConsentPrompt{}, scopeErr
+		return ui.UIPageConsentPrompt{}, scopeErr
 	}
 	applicationName := a.applicationName(prompt.ClientID)
 	userDisplay := "当前账户"
@@ -189,7 +188,7 @@ func (a *Adapter) BeginConsent(ctx context.Context, request *http.Request,
 			}
 		}
 	}
-	return login.UIPageConsentPrompt{RequestID: prompt.RequestID,
+	return ui.UIPageConsentPrompt{RequestID: prompt.RequestID,
 		ApplicationName: applicationName, ClientID: prompt.ClientID,
 		ClientType: string(prompt.ClientType), Scopes: scopes,
 		Audiences: audienceInfos(prompt.Audiences), RedirectURI: prompt.RedirectURI,
@@ -223,43 +222,43 @@ func promptUserID(request *http.Request, a *Adapter) string {
 
 // DecideConsent 调用真实决定接口；批准返回后端生成的重定向 URL。
 func (a *Adapter) DecideConsent(ctx context.Context, request *http.Request,
-	decision login.UIPageConsentDecision) (login.UIPageConsentResult, error) {
+	decision ui.UIPageConsentDecision) (ui.UIPageConsentResult, error) {
 	if a.opts.OAuth == nil {
-		return login.UIPageConsentResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageConsentResult{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
 	secret, err := a.sessionSecretOrError(request)
 	if err != nil {
-		return login.UIPageConsentResult{}, err
+		return ui.UIPageConsentResult{}, err
 	}
 	result, decideErr := a.opts.OAuth.DecideAuthorization(
 		a.withSessionReauthSignals(ctx, secret), secret,
 		oauthflow.DecideRequest{RequestID: decision.RequestID, Approve: decision.Approve,
 			DecisionRequestID: requestIDFromRequest(request)})
 	if decideErr != nil {
-		return login.UIPageConsentResult{}, publicOAuthError(decideErr)
+		return ui.UIPageConsentResult{}, publicOAuthError(decideErr)
 	}
-	return login.UIPageConsentResult{Approved: result.Approved,
+	return ui.UIPageConsentResult{Approved: result.Approved,
 		RedirectURL: result.RedirectURL.Reveal()}, nil
 }
 
 // DeviceDescribe 只读短码对应设备授权请求。
 func (a *Adapter) DeviceDescribe(ctx context.Context, request *http.Request,
-	userCode string) (login.UIPageDevicePrompt, error) {
+	userCode string) (ui.UIPageDevicePrompt, error) {
 	if a.opts.OAuth == nil {
-		return login.UIPageDevicePrompt{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageDevicePrompt{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
 	secret, err := a.sessionSecretOrError(request)
 	if err != nil {
-		return login.UIPageDevicePrompt{}, err
+		return ui.UIPageDevicePrompt{}, err
 	}
 	prompt, describeErr := a.opts.OAuth.DescribeDeviceAuthorization(ctx, secret, userCode,
 		requestIDFromRequest(request))
 	if describeErr != nil {
-		return login.UIPageDevicePrompt{}, publicOAuthError(describeErr)
+		return ui.UIPageDevicePrompt{}, publicOAuthError(describeErr)
 	}
 	scopes, scopeErr := consentScopes(prompt.Scopes)
 	if scopeErr != nil {
-		return login.UIPageDevicePrompt{}, scopeErr
+		return ui.UIPageDevicePrompt{}, scopeErr
 	}
 	applicationName := a.applicationName(prompt.ClientID)
 	if a.opts.App != nil {
@@ -269,7 +268,7 @@ func (a *Adapter) DeviceDescribe(ctx context.Context, request *http.Request,
 			}
 		}
 	}
-	return login.UIPageDevicePrompt{RequestID: prompt.RequestID,
+	return ui.UIPageDevicePrompt{RequestID: prompt.RequestID,
 		ApplicationName: applicationName, ClientID: prompt.ClientID,
 		ClientType: string(prompt.ClientType), Scopes: scopes,
 		Audiences: audienceInfos(prompt.Audiences), ExpiresAt: prompt.ExpiresAt,
@@ -278,47 +277,47 @@ func (a *Adapter) DeviceDescribe(ctx context.Context, request *http.Request,
 
 // DeviceDecide 提交真实设备授权决定。
 func (a *Adapter) DeviceDecide(ctx context.Context, request *http.Request,
-	decision login.UIPageDeviceDecision) (login.UIPageDeviceResult, error) {
+	decision ui.UIPageDeviceDecision) (ui.UIPageDeviceResult, error) {
 	if a.opts.OAuth == nil {
-		return login.UIPageDeviceResult{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageDeviceResult{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
 	secret, err := a.sessionSecretOrError(request)
 	if err != nil {
-		return login.UIPageDeviceResult{}, err
+		return ui.UIPageDeviceResult{}, err
 	}
 	result, decideErr := a.opts.OAuth.DecideDeviceAuthorization(
 		a.withSessionReauthSignals(ctx, secret), secret,
 		oauthflow.DeviceDecisionRequest{UserCode: decision.UserCode, Approve: decision.Approve,
 			RequestID: requestIDFromRequest(request)})
 	if decideErr != nil {
-		return login.UIPageDeviceResult{}, publicOAuthError(decideErr)
+		return ui.UIPageDeviceResult{}, publicOAuthError(decideErr)
 	}
-	return login.UIPageDeviceResult{RequestID: result.RequestID,
+	return ui.UIPageDeviceResult{RequestID: result.RequestID,
 		Approved: result.Approved}, nil
 }
 
 // BeginQR 创建匿名扫码请求并写签名状态 Cookie。
-func (a *Adapter) BeginQR(ctx context.Context, request *http.Request) (login.UIPageQRBegin, error) {
+func (a *Adapter) BeginQR(ctx context.Context, request *http.Request) (ui.UIPageQRBegin, error) {
 	if a.opts.QR == nil || a.opts.PageState == nil || a.opts.QRClientID == "" {
-		return login.UIPageQRBegin{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageQRBegin{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
 	result, err := a.opts.QR.Begin(ctx, qrlogin.BeginRequest{ClientID: a.opts.QRClientID,
 		Scopes: append([]string(nil), a.opts.QRScopes...), RequestID: requestIDFromRequest(request)})
 	if err != nil {
-		return login.UIPageQRBegin{}, publicOAuthError(err)
+		return ui.UIPageQRBegin{}, publicOAuthError(err)
 	}
 	return a.qrBeginOf(result)
 }
 
 // qrBeginOf 编码 BeginResult 为页面视图与签名状态。
-func (a *Adapter) qrBeginOf(result qrlogin.BeginResult) (login.UIPageQRBegin, error) {
+func (a *Adapter) qrBeginOf(result qrlogin.BeginResult) (ui.UIPageQRBegin, error) {
 	state := qrClaimState{RequestID: result.RequestID,
 		ClaimSecret: result.ClaimSecret.Reveal(), QRPayload: result.QRPayload}
 	token, err := a.opts.PageState.Seal(qrStatePurpose, state)
 	if err != nil {
-		return login.UIPageQRBegin{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageQRBegin{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
-	return login.UIPageQRBegin{RequestID: result.RequestID, QRPayload: result.QRPayload,
+	return ui.UIPageQRBegin{RequestID: result.RequestID, QRPayload: result.QRPayload,
 		ExpiresAt: result.ExpiresAt, Version: result.Version,
 		PollIntervalSeconds: result.PollIntervalSeconds,
 		StateCookie:         stateCookie("ln_qr_state", token, a.stateTTLSeconds())}, nil
@@ -327,53 +326,53 @@ func (a *Adapter) qrBeginOf(result qrlogin.BeginResult) (login.UIPageQRBegin, er
 // loadQRState 读取签名状态。
 func (a *Adapter) loadQRState(request *http.Request) (qrClaimState, error) {
 	if a.opts.PageState == nil {
-		return qrClaimState{}, &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
+		return qrClaimState{}, &ui.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	}
 	cookie, err := request.Cookie("ln_qr_state")
 	if err != nil || cookie == nil {
-		return qrClaimState{}, &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
+		return qrClaimState{}, &ui.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	}
 	var state qrClaimState
 	if err := a.opts.PageState.Open(qrStatePurpose, cookie.Value, &state); err != nil {
-		return qrClaimState{}, &login.UIPageAuthError{Code: "CHALLENGE_INVALID"}
+		return qrClaimState{}, &ui.UIPageAuthError{Code: "CHALLENGE_INVALID"}
 	}
 	return state, nil
 }
 
 // QueryQR 查询原发起端状态。
-func (a *Adapter) QueryQR(ctx context.Context, request *http.Request) (login.UIPageQRStatus, error) {
+func (a *Adapter) QueryQR(ctx context.Context, request *http.Request) (ui.UIPageQRStatus, error) {
 	state, err := a.loadQRState(request)
 	if err != nil {
-		return login.UIPageQRStatus{}, err
+		return ui.UIPageQRStatus{}, err
 	}
 	status, statusErr := a.opts.QR.Status(ctx, qrlogin.ClaimedRequest{
 		ClaimSecret: claimSecretOf(state), RequestID: state.RequestID,
 		AuditRequestID: requestIDFromRequest(request)})
 	if statusErr != nil {
-		return login.UIPageQRStatus{}, publicOAuthError(statusErr)
+		return ui.UIPageQRStatus{}, publicOAuthError(statusErr)
 	}
-	return login.UIPageQRStatus{Status: status.Status, ExpiresAt: status.ExpiresAt,
+	return ui.UIPageQRStatus{Status: status.Status, ExpiresAt: status.ExpiresAt,
 		Version: status.Version, RetryAfterSeconds: status.RetryAfterSeconds,
 		QRPayload: state.QRPayload}, nil
 }
 
 // ClaimQR 领取并写目标应用会话 Cookie。
-func (a *Adapter) ClaimQR(ctx context.Context, request *http.Request) (login.UIPageQRClaim, error) {
+func (a *Adapter) ClaimQR(ctx context.Context, request *http.Request) (ui.UIPageQRClaim, error) {
 	state, err := a.loadQRState(request)
 	if err != nil {
-		return login.UIPageQRClaim{}, err
+		return ui.UIPageQRClaim{}, err
 	}
 	issued, claimErr := a.opts.QR.Claim(ctx, qrlogin.ClaimedRequest{
 		ClaimSecret: claimSecretOf(state), RequestID: state.RequestID,
 		AuditRequestID: requestIDFromRequest(request)})
 	if claimErr != nil {
-		return login.UIPageQRClaim{}, publicOAuthError(claimErr)
+		return ui.UIPageQRClaim{}, publicOAuthError(claimErr)
 	}
 	cookie, cookieErr := a.opts.Sessions.NewCookie(issued)
 	if cookieErr != nil {
-		return login.UIPageQRClaim{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageQRClaim{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
-	return login.UIPageQRClaim{SessionCookie: cookie,
+	return ui.UIPageQRClaim{SessionCookie: cookie,
 		StateCookie: stateCookie("ln_qr_state", "", -1), UserID: issued.Session.UserID}, nil
 }
 
@@ -387,58 +386,58 @@ func claimSecretOf(state qrClaimState) qrlogin.ClaimSecret {
 }
 
 // RegenerateQR 取消旧请求并创建新请求。
-func (a *Adapter) RegenerateQR(ctx context.Context, request *http.Request) (login.UIPageQRBegin, error) {
+func (a *Adapter) RegenerateQR(ctx context.Context, request *http.Request) (ui.UIPageQRBegin, error) {
 	state, err := a.loadQRState(request)
 	if err != nil {
-		return login.UIPageQRBegin{}, err
+		return ui.UIPageQRBegin{}, err
 	}
 	result, regenErr := a.opts.QR.Regenerate(ctx, qrlogin.ClaimedRequest{
 		ClaimSecret: claimSecretOf(state), RequestID: state.RequestID,
 		AuditRequestID: requestIDFromRequest(request)})
 	if regenErr != nil {
-		return login.UIPageQRBegin{}, publicOAuthError(regenErr)
+		return ui.UIPageQRBegin{}, publicOAuthError(regenErr)
 	}
 	return a.qrBeginOf(result)
 }
 
 // CancelQR 取消当前扫码请求。
-func (a *Adapter) CancelQR(ctx context.Context, request *http.Request) (login.UIPageQRStatus, error) {
+func (a *Adapter) CancelQR(ctx context.Context, request *http.Request) (ui.UIPageQRStatus, error) {
 	state, err := a.loadQRState(request)
 	if err != nil {
-		return login.UIPageQRStatus{}, err
+		return ui.UIPageQRStatus{}, err
 	}
 	status, cancelErr := a.opts.QR.Cancel(ctx, qrlogin.ClaimedRequest{
 		ClaimSecret: claimSecretOf(state), RequestID: state.RequestID,
 		AuditRequestID: requestIDFromRequest(request)})
 	if cancelErr != nil {
-		return login.UIPageQRStatus{}, publicOAuthError(cancelErr)
+		return ui.UIPageQRStatus{}, publicOAuthError(cancelErr)
 	}
-	return login.UIPageQRStatus{Status: status.Status, ExpiresAt: status.ExpiresAt,
+	return ui.UIPageQRStatus{Status: status.Status, ExpiresAt: status.ExpiresAt,
 		Version: status.Version, RetryAfterSeconds: status.RetryAfterSeconds,
 		StateCookie: stateCookie("ln_qr_state", "", -1)}, nil
 }
 
 // DescribeQR 供 APP 确认端读取请求。
 func (a *Adapter) DescribeQR(ctx context.Context, request *http.Request,
-	requestID string) (login.UIPageQRPrompt, error) {
+	requestID string) (ui.UIPageQRPrompt, error) {
 	if a.opts.QR == nil {
-		return login.UIPageQRPrompt{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageQRPrompt{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
 	secret, err := a.sessionSecretOrError(request)
 	if err != nil {
-		return login.UIPageQRPrompt{}, err
+		return ui.UIPageQRPrompt{}, err
 	}
 	prompt, describeErr := a.opts.QR.Describe(ctx, qrlogin.PromptRequest{
 		SessionSecret: secret, RequestID: requestID,
 		AuditRequestID: requestIDFromRequest(request)})
 	if describeErr != nil {
-		return login.UIPageQRPrompt{}, publicOAuthError(describeErr)
+		return ui.UIPageQRPrompt{}, publicOAuthError(describeErr)
 	}
 	scopes, scopeErr := consentScopes(prompt.Scopes)
 	if scopeErr != nil {
-		return login.UIPageQRPrompt{}, scopeErr
+		return ui.UIPageQRPrompt{}, scopeErr
 	}
-	return login.UIPageQRPrompt{RequestID: prompt.RequestID,
+	return ui.UIPageQRPrompt{RequestID: prompt.RequestID,
 		ApplicationName: prompt.ApplicationName, ClientID: prompt.ClientID,
 		ClientType: prompt.ClientType, Scopes: scopes,
 		RequesterHint: requesterHint(prompt.Requester), Status: prompt.Status,
@@ -460,13 +459,13 @@ func requesterHint(info qrlogin.RequesterInfo) string {
 
 // DecideQR 提交 APP 扫码决定。
 func (a *Adapter) DecideQR(ctx context.Context, request *http.Request,
-	decision login.UIPageQRDecision) (login.UIPageQRPrompt, error) {
+	decision ui.UIPageQRDecision) (ui.UIPageQRPrompt, error) {
 	if a.opts.QR == nil {
-		return login.UIPageQRPrompt{}, &login.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		return ui.UIPageQRPrompt{}, &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
 	}
 	secret, err := a.sessionSecretOrError(request)
 	if err != nil {
-		return login.UIPageQRPrompt{}, err
+		return ui.UIPageQRPrompt{}, err
 	}
 	decideRequest := qrlogin.DecideRequest{SessionSecret: secret,
 		RequestID: decision.RequestID, ExpectedVersion: decision.ExpectedVersion,
@@ -480,13 +479,13 @@ func (a *Adapter) DecideQR(ctx context.Context, request *http.Request,
 		prompt, decideErr = a.opts.QR.Deny(decisionCtx, decideRequest)
 	}
 	if decideErr != nil {
-		return login.UIPageQRPrompt{}, publicOAuthError(decideErr)
+		return ui.UIPageQRPrompt{}, publicOAuthError(decideErr)
 	}
 	scopes, scopeErr := consentScopes(prompt.Scopes)
 	if scopeErr != nil {
-		return login.UIPageQRPrompt{}, scopeErr
+		return ui.UIPageQRPrompt{}, scopeErr
 	}
-	return login.UIPageQRPrompt{RequestID: prompt.RequestID,
+	return ui.UIPageQRPrompt{RequestID: prompt.RequestID,
 		ApplicationName: prompt.ApplicationName, ClientID: prompt.ClientID,
 		ClientType: prompt.ClientType, Scopes: scopes,
 		RequesterHint: requesterHint(prompt.Requester), Status: prompt.Status,

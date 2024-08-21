@@ -39,6 +39,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // step209Config 构造启用人工恢复、关闭 Passkey 并显式允许 TOTP 重绑的配置。
@@ -113,7 +114,7 @@ var step209Clock = testNow
 // expectPageAuthCode 断言错误是页面公开错误且错误码匹配。
 func expectPageAuthCode(t *testing.T, err error, want string) {
 	t.Helper()
-	var publicErr *login.UIPageAuthError
+	var publicErr *ui.UIPageAuthError
 	if !errors.As(err, &publicErr) || publicErr.Code != want {
 		t.Fatalf("期望页面错误码 %s，实际 %v", want, err)
 	}
@@ -284,7 +285,7 @@ VALUES(?,?,?,?,?,?)`, targetID, targetMail, strings.ToLower(targetMail), nowMS, 
 	}
 	loginRequest := httptest.NewRequest(http.MethodPost, "/login", nil)
 	loginRequest.RemoteAddr = "127.0.0.1:23456"
-	loginResult, err := adapter.PasswordLogin(ctx, loginRequest, login.UIPasswordLoginRequest{
+	loginResult, err := adapter.PasswordLogin(ctx, loginRequest, ui.UIPasswordLoginRequest{
 		Identifier: "step209-target", Password: password, RequestID: "req-209-login-1"})
 	if err != nil {
 		t.Fatalf("受限登录: %v", err)
@@ -403,7 +404,7 @@ VALUES(?,?,?,?,?,?)`, targetID, targetMail, strings.ToLower(targetMail), nowMS, 
 	// ===== 重新正常登录：必须完成新的 TOTP 第二步并获得完整会话 =====
 	step209Clock = step209Clock.Add(31 * time.Second)
 	loginResult2, err := adapter.PasswordLogin(ctx, httptest.NewRequest(http.MethodPost, "/login", nil),
-		login.UIPasswordLoginRequest{Identifier: "step209-target", Password: password,
+		ui.UIPasswordLoginRequest{Identifier: "step209-target", Password: password,
 			RequestID: "req-209-login-2"})
 	if err != nil {
 		t.Fatalf("重新登录: %v", err)
@@ -425,7 +426,7 @@ VALUES(?,?,?,?,?,?)`, targetID, targetMail, strings.ToLower(targetMail), nowMS, 
 		verifyRequest.AddCookie(&http.Cookie{Name: loginResult2.StateCookie.Name,
 			Value: loginResult2.StateCookie.Value})
 	}
-	verified, err := adapter.VerifySecondFactor(ctx, verifyRequest, login.UIPageSecondFactorVerify{
+	verified, err := adapter.VerifySecondFactor(ctx, verifyRequest, ui.UIPageSecondFactorVerify{
 		ChallengeID:  loginResult2.SecondFactor.ChallengeID,
 		AttemptToken: loginResult2.SecondFactor.AttemptToken,
 		Code:         code2, RequestID: "req-209-login-2-verify"})
@@ -447,7 +448,7 @@ VALUES(?,?,?,?,?,?)`, targetID, targetMail, strings.ToLower(targetMail), nowMS, 
 		replayRequest.AddCookie(&http.Cookie{Name: loginResult2.StateCookie.Name,
 			Value: loginResult2.StateCookie.Value})
 	}
-	if _, err := adapter.VerifySecondFactor(ctx, replayRequest, login.UIPageSecondFactorVerify{
+	if _, err := adapter.VerifySecondFactor(ctx, replayRequest, ui.UIPageSecondFactorVerify{
 		ChallengeID:  loginResult2.SecondFactor.ChallengeID,
 		AttemptToken: loginResult2.SecondFactor.AttemptToken,
 		Code:         code2, RequestID: "req-209-login-2-replay"}); err == nil {

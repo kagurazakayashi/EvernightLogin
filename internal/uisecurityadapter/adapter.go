@@ -10,15 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"net"
-	"net/http"
-	"strings"
-	"time"
-	"unicode/utf8"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
@@ -27,6 +18,14 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
 )
 
 // ReauthChallenger 是适配器需要的再次认证子集（生产实现 *reauth.Service）。
@@ -55,7 +54,7 @@ type Options struct {
 	Logger           *slog.Logger
 }
 
-// Adapter 实现 login.UIPageSecurityBackend。
+// Adapter 实现 ui.UIPageSecurityBackend。
 type Adapter struct{ opts Options }
 
 // New 校验依赖并构造适配器。
@@ -78,8 +77,8 @@ func New(options Options) (*Adapter, error) {
 func featureNotEnabled() error { return mapped("FEATURE_NOT_ENABLED") }
 
 // GetOverview 返回真实事实摘要（不输出安全结论）。
-func (a *Adapter) GetOverview(ctx context.Context, userID string) (login.UISecurityOverview, error) {
-	overview := login.UISecurityOverview{
+func (a *Adapter) GetOverview(ctx context.Context, userID string) (ui.UISecurityOverview, error) {
+	overview := ui.UISecurityOverview{
 		MFAAvailable: true, TOTPAvailable: true,
 		RecoveryCodesAvailable: true, SessionsAvailable: true,
 		PasskeyAvailable: a.opts.Passkeys != nil, OAuthAvailable: a.opts.OAuth != nil,
@@ -112,7 +111,7 @@ func (a *Adapter) GetOverview(ctx context.Context, userID string) (login.UISecur
 }
 
 // ListMFA 返回真实邮件因素。
-func (a *Adapter) ListMFA(ctx context.Context, userID string) ([]login.UIMFAFactor, error) {
+func (a *Adapter) ListMFA(ctx context.Context, userID string) ([]ui.UIMFAFactor, error) {
 	factors, err := a.factors(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -120,7 +119,7 @@ func (a *Adapter) ListMFA(ctx context.Context, userID string) ([]login.UIMFAFact
 	return factors, nil
 }
 
-func (a *Adapter) factors(ctx context.Context, userID string) ([]login.UIMFAFactor, error) {
+func (a *Adapter) factors(ctx context.Context, userID string) ([]ui.UIMFAFactor, error) {
 	caller, err := mfa.UserCaller(userID)
 	if err != nil {
 		return nil, securityErr("ACCESS_DENIED")
@@ -129,33 +128,33 @@ func (a *Adapter) factors(ctx context.Context, userID string) ([]login.UIMFAFact
 	if listErr != nil {
 		return nil, mapMFAError(listErr)
 	}
-	result := make([]login.UIMFAFactor, 0, len(factors))
+	result := make([]ui.UIMFAFactor, 0, len(factors))
 	for _, factor := range factors {
-		result = append(result, login.UIMFAFactor{Type: string(factor.Type),
+		result = append(result, ui.UIMFAFactor{Type: string(factor.Type),
 			State: factor.State, CreatedAt: factor.CreatedAt})
 	}
 	return result, nil
 }
 
 // BeginMFAEnrollment 发送真实邮件验证码。
-func (a *Adapter) BeginMFAEnrollment(ctx context.Context, userID, requestID string) (login.UIMFAEnrollment, error) {
+func (a *Adapter) BeginMFAEnrollment(ctx context.Context, userID, requestID string) (ui.UIMFAEnrollment, error) {
 	caller, err := mfa.UserCaller(userID)
 	if err != nil {
-		return login.UIMFAEnrollment{}, securityErr("ACCESS_DENIED")
+		return ui.UIMFAEnrollment{}, securityErr("ACCESS_DENIED")
 	}
 	enrollment, beginErr := a.opts.MFA.BeginEmailFactorEnrollment(ctx, caller,
 		mfa.FactorEnrollmentRequest{RequestID: requestID})
 	if beginErr != nil {
-		return login.UIMFAEnrollment{}, mapMFAError(beginErr)
+		return ui.UIMFAEnrollment{}, mapMFAError(beginErr)
 	}
-	return login.UIMFAEnrollment{ChallengeID: enrollment.ChallengeID,
+	return ui.UIMFAEnrollment{ChallengeID: enrollment.ChallengeID,
 		AttemptToken: enrollment.AttemptToken, MaskedEmail: enrollment.MaskedEmail,
 		ExpiresAt: enrollment.ExpiresAt}, nil
 }
 
 // ConfirmMFAEnrollment 验证码通过才启用邮件因素。
 func (a *Adapter) ConfirmMFAEnrollment(ctx context.Context, userID string,
-	confirm login.UISecurityConfirm) error {
+	confirm ui.UISecurityConfirm) error {
 	caller, err := mfa.UserCaller(userID)
 	if err != nil {
 		return securityErr("ACCESS_DENIED")
@@ -189,16 +188,16 @@ func (a *Adapter) RemoveMFA(ctx context.Context, userID, currentPassword, reques
 }
 
 // GetTOTP 返回真实 TOTP 元数据（不含种子）。
-func (a *Adapter) GetTOTP(ctx context.Context, userID string) (login.UITOTPState, error) {
+func (a *Adapter) GetTOTP(ctx context.Context, userID string) (ui.UITOTPState, error) {
 	caller, err := totp.UserCaller(userID)
 	if err != nil {
-		return login.UITOTPState{}, securityErr("ACCESS_DENIED")
+		return ui.UITOTPState{}, securityErr("ACCESS_DENIED")
 	}
 	bindings, listErr := a.opts.TOTP.Bindings(ctx, caller)
 	if listErr != nil {
-		return login.UITOTPState{}, mapTOTPError(listErr)
+		return ui.UITOTPState{}, mapTOTPError(listErr)
 	}
-	state := login.UITOTPState{Status: "unbound"}
+	state := ui.UITOTPState{Status: "unbound"}
 	for _, binding := range bindings {
 		if binding.Status == "active" {
 			state.Enabled = true
@@ -214,16 +213,16 @@ func (a *Adapter) GetTOTP(ctx context.Context, userID string) (login.UITOTPState
 }
 
 // BeginTOTP 开始真实绑定（Secret/URI 仅一次返回）。
-func (a *Adapter) BeginTOTP(ctx context.Context, userID, requestID string) (login.UITOTPBinding, error) {
+func (a *Adapter) BeginTOTP(ctx context.Context, userID, requestID string) (ui.UITOTPBinding, error) {
 	caller, err := totp.UserCaller(userID)
 	if err != nil {
-		return login.UITOTPBinding{}, securityErr("ACCESS_DENIED")
+		return ui.UITOTPBinding{}, securityErr("ACCESS_DENIED")
 	}
 	start, beginErr := a.opts.TOTP.BeginBinding(ctx, caller, requestID)
 	if beginErr != nil {
-		return login.UITOTPBinding{}, mapTOTPError(beginErr)
+		return ui.UITOTPBinding{}, mapTOTPError(beginErr)
 	}
-	return login.UITOTPBinding{BindingID: start.BindingID, Secret: start.Secret,
+	return ui.UITOTPBinding{BindingID: start.BindingID, Secret: start.Secret,
 		URI: start.URI, ExpiresAt: start.ExpiresAt}, nil
 }
 
@@ -231,27 +230,27 @@ func (a *Adapter) BeginTOTP(ctx context.Context, userID, requestID string) (logi
 // 批准，再在同一请求上下文开始 TOTP 绑定；策略仍由真实 reauth 服务判定，缺密码/
 // 弱认证/策略要求强认证时 fail-closed。
 func (a *Adapter) BeginTOTPWithPassword(ctx context.Context, userID, currentPassword,
-	requestID string) (login.UITOTPBinding, error) {
+	requestID string) (ui.UITOTPBinding, error) {
 	challengeCtx, result, err := a.approve(ctx, userID, "mfa.add", "user", userID,
 		map[string]string{"action": "totp_bind"}, currentPassword, requestID, "绑定验证器")
 	if err != nil {
-		return login.UITOTPBinding{}, err
+		return ui.UITOTPBinding{}, err
 	}
 	caller, callerErr := totp.UserCaller(userID)
 	if callerErr != nil {
-		return login.UITOTPBinding{}, securityErr("ACCESS_DENIED")
+		return ui.UITOTPBinding{}, securityErr("ACCESS_DENIED")
 	}
 	start, beginErr := a.opts.TOTP.BeginBinding(challengeCtx, caller, requestID)
 	a.notify(result, beginErr)
 	if beginErr != nil {
-		return login.UITOTPBinding{}, mapTOTPError(beginErr)
+		return ui.UITOTPBinding{}, mapTOTPError(beginErr)
 	}
-	return login.UITOTPBinding{BindingID: start.BindingID, Secret: start.Secret,
+	return ui.UITOTPBinding{BindingID: start.BindingID, Secret: start.Secret,
 		URI: start.URI, ExpiresAt: start.ExpiresAt}, nil
 }
 
 // ConfirmTOTP 用动态码确认绑定。
-func (a *Adapter) ConfirmTOTP(ctx context.Context, userID string, confirm login.UISecurityConfirm) error {
+func (a *Adapter) ConfirmTOTP(ctx context.Context, userID string, confirm ui.UISecurityConfirm) error {
 	caller, err := totp.UserCaller(userID)
 	if err != nil {
 		return securityErr("ACCESS_DENIED")
@@ -286,7 +285,7 @@ func (a *Adapter) RemoveTOTP(ctx context.Context, userID, currentPassword, code,
 }
 
 // ListPasskeys 返回真实 Passkey 元数据。
-func (a *Adapter) ListPasskeys(ctx context.Context, userID string) ([]login.UIPasskey, error) {
+func (a *Adapter) ListPasskeys(ctx context.Context, userID string) ([]ui.UIPasskey, error) {
 	if a.opts.Passkeys == nil {
 		return nil, featureNotEnabled()
 	}
@@ -298,9 +297,9 @@ func (a *Adapter) ListPasskeys(ctx context.Context, userID string) ([]login.UIPa
 	if listErr != nil {
 		return nil, mapPasskeyError(listErr)
 	}
-	result := make([]login.UIPasskey, 0, len(credentials))
+	result := make([]ui.UIPasskey, 0, len(credentials))
 	for _, credential := range credentials {
-		result = append(result, login.UIPasskey{ID: credential.ID, Name: credential.Name,
+		result = append(result, ui.UIPasskey{ID: credential.ID, Name: credential.Name,
 			BackupEligible: credential.BackupEligible, BackedUp: credential.BackedUp,
 			Transports: append([]string(nil), credential.Transports...),
 			CreatedAt:  credential.CreatedAt, LastUsedAt: credential.LastUsedAt})
@@ -310,26 +309,26 @@ func (a *Adapter) ListPasskeys(ctx context.Context, userID string) ([]login.UIPa
 
 // BeginPasskeyRegistration 由服务端选择用途后开始注册。
 func (a *Adapter) BeginPasskeyRegistration(ctx context.Context, userID,
-	requestID string) (login.UIPasskeyRegistration, error) {
+	requestID string) (ui.UIPasskeyRegistration, error) {
 	if a.opts.Passkeys == nil {
-		return login.UIPasskeyRegistration{}, featureNotEnabled()
+		return ui.UIPasskeyRegistration{}, featureNotEnabled()
 	}
 	caller, err := passkey.UserCaller(userID)
 	if err != nil {
-		return login.UIPasskeyRegistration{}, securityErr("ACCESS_DENIED")
+		return ui.UIPasskeyRegistration{}, securityErr("ACCESS_DENIED")
 	}
 	start, beginErr := a.opts.Passkeys.BeginRegistrationWithPurpose(ctx, caller, requestID,
 		passkey.PurposeLogin)
 	if beginErr != nil {
-		return login.UIPasskeyRegistration{}, mapPasskeyError(beginErr)
+		return ui.UIPasskeyRegistration{}, mapPasskeyError(beginErr)
 	}
-	return login.UIPasskeyRegistration{CeremonyID: start.CeremonyID,
+	return ui.UIPasskeyRegistration{CeremonyID: start.CeremonyID,
 		PublicKey: []byte(start.PublicKey), ExpiresAt: start.ExpiresAt}, nil
 }
 
 // FinishPasskeyRegistration 验证真实 WebAuthn 断言后启用凭证。
 func (a *Adapter) FinishPasskeyRegistration(ctx context.Context, userID string,
-	finish login.UIPasskeyFinish) error {
+	finish ui.UIPasskeyFinish) error {
 	if a.opts.Passkeys == nil {
 		return featureNotEnabled()
 	}
@@ -350,7 +349,7 @@ func (a *Adapter) FinishPasskeyRegistration(ctx context.Context, userID string,
 // passkey.register 一次性批准，再调用真实 WebAuthn finish；批准与策略仍由真实
 // reauth/服务层判定，绝不绕过强认证或伪造成功。
 func (a *Adapter) FinishPasskeyRegistrationWithPassword(ctx context.Context, userID string,
-	finish login.UIPasskeyFinish) error {
+	finish ui.UIPasskeyFinish) error {
 	if a.opts.Passkeys == nil {
 		return featureNotEnabled()
 	}
@@ -418,16 +417,16 @@ func (a *Adapter) RemovePasskey(ctx context.Context, userID, credentialID,
 }
 
 // GetRecoveryCodes 返回恢复代码组只读概览。
-func (a *Adapter) GetRecoveryCodes(ctx context.Context, userID string) (login.UIRecoveryInventory, error) {
+func (a *Adapter) GetRecoveryCodes(ctx context.Context, userID string) (ui.UIRecoveryInventory, error) {
 	caller, err := recovery.UserCaller(userID)
 	if err != nil {
-		return login.UIRecoveryInventory{}, securityErr("ACCESS_DENIED")
+		return ui.UIRecoveryInventory{}, securityErr("ACCESS_DENIED")
 	}
 	inventory, inventoryErr := a.opts.Recovery.Inventory(ctx, caller)
 	if inventoryErr != nil {
-		return login.UIRecoveryInventory{}, mapRecoveryError(inventoryErr)
+		return ui.UIRecoveryInventory{}, mapRecoveryError(inventoryErr)
 	}
-	return login.UIRecoveryInventory{HasActiveGroup: inventory.HasActiveGroup,
+	return ui.UIRecoveryInventory{HasActiveGroup: inventory.HasActiveGroup,
 		Generation: inventory.Generation, CodesRemaining: inventory.CodesRemaining,
 		CreatedAt: inventory.CreatedAt}, nil
 }
@@ -459,20 +458,20 @@ func (a *Adapter) GenerateRecoveryCodes(ctx context.Context, userID, currentPass
 }
 
 // ListSessions 分页读取本人活动会话（用户身份来自服务端会话）。
-func (a *Adapter) ListSessions(ctx context.Context, request *http.Request, page, pageSize int) (login.UISessionPage, error) {
+func (a *Adapter) ListSessions(ctx context.Context, request *http.Request, page, pageSize int) (ui.UISessionPage, error) {
 	secret, err := a.sessionSecret(request)
 	if err != nil {
-		return login.UISessionPage{}, err
+		return ui.UISessionPage{}, err
 	}
 	result, listErr := a.opts.Sessions.ListSessions(ctx, secret,
 		session.ListOptions{Page: page, PageSize: pageSize})
 	if listErr != nil {
-		return login.UISessionPage{}, mapSessionError(listErr)
+		return ui.UISessionPage{}, mapSessionError(listErr)
 	}
-	resultPage := login.UISessionPage{Page: result.Page, PageSize: result.PageSize,
+	resultPage := ui.UISessionPage{Page: result.Page, PageSize: result.PageSize,
 		Total: result.Total, HasMore: result.HasMore}
 	for _, summary := range result.Sessions {
-		resultPage.Sessions = append(resultPage.Sessions, login.UISessionSummary{
+		resultPage.Sessions = append(resultPage.Sessions, ui.UISessionSummary{
 			ID: summary.ID, Current: summary.Current, AppID: summary.AppID,
 			Kind: string(summary.Kind), Reason: string(summary.Reason),
 			CreatedAt: summary.CreatedAt, LastSeenAt: summary.LastSeenAt,
@@ -561,37 +560,37 @@ func (a *Adapter) RevokeAllSessions(ctx context.Context, request *http.Request,
 
 // ListGrants 分页读取本人已授权应用（真实 oauthflow 查询）。
 func (a *Adapter) ListGrants(ctx context.Context, request *http.Request, page,
-	pageSize int) (login.UIGrantPage, error) {
+	pageSize int) (ui.UIGrantPage, error) {
 	if a.opts.OAuth == nil {
-		return login.UIGrantPage{}, featureNotEnabled()
+		return ui.UIGrantPage{}, featureNotEnabled()
 	}
 	secret, err := a.sessionSecret(request)
 	if err != nil {
-		return login.UIGrantPage{}, err
+		return ui.UIGrantPage{}, err
 	}
 	result, listErr := a.opts.OAuth.ListUserAuthorizations(ctx, secret,
 		oauthflow.AuthorizationListOptions{Page: page, PageSize: pageSize})
 	if listErr != nil {
 		var oauthErr *oauthflow.OAuthError
 		if errors.As(listErr, &oauthErr) {
-			return login.UIGrantPage{}, securityErr("AUTHZ_UNAVAILABLE")
+			return ui.UIGrantPage{}, securityErr("AUTHZ_UNAVAILABLE")
 		}
-		return login.UIGrantPage{}, mapOAuthError(listErr)
+		return ui.UIGrantPage{}, mapOAuthError(listErr)
 	}
-	pageResult := login.UIGrantPage{Page: result.Page, PageSize: result.PageSize,
+	pageResult := ui.UIGrantPage{Page: result.Page, PageSize: result.PageSize,
 		Total: result.Total, HasMore: result.HasMore}
 	for _, summary := range result.Authorizations {
-		scopes := make([]login.UIPageScopeInfo, 0, len(summary.Scopes))
+		scopes := make([]ui.UIPageScopeInfo, 0, len(summary.Scopes))
 		for _, scope := range summary.Scopes {
-			scopes = append(scopes, login.UIPageScopeInfo{Value: scope,
+			scopes = append(scopes, ui.UIPageScopeInfo{Value: scope,
 				Description: scopeDescription(scope)})
 		}
-		audiences := make([]login.UIPageAudienceInfo, 0, len(summary.Audiences))
+		audiences := make([]ui.UIPageAudienceInfo, 0, len(summary.Audiences))
 		for _, audience := range summary.Audiences {
-			audiences = append(audiences, login.UIPageAudienceInfo{Value: audience,
+			audiences = append(audiences, ui.UIPageAudienceInfo{Value: audience,
 				Description: "目标资源服务"})
 		}
-		pageResult.Grants = append(pageResult.Grants, login.UIGrant{
+		pageResult.Grants = append(pageResult.Grants, ui.UIGrant{
 			AuthorizationID: summary.AuthorizationID,
 			ApplicationName: a.applicationName(summary.ClientID),
 			ClientID:        summary.ClientID, Scopes: scopes, Audiences: audiences,
@@ -603,33 +602,33 @@ func (a *Adapter) ListGrants(ctx context.Context, request *http.Request, page,
 
 // RevokeGrant 撤回本人授权，返回真实撤销计数。
 func (a *Adapter) RevokeGrant(ctx context.Context, request *http.Request,
-	authorizationID, currentPassword, requestID string) (login.UIGrantRevokeResult, error) {
+	authorizationID, currentPassword, requestID string) (ui.UIGrantRevokeResult, error) {
 	if a.opts.OAuth == nil {
-		return login.UIGrantRevokeResult{}, featureNotEnabled()
+		return ui.UIGrantRevokeResult{}, featureNotEnabled()
 	}
 	secret, err := a.sessionSecret(request)
 	if err != nil {
-		return login.UIGrantRevokeResult{}, err
+		return ui.UIGrantRevokeResult{}, err
 	}
 	userID, userErr := a.userID(ctx, secret)
 	if userErr != nil {
-		return login.UIGrantRevokeResult{}, userErr
+		return ui.UIGrantRevokeResult{}, userErr
 	}
 	challengeCtx, result, err := a.approve(ctx, userID, "oauth.authorization.revoke.self",
 		"oauth_authorization", authorizationID,
 		map[string]string{"authorization_id": authorizationID}, currentPassword, requestID,
 		"撤回已授权应用")
 	if err != nil {
-		return login.UIGrantRevokeResult{}, err
+		return ui.UIGrantRevokeResult{}, err
 	}
 	revokeResult, revokeErr := a.opts.OAuth.RevokeAuthorization(challengeCtx,
 		oauthflow.RevokeAuthorizationRequest{SessionSecret: secret,
 			AuthorizationID: authorizationID, RequestID: requestID})
 	a.notify(result, revokeErr)
 	if revokeErr != nil {
-		return login.UIGrantRevokeResult{}, mapOAuthError(revokeErr)
+		return ui.UIGrantRevokeResult{}, mapOAuthError(revokeErr)
 	}
-	return login.UIGrantRevokeResult{RefreshFamilies: revokeResult.RefreshFamilies,
+	return ui.UIGrantRevokeResult{RefreshFamilies: revokeResult.RefreshFamilies,
 		RefreshTokens:      revokeResult.RefreshTokens,
 		AuthorizationCodes: revokeResult.AuthorizationCodes}, nil
 }
@@ -787,7 +786,7 @@ func newRequestID(now time.Time) string {
 }
 
 // securityErr 构造稳定公开错误。
-func securityErr(code string) error { return &login.UIAccountError{Code: code} }
+func securityErr(code string) error { return &ui.UIAccountError{Code: code} }
 
 // 编译期断言：适配器实现步骤 67 页面公开契约。
-var _ login.UIPageSecurityBackend = (*Adapter)(nil)
+var _ ui.UIPageSecurityBackend = (*Adapter)(nil)

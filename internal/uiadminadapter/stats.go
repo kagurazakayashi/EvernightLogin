@@ -10,12 +10,11 @@ package uiadminadapter
 import (
 	"context"
 	"errors"
-	"log/slog"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"log/slog"
 )
 
 // StatsOptions 是统计页适配器依赖。Authorizer 由宿主注入真实权限引擎；nil 时页面
@@ -31,7 +30,7 @@ type StatsOptions struct {
 	Logger     *slog.Logger
 }
 
-// StatsAdapter 实现 login.UIPageStatsBackend。
+// StatsAdapter 实现 ui.UIPageStatsBackend。
 type StatsAdapter struct {
 	opts StatsOptions
 }
@@ -55,7 +54,7 @@ func NewStats(options StatsOptions) (*StatsAdapter, error) {
 // statsCaller 把页面已认证用户 ID 重建为可信 Caller。
 func statsCaller(userID string) (account.Caller, error) {
 	if userID == "" || !account.ValidUserID(userID) {
-		return account.Caller{}, &login.UIStatsError{Code: "ACCESS_DENIED"}
+		return account.Caller{}, &ui.UIStatsError{Code: "ACCESS_DENIED"}
 	}
 	return account.UserCaller(userID)
 }
@@ -72,12 +71,12 @@ func (a *StatsAdapter) isRoot(ctx context.Context, userID string) bool {
 // Capabilities 返回页面能力位与获准作用范围。能力位只是呈现辅助，每次读取仍由
 // 领域服务重新授权；未装配授权器或失败为 false。
 func (a *StatsAdapter) Capabilities(ctx context.Context,
-	userID string) (login.UIStatsCapabilities, error) {
+	userID string) (ui.UIStatsCapabilities, error) {
 	caller, err := statsCaller(userID)
 	if err != nil {
-		return login.UIStatsCapabilities{}, err
+		return ui.UIStatsCapabilities{}, err
 	}
-	caps := login.UIStatsCapabilities{Scopes: []string{}}
+	caps := ui.UIStatsCapabilities{Scopes: []string{}}
 	if a.isRoot(ctx, userID) {
 		// root 可查询任意应用，但页面无法枚举全部应用；仍以系统范围为默认入口，
 		// 由服务端按 URL 中的显式应用范围再次校验。
@@ -125,42 +124,42 @@ func mapStatsError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var publicErr *login.UIStatsError
+	var publicErr *ui.UIStatsError
 	if errors.As(err, &publicErr) {
 		return err
 	}
 	switch {
 	case errors.Is(err, stats.ErrAccessDenied):
-		return &login.UIStatsError{Code: "ACCESS_DENIED"}
+		return &ui.UIStatsError{Code: "ACCESS_DENIED"}
 	case errors.Is(err, stats.ErrInvalidRequest), errors.Is(err, stats.ErrOptionsInvalid):
-		return &login.UIStatsError{Code: "REQ_INVALID"}
+		return &ui.UIStatsError{Code: "REQ_INVALID"}
 	case errors.Is(err, stats.ErrStoreUnavailable):
-		return &login.UIStatsError{Code: "DB_UNAVAILABLE"}
+		return &ui.UIStatsError{Code: "DB_UNAVAILABLE"}
 	default:
-		return &login.UIStatsError{Code: "INTERNAL_ERROR"}
+		return &ui.UIStatsError{Code: "INTERNAL_ERROR"}
 	}
 }
 
 // statsWindowRequest 把页面规范化窗口转换为领域窗口请求。页面已校验粒度白名单。
-func statsWindowRequest(window login.UIStatsWindow) (stats.WindowRequest, error) {
+func statsWindowRequest(window ui.UIStatsWindow) (stats.WindowRequest, error) {
 	granularity := stats.Granularity(window.Granularity)
 	switch granularity {
 	case stats.GranularityDay, stats.GranularityWeek, stats.GranularityMonth:
 	case "":
 		granularity = stats.GranularityDay
 	default:
-		return stats.WindowRequest{}, &login.UIStatsError{Code: "REQ_INVALID"}
+		return stats.WindowRequest{}, &ui.UIStatsError{Code: "REQ_INVALID"}
 	}
 	if window.TimeZone == "" || window.Start.IsZero() || window.End.IsZero() {
-		return stats.WindowRequest{}, &login.UIStatsError{Code: "REQ_INVALID"}
+		return stats.WindowRequest{}, &ui.UIStatsError{Code: "REQ_INVALID"}
 	}
 	return stats.WindowRequest{TimeZone: window.TimeZone, Start: window.Start,
 		End: window.End, Granularity: granularity}, nil
 }
 
 // toCompleteness 转换完整性结构（只含稳定、可公开展示的字段）。
-func toCompleteness(completeness stats.Completeness) login.UIStatsCompleteness {
-	result := login.UIStatsCompleteness{
+func toCompleteness(completeness stats.Completeness) ui.UIStatsCompleteness {
+	result := ui.UIStatsCompleteness{
 		WindowWithinRetention: completeness.WindowWithinRetention,
 		RetentionDays:         completeness.RetentionDays,
 		RetentionConfigured:   completeness.RetentionConfigured,
@@ -177,20 +176,20 @@ func toCompleteness(completeness stats.Completeness) login.UIStatsCompleteness {
 }
 
 // toIntervals 转换缺失区间。
-func toIntervals(intervals []stats.MissingInterval) []login.UIStatsInterval {
-	result := make([]login.UIStatsInterval, 0, len(intervals))
+func toIntervals(intervals []stats.MissingInterval) []ui.UIStatsInterval {
+	result := make([]ui.UIStatsInterval, 0, len(intervals))
 	for _, interval := range intervals {
-		result = append(result, login.UIStatsInterval{Start: interval.Start,
+		result = append(result, ui.UIStatsInterval{Start: interval.Start,
 			End: interval.End, Reason: interval.Reason})
 	}
 	return result
 }
 
 // toCategorySummary 转换类别汇总。
-func toCategorySummary(summaries []stats.CategorySummary) []login.UIStatsCategorySummary {
-	result := make([]login.UIStatsCategorySummary, 0, len(summaries))
+func toCategorySummary(summaries []stats.CategorySummary) []ui.UIStatsCategorySummary {
+	result := make([]ui.UIStatsCategorySummary, 0, len(summaries))
 	for _, summary := range summaries {
-		result = append(result, login.UIStatsCategorySummary{
+		result = append(result, ui.UIStatsCategorySummary{
 			Category: string(summary.Category), Severity: string(summary.Severity),
 			RawEvents: summary.RawEvents, FailedRequests: summary.FailedRequests,
 			FailedTasks: summary.FailedTasks})
@@ -201,19 +200,19 @@ func toCategorySummary(summaries []stats.CategorySummary) []login.UIStatsCategor
 // Dashboard 读取同一窗口的看板摘要与当前系统状态。健康快照只在系统范围读取；应用
 // 范围不适用或读取失败都如实标记，绝不用历史筛选值冒充当前状态。
 func (a *StatsAdapter) Dashboard(ctx context.Context, userID string,
-	query login.UIStatsQuery) (login.UIStatsDashboard, error) {
+	query ui.UIStatsQuery) (ui.UIStatsDashboard, error) {
 	caller, err := statsCaller(userID)
 	if err != nil {
-		return login.UIStatsDashboard{}, err
+		return ui.UIStatsDashboard{}, err
 	}
 	window, err := statsWindowRequest(query.Window)
 	if err != nil {
-		return login.UIStatsDashboard{}, err
+		return ui.UIStatsDashboard{}, err
 	}
 	overview, err := a.opts.Stats.Overview(ctx, stats.OverviewRequest{
 		Caller: caller, ScopeID: query.ScopeID, Window: window})
 	if err != nil {
-		return login.UIStatsDashboard{}, mapStatsError(err)
+		return ui.UIStatsDashboard{}, mapStatsError(err)
 	}
 	// 健康采样空档必须来自真实历史采样查询（当前快照没有历史）。它在仪表盘上独立
 	// 标注来源；查询失败只影响空档提示，不伪装成“没有空档”。
@@ -226,8 +225,8 @@ func (a *StatsAdapter) Dashboard(ctx context.Context, userID string,
 			historyGaps = history.Completeness.SamplingGaps
 		}
 	}
-	result := login.UIStatsDashboard{
-		Overview: login.UIStatsOverview{
+	result := ui.UIStatsDashboard{
+		Overview: ui.UIStatsOverview{
 			ScopeID: overview.Scope.ID, ScopeKind: overview.Scope.Kind,
 			Start: overview.Window.Start, End: overview.Window.End,
 			TimeZone: overview.Window.TimeZone, Granularity: string(overview.Window.Granularity),
@@ -260,11 +259,11 @@ func (a *StatsAdapter) Dashboard(ctx context.Context, userID string,
 }
 
 // toHealth 转换当前健康快照（只保留稳定模块/状态/时间/来源与脱敏补充字段）。
-func toHealth(health stats.HealthResult) *login.UIStatsHealth {
-	result := &login.UIStatsHealth{ObservedAt: health.ObservedAt,
-		Modules: make([]login.UIStatsHealthSample, 0, len(health.Modules))}
+func toHealth(health stats.HealthResult) *ui.UIStatsHealth {
+	result := &ui.UIStatsHealth{ObservedAt: health.ObservedAt,
+		Modules: make([]ui.UIStatsHealthSample, 0, len(health.Modules))}
 	for _, module := range health.Modules {
-		sample := login.UIStatsHealthSample{
+		sample := ui.UIStatsHealthSample{
 			Module: string(module.Module), State: string(module.State),
 			Severity: string(module.Severity), Enabled: module.Enabled,
 			ObservedAt: module.ObservedAt, Source: module.Source,
@@ -284,16 +283,16 @@ func toHealth(health stats.HealthResult) *login.UIStatsHealth {
 }
 
 // toActivity 转换活跃度结果。
-func toActivity(activity stats.ActivityResult) login.UIStatsActivity {
-	result := login.UIStatsActivity{
+func toActivity(activity stats.ActivityResult) ui.UIStatsActivity {
+	result := ui.UIStatsActivity{
 		Start: activity.Window.Start, End: activity.Window.End,
 		TimeZone: activity.Window.TimeZone, Granularity: string(activity.Window.Granularity),
 		TotalActiveUsers: activity.TotalActiveUsers, DedupeScope: activity.DedupeScope,
 		UpdatedAt: activity.GeneratedAt, Completeness: toCompleteness(activity.Completeness),
-		Points: make([]login.UIStatsPoint, 0, len(activity.Points)),
+		Points: make([]ui.UIStatsPoint, 0, len(activity.Points)),
 	}
 	for _, point := range activity.Points {
-		result.Points = append(result.Points, login.UIStatsPoint{
+		result.Points = append(result.Points, ui.UIStatsPoint{
 			BucketKey: point.Bucket.Key, Start: point.Bucket.Start, End: point.Bucket.End,
 			InProgress: point.Bucket.InProgress, Partial: point.Bucket.Partial,
 			ActiveUsers: point.ActiveUsers, DataStatus: string(point.DataStatus)})
@@ -304,14 +303,14 @@ func toActivity(activity stats.ActivityResult) login.UIStatsActivity {
 // Statistics 读取同一窗口的活跃度与错误趋势；两次读取使用同一显式起止时间与作用
 // 范围，返回窗口若不一致由页面明确标注而不是拼接。
 func (a *StatsAdapter) Statistics(ctx context.Context, userID string,
-	query login.UIStatsQuery) (login.UIStatsStatistics, error) {
+	query ui.UIStatsQuery) (ui.UIStatsStatistics, error) {
 	caller, err := statsCaller(userID)
 	if err != nil {
-		return login.UIStatsStatistics{}, err
+		return ui.UIStatsStatistics{}, err
 	}
 	window, err := statsWindowRequest(query.Window)
 	if err != nil {
-		return login.UIStatsStatistics{}, err
+		return ui.UIStatsStatistics{}, err
 	}
 	categories := []stats.Category(nil)
 	if query.Category != "" {
@@ -324,15 +323,15 @@ func (a *StatsAdapter) Statistics(ctx context.Context, userID string,
 	activity, err := a.opts.Stats.Activity(ctx, stats.ActivityRequest{
 		Caller: caller, ScopeID: query.ScopeID, Window: window})
 	if err != nil {
-		return login.UIStatsStatistics{}, mapStatsError(err)
+		return ui.UIStatsStatistics{}, mapStatsError(err)
 	}
 	trend, err := a.opts.Stats.ErrorTrend(ctx, stats.ErrorTrendRequest{
 		Caller: caller, ScopeID: query.ScopeID, Window: window,
 		Categories: categories, Metric: metric})
 	if err != nil {
-		return login.UIStatsStatistics{}, mapStatsError(err)
+		return ui.UIStatsStatistics{}, mapStatsError(err)
 	}
-	result := login.UIStatsStatistics{Activity: toActivity(activity),
+	result := ui.UIStatsStatistics{Activity: toActivity(activity),
 		ErrorTrend: toErrorTrend(trend)}
 	result.UpdatedAt = activity.GeneratedAt
 	if trend.GeneratedAt.After(result.UpdatedAt) {
@@ -342,18 +341,18 @@ func (a *StatsAdapter) Statistics(ctx context.Context, userID string,
 }
 
 // toErrorTrend 转换错误趋势结果。
-func toErrorTrend(trend stats.ErrorTrendResult) login.UIStatsErrorTrend {
-	result := login.UIStatsErrorTrend{
+func toErrorTrend(trend stats.ErrorTrendResult) ui.UIStatsErrorTrend {
+	result := ui.UIStatsErrorTrend{
 		Start: trend.Window.Start, End: trend.Window.End,
 		TimeZone: trend.Window.TimeZone, Granularity: string(trend.Window.Granularity),
 		Metric: string(trend.Metric), Categories: toCategorySummary(trend.Categories),
 		TotalRawEvents: trend.TotalRawEvents, FailedRequests: trend.FailedRequests,
 		FailedTasks: trend.FailedTasks, UpdatedAt: trend.GeneratedAt,
 		Completeness: toCompleteness(trend.Completeness),
-		Points:       make([]login.UIStatsErrorPoint, 0, len(trend.Points)),
+		Points:       make([]ui.UIStatsErrorPoint, 0, len(trend.Points)),
 	}
 	for _, point := range trend.Points {
-		result.Points = append(result.Points, login.UIStatsErrorPoint{
+		result.Points = append(result.Points, ui.UIStatsErrorPoint{
 			BucketKey: point.Bucket.Key, Start: point.Bucket.Start, End: point.Bucket.End,
 			InProgress: point.Bucket.InProgress, Category: string(point.Category),
 			Severity: string(point.Severity), RawEvents: point.RawEvents,
@@ -365,14 +364,14 @@ func toErrorTrend(trend stats.ErrorTrendResult) login.UIStatsErrorTrend {
 
 // Errors 读取错误分类明细（五种白名单排序、占比、首次/最近发生与增幅）。
 func (a *StatsAdapter) Errors(ctx context.Context, userID string,
-	query login.UIStatsQuery) (login.UIStatsErrors, error) {
+	query ui.UIStatsQuery) (ui.UIStatsErrors, error) {
 	caller, err := statsCaller(userID)
 	if err != nil {
-		return login.UIStatsErrors{}, err
+		return ui.UIStatsErrors{}, err
 	}
 	window, err := statsWindowRequest(query.Window)
 	if err != nil {
-		return login.UIStatsErrors{}, err
+		return ui.UIStatsErrors{}, err
 	}
 	categories := []stats.Category(nil)
 	if query.Category != "" {
@@ -383,9 +382,9 @@ func (a *StatsAdapter) Errors(ctx context.Context, userID string,
 		Categories: categories, Sort: stats.ErrorSort(query.Sort),
 		Order: stats.SortOrder(query.Order), Limit: query.Limit, Offset: query.Offset})
 	if err != nil {
-		return login.UIStatsErrors{}, mapStatsError(err)
+		return ui.UIStatsErrors{}, mapStatsError(err)
 	}
-	page := login.UIStatsErrors{
+	page := ui.UIStatsErrors{
 		Start: result.Window.Start, End: result.Window.End,
 		TimeZone: result.Window.TimeZone, Granularity: string(result.Window.Granularity),
 		TotalRawEvents: result.TotalRawEvents, FailedRequests: result.FailedRequests,
@@ -398,10 +397,10 @@ func (a *StatsAdapter) Errors(ctx context.Context, userID string,
 		ComparisonEnabled: result.Comparison.Reason == "",
 		UpdatedAt:         result.GeneratedAt,
 		Completeness:      toCompleteness(result.Completeness),
-		Rows:              make([]login.UIStatsErrorRow, 0, len(result.Rows)),
+		Rows:              make([]ui.UIStatsErrorRow, 0, len(result.Rows)),
 	}
 	for _, row := range result.Rows {
-		page.Rows = append(page.Rows, login.UIStatsErrorRow{
+		page.Rows = append(page.Rows, ui.UIStatsErrorRow{
 			ErrorCode: row.ErrorCode, Category: string(row.Category),
 			Severity: string(row.Severity), AppID: row.AppID,
 			RawEvents: row.RawEvents, FailedRequests: row.FailedRequests,
@@ -436,5 +435,5 @@ func (a *StatsAdapter) RecordDenial(ctx context.Context, userID, reason string) 
 	return nil
 }
 
-// 编译期确认实现 login.UIPageStatsBackend。
-var _ login.UIPageStatsBackend = (*StatsAdapter)(nil)
+// 编译期确认实现 ui.UIPageStatsBackend。
+var _ ui.UIPageStatsBackend = (*StatsAdapter)(nil)

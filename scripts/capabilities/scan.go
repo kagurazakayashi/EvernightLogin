@@ -668,6 +668,10 @@ func scanPages(root string, inv *inventory) error {
 	if err != nil {
 		return err
 	}
+	uiFiles, uiErr := listGoFiles(filepath.Join(root, "ui"))
+	if uiErr == nil {
+		files = append(files, uiFiles...)
+	}
 	fset := token.NewFileSet()
 	for _, path := range files {
 		if strings.HasSuffix(path, "_test.go") {

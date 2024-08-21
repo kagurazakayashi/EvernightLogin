@@ -333,7 +333,7 @@ func scanPaginationContract(root string) paginationContract {
 		contract.CLIOffsetCap = 1000000
 	}
 
-	pageLiterals := intLiteralsInFile(root, "ui_pages_admin.go")
+	pageLiterals := intLiteralsInFile(root, "ui/pages_admin.go")
 	if pageLiterals[1000000] {
 		contract.PageOffsetCap = 1000000
 	}

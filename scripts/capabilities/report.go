@@ -346,7 +346,7 @@ func writeMarkdown(path string, report matrixReport) error {
 	appendPaginationList("跨入口分页参数不一致（-strict 失败）", audit.ContractMismatches)
 	builder.WriteString("## 扫描口径与限制\n\n")
 	builder.WriteString("- 扫描范围见 JSON `metadata.scan_scope`；跳过 `.ai/`、`docs/`、`scripts/`、")
-	builder.WriteString("`web/`、`migrations/`、`dist/`、`data/`，以及 `EvernightMail/`、`go-build-all/`、")
+	builder.WriteString("`ui/web/`、`migrations/`、`dist/`、`data/`，以及 `EvernightMail/`、`go-build-all/`、")
 	builder.WriteString("`examples/` 等嵌套 Module。\n")
 	builder.WriteString("- 页面路由从 `UIRoute` 复合字面量盘点；动态生成或宿主替换的路由不在静态清单内。\n")
 	builder.WriteString("- 协议端点表来自 `internal/protocolapi/doc.go` 的端点文档表；")

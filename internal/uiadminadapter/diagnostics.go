@@ -5,25 +5,24 @@ package uiadminadapter
 
 import (
 	"context"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/diag"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // GetDiagnostics 返回管理页脱敏诊断视图；errorRequestID 非空时附带关联错误。
 func (a *Adapter) GetDiagnostics(ctx context.Context, adminID,
-	errorRequestID string) (login.UIAdminDiagnosticsView, error) {
+	errorRequestID string) (ui.UIAdminDiagnosticsView, error) {
 	if err := a.check(ctx, adminID, "diagnostics.read"); err != nil {
-		return login.UIAdminDiagnosticsView{}, err
+		return ui.UIAdminDiagnosticsView{}, err
 	}
 	if a.opts.Diagnostics == nil {
-		return login.UIAdminDiagnosticsView{}, adminErr("INTERNAL_ERROR")
+		return ui.UIAdminDiagnosticsView{}, adminErr("INTERNAL_ERROR")
 	}
 	report, err := a.opts.Diagnostics.Snapshot(ctx, diag.Scope{})
 	if err != nil {
-		return login.UIAdminDiagnosticsView{}, adminErr("REQ_INVALID")
+		return ui.UIAdminDiagnosticsView{}, adminErr("REQ_INVALID")
 	}
-	view := login.UIAdminDiagnosticsView{
+	view := ui.UIAdminDiagnosticsView{
 		GeneratedAt: report.GeneratedAt, Status: report.Status,
 		State: report.State, Version: report.Version.Version,
 		ScopeID: report.Scope.ID, StorageStatus: report.Storage.Status,
@@ -32,11 +31,11 @@ func (a *Adapter) GetDiagnostics(ctx context.Context, adminID,
 		ErrorRequestID:       errorRequestID,
 	}
 	for _, item := range report.Queues.Jobs {
-		view.QueueCounts = append(view.QueueCounts, login.UIAdminDiagnosticsQueueCount{
+		view.QueueCounts = append(view.QueueCounts, ui.UIAdminDiagnosticsQueueCount{
 			Kind: "job", State: item.State, Count: item.Count})
 	}
 	for _, item := range report.Queues.MailDeliveries {
-		view.QueueCounts = append(view.QueueCounts, login.UIAdminDiagnosticsQueueCount{
+		view.QueueCounts = append(view.QueueCounts, ui.UIAdminDiagnosticsQueueCount{
 			Kind: "mail", State: item.State, Count: item.Count})
 	}
 	flagNames := make([]string, 0, len(report.Config.FeatureFlags))
@@ -45,7 +44,7 @@ func (a *Adapter) GetDiagnostics(ctx context.Context, adminID,
 	}
 	sortStrings(flagNames)
 	for _, name := range flagNames {
-		view.FeatureFlags = append(view.FeatureFlags, login.UIAdminDiagnosticsFlag{
+		view.FeatureFlags = append(view.FeatureFlags, ui.UIAdminDiagnosticsFlag{
 			Name: name, Enabled: report.Config.FeatureFlags[name]})
 	}
 	for _, field := range report.Config.PendingRestart {
@@ -59,7 +58,7 @@ func (a *Adapter) GetDiagnostics(ctx context.Context, adminID,
 		} else {
 			view.ErrorStatus = list.Status
 			for _, entry := range list.Entries {
-				view.Errors = append(view.Errors, login.UIAdminDiagnosticsError{
+				view.Errors = append(view.Errors, ui.UIAdminDiagnosticsError{
 					OccurredAt: entry.OccurredAt, Action: entry.Action,
 					Outcome: entry.Outcome, ErrorCode: entry.ErrorCode,
 					RequestID: entry.RequestID})

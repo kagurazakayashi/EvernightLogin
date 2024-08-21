@@ -11,14 +11,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/backup"
@@ -33,6 +25,13 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 )
 
 const testUserID = "usr_00000000000000000000000000000081"
@@ -763,7 +762,7 @@ func TestUIAdapterIntegration(t *testing.T) {
 		t.Fatalf("能力位 = %+v err=%v", caps, err)
 	}
 	artifacts, hasMore, err := adapter.ListArtifacts(e.ctx, testUserID,
-		login.UIBackupArtifactQuery{Limit: 20})
+		ui.UIBackupArtifactQuery{Limit: 20})
 	if err != nil || hasMore || len(artifacts) != 1 {
 		t.Fatalf("历史列表 = %d hasMore=%v err=%v", len(artifacts), hasMore, err)
 	}

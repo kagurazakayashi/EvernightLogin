@@ -11,12 +11,6 @@ package uiadminadapter
 import (
 	"context"
 	"errors"
-	"path/filepath"
-	"sync"
-	"testing"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
@@ -30,6 +24,11 @@ import (
 	tasksqlite "github.com/kagurazakayashi/EvernightLogin/internal/task/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	appmigrations "github.com/kagurazakayashi/EvernightLogin/migrations"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
 )
 
 // m5Authorizer 是按权限键控的授权替身（真实权限引擎由宿主注入）。
@@ -433,8 +432,8 @@ func TestReportsAdapterRealServices(t *testing.T) {
 }
 
 // loginPlanRequest 构造页面计划创建请求。
-func loginPlanRequest(name string) login.UIReportPlanRequest {
-	return login.UIReportPlanRequest{Name: name, ScopeID: "system",
+func loginPlanRequest(name string) ui.UIReportPlanRequest {
+	return ui.UIReportPlanRequest{Name: name, ScopeID: "system",
 		ScheduleType: "daily", Expression: "09:00", TimeZone: "Asia/Shanghai",
 		Granularity: "day", WindowDays: 1, Formats: []string{"html"},
 		DetailRows: 20, MissedPolicy: "latest", MaxCatchUp: 1,
@@ -442,8 +441,8 @@ func loginPlanRequest(name string) login.UIReportPlanRequest {
 }
 
 // loginReportHistoryQuery 构造历史列表查询。
-func loginReportHistoryQuery() login.UIReportHistoryQuery {
-	return login.UIReportHistoryQuery{Limit: 20}
+func loginReportHistoryQuery() ui.UIReportHistoryQuery {
+	return ui.UIReportHistoryQuery{Limit: 20}
 }
 
 // m5Repeat 生成重复字节字符串（测试数据）。

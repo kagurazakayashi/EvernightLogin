@@ -23,7 +23,7 @@
 |---|---|---|---|---|---|---|
 | 1 范围与原则 | Go Module、嵌入/独立共用、共享账户/应用隔离、单实例、SQLite/Windows 优先、默认拒绝、中文文档 | 根包 `login`/`Instance`、`internal/*`、`config`、`authz` | `login.New`/`Instance`；`login-server serve`；`examples/external-consumer` | 步骤 88/91/95 历史；138 A01 外部 module/API 表面 PASS | PASS-H | 138 Phase B（appcore 抽取）PARTIAL；独立服务当前树最终证据待 158 |
 | 2 运行形态/集成 | net/http Handler、宿主注入、资源所有权、独立服务、CLI 与页面共用逻辑 | `internal/serverapp`、`cmd/*`、`app`/`appcore` | `serve`/`init`、`loginctl`、`login-backup`；14 个页面选项 | 138 A01 PASS、138 6/6 回归（21:45）；`login-server --help` 可运行 | PARTIAL | 138 Phase B；页面/HTTP 全量证据待 158/161 |
-| 3 页面与替换 | 全功能内置页面、可替换、响应式/i18n、键盘/无障碍、管理后台 | `web/**`（104 模板）、`ui.go` 页面框架、`ui_pages_*` | 14 个页面选项；`/login\|register\|account\|security\|admin\|support` 等 | **161 PWN**：真实 root/客服 Passkey 强认证、普通用户 403、页面+API 矩阵通过 | PARTIAL | app-admin 应用范围页 403、管理员 revoke/logout CSRF 未验证；视觉/读屏/真机 NOT_TESTED |
+| 3 页面与替换 | 全功能内置页面、可替换、响应式/i18n、键盘/无障碍、管理后台 | `ui/web/**`（104 模板）、`ui/contracts.go`、`ui/webui.go` 页面框架、`ui/pages_*` | 14 个页面选项；`/login\|register\|account\|security\|admin\|support` 等 | **161 PWN**：真实 root/客服 Passkey 强认证、普通用户 403、页面+API 矩阵通过 | PARTIAL | app-admin 应用范围页 403、管理员 revoke/logout CSRF 未验证；视觉/读屏/真机 NOT_TESTED |
 | 4 用户/资料/生命周期 | CRUD/禁停/导入导出、注册/邀请/审核、稳定 ID、资料/邮箱/电话/头像 | `internal/account\|profile\|emailchange\|avatar\|onboarding` | `/admin/users`、`/account/profile`；`loginctl user` | `步骤158` 端到端；147 页面后端 PASS_WITH_NOTES；155 应用侧页面测试 | PASS-H | 当前 HTTP 用户管理端到端待 158；邮箱验证/变更待 140（已出 dev） |
 | 5 登录与认证 | 密码/邮箱登录、策略/限流/防枚举、Passkey、认证强度/近期认证 | `authn\|passkey\|ratelimit\|session` | `/login`、`/mfa`、`/security` | `步骤158`/`步骤159`；**159 最终 PASS_WITH_NOTES**：真实 Chrome/CDP Passkey 注册、TOTP 绑定/二次登录、恢复码生成（当前密码+TOTP reauth strong）/消费受限/绑新 Passkey/重登第二因素/Passkey 密码less 登录/旧码重放 400 均真实 PASS | PASS-H | 159 备注：TOTP 解除/最后因素保护 SKIP；真实硬件/Windows Hello/读屏 NOT_TESTED |
 | 6 设备码与扫码 | Device Grant、轮询/取消、扫码绑定/一次性/防重放/跨应用 | `oauthflow`、`qrlogin`、`protocolapi` | 协议端点默认关闭；设备确认/扫码页面 | 143 PWN；**160 PASS_WITH_NOTES**：`/oauth/device` 404 修复，设备确认/扫码页面+HTTP 主路径通过；142 仍 PARTIAL | PARTIAL | 160 精确缺口：OIDC UserInfo audience、loginte2e 直连、slow_down/expired；142 完整 QR 闭环；真实手机/浏览器表单 NOT_TESTED |
@@ -96,7 +96,7 @@
 | `go run ./cmd/login-server --help` | **PASS（200 小修复）**：显示 serve/init；帮助末尾为“已实现但默认关闭：设备码与扫码登录（192/193 验收边界）、令牌状态查询（introspection，145/160 验收边界）；真实邮件外发未配置” |
 | `go run ./cmd/loginctl help` | root-recover、restore-*、maintenance-*、config/diag/migrate/task/session/user/group/role/app/permission/notify/audit/reports/backups 等命令组 |
 | `go run ./cmd/login-backup --help` | create/verify/info/list/tables/preview/export/extract/help/version |
-| 页面清单 | `ui.go` **14 个页面选项**；`web/templates/page` **104 个模板**；路由名 grep 218 条（含少量非页面匹配，正式以 WebUI.Routes 为准） |
+| 页面清单 | `ui/contracts.go`、`ui/webui.go` **14 个页面选项**；`web/templates/page` **104 个模板**；路由名 grep 218 条（含少量非页面匹配，正式以 WebUI.Routes 为准） |
 | 权限/迁移 | `internal/preset/catalog.go` 51 键，`Implemented` 49 true/2 false（settings.manage/diagnostics.read 未实现且不授予预设）；`migrations/*.sql` 49 条（含 0048/0049） |
 | loginte2e | 套件：`discovery jwks authcode token device qr tokenauthz introspect adminapi all`；秘密从受保护文件读取 |
 | 验收证据 | 当前 `docs/acceptance/requirements-matrix-login.md` 与 `step156`、`步骤158`、`步骤159`、`step160`、`step161`、`step162`、`step163`、`step164`、`step165`、`step166` 验收记录；历史口径不再单列旧文档 |

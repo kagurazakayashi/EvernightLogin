@@ -18,33 +18,32 @@ package serverapp
 
 import (
 	"context"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // adminSessionsReauth 实现 UIPageAdminSessionsOptions.Reauth 的宿主实现。
 func adminSessionsReauth(ctx context.Context, gate *SecurityGate, userID string,
-	binding login.UIAdminSessionActionBinding) (login.UIAdminSessionEvidence, error) {
+	binding ui.UIAdminSessionActionBinding) (ui.UIAdminSessionEvidence, error) {
 	if gate == nil || gate.Reauth == nil || gate.Policy == nil {
-		return login.UIAdminSessionEvidence{}, reauth.ErrReauthRequired
+		return ui.UIAdminSessionEvidence{}, reauth.ErrReauthRequired
 	}
 	if !account.ValidUserID(userID) {
-		return login.UIAdminSessionEvidence{}, reauth.ErrAccessDenied
+		return ui.UIAdminSessionEvidence{}, reauth.ErrAccessDenied
 	}
 	if binding.Action != "session.admin_revoke" {
-		return login.UIAdminSessionEvidence{}, reauth.ErrAccessDenied
+		return ui.UIAdminSessionEvidence{}, reauth.ErrAccessDenied
 	}
 	fact, ok := gate.takeManagementFact(userID)
 	if !ok || fact.verifiedAt.IsZero() {
-		return login.UIAdminSessionEvidence{}, reauth.ErrReauthRequired
+		return ui.UIAdminSessionEvidence{}, reauth.ErrReauthRequired
 	}
 	caller, err := reauth.UserCaller(userID)
 	if err != nil {
-		return login.UIAdminSessionEvidence{}, reauth.ErrAccessDenied
+		return ui.UIAdminSessionEvidence{}, reauth.ErrAccessDenied
 	}
 	safeRequestID := ""
 	if account.ValidateRequestID(binding.RequestID) == nil {
@@ -66,9 +65,9 @@ func adminSessionsReauth(ctx context.Context, gate *SecurityGate, userID string,
 	signals := reauth.Signals{VerifiedAt: fact.verifiedAt, Strength: policy.StrengthStrong,
 		Complete: true, Confirmed: true}
 	if _, err := gate.Reauth.Authorize(reauth.WithSignals(ctx, signals), caller, request); err != nil {
-		return login.UIAdminSessionEvidence{}, err
+		return ui.UIAdminSessionEvidence{}, err
 	}
-	return login.UIAdminSessionEvidence{
+	return ui.UIAdminSessionEvidence{
 		VerifiedAt: fact.verifiedAt, Strength: "strong", Complete: true, Confirmed: true,
 	}, nil
 }
@@ -77,13 +76,13 @@ func adminSessionsReauth(ctx context.Context, gate *SecurityGate, userID string,
 // 会话显示，仅影响展示，不构成授权证明（页面路由与领域服务仍逐次判定）。
 type adminSessionsNavigation struct{}
 
-// Navigation 实现 login.UINavigationProvider。
+// Navigation 实现 ui.UINavigationProvider。
 func (adminSessionsNavigation) Navigation(_ context.Context,
-	page login.UIPageContext) ([]login.UINavItem, error) {
+	page ui.UIPageContext) ([]ui.UINavItem, error) {
 	if page.Session.Kind != "management" {
 		return nil, nil
 	}
-	return []login.UINavItem{{
+	return []ui.UINavItem{{
 		Key: "admin.sessions", Label: "会话管理", RouteName: "admin.sessions",
 		Visible: true, Enabled: true, Current: page.RouteName == "admin.sessions",
 	}}, nil

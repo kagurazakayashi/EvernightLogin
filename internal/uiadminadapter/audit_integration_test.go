@@ -9,13 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"path/filepath"
-	"testing"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	auditsqlite "github.com/kagurazakayashi/EvernightLogin/internal/audit/sqlite"
@@ -28,6 +21,12 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/testutil"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"path/filepath"
+	"testing"
+	"time"
 )
 
 var integrationNow = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
@@ -260,7 +259,7 @@ func (e *integrationEnv) backdateEvent(id string, occurredAt time.Time) {
 }
 
 func publicErrorCode(err error) string {
-	var publicErr *login.UIAuditError
+	var publicErr *ui.UIAuditError
 	if errors.As(err, &publicErr) {
 		return publicErr.Code
 	}
@@ -275,8 +274,8 @@ func TestAuditAdapterQueryAndDetail(t *testing.T) {
 	env.allow(actor, auditops.PermissionRead)
 	eventID := env.recordUserEvent(actor, "session.revoke", "success")
 
-	page, err := env.adapter.ListAudit(env.ctx, actor, login.UIAuditQuery{
-		ScopeID: auditops.ScopeSystem, Filter: login.UIAuditFilter{RequestID: "req_integration"},
+	page, err := env.adapter.ListAudit(env.ctx, actor, ui.UIAuditQuery{
+		ScopeID: auditops.ScopeSystem, Filter: ui.UIAuditFilter{RequestID: "req_integration"},
 		Order: "occurred_desc", Limit: 20})
 	if err != nil {
 		t.Fatalf("列表查询失败: %v", err)
@@ -304,13 +303,13 @@ func TestAuditAdapterQueryAndDetail(t *testing.T) {
 	// 跨应用筛选：授权范围只含 system 且非 allData 时服务拒绝。
 	env.authorizer.grants[testUserID(2)+"|"+auditops.PermissionRead+"|"+auditops.ScopeSystem] =
 		auditops.ScopeGrant{Allowed: true, AllData: false, ResourceIDs: []string{"app_allowed"}}
-	if _, err := env.adapter.ListAudit(env.ctx, testUserID(2), login.UIAuditQuery{
+	if _, err := env.adapter.ListAudit(env.ctx, testUserID(2), ui.UIAuditQuery{
 		ScopeID: auditops.ScopeSystem,
-		Filter:  login.UIAuditFilter{AppID: "app_other"}, Limit: 20}); publicErrorCode(err) != "ACCESS_DENIED" {
+		Filter:  ui.UIAuditFilter{AppID: "app_other"}, Limit: 20}); publicErrorCode(err) != "ACCESS_DENIED" {
 		t.Fatalf("跨应用筛选错误码 = %v", err)
 	}
 	// 无 audit.read 授权的用户被拒绝。
-	if _, err := env.adapter.ListAudit(env.ctx, testUserID(3), login.UIAuditQuery{
+	if _, err := env.adapter.ListAudit(env.ctx, testUserID(3), ui.UIAuditQuery{
 		ScopeID: auditops.ScopeSystem, Limit: 20}); publicErrorCode(err) != "ACCESS_DENIED" {
 		t.Fatalf("未授权用户列表错误码 = %v", err)
 	}
@@ -324,7 +323,7 @@ func TestAuditAdapterOwnActivityIsolation(t *testing.T) {
 	ownID := env.recordUserEvent(self, "password.change", "success")
 	otherID := env.recordUserEvent(other, "password.change", "failure")
 
-	page, err := env.adapter.QueryOwnActivity(env.ctx, self, login.UIAuditQuery{Limit: 20})
+	page, err := env.adapter.QueryOwnActivity(env.ctx, self, ui.UIAuditQuery{Limit: 20})
 	if err != nil {
 		t.Fatalf("本人活动查询失败: %v", err)
 	}
@@ -332,8 +331,8 @@ func TestAuditAdapterOwnActivityIsolation(t *testing.T) {
 		t.Fatalf("本人活动混入他人记录: %+v", page.Events)
 	}
 	// 显式传入他人操作者筛选也不能越权：服务固定为本人。
-	page, err = env.adapter.QueryOwnActivity(env.ctx, self, login.UIAuditQuery{
-		Filter: login.UIAuditFilter{ActorType: "user", ActorID: other}, Limit: 20})
+	page, err = env.adapter.QueryOwnActivity(env.ctx, self, ui.UIAuditQuery{
+		Filter: ui.UIAuditFilter{ActorType: "user", ActorID: other}, Limit: 20})
 	if err != nil {
 		t.Fatalf("本人活动筛选查询失败: %v", err)
 	}
@@ -357,8 +356,8 @@ func TestAuditAdapterExportLifecycle(t *testing.T) {
 	env.allow(actor, auditops.PermissionExport)
 	env.recordUserEvent(actor, "session.revoke", "success")
 
-	export, err := env.adapter.CreateExport(env.ctx, actor, login.UIAuditExportRequest{
-		ScopeID: auditops.ScopeSystem, Filter: login.UIAuditFilter{Outcome: "success"},
+	export, err := env.adapter.CreateExport(env.ctx, actor, ui.UIAuditExportRequest{
+		ScopeID: auditops.ScopeSystem, Filter: ui.UIAuditFilter{Outcome: "success"},
 		Order: "occurred_desc", Format: "csv", RequestID: "req_export_it"})
 	if err != nil {
 		t.Fatalf("创建导出失败: %v", err)
@@ -414,12 +413,12 @@ func TestAuditAdapterPurgeRootOnlyAndPreview(t *testing.T) {
 	cutoff := integrationNow.AddDate(0, 0, -200)
 	// 非 root（即便有 audit.read）：预估与提交都拒绝。
 	if _, err := env.adapter.PreviewPurge(env.ctx, testUserID(32),
-		login.UIPurgeRequest{ScopeID: auditops.ScopeSystem, Cutoff: cutoff,
+		ui.UIPurgeRequest{ScopeID: auditops.ScopeSystem, Cutoff: cutoff,
 			BatchSize: 20, MaxRecords: 100}); publicErrorCode(err) != "ACCESS_DENIED" {
 		t.Fatalf("非 root 预估错误码 = %v", err)
 	}
 	// root 只读预估：返回真实预估与保护/产物边界。
-	preview, err := env.adapter.PreviewPurge(env.ctx, rootID, login.UIPurgeRequest{
+	preview, err := env.adapter.PreviewPurge(env.ctx, rootID, ui.UIPurgeRequest{
 		ScopeID: auditops.ScopeSystem, Cutoff: cutoff, BatchSize: 20, MaxRecords: 100})
 	if err != nil {
 		t.Fatalf("root 预估失败: %v", err)
@@ -432,12 +431,12 @@ func TestAuditAdapterPurgeRootOnlyAndPreview(t *testing.T) {
 		t.Fatal("预估缺少提交摘要")
 	}
 	// 预估不是删除：记录仍在。
-	if page, err := env.adapter.ListAudit(env.ctx, rootID, login.UIAuditQuery{
+	if page, err := env.adapter.ListAudit(env.ctx, rootID, ui.UIAuditQuery{
 		ScopeID: auditops.ScopeSystem, Limit: 20}); err != nil || len(page.Events) < 2 {
 		t.Fatalf("预估删除了记录？events=%d err=%v", len(page.Events), err)
 	}
 	// 提交清理：只表示已受理，返回 queued 任务。
-	run, err := env.adapter.StartPurge(env.ctx, rootID, login.UIPurgeRequest{
+	run, err := env.adapter.StartPurge(env.ctx, rootID, ui.UIPurgeRequest{
 		ScopeID: auditops.ScopeSystem, Cutoff: cutoff, BatchSize: 20, MaxRecords: 100},
 		preview.Digest, "integration cleanup", "req_purge_it")
 	if err != nil {
@@ -526,11 +525,11 @@ func TestAuditAdapterCapabilities(t *testing.T) {
 	}
 	// root 未获普通授权也可经真实 auditops 读取列表与错误码目录（与后端旁路一致）。
 	env.recordUserEvent(rootID, "session.revoke", "success")
-	if page, err := env.adapter.ListAudit(env.ctx, rootID, login.UIAuditQuery{
+	if page, err := env.adapter.ListAudit(env.ctx, rootID, ui.UIAuditQuery{
 		ScopeID: auditops.ScopeSystem, Limit: 20}); err != nil || len(page.Events) == 0 {
 		t.Fatalf("root 列表被页面适配器拒绝: %+v err=%v", page, err)
 	}
-	if search, err := env.adapter.SearchErrors(env.ctx, rootID, login.UIErrorQuery{
+	if search, err := env.adapter.SearchErrors(env.ctx, rootID, ui.UIErrorQuery{
 		Code: "ACCESS_DENIED"}); err != nil || len(search.Entries) != 1 {
 		t.Fatalf("root 错误码目录被拒绝: %+v err=%v", search, err)
 	}
@@ -542,12 +541,12 @@ func TestAuditAdapterErrorCatalogAuthorization(t *testing.T) {
 	env := newIntegrationEnv(t)
 	reader := testUserID(61)
 	env.allow(reader, auditops.PermissionRead)
-	allowed, err := env.adapter.SearchErrors(env.ctx, reader, login.UIErrorQuery{
+	allowed, err := env.adapter.SearchErrors(env.ctx, reader, ui.UIErrorQuery{
 		Code: "ACCESS_DENIED"})
 	if err != nil || len(allowed.Entries) != 1 {
 		t.Fatalf("授权用户错误码检索 = %+v err=%v", allowed, err)
 	}
-	denied, err := env.adapter.SearchErrors(env.ctx, testUserID(62), login.UIErrorQuery{})
+	denied, err := env.adapter.SearchErrors(env.ctx, testUserID(62), ui.UIErrorQuery{})
 	if publicErrorCode(err) != "ACCESS_DENIED" || len(denied.Entries) != 0 {
 		t.Fatalf("未授权错误码检索 = %+v err=%v", denied, err)
 	}

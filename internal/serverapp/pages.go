@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/httpapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
@@ -24,6 +25,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiadminadapter"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uisecurityadapter"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // pageSessions 用真实会话服务实现内置页面框架的页面会话契约。
@@ -68,14 +70,14 @@ func isManagementPagePath(requestPath, prefix string) bool {
 
 // ResolvePageSession 校验请求携带的会话 Cookie 并返回公开安全摘要。
 func (p pageSessions) ResolvePageSession(ctx context.Context,
-	request *http.Request) (login.UISession, error) {
+	request *http.Request) (ui.UISession, error) {
 	secret, ok := p.service.SessionSecretFromRequest(request)
 	if !ok {
-		return login.UISession{}, login.ErrUISessionExpired
+		return ui.UISession{}, login.ErrUISessionExpired
 	}
 	record, err := p.service.Validate(ctx, secret)
 	if err != nil {
-		return login.UISession{}, login.ErrUISessionExpired
+		return ui.UISession{}, login.ErrUISessionExpired
 	}
 	kind := "normal"
 	if record.IsRestricted() {
@@ -95,7 +97,7 @@ func (p pageSessions) ResolvePageSession(ctx context.Context,
 			}
 		}
 	}
-	return login.UISession{
+	return ui.UISession{
 		Authenticated: true,
 		UserID:        record.UserID,
 		AppID:         record.AppID,
@@ -119,7 +121,7 @@ func (p pageSessions) IssueCSRFToken(ctx context.Context, request *http.Request)
 
 // Pages 是内置页面装配结果。
 type Pages struct {
-	WebUI      *login.WebUI
+	WebUI      *ui.WebUI
 	CSRF       *pagecsrf.Provider
 	Sessions   *session.Service
 	PublicForm map[string]string
@@ -136,19 +138,19 @@ type PageBuildOptions struct {
 	// Prefix 必须与宿主 HTTP handler 的固定前缀一致；空使用配置的 server.path_prefix。
 	Prefix string
 	// HostTemplates 是宿主模板覆盖来源；HostRenderer 是最高优先级单页渲染器。
-	HostTemplates *login.UIHostTemplates
-	HostRenderer  login.UIPageRenderer
+	HostTemplates *ui.UIHostTemplates
+	HostRenderer  ui.UIPageRenderer
 	// Brand 覆盖页面品牌；nil 使用内置品牌。
-	Brand *login.UIBrand
+	Brand *ui.UIBrand
 	// AssetOverlays 按顺序覆盖内置静态资源（同逻辑路径后者优先）。
 	AssetOverlays []fs.FS
 	// Translations 追加/覆盖翻译目录；nil 使用内置 zh-CN。
-	Translations login.UICatalogProvider
+	Translations ui.UICatalogProvider
 	// DisableBuiltinPages 关闭内置页面，仅由宿主模板/渲染器提供页面。
 	DisableBuiltinPages bool
 }
 
-// BuildPages 装配内置页面：ui.go 共 14 个页面选项，安全中心随核心安全服务注册，
+// BuildPages 装配内置页面：ui/contracts.go 与 ui/webui.go 共 14 个页面选项，安全中心随核心安全服务注册，
 // OAuth 授权页仍按协议端点条件注册；Passkey/OAuth 子能力在安全中心内按能力位显示。
 //
 // 已装配（全部使用真实领域服务与生产授权适配层）：
@@ -267,12 +269,12 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	validateCSRF := func(ctx context.Context, request *http.Request, token string) error {
 		return services.Sessions.ValidateCSRFToken(ctx, request, token)
 	}
-	webOptions := login.WebUIOptions{
+	webOptions := ui.WebUIOptions{
 		Prefix: prefix,
 		Session: pageSessions{service: services.Sessions, gate: gate,
 			pathPrefix: prefix},
 		FormTokens: csrfProvider,
-		PageAuth: &login.UIPageAuthOptions{
+		PageAuth: &ui.UIPageAuthOptions{
 			Backend:       authAdapter,
 			PostLoginPath: "/",
 			PasskeyLoginPath: func() string {
@@ -282,8 +284,8 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 				return ""
 			}(),
 		},
-		PageAccount: &login.UIPageAccountOptions{Backend: accountAdapter},
-		PageMFA: &login.UIPageMFAOptions{
+		PageAccount: &ui.UIPageAccountOptions{Backend: accountAdapter},
+		PageMFA: &ui.UIPageMFAOptions{
 			Backend:       authAdapter,
 			LoginPath:     "/login",
 			PostLoginPath: "/home",
@@ -314,10 +316,10 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		if securityErr != nil {
 			return nil, fmt.Errorf("构造安全中心页适配器失败: %w", securityErr)
 		}
-		webOptions.PageSecurity = &login.UIPageSecurityOptions{Backend: securityAdapter}
+		webOptions.PageSecurity = &ui.UIPageSecurityOptions{Backend: securityAdapter}
 	}
 	if protocolDomains != nil && protocolDomains.OAuthFlow != nil {
-		webOptions.PageOAuth = &login.UIPageOAuthOptions{
+		webOptions.PageOAuth = &ui.UIPageOAuthOptions{
 			Backend:       authAdapter,
 			LoginPath:     "/login",
 			PostLoginPath: "/home",
@@ -337,13 +339,13 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if adminErr != nil {
 		return nil, fmt.Errorf("构造用户管理页适配器失败: %w", adminErr)
 	}
-	webOptions.PageAdmin = &login.UIPageAdminOptions{Backend: adminAdapter,
-		Diagnostics: &login.UIPageAdminDiagnosticsOptions{Backend: adminAdapter},
+	webOptions.PageAdmin = &ui.UIPageAdminOptions{Backend: adminAdapter,
+		Diagnostics: &ui.UIPageAdminDiagnosticsOptions{Backend: adminAdapter},
 		Validity:    adminAdapter}
 	if settingsBackend, settingsErr := newSettingsSettingsPageBackend(deps, managed); settingsErr != nil {
 		return nil, fmt.Errorf("构造配置设置页适配器失败: %w", settingsErr)
 	} else if settingsBackend != nil {
-		webOptions.PageAdmin.Settings = &login.UIPageAdminSettingsOptions{Backend: settingsBackend}
+		webOptions.PageAdmin.Settings = &ui.UIPageAdminSettingsOptions{Backend: settingsBackend}
 	}
 	rbacAdapter, rbacErr := uiadminadapter.NewRBAC(uiadminadapter.RBACOptions{
 		Roles: managed.Role, Permissions: managed.Permission,
@@ -361,7 +363,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if rbacErr != nil {
 		return nil, fmt.Errorf("构造角色权限页适配器失败: %w", rbacErr)
 	}
-	webOptions.PageRBAC = &login.UIPageRBACOptions{Backend: rbacAdapter}
+	webOptions.PageRBAC = &ui.UIPageRBACOptions{Backend: rbacAdapter}
 	// 审计页：真实 auditops 查询/导出/清理 + 生产授权适配器；导出/清理等敏感
 	// 动作经真实 reauth/policy 判定（未满足时 fail-closed 拒绝）。
 	auditAdapter, auditErr := uiadminadapter.NewAudit(uiadminadapter.AuditOptions{
@@ -376,7 +378,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if auditErr != nil {
 		return nil, fmt.Errorf("构造审计页适配器失败: %w", auditErr)
 	}
-	webOptions.PageAudit = &login.UIPageAuditOptions{
+	webOptions.PageAudit = &ui.UIPageAuditOptions{
 		Backend: auditAdapter, ValidateCSRF: validateCSRF, Now: now,
 	}
 	statsAdapter, statsErr := uiadminadapter.NewStats(uiadminadapter.StatsOptions{
@@ -394,7 +396,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if statsErr != nil {
 		return nil, fmt.Errorf("构造统计页适配器失败: %w", statsErr)
 	}
-	webOptions.PageStats = &login.UIPageStatsOptions{Backend: statsAdapter, Now: now}
+	webOptions.PageStats = &ui.UIPageStatsOptions{Backend: statsAdapter, Now: now}
 	reportsAdapter, reportsErr := uiadminadapter.NewReports(uiadminadapter.ReportsOptions{
 		Reports:    managed.Reports,
 		Plans:      managed.Plans,
@@ -406,7 +408,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if reportsErr != nil {
 		return nil, fmt.Errorf("构造报告页适配器失败: %w", reportsErr)
 	}
-	webOptions.PageReports = &login.UIPageReportsOptions{
+	webOptions.PageReports = &ui.UIPageReportsOptions{
 		Backend: reportsAdapter, ValidateCSRF: validateCSRF, Now: now,
 	}
 	backupsAdapter, backupsErr := uiadminadapter.NewBackups(uiadminadapter.BackupsOptions{
@@ -417,7 +419,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if backupsErr != nil {
 		return nil, fmt.Errorf("构造备份页适配器失败: %w", backupsErr)
 	}
-	webOptions.PageBackups = &login.UIPageBackupOptions{
+	webOptions.PageBackups = &ui.UIPageBackupOptions{
 		Backend: backupsAdapter, ValidateCSRF: validateCSRF, Now: now,
 	}
 	appsAdapter, appsErr := uiadminadapter.NewApps(uiadminadapter.AppOptions{
@@ -436,19 +438,19 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if appsErr != nil {
 		return nil, fmt.Errorf("构造应用管理页适配器失败: %w", appsErr)
 	}
-	webOptions.PageApps = &login.UIPageAppsOptions{
+	webOptions.PageApps = &ui.UIPageAppsOptions{
 		Backend:       appsAdapter,
 		PolicyBackend: appsAdapter,
 		// 步骤 190：应用逻辑删除属于高风险生命周期操作，接真实再次认证/敏感策略
 		// 闸门；未装配时页面删除入口 fail-closed 拒绝，不静默放行。
 		DeleteReauth: func(ctx context.Context, userID string,
-			binding login.UIAppDeleteBinding) error {
+			binding ui.UIAppDeleteBinding) error {
 			return applicationDeleteReauth(ctx, gate, userID, binding)
 		},
 		// 策略写先经过真实管理强认证（root/管理会话近期事实），再登记一次性
 		// app/version/policy-digest/request-id 批准；managedapi.SetPolicy 只消费该批准。
 		PolicyReauth: func(ctx context.Context, userID string,
-			binding login.UIAppPolicyActionBinding) error {
+			binding ui.UIAppPolicyActionBinding) error {
 			if managed.ManagedPolicyApprovals == nil {
 				return fmt.Errorf("托管策略一次性批准器未装配")
 			}
@@ -460,7 +462,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	}
 	// 步骤 185：业务应用管理员页面（/manage/**，UIAccessUser）复用同一应用范围
 	// 判定与真实领域服务；/admin/** 的强认证访问级别保持不变。
-	webOptions.PageManage = &login.UIPageManageOptions{
+	webOptions.PageManage = &ui.UIPageManageOptions{
 		Apps: appsAdapter, RBAC: rbacAdapter,
 	}
 	// 客服/人工恢复页：真实 support/manualrecovery 服务；人工恢复制度默认关闭，
@@ -470,14 +472,14 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		Recovery:  securityDomains.ManualRecovery,
 		Authorize: managed.Checker.authorizePageAction,
 		Reauth: func(ctx context.Context, userID string,
-			binding login.UISupportActionBinding) (login.UISupportEvidence, error) {
+			binding ui.UISupportActionBinding) (ui.UISupportEvidence, error) {
 			return supportPageReauth(ctx, gate, userID, binding)
 		},
 	})
 	if supportErr != nil {
 		return nil, fmt.Errorf("构造客服页适配器失败: %w", supportErr)
 	}
-	webOptions.PageSupport = &login.UIPageSupportOptions{Backend: supportAdapter}
+	webOptions.PageSupport = &ui.UIPageSupportOptions{Backend: supportAdapter}
 	// 步骤 187：系统管理员强制下线页（/admin/sessions）。查询/撤销调用真实
 	// session.Service；宿主回调提供页面再次认证证据（管理强认证短时事实 + 真实
 	// session.revoke.other 策略评估）；CLI 证明通道由 186 中间件单独消费。
@@ -489,10 +491,10 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if adminSessionsErr != nil {
 		return nil, fmt.Errorf("构造管理员会话页适配器失败: %w", adminSessionsErr)
 	}
-	webOptions.PageAdminSessions = &login.UIPageAdminSessionsOptions{
+	webOptions.PageAdminSessions = &ui.UIPageAdminSessionsOptions{
 		Backend: adminSessionsAdapter,
 		Reauth: func(ctx context.Context, userID string,
-			binding login.UIAdminSessionActionBinding) (login.UIAdminSessionEvidence, error) {
+			binding ui.UIAdminSessionActionBinding) (ui.UIAdminSessionEvidence, error) {
 			return adminSessionsReauth(ctx, gate, userID, binding)
 		},
 	}
@@ -507,7 +509,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		Policy:    gate.Policy,
 		Authorize: managed.Checker.authorizePageAction,
 		Reauth: func(ctx context.Context, userID string,
-			binding login.UISecurityPolicyActionBinding) error {
+			binding ui.UISecurityPolicyActionBinding) error {
 			return gate.SecurityPolicyReauth(ctx, userID, binding)
 		},
 		Audit: deps.Audit,
@@ -515,7 +517,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	if policyErr != nil {
 		return nil, fmt.Errorf("构造敏感策略页适配器失败: %w", policyErr)
 	}
-	webOptions.PageSecurityPolicy = &login.UIPageSecurityPolicyOptions{
+	webOptions.PageSecurityPolicy = &ui.UIPageSecurityPolicyOptions{
 		Backend: newPolicyWriteBackend(policyAdapter, gate, deps.Audit), ValidateCSRF: validateCSRF,
 	}
 	// 步骤 183：应用宿主页面替换/资源覆盖。这里只覆盖内容与资源来源；页面路由的
@@ -541,7 +543,7 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 			webOptions.DisableBuiltinPages = true
 		}
 	}
-	web, err := login.NewWebUI(webOptions)
+	web, err := ui.NewWebUI(webOptions)
 	if err != nil {
 		return nil, fmt.Errorf("构造内置页面失败: %w", err)
 	}
@@ -648,18 +650,18 @@ func validRBACPageReauthAction(action string) bool {
 // 只取认证页映射会导致真实 serve 下 /login/forgot-password、
 // /login/reset-password 等公开表单被当作会话表单校验而恒 403。
 func publicFormPaths(prefix string) map[string]string {
-	paths := login.UIPageAuthPublicFormPaths(prefix)
-	for path, purpose := range login.UIPageMFAPublicFormPaths(prefix) {
+	paths := ui.UIPageAuthPublicFormPaths(prefix)
+	for path, purpose := range ui.UIPageMFAPublicFormPaths(prefix) {
 		paths[path] = purpose
 	}
 	// 步骤 162/163 回归：邮箱变更验证是匿名公开表单，漏合并会让真实 serve 的
 	// POST 被当作会话表单校验而恒 403 ACCESS_DENIED。
-	for path, purpose := range login.UIPageAccountPublicFormPaths(prefix) {
+	for path, purpose := range ui.UIPageAccountPublicFormPaths(prefix) {
 		paths[path] = purpose
 	}
 	// OAuth 授权同意、设备确认、扫码确认是匿名公开表单；真实 serve 中它们与
 	// /oauth 协议挂载共享路径，漏合并会让页面 POST 被当作会话表单 CSRF 校验而恒 403。
-	for path, purpose := range login.UIPageOAuthPublicFormPaths(prefix) {
+	for path, purpose := range ui.UIPageOAuthPublicFormPaths(prefix) {
 		paths[path] = purpose
 	}
 	return paths
@@ -706,7 +708,7 @@ func BuildHTTPOptions(deps Deps, pages *Pages, logger *slog.Logger,
 				ContentSecurityPolicy: login.DefaultUIPageContentSecurityPolicy,
 			},
 		},
-		UI: &login.UIHTTPOptions{
+		UI: &httpapi.UIHTTPOptions{
 			Handler:                   pages.WebUI,
 			PageContentSecurityPolicy: login.DefaultUIPageContentSecurityPolicy,
 		},
@@ -726,4 +728,4 @@ func IsUninitialized(ctx context.Context, services *Services) (bool, error) {
 }
 
 // 编译期确认页面会话适配器满足公开契约。
-var _ login.UISessionService = pageSessions{}
+var _ ui.UISessionService = pageSessions{}

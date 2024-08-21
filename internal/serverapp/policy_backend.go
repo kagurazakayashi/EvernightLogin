@@ -18,17 +18,18 @@ import (
 
 	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // policyWriteBackend 包装真实敏感策略页后端，只拦截四个写/敏感动作。
 type policyWriteBackend struct {
-	login.UISecurityPolicyBackend
+	ui.UISecurityPolicyBackend
 	gate  *SecurityGate
 	audit *audit.Recorder
 }
 
 // newPolicyWriteBackend 构造包装器；gate 为空时返回 nil（调用方应拒绝装配）。
-func newPolicyWriteBackend(inner login.UISecurityPolicyBackend,
+func newPolicyWriteBackend(inner ui.UISecurityPolicyBackend,
 	gate *SecurityGate, recorder *audit.Recorder) *policyWriteBackend {
 	if inner == nil || gate == nil {
 		return nil
@@ -38,11 +39,11 @@ func newPolicyWriteBackend(inner login.UISecurityPolicyBackend,
 
 // securityPolicyReauthError 返回页面稳定错误码（再次认证未满足）。
 func securityPolicyReauthError() error {
-	return &login.UISecurityPolicyError{Code: "REAUTH_REQUIRED"}
+	return &ui.UISecurityPolicyError{Code: "REAUTH_REQUIRED"}
 }
 
 // policyValuesDigest 规范化策略值后计算绑定摘要（不含秘密，仅定位变更内容）。
-func policyValuesDigest(values login.UISecurityPolicyValues) string {
+func policyValuesDigest(values ui.UISecurityPolicyValues) string {
 	canonical := fmt.Sprintf("%t|%t|%d|%s|%t|%t", values.Sensitive,
 		values.ReauthRequired, values.MaxAuthAgeSeconds, values.Strength,
 		values.ConfirmationRequired, values.NotificationRequired)
@@ -50,59 +51,59 @@ func policyValuesDigest(values login.UISecurityPolicyValues) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SavePolicy 实现 login.UISecurityPolicyBackend：绑定变更摘要与版本后执行。
+// SavePolicy 实现 ui.UISecurityPolicyBackend：绑定变更摘要与版本后执行。
 func (b *policyWriteBackend) SavePolicy(ctx context.Context, userID, scopeID,
-	operationID string, change login.UISecurityPolicyValues, expectedVersion int64,
-	previewToken, requestID string) (login.UISecurityPolicyWriteResult, error) {
+	operationID string, change ui.UISecurityPolicyValues, expectedVersion int64,
+	previewToken, requestID string) (ui.UISecurityPolicyWriteResult, error) {
 	normalized, _ := login.NormalizeSecurityPolicyChange(change)
 	digest := policyValuesDigest(normalized)
 	if err := b.beginLocked(userID, "policy.save", scopeID, operationID,
 		expectedVersion, digest); err != nil {
-		return login.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
+		return ui.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
 	}
 	if authErr := b.gate.authorizePolicyWrite(ctx, userID, "policy.save", scopeID,
 		operationID, expectedVersion, digest); authErr != nil {
 		b.gate.policyWriteMu.Unlock()
 		b.gate.abortPolicyWrite(userID)
-		return login.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
+		return ui.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
 	}
 	result, callErr := b.UISecurityPolicyBackend.SavePolicy(ctx, userID, scopeID,
 		operationID, change, expectedVersion, previewToken, requestID)
 	return b.finishOnReturn(userID, digest, result, callErr)
 }
 
-// RestorePolicy 实现 login.UISecurityPolicyBackend：绑定作用域/操作/版本后执行。
+// RestorePolicy 实现 ui.UISecurityPolicyBackend：绑定作用域/操作/版本后执行。
 func (b *policyWriteBackend) RestorePolicy(ctx context.Context, userID, scopeID,
 	operationID string, all bool, expectedVersion int64, previewToken,
-	requestID string) (login.UISecurityPolicyWriteResult, error) {
+	requestID string) (ui.UISecurityPolicyWriteResult, error) {
 	digest := policyWriteDigest("policy.restore", scopeID, operationID,
 		expectedVersion, strconv.FormatBool(all))
 	if err := b.beginLocked(userID, "policy.restore", scopeID, operationID,
 		expectedVersion, digest); err != nil {
-		return login.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
+		return ui.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
 	}
 	if authErr := b.gate.authorizePolicyWrite(ctx, userID, "policy.restore", scopeID,
 		operationID, expectedVersion, digest); authErr != nil {
 		b.gate.policyWriteMu.Unlock()
 		b.gate.abortPolicyWrite(userID)
-		return login.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
+		return ui.UISecurityPolicyWriteResult{}, securityPolicyReauthError()
 	}
 	result, callErr := b.UISecurityPolicyBackend.RestorePolicy(ctx, userID, scopeID,
 		operationID, all, expectedVersion, previewToken, requestID)
 	return b.finishOnReturn(userID, digest, result, callErr)
 }
 
-// SendTestMail 实现 login.UISecurityPolicyBackend：只做再次认证，不建立策略写批准。
+// SendTestMail 实现 ui.UISecurityPolicyBackend：只做再次认证，不建立策略写批准。
 func (b *policyWriteBackend) SendTestMail(ctx context.Context, userID, recipient,
-	kind, idempotencyKey, requestID string) (login.UINotificationTestResult, error) {
+	kind, idempotencyKey, requestID string) (ui.UINotificationTestResult, error) {
 	return b.UISecurityPolicyBackend.SendTestMail(ctx, userID, recipient, kind,
 		idempotencyKey, requestID)
 }
 
-// ReplaceSMTPSecret 实现 login.UISecurityPolicyBackend：秘密替换同样属于敏感动作，
+// ReplaceSMTPSecret 实现 ui.UISecurityPolicyBackend：秘密替换同样属于敏感动作，
 // 只做再次认证；真实秘密写入通道未装配（页面能力位为 false）。
 func (b *policyWriteBackend) ReplaceSMTPSecret(ctx context.Context, userID, newSecret,
-	idempotencyKey, requestID string) (login.UINotificationSecretResult, error) {
+	idempotencyKey, requestID string) (ui.UINotificationSecretResult, error) {
 	return b.UISecurityPolicyBackend.ReplaceSMTPSecret(ctx, userID, newSecret,
 		idempotencyKey, requestID)
 }
@@ -121,7 +122,7 @@ func (b *policyWriteBackend) beginLocked(userID, action, scopeID, operationID st
 
 // finishOnReturn 在写完/失败后核对绑定并释放写锁。
 func (b *policyWriteBackend) finishOnReturn(userID, digest string,
-	result login.UISecurityPolicyWriteResult, err error) (login.UISecurityPolicyWriteResult, error) {
+	result ui.UISecurityPolicyWriteResult, err error) (ui.UISecurityPolicyWriteResult, error) {
 	defer b.gate.policyWriteMu.Unlock()
 	if err != nil {
 		b.gate.abortPolicyWrite(userID)

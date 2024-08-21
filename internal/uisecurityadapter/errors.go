@@ -2,8 +2,6 @@ package uisecurityadapter
 
 import (
 	"errors"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
@@ -11,6 +9,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/totp"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // publicCodes 是页面可呈现的稳定错误码集合（不新增码）。
@@ -27,7 +26,7 @@ func mapped(code string) error {
 	if !publicCodes[code] {
 		code = "INTERNAL_ERROR"
 	}
-	return &login.UIAccountError{Code: code}
+	return &ui.UIAccountError{Code: code}
 }
 
 // domainError 优先透传已映射公开错误，否则用领域 CodeOf 归一化。
@@ -35,7 +34,7 @@ func domainError(err error, codeOf func(error) string) error {
 	if err == nil {
 		return nil
 	}
-	var publicErr *login.UIAccountError
+	var publicErr *ui.UIAccountError
 	if errors.As(err, &publicErr) {
 		return publicErr
 	}
@@ -67,7 +66,7 @@ func mapOAuthError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var publicErr *login.UIAccountError
+	var publicErr *ui.UIAccountError
 	if errors.As(err, &publicErr) {
 		return publicErr
 	}
@@ -102,7 +101,7 @@ func mapReauthVerifyError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var publicErr *login.UIAccountError
+	var publicErr *ui.UIAccountError
 	if errors.As(err, &publicErr) {
 		return publicErr
 	}

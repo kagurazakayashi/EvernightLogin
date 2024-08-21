@@ -14,6 +14,7 @@ import (
 	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 // newSecurityGateTestEnv 构造真实服务的敏感操作闸门。
@@ -153,7 +154,7 @@ func TestSecurityPolicyReauthRequiresManagementFact(t *testing.T) {
 	gate, _ := newSecurityGateTestEnv(t, true)
 	err := gate.SecurityPolicyReauth(context.Background(),
 		"usr_00000000000000000000000000000001",
-		login.UISecurityPolicyActionBinding{Action: "policy.save"})
+		ui.UISecurityPolicyActionBinding{Action: "policy.save"})
 	if err == nil {
 		t.Fatal("缺少管理会话强认证事实时必须拒绝策略写入再次认证")
 	}

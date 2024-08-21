@@ -3,13 +3,12 @@ package uiauthadapter
 import (
 	"errors"
 	"fmt"
-	"testing"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mfa"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
 	"github.com/kagurazakayashi/EvernightLogin/internal/recovery"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"testing"
 )
 
 // TestPublicMFAErrorDomainMapping 验证各领域错误按真实哨兵映射，不会因某领域
@@ -60,7 +59,7 @@ func TestPublicMFAErrorDomainMapping(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			mapped := publicMFAError(test.err)
-			var publicErr *login.UIPageAuthError
+			var publicErr *ui.UIPageAuthError
 			if !errors.As(mapped, &publicErr) {
 				t.Fatalf("期望 *UIPageAuthError，实际 %T", mapped)
 			}
