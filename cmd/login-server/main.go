@@ -32,6 +32,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/serverapp"
+	"github.com/kagurazakayashi/EvernightLogin/lifecycle"
 	"github.com/spf13/cobra"
 )
 
@@ -110,6 +111,14 @@ func newServeCommand() *cobra.Command {
 				options.Migrate = true
 			default:
 				return fmt.Errorf("--migrate 只支持空值、--migrate 或 --migrate=apply，实际为 %q", migrateValue)
+			}
+			options.Build = login.CurrentBuildInfo()
+			options.NewInstance = func(opts lifecycle.Options) (lifecycle.Runner, error) {
+				instance, err := login.New(opts)
+				if err != nil {
+					return nil, err
+				}
+				return instance, nil
 			}
 			return executeWithSignal(context.Background(), func(ctx context.Context) error {
 				return serverapp.RunServe(ctx, options)

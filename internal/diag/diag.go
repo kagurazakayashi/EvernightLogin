@@ -17,13 +17,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/kagurazakayashi/EvernightLogin/appids"
+	"github.com/kagurazakayashi/EvernightLogin/config"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
+	"github.com/kagurazakayashi/EvernightLogin/version"
 	"log/slog"
 	"strings"
 	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/appids"
-	"github.com/kagurazakayashi/EvernightLogin/config"
 )
 
 const (
@@ -178,7 +178,7 @@ type Options struct {
 	// Config 是当前生效配置（通常是启动时加载的配置快照）。
 	Config config.Config
 	// Build 是当前构建信息。
-	Build login.BuildInfo
+	Build version.BuildInfo
 	// State 返回运行状态字符串（可选）；nil 时返回 unknown。
 	State func() string
 	// DB 是只读诊断查询使用的数据库句柄（可选）。
@@ -259,7 +259,7 @@ func (c *Collector) RelatedErrors(ctx context.Context, scope Scope,
 	if requestID == "" {
 		return result, nil
 	}
-	if err := login.ValidateRequestID(requestID); err != nil {
+	if err := errs.ValidateRequestID(requestID); err != nil {
 		result.Status = StatusUnverified
 		return result, nil
 	}
@@ -318,7 +318,7 @@ FROM audit_events WHERE request_id=?`
 }
 
 // versionInfo 构造公开构建信息。
-func versionInfo(build login.BuildInfo) VersionInfo {
+func versionInfo(build version.BuildInfo) VersionInfo {
 	return VersionInfo{Version: valueOr(build.Version, "devel"),
 		Commit:    valueOr(build.Commit, "unknown"),
 		BuildTime: valueOr(build.BuildTime, "unknown"),

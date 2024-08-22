@@ -10,13 +10,13 @@ package serverapp
 import (
 	"context"
 	"errors"
-	"strings"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/settings"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
 	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"strings"
 )
 
 type settingsPageBackend struct {
@@ -32,7 +32,7 @@ func newSettingsSettingsPageBackend(deps Deps,
 		return nil, nil
 	}
 	service, err := settings.New(settings.Options{ConfigPath: deps.ConfigPath,
-		Effective: func() login.Config { return deps.Config }, Audit: deps.Audit,
+		Effective: func() config.Config { return deps.Config }, Audit: deps.Audit,
 		Now: deps.Now})
 	if err != nil {
 		return nil, err
@@ -111,20 +111,20 @@ func pageSettingsError(err error) error {
 	}
 	var coreErr *settings.Error
 	if !errors.As(err, &coreErr) {
-		return login.NewAppError(login.CodeInternalError, "配置操作失败")
+		return errs.NewAppError(errs.CodeInternalError, "配置操作失败")
 	}
-	code := login.CodeInternalError
+	code := errs.CodeInternalError
 	switch coreErr.Code {
 	case settings.CodeReqInvalid:
-		code = login.CodeReqInvalid
+		code = errs.CodeReqInvalid
 	case settings.CodeAccessDenied:
-		code = login.CodeAccessDenied
+		code = errs.CodeAccessDenied
 	case settings.CodeConfigInvalid:
-		code = login.CodeConfigInvalid
+		code = errs.CodeConfigInvalid
 	case settings.CodeConflict:
-		code = login.CodeConflict
+		code = errs.CodeConflict
 	case settings.CodeAuditWriteFailed:
-		code = login.CodeAuditWriteFailed
+		code = errs.CodeAuditWriteFailed
 	}
-	return login.NewAppError(code, coreErr.Message)
+	return errs.NewAppError(code, coreErr.Message)
 }

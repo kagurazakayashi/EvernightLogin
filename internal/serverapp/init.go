@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authn"
 	"github.com/kagurazakayashi/EvernightLogin/internal/bootstrap"
 	bootstrapsqlite "github.com/kagurazakayashi/EvernightLogin/internal/bootstrap/sqlite"
@@ -323,7 +323,7 @@ func RunInit(ctx context.Context, options InitOptions) (exitErr error) {
 	if err != nil {
 		return fmt.Errorf("构造本地认证操作者失败: %w", err)
 	}
-	requestID := login.NewRequestID()
+	requestID := errs.NewRequestID()
 	passwordResult, err := authnService.SetRootPassword(ctx, authnCaller,
 		authn.SetRootPasswordRequest{RootUserID: grant.RootUserID,
 			NewPassword: password, RequestID: requestID})

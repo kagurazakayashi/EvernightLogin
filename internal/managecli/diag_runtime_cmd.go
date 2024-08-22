@@ -9,11 +9,10 @@ package managecli
 
 import (
 	"fmt"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
+	"github.com/kagurazakayashi/EvernightLogin/internal/diag"
 	"path/filepath"
 	"strings"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/diag"
 )
 
 // diagRuntimeFlags 是运行时诊断参数。
@@ -52,7 +51,7 @@ func (r *runner) runDiagRuntime(args []string) int {
 	}
 	defer func() { _ = store.Close() }()
 	collector := diag.New(diag.Options{Config: config, DB: store.DB(),
-		ConfigPath: diagConfigPath(values), Build: login.CurrentBuildInfo(),
+		ConfigPath: diagConfigPath(values), Build: r.options.Build,
 		Now: r.options.Now})
 	report, snapshotErr := collector.Snapshot(r.ctx, scope)
 	if snapshotErr != nil {
@@ -101,7 +100,7 @@ func (r *runner) runDiagErrors(args []string) int {
 	if requestID == "" {
 		return r.usage("diag errors 需要 --request-id <req_...>")
 	}
-	if err := login.ValidateRequestID(requestID); err != nil {
+	if err := errs.ValidateRequestID(requestID); err != nil {
 		return r.usage("--request-id 格式无效")
 	}
 	limit, err := parseIntFlag(values, "limit", 0)

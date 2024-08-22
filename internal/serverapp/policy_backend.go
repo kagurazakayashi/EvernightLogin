@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"time"
 
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
@@ -55,7 +54,7 @@ func policyValuesDigest(values ui.UISecurityPolicyValues) string {
 func (b *policyWriteBackend) SavePolicy(ctx context.Context, userID, scopeID,
 	operationID string, change ui.UISecurityPolicyValues, expectedVersion int64,
 	previewToken, requestID string) (ui.UISecurityPolicyWriteResult, error) {
-	normalized, _ := login.NormalizeSecurityPolicyChange(change)
+	normalized, _ := ui.NormalizeSecurityPolicyChange(change)
 	digest := policyValuesDigest(normalized)
 	if err := b.beginLocked(userID, "policy.save", scopeID, operationID,
 		expectedVersion, digest); err != nil {
@@ -154,7 +153,7 @@ func (b *policyWriteBackend) recordInvariantFailure(ctx context.Context) {
 func (g *SecurityGate) beginPolicyWriteLocked(userID, action, scopeID,
 	operationID string, version int64, digest string) error {
 	if g == nil || userID == "" {
-		return login.ErrUISessionExpired
+		return ui.ErrUISessionExpired
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

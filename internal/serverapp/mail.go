@@ -2,11 +2,10 @@ package serverapp
 
 import (
 	"fmt"
+	"github.com/kagurazakayashi/EvernightLogin/config"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"strings"
 	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 )
 
 // MailRuntime 是步骤 139 装配的真实邮件发送运行时。
@@ -33,7 +32,7 @@ type MailRuntime struct {
 // mail.enabled=false 时不读取密码/证书、不建立网络连接；enabled=true 时配置
 // 不完整、秘密来源不可读或信任根无效都返回错误（启动失败），绝不降级为未配置
 // 或明文发送。
-func BuildMailRuntime(cfg login.Config) (*MailRuntime, error) {
+func BuildMailRuntime(cfg config.Config) (*MailRuntime, error) {
 	appName := strings.TrimSpace(cfg.Mail.AppName)
 	if appName == "" {
 		appName = "EvernightLogin"

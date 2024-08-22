@@ -24,18 +24,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"sync"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/version"
+	"io"
+	"log/slog"
+	"sync"
+	"time"
 )
 
 // ErrMigrationPending 表示数据库存在尚未应用的迁移，且调用方没有允许自动迁移。
@@ -49,10 +49,13 @@ var ErrUninitialized = errors.New("数据库尚未完成首次初始化")
 // BaseOptions 是独立服务与公开 app 入口共用的基础装配参数。
 type BaseOptions struct {
 	// Config 是已通过最终校验的配置（数据库路径覆盖已应用）。
-	Config login.Config
+	Config config.Config
 	// ConfigPath 是加载配置时使用的 YAML 文件路径（可选）；只用于诊断的待重启
 	// 字段比较，不用于重新读取秘密或修改运行配置。
 	ConfigPath string
+	// Build 是当前进程构建信息（步骤 215）；由 app/cmd 入口注入，internal 不 import
+	// 根包。零值表示未注入。
+	Build version.BuildInfo
 	// Keyring 是调用方已加载的主密钥环；nil 时由 OpenBase 按 MasterKeyFile/
 	// CreateMasterKey 加载（独立服务在打开库外维护状态前需要先用密钥环，因此
 	// 允许由调用方注入，避免重复读取密钥材料）。
@@ -85,7 +88,7 @@ type BaseOptions struct {
 // 日志器/时钟等不被关闭，也不监听端口或启动后台任务。
 type Base struct {
 	Options BaseOptions
-	Config  login.Config
+	Config  config.Config
 	Logger  *slog.Logger
 	Now     func() time.Time
 	Keyring *secrets.Keyring
@@ -221,7 +224,7 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 
 	// 延迟投递提供器：任务运行时构造完成后才对域服务可见，避免循环依赖。
 	var taskRuntime *TaskRuntime
-	deps := Deps{Config: cfg, ConfigPath: options.ConfigPath, Store: store, Keyring: keyring, Mail: mailRuntime,
+	deps := Deps{Config: cfg, ConfigPath: options.ConfigPath, Build: options.Build, Store: store, Keyring: keyring, Mail: mailRuntime,
 		MailDeliveryProvider: func() *mailer.DeliveryService {
 			if taskRuntime == nil {
 				return nil

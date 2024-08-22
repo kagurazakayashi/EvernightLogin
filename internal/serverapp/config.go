@@ -7,28 +7,27 @@ package serverapp
 import (
 	"context"
 	"fmt"
+	"github.com/kagurazakayashi/EvernightLogin/config"
+	"github.com/kagurazakayashi/EvernightLogin/internal/appcore"
+	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
+	"github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"net"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
-	"github.com/kagurazakayashi/EvernightLogin/internal/appcore"
-	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
-	"github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
 // LoadConfig 严格加载并校验 YAML 配置，然后应用可选的数据库路径覆盖。
 // 实现见 internal/appcore.LoadConfigFile（与嵌入模式共用）。
-func LoadConfig(configPath, databasePath string) (login.Config, error) {
+func LoadConfig(configPath, databasePath string) (config.Config, error) {
 	return appcore.LoadConfigFile(configPath, databasePath)
 }
 
 // LoadKeyring 解析主密钥环：配置中的 secrets.master_key 优先，其次显式文件路径；
 // allowCreate 为 true 时文件不存在则生成受保护主密钥环。
 // 实现见 internal/appcore.LoadKeyring（与嵌入模式共用）。
-func LoadKeyring(ctx context.Context, cfg login.Config, masterKeyFile string,
+func LoadKeyring(ctx context.Context, cfg config.Config, masterKeyFile string,
 	allowCreate bool, now func() time.Time) (*secrets.Keyring, string, error) {
 	return appcore.LoadKeyring(ctx, cfg, masterKeyFile, allowCreate, now)
 }
@@ -50,7 +49,7 @@ func ApplyMigrations(ctx context.Context, store *sqlite.Store) (int, error) {
 // public_base_url，加上回环监听地址对应的本机来源（http 或 https）。通配监听
 // 地址无法在启动前知道浏览器实际使用的来源，此时要求部署方配置 public_base_url；
 // 一个来源都推导不出时启动失败，绝不退化为"不校验来源"。
-func csrfOrigins(cfg login.Config) ([]string, error) {
+func csrfOrigins(cfg config.Config) ([]string, error) {
 	origins := make([]string, 0, 8)
 	seen := make(map[string]struct{}, 8)
 	add := func(candidate string) {

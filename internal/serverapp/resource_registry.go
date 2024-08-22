@@ -3,13 +3,12 @@ package serverapp
 import (
 	"context"
 	"fmt"
-	"strings"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
 	oauthclientsqlite "github.com/kagurazakayashi/EvernightLogin/internal/oauthclient/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
+	"strings"
 )
 
 // resourceServiceEntry 是受信资源服务登记项：OAuth confidential 客户端认证材料 +
@@ -140,7 +139,7 @@ func newResourceIdentity(entry resourceServiceEntry) (resourceIdentity, error) {
 		audience: entry.Audience}, nil
 }
 
-var _ = login.CodeConfigInvalid
+var _ = errs.CodeConfigInvalid
 
 // resourceInspectAuthorizer 用资源服务登记实现 RFC 7662 的 audience 授权：
 // 只有登记过的 (resourceServerClientID, audience) 才被允许查看令牌元数据。

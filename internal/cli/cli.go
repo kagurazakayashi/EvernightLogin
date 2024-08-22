@@ -8,10 +8,9 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/version"
 	"github.com/spf13/cobra"
+	"io"
 )
 
 // programName 是对外显示的命令名，也是帮助和版本输出的前缀。
@@ -22,7 +21,7 @@ var ErrNotImplemented = errors.New("login-server 服务功能尚未实现")
 
 // New 构造 login-server 命令。build 用于生成 --version 输出；调用方负责
 // 设置输出目的地，便于测试和嵌入其他进程。
-func New(build login.BuildInfo) *cobra.Command {
+func New(build version.BuildInfo) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           programName,
 		Short:         "login 身份服务（当前仅提供版本与帮助）",
@@ -41,7 +40,7 @@ func New(build login.BuildInfo) *cobra.Command {
 
 // Execute 运行命令并返回进程退出码。0 表示版本或帮助成功；1 表示失败。
 // 错误写入 stderr，帮助和版本写入 stdout，便于脚本区分成功与失败。
-func Execute(args []string, stdout, stderr io.Writer, build login.BuildInfo) int {
+func Execute(args []string, stdout, stderr io.Writer, build version.BuildInfo) int {
 	cmd := New(build)
 	cmd.SetArgs(args)
 	cmd.SetOut(stdout)

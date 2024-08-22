@@ -11,11 +11,14 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
+	"github.com/kagurazakayashi/EvernightLogin/internal/httpsrv"
 	"github.com/kagurazakayashi/EvernightLogin/internal/logging"
 	"github.com/kagurazakayashi/EvernightLogin/internal/maintenance"
 	"github.com/kagurazakayashi/EvernightLogin/internal/secrets"
 	"github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/lifecycle"
+	"github.com/kagurazakayashi/EvernightLogin/version"
 )
 
 // ServeOptions 是 login-server serve 的显式参数。所有字段来自命令行或测试，
@@ -78,6 +81,11 @@ type ServeOptions struct {
 	// 默认 false：维护状态缺失时拒绝启动，避免删除/丢失状态目录后绕过维护门禁。
 	// 仅本地受控运维在确认状态丢失原因后使用。
 	InitMaintenanceState bool
+	// Build 是当前进程构建信息；由 cmd/login-server 注入。
+	Build version.BuildInfo
+	// NewInstance 是根包 Instance 工厂；由 cmd/login-server 注入 login.New，
+	// internal 不 import 根包（步骤 215）。
+	NewInstance lifecycle.Factory
 	// AllowUninitialized 显式允许数据库尚未完成首次初始化时启动服务（仅开发/测试）。
 	// 默认 false：未初始化数据库拒绝启动，避免在未创建 root 的实例上对外提供页面。
 	AllowUninitialized bool
@@ -101,7 +109,7 @@ func defaultMaintenanceStateDir(databasePath string) string {
 // 显式传入 --init-maintenance-state 的本地受控运维。损坏（加载/HMAC 校验失败）
 // 一律拒绝，不重建、不覆盖。
 // 返回 created 表示本次调用创建了状态目录（失败路径清理用）。
-func openMaintenance(ctx context.Context, cfg login.Config, keyring *secrets.Keyring,
+func openMaintenance(ctx context.Context, cfg config.Config, keyring *secrets.Keyring,
 	stateDir string, logger *slog.Logger, now func() time.Time,
 	allowCreate bool) (*maintenance.Controller, bool, error) {
 	if stateDir == "" {
@@ -161,7 +169,7 @@ func hasSchemaHistory(ctx context.Context, store *sqlite.Store) (bool, error) {
 }
 
 // newLogger 按配置构造结构化运行日志器；日志只写脱敏字段，不写秘密。
-func newLogger(cfg login.Config, output io.Writer) (*slog.Logger, error) {
+func newLogger(cfg config.Config, output io.Writer) (*slog.Logger, error) {
 	if output == nil {
 		output = io.Discard
 	}
@@ -196,13 +204,13 @@ func accessLogTarget(options ServeOptions) (io.Writer, io.Closer, error) {
 }
 
 // MaintenanceHealthPath 返回维护模式下仍放行的健康检查路径（含部署前缀）。
-func MaintenanceHealthPath(cfg login.Config) string {
+func MaintenanceHealthPath(cfg config.Config) string {
 	return cfg.Server.PathPrefix + "/healthz"
 }
 
 // maintenanceHandler 是维护状态下唯一对外提供的处理程序：健康检查返回 200，
 // 其余请求返回 503 与维护提示（不装配任何业务页面/会话/数据库写入）。
-func maintenanceHandler(cfg login.Config) http.Handler {
+func maintenanceHandler(cfg config.Config) http.Handler {
 	healthPath := MaintenanceHealthPath(cfg)
 	const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">` +
 		`<title>服务维护中</title></head><body><h1>服务维护中</h1>` +
@@ -263,7 +271,7 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "login-server %s\n", login.CurrentBuildInfo().Version)
+	fmt.Fprintf(stdout, "login-server %s\n", options.Build.Version)
 	fmt.Fprintf(stdout, "配置: %s\n", options.ConfigPath)
 	instanceLock, err := AcquireInstanceLock(cfg.Database.Path)
 	if err != nil {
@@ -376,8 +384,8 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	}
 
 	var handler http.Handler
-	var server *login.Server
-	var instance *login.Instance
+	var server *httpsrv.Server
+	var instance lifecycle.Runner
 	mountPaths := make([]string, 0, len(options.ExtraMounts))
 	if maintenanceMode {
 		if len(options.ExtraMounts) > 0 {
@@ -413,16 +421,23 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 		mountPaths = append(mountPaths, httpRuntime.Mounts...)
 	}
 
-	server, err = login.NewServer(login.ServerOptions{
+	server, err = httpsrv.New(httpsrv.Options{
 		Config: cfg, Handler: handler, Prefix: cfg.Server.PathPrefix, Logger: logger})
 	if err != nil {
 		return fmt.Errorf("构造监听服务失败: %w", err)
 	}
-	components := []login.BackgroundComponent{server}
+	components := []lifecycle.BackgroundComponent{server}
 	if base.Tasks != nil {
 		components = append(components, base.Tasks)
 	}
-	instance, err = login.New(login.Options{
+	factory := options.NewInstance
+	if factory == nil {
+		factory = defaultInstanceFactory
+	}
+	if factory == nil {
+		return fmt.Errorf("独立服务缺少实例工厂：请由进程入口注入 lifecycle.Factory")
+	}
+	instance, err = factory(lifecycle.Options{
 		Config:     &cfg,
 		Logger:     logger,
 		Database:   databasePingAdapter{store: base.Store},
@@ -465,12 +480,12 @@ func runServe(ctx context.Context, options ServeOptions) (exitErr error) {
 	return nil
 }
 
-// databasePingAdapter 把 SQLite 存储适配为公开的 login.Database 就绪检查契约。
+// databasePingAdapter 把 SQLite 存储适配为公开的 lifecycle.Database 就绪检查契约。
 type databasePingAdapter struct {
 	store *sqlite.Store
 }
 
-// Ping 实现 login.Database。
+// Ping 实现 lifecycle.Database。
 func (a databasePingAdapter) Ping(ctx context.Context) error {
 	if a.store == nil {
 		return fmt.Errorf("数据库未打开")
@@ -480,6 +495,10 @@ func (a databasePingAdapter) Ping(ctx context.Context) error {
 
 // 保留 sqlite 类型引用（RunServe 内部使用）；避免未来重构时误删导入。
 var _ = (*sqlite.Store)(nil)
+
+// defaultInstanceFactory 仅供同包测试注入根包构造器；生产必须由 cmd 在
+// ServeOptions.NewInstance 显式注入，nil 时 fail-closed。
+var defaultInstanceFactory lifecycle.Factory
 
 // RunServe 装配并运行独立 HTTP 服务，直到 ctx 被取消（信号驱动）后执行有界
 // 优雅关闭。返回值非 nil 表示装配失败或关闭失败，退出码应由调用方置为非零。

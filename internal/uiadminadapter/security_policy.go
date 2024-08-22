@@ -27,17 +27,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"strings"
+	"sync"
+	"time"
 )
 
 // SecurityPolicyPermissionKey 是敏感策略页面使用的真实既有权限键（预设目录
@@ -291,7 +289,7 @@ func (a *SecurityPolicyAdapter) operationView(operation policy.EffectiveOperatio
 		Effective: policyValues(operation.Effective), Source: string(operation.Source),
 		PermissionKey: operation.PermissionKey, RootOnly: operation.RootOnly,
 		AuditRequired: operation.AuditRequired, Implemented: operation.Implemented,
-		ChangedFields: login.SecurityPolicyChangedFields(policyValues(operation.Default),
+		ChangedFields: ui.SecurityPolicyChangedFields(policyValues(operation.Default),
 			policyValues(operation.Effective)),
 		StrengthAvailable: available[operation.Effective.Strength] ||
 			operation.Effective.Strength == policy.StrengthNone,
@@ -517,7 +515,7 @@ func (a *SecurityPolicyAdapter) PreviewPolicy(ctx context.Context, userID, scope
 	if !found {
 		return ui.UISecurityPolicyPreview{}, securityPolicyErr("REQ_INVALID")
 	}
-	normalized, derived := login.NormalizeSecurityPolicyChange(change)
+	normalized, derived := ui.NormalizeSecurityPolicyChange(change)
 	next := policyFromValues(normalized)
 	if definition, ok := a.opts.Policy.Operation(operation.OperationID); ok &&
 		definition.ImmutableSensitive && !next.Sensitive {
@@ -532,7 +530,7 @@ func (a *SecurityPolicyAdapter) PreviewPolicy(ctx context.Context, userID, scope
 		OperationID: operation.OperationID, HasDefault: operation.HasDefault,
 		Default: policyValues(operation.Default), Current: policyValues(operation.Effective),
 		Proposed: normalized, DerivedFields: derived,
-		ChangedFields:   login.SecurityPolicyChangedFields(policyValues(operation.Effective), normalized),
+		ChangedFields:   ui.SecurityPolicyChangedFields(policyValues(operation.Effective), normalized),
 		SelfProtection:  operation.OperationID == policy.OperationPolicyChange,
 		StrengthWarning: strengthWarning,
 	}
@@ -579,7 +577,7 @@ func (a *SecurityPolicyAdapter) SavePolicy(ctx context.Context, userID, scopeID,
 	if err != nil {
 		return ui.UISecurityPolicyWriteResult{}, policyErr(err)
 	}
-	normalized, _ := login.NormalizeSecurityPolicyChange(change)
+	normalized, _ := ui.NormalizeSecurityPolicyChange(change)
 	binding := ui.UISecurityPolicyActionBinding{
 		Action: "policy.save", UserID: userID, ScopeID: scopeID,
 		OperationID: operationID, Version: expectedVersion,

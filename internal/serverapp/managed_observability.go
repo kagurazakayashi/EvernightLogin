@@ -15,11 +15,6 @@ package serverapp
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/auditops"
 	auditopssqlite "github.com/kagurazakayashi/EvernightLogin/internal/auditops/sqlite"
@@ -32,6 +27,9 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	statssqlite "github.com/kagurazakayashi/EvernightLogin/internal/stats/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"os"
+	"path/filepath"
+	"time"
 )
 
 // buildAuditOps 构造审计读取/导出/清理服务与导出目录。
@@ -342,7 +340,7 @@ func buildBackups(deps Deps, managed *ManagedServices,
 		Snapshotter: snapshotter, Keyring: keyringProvider,
 		Authorizer: statsScopeAuthorizer{checker: managed.Checker},
 		Audit:      deps.Audit,
-		OutputDir:  outputDir, AppVersion: login.CurrentBuildInfo().Version,
+		OutputDir:  outputDir, AppVersion: deps.Build.Version,
 		Now: deps.Now, Logger: deps.Logger,
 	})
 	if err != nil {
@@ -365,7 +363,7 @@ func buildBackups(deps Deps, managed *ManagedServices,
 		Sensitive:  gate.Reauth,
 		Audit:      deps.Audit, SchedulerRelay: relay,
 		Keyring:   keyringProvider,
-		OutputDir: outputDir, AppVersion: login.CurrentBuildInfo().Version,
+		OutputDir: outputDir, AppVersion: deps.Build.Version,
 		DefaultRetention: backupadmin.RetentionPolicy{
 			Version: 1, MaxAgeDays: 30, MaxCount: 20,
 		},

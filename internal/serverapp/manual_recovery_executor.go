@@ -7,10 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authfact"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
@@ -19,13 +16,15 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/passwordreset"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"strings"
+	"time"
 )
 
 // manualRecoveryRebindMethods 把人工恢复制度配置的“允许重绑因素类别”解析为领域
 // 方法列表（步骤 209）。passkey 只有真正启用 Passkey 时才可用；totp 作为显式的
 // 非抗钓鱼类别，仅在配置明确列出时提供。列表为空表示没有可用重绑方式，申请/执行
 // mfa_reset 必须 fail-closed 拒绝，避免“恢复后无法重绑”把账户锁死。
-func manualRecoveryRebindMethods(cfg login.ManualRecoveryConfig,
+func manualRecoveryRebindMethods(cfg config.ManualRecoveryConfig,
 	passkeyEnabled bool) ([]authfact.Method, error) {
 	methods := make([]authfact.Method, 0, len(cfg.RebindMethods))
 	seen := make(map[authfact.Method]bool, len(cfg.RebindMethods))
@@ -72,7 +71,7 @@ func rebindMethodSummary(methods []authfact.Method) string {
 
 // manualRecoveryPolicyFromConfig 把根配置转换为领域制度；配置层已做边界校验，
 // 服务构造会再次 Validate（双重 fail-closed）。RequireIndependentApproval 固定 true。
-func manualRecoveryPolicyFromConfig(cfg login.ManualRecoveryConfig) manualrecovery.Policy {
+func manualRecoveryPolicyFromConfig(cfg config.ManualRecoveryConfig) manualrecovery.Policy {
 	bases := make([]manualrecovery.VerificationBasis, 0, len(cfg.VerificationBases))
 	for _, basis := range cfg.VerificationBases {
 		bases = append(bases, manualrecovery.VerificationBasis(strings.TrimSpace(basis)))

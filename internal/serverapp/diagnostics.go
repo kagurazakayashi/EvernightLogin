@@ -9,15 +9,13 @@ package serverapp
 import (
 	"context"
 	"database/sql"
-	"net/http"
-	"strconv"
-	"strings"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/adminapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/diag"
+	"net/http"
+	"strconv"
+	"strings"
 )
 
 // newDiagnosticsCollector 从共享装配依赖构造只读诊断收集器。state 为 nil 时
@@ -28,7 +26,7 @@ func newDiagnosticsCollector(deps Deps, state func() string) *diag.Collector {
 		db = deps.Store.DB()
 	}
 	options := diag.Options{Config: deps.Config, ConfigPath: deps.ConfigPath,
-		Build: login.CurrentBuildInfo(), DB: db, Logger: deps.Logger, Now: deps.Now}
+		Build: deps.Build, DB: db, Logger: deps.Logger, Now: deps.Now}
 	if state != nil {
 		options.State = state
 	}

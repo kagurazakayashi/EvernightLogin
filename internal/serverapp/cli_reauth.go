@@ -25,18 +25,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
-	"sync"
-	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/passkey"
 	"github.com/kagurazakayashi/EvernightLogin/internal/policy"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
 )
 
 // 确认证明的传输与有效期常量。
@@ -941,4 +940,4 @@ func cliAdminPrefixFromPath(path string) string {
 }
 
 // login 包引用用于错误码登记测试（保持依赖显式）。
-var _ = login.CodeReauthRequired
+var _ = errs.CodeReauthRequired

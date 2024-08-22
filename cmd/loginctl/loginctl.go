@@ -70,7 +70,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, factory Promp
 		// 需要委派/敏感策略的写动作返回 MANAGEMENT_WRITE_NOT_EXPOSED）；在线域
 		// （audit/reports/backups/notifications/tasks）只调用已运行服务的
 		// 管理 API，需要 --session-file 提供的受保护管理会话秘密。
-		return managecli.Run(args, stdin, stdout, stderr)
+		return managecli.RunWithOptions(args, stdin, stdout, stderr, managecli.Options{
+			Build: login.CurrentBuildInfo(),
+		})
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return ExitOK

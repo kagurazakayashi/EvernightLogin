@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/internal/httpassemble"
 	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
@@ -180,7 +180,7 @@ func BuildHTTPRuntime(base *Base, options HTTPRuntimeOptions) (*HTTPRuntime, err
 	if err != nil {
 		return nil, fmt.Errorf("装配 HTTP 防护失败: %w", err)
 	}
-	assembled, err := login.NewHTTPHandler(httpOptions)
+	assembled, err := httpassemble.NewHTTPHandler(httpOptions, base.Deps.Build.Version)
 	if err != nil {
 		return nil, fmt.Errorf("构造 HTTP 处理程序失败: %w", err)
 	}

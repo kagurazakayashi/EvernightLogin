@@ -4,14 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"log/slog"
-	"net/http"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/httpapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
@@ -26,12 +18,18 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/uiauthadapter"
 	"github.com/kagurazakayashi/EvernightLogin/internal/uisecurityadapter"
 	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
 )
 
 // pageSessions 用真实会话服务实现内置页面框架的页面会话契约。
 //
 // 它只读取服务端会话 Cookie 并调用 session.Service 的校验方法，不接受任何客户端
-// 自报身份字段；会话失效统一返回 login.ErrUISessionExpired，页面按过期处理。
+// 自报身份字段；会话失效统一返回 ui.ErrUISessionExpired，页面按过期处理。
 //
 // 强认证门禁（root/高权限管理访问）：
 //   - "management" 页面级别只有在 session.Service.AuthorizeManagement 真实通过时
@@ -73,11 +71,11 @@ func (p pageSessions) ResolvePageSession(ctx context.Context,
 	request *http.Request) (ui.UISession, error) {
 	secret, ok := p.service.SessionSecretFromRequest(request)
 	if !ok {
-		return ui.UISession{}, login.ErrUISessionExpired
+		return ui.UISession{}, ui.ErrUISessionExpired
 	}
 	record, err := p.service.Validate(ctx, secret)
 	if err != nil {
-		return ui.UISession{}, login.ErrUISessionExpired
+		return ui.UISession{}, ui.ErrUISessionExpired
 	}
 	kind := "normal"
 	if record.IsRestricted() {
@@ -110,11 +108,11 @@ func (p pageSessions) ResolvePageSession(ctx context.Context,
 func (p pageSessions) IssueCSRFToken(ctx context.Context, request *http.Request) (string, error) {
 	secret, ok := p.service.SessionSecretFromRequest(request)
 	if !ok {
-		return "", login.ErrUISessionExpired
+		return "", ui.ErrUISessionExpired
 	}
 	token, err := p.service.IssuePageCSRFToken(ctx, secret)
 	if err != nil {
-		return "", login.ErrUISessionExpired
+		return "", ui.ErrUISessionExpired
 	}
 	return token.Reveal(), nil
 }
@@ -674,43 +672,43 @@ func publicFormPaths(prefix string) map[string]string {
 // 两条校验路径，并对所有不安全请求要求精确同源。没有可用来源时返回错误，
 // 不降级为关闭校验。
 func BuildHTTPOptions(deps Deps, pages *Pages, logger *slog.Logger,
-	accessLogWriter io.Writer) (login.HTTPOptions, error) {
+	accessLogWriter io.Writer) (httpapi.HTTPOptions, error) {
 	if pages == nil || pages.WebUI == nil || pages.CSRF == nil || pages.Sessions == nil {
-		return login.HTTPOptions{}, fmt.Errorf("HTTP 装配缺少页面或 CSRF 依赖")
+		return httpapi.HTTPOptions{}, fmt.Errorf("HTTP 装配缺少页面或 CSRF 依赖")
 	}
 	origins, err := csrfOrigins(deps.Config)
 	if err != nil {
-		return login.HTTPOptions{}, err
+		return httpapi.HTTPOptions{}, err
 	}
 	publicPaths := make([]string, 0, len(pages.PublicForm))
 	for path := range pages.PublicForm {
 		publicPaths = append(publicPaths, path)
 	}
-	return login.HTTPOptions{
+	return httpapi.HTTPOptions{
 		Prefix:          deps.Config.Server.PathPrefix,
 		Logger:          logger,
 		AccessLogWriter: accessLogWriter,
-		Protection: &login.HTTPProtectionOptions{
+		Protection: &httpapi.HTTPProtectionOptions{
 			TrustedProxies: append([]string(nil), deps.Config.Server.TrustedProxies...),
-			CSRF: login.CSRFPolicy{
+			CSRF: httpapi.CSRFPolicy{
 				Enabled:                     true,
 				CookieName:                  session.DefaultCookieName,
 				AllowedOrigins:              origins,
 				RequireForAllUnsafeRequests: true,
 				PublicFormPaths:             publicPaths,
 				PublicTokenValidator:        pages.CSRF.Validator(pages.PublicForm),
-				TokenValidator: login.CSRFValidatorFunc(func(ctx context.Context,
+				TokenValidator: httpapi.CSRFValidatorFunc(func(ctx context.Context,
 					request *http.Request, token string) error {
 					return pages.Sessions.ValidateCSRFToken(ctx, request, token)
 				}),
 			},
-			SecurityHeaders: &login.SecurityHeaderOptions{
-				ContentSecurityPolicy: login.DefaultUIPageContentSecurityPolicy,
+			SecurityHeaders: &httpapi.SecurityHeaderOptions{
+				ContentSecurityPolicy: ui.DefaultUIPageContentSecurityPolicy,
 			},
 		},
 		UI: &httpapi.UIHTTPOptions{
 			Handler:                   pages.WebUI,
-			PageContentSecurityPolicy: login.DefaultUIPageContentSecurityPolicy,
+			PageContentSecurityPolicy: ui.DefaultUIPageContentSecurityPolicy,
 		},
 	}, nil
 }

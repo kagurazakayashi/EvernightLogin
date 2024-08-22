@@ -84,6 +84,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	base, err := serverapp.OpenBase(ctx, serverapp.BaseOptions{
 		Config:          cfg,
 		ConfigPath:      opts.ConfigPath,
+		Build:           login.CurrentBuildInfo(),
 		MasterKeyFile:   opts.MasterKeyFile,
 		CreateMasterKey: opts.CreateMasterKey,
 		Migrate:         opts.Migrate,

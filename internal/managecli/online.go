@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.yaml.in/yaml/v3"
 	"io"
 	"mime"
 	"net"
@@ -41,9 +42,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
-	"go.yaml.in/yaml/v3"
 )
 
 // 在线管理命令的默认值与硬上限。
@@ -81,6 +79,7 @@ func onlineFlagDefs(extra ...flagDef) []flagDef {
 
 // onlineTarget 是一次在线命令的已校验调用目标。它不输出秘密，也不被并发使用。
 type onlineTarget struct {
+	userAgent string
 	baseURL   string
 	apiPath   string
 	secret    string
@@ -268,7 +267,8 @@ func (r *runner) onlineTarget(values map[string]string) (*onlineTarget, int) {
 		IdleConnTimeout:       30 * time.Second,
 	}
 	return &onlineTarget{
-		baseURL: baseURL, apiPath: apiPath, secret: secret, timeout: timeout,
+		userAgent: onlineUserAgent(r.options.Build.Version),
+		baseURL:   baseURL, apiPath: apiPath, secret: secret, timeout: timeout,
 		// 客户端整体超时覆盖下载；JSON 请求另有更短的 context 期限。
 		client:     &http.Client{Transport: transport, Timeout: defaultOnlineDownloadTimeout},
 		transport:  transport,
@@ -451,12 +451,12 @@ func onlineTLSConfig(caFile string) (*tls.Config, error) {
 }
 
 // onlineUserAgent 返回带版本号的稳定 User-Agent（不包含主机名/秘密）。
-func onlineUserAgent() string {
-	version := strings.TrimSpace(login.CurrentBuildInfo().Version)
-	if version == "" {
-		version = "dev"
+func onlineUserAgent(buildVersion string) string {
+	value := strings.TrimSpace(buildVersion)
+	if value == "" {
+		value = "dev"
 	}
-	return "loginctl-managecli/" + version
+	return "loginctl-managecli/" + value
 }
 
 // doJSON 调用管理 JSON API 并解包统一 envelope。返回的成功响应保留原始 data
@@ -492,7 +492,7 @@ func (t *onlineTarget) doJSONHeaders(ctx context.Context, method, relative strin
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	request.Header.Set("User-Agent", onlineUserAgent())
+	request.Header.Set("User-Agent", t.userAgent)
 	request.Header.Set("X-Request-ID", requestID)
 	request.Header.Set("Authorization", "Bearer "+t.secret)
 	for key, value := range headers {
@@ -591,7 +591,7 @@ func (t *onlineTarget) download(ctx context.Context, method, relative string,
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	request.Header.Set("User-Agent", onlineUserAgent())
+	request.Header.Set("User-Agent", t.userAgent)
 	request.Header.Set("X-Request-ID", requestID)
 	request.Header.Set("Authorization", "Bearer "+t.secret)
 	if len(query) > 0 {

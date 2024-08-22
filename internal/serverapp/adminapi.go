@@ -15,13 +15,12 @@ package serverapp
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"strings"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/adminapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
+	"net/http"
+	"strings"
 )
 
 // ReservedAdminAPIConflicts 是管理 API 前缀不允许覆盖的页面命名空间根。
@@ -54,8 +53,8 @@ func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices
 	if err != nil {
 		return nil, "", err
 	}
-	codes := make([]adminapi.ErrorCodeInfo, 0, len(login.RegisteredErrorCodes()))
-	for _, definition := range login.RegisteredErrorCodes() {
+	codes := make([]adminapi.ErrorCodeInfo, 0, len(errs.RegisteredErrorCodes()))
+	for _, definition := range errs.RegisteredErrorCodes() {
 		codes = append(codes, adminapi.ErrorCodeInfo{
 			Code: string(definition.Code), Message: definition.DefaultMessage,
 			HTTPStatus: definition.HTTPStatus,

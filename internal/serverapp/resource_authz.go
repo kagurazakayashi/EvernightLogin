@@ -5,17 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
 	"github.com/kagurazakayashi/EvernightLogin/internal/authz"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthclient"
 	"github.com/kagurazakayashi/EvernightLogin/internal/oauthflow"
 	"github.com/kagurazakayashi/EvernightLogin/internal/token"
 	"github.com/kagurazakayashi/EvernightLogin/internal/tokenauthz"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 )
 
 // resourceAuthorizeHandler 实现扩展联合判定端点（非标准 OAuth）：
@@ -69,7 +68,7 @@ func buildResourceAuthorizeHandler(deps Deps, registry *resourceRegistry,
 }
 
 func (h *resourceAuthorizeHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	requestID := login.NewRequestID()
+	requestID := errs.NewRequestID()
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("X-Request-ID", requestID)

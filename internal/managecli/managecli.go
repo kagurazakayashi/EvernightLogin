@@ -35,6 +35,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/version"
 )
 
 // 稳定退出码。脚本可以依赖这些值区分失败类别；新增值只能追加。
@@ -67,6 +69,9 @@ type Options struct {
 	Now func() time.Time
 	// LookupEnv 读取环境变量；nil 使用 os.LookupEnv。仅用于测试注入。
 	LookupEnv func(string) (string, bool)
+	// Build 是当前进程构建信息（步骤 215）；由 cmd 入口注入，internal 不 import
+	// 根包。零值表示未注入。
+	Build version.BuildInfo
 }
 
 // Run 执行一条 loginctl 管理命令并返回稳定退出码。

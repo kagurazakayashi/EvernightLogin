@@ -3,13 +3,12 @@ package serverapp
 import (
 	"context"
 	"fmt"
-	"net/url"
-	"strings"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
 	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/registration"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
+	"net/url"
+	"strings"
 )
 
 // 页面路径常量与 WebUI 实际注册路由保持一致；集中在这里避免多处硬编码漂移。
@@ -43,7 +42,7 @@ type MailURLBases struct {
 // 配置校验（Config.Validate）仍要求 public_base_url 的路径与 path_prefix 完全一致，
 // 因此这里只处理合法组合的尾斜杠/幂等拼接；非法组合由启动校验拒绝，不把配置错误
 // 当成可利用缺陷。查询串、片段与 userinfo 在这里也拒绝（防御性，不生成含糊链接）。
-func buildMailURLs(cfg login.Config) (MailURLBases, error) {
+func buildMailURLs(cfg config.Config) (MailURLBases, error) {
 	if !cfg.Mail.Enabled {
 		return MailURLBases{}, nil
 	}
@@ -135,7 +134,7 @@ func mustMailTemplates() *mailer.TemplateSet {
 
 // validateMailRegistration 在启动期校验邮件与注册邮箱验证的组合约束：
 // 要求邮箱验证但没有邮件能力、或启用邮件但公开链接基址非法，都直接失败。
-func validateMailRegistration(cfg login.Config) error {
+func validateMailRegistration(cfg config.Config) error {
 	if cfg.Registration.RequireEmailVerification && !cfg.Mail.Enabled {
 		return fmt.Errorf("CONFIG_INVALID: registration.require_email_verification=true 但 mail.enabled=false；" +
 			"请配置邮件传输或关闭注册邮箱验证")

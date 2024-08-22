@@ -11,18 +11,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"os"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/auditops"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 	ui "github.com/kagurazakayashi/EvernightLogin/ui"
+	"io"
+	"log/slog"
+	"os"
+	"strings"
+	"time"
 )
 
 // AuditRecorder 是拒绝审计写入契约（生产 *audit.Recorder）。
@@ -407,7 +406,7 @@ func (a *AuditAdapter) SearchErrors(ctx context.Context, userID string,
 	result := ui.UIErrorSearch{Searched: query.Code != "" || query.Keyword != "" ||
 		query.Category != ""}
 	keyword := strings.ToLower(query.Keyword)
-	for _, definition := range login.RegisteredErrorCodes() {
+	for _, definition := range errs.RegisteredErrorCodes() {
 		code := string(definition.Code)
 		if query.Code != "" && code != query.Code {
 			continue
@@ -431,14 +430,14 @@ func (a *AuditAdapter) SearchErrors(ctx context.Context, userID string,
 // errorEntryOf 从根包注册表与手册说明构造公开条目。
 func errorEntryOf(code string) ui.UIErrorEntry {
 	entry := ui.UIErrorEntry{Code: code}
-	definition, ok := login.LookupErrorCode(login.ErrorCode(code))
+	definition, ok := errs.LookupErrorCode(errs.ErrorCode(code))
 	if ok {
 		entry.Category = string(definition.Category)
 		entry.Message = definition.DefaultMessage
 		entry.HTTPStatus = definition.HTTPStatus
 		entry.HasHTTPStatus = definition.HTTPStatus != 0
 	}
-	if guidance, ok := login.LookupErrorCodeGuidance(login.ErrorCode(code)); ok {
+	if guidance, ok := errs.LookupErrorCodeGuidance(errs.ErrorCode(code)); ok {
 		entry.Cause, entry.Advice, entry.Retry = guidance.Cause, guidance.Advice, guidance.Retry
 		entry.HasGuidance = true
 	}

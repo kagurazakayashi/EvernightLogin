@@ -12,11 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"strings"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/adminapi"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -24,6 +20,9 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/settings"
 	"github.com/kagurazakayashi/EvernightLogin/internal/transport"
+	"net/http"
+	"strings"
+	"time"
 )
 
 // buildAdminSettingsRoutes 构造设置领域路由；核心服务构造失败或没有可写配置路径时
@@ -35,7 +34,7 @@ func buildAdminSettingsRoutes(deps Deps, managed *ManagedServices,
 	}
 	service, err := settings.New(settings.Options{
 		ConfigPath: deps.ConfigPath,
-		Effective:  func() login.Config { return deps.Config },
+		Effective:  func() config.Config { return deps.Config },
 		Audit:      deps.Audit,
 		Now:        deps.Now,
 	})

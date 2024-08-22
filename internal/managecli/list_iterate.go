@@ -12,10 +12,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-
-	login "github.com/kagurazakayashi/EvernightLogin"
 	appapi "github.com/kagurazakayashi/EvernightLogin/app"
+	"github.com/kagurazakayashi/EvernightLogin/errs"
+	"strings"
 )
 
 // listIterationOptions 是 CLI 列表遍历参数。
@@ -103,7 +102,7 @@ func iterateCommandList[T any](r *runner, options listIterationOptions, pageLimi
 // 错误（ExitUsage），领域错误保留领域稳定码与退出码映射。
 func (r *runner) listIterationFailure(operation string, codeOf func(error) any, err error) int {
 	if errors.Is(err, appapi.ErrPageNotAdvancing) ||
-		login.IsErrorCode(err, login.CodeReqInvalid) {
+		errs.IsErrorCode(err, errs.CodeReqInvalid) {
 		return r.usage("%s遍历失败：%v", operation, err)
 	}
 	return r.domainFailure(operation, codeOf(err), err)

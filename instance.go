@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -12,105 +11,11 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/logging"
 )
 
-// State 表示 Instance 的生命周期状态。
-//
-// 状态转换只有一条路径：New 后为 StateNew；Start 成功后为 StateRunning；
-// Close 或启动失败后为 StateClosed。实例不会从 StateClosed 回到其他状态，
-// 避免反复启动产生多套资源。
-type State string
-
-const (
-	// StateNew 表示实例已构造，尚未启动任何后台组件。
-	StateNew State = "new"
-	// StateRunning 表示后台组件已全部成功启动。
-	StateRunning State = "running"
-	// StateClosed 表示实例已关闭或启动失败；不能再启动。
-	StateClosed State = "closed"
-)
-
-// String 返回状态的稳定字符串。
-func (s State) String() string {
-	return string(s)
-}
-
 // ErrAlreadyStarted 表示实例已经成功启动；Start 不会重复启动组件。
 var ErrAlreadyStarted = errors.New("实例已经启动")
 
 // ErrClosed 表示实例已经关闭或启动失败，不能再启动。
 var ErrClosed = errors.New("实例已经关闭")
-
-// BackgroundComponent 是可由 Instance 管理生命周期的后台组件。
-//
-// 生命周期约定：
-//
-//   - Start 按 Options.Components 的声明顺序调用；返回错误表示启动失败，实现
-//     必须在返回错误前清理自己已创建的资源，Instance 不会对启动失败的组件
-//     调用 Close。
-//   - Close 按启动顺序的逆序调用，只对成功启动过的组件各调用一次；必须响应
-//     ctx 取消，不得在取消后继续阻塞。
-//   - 组件只释放自己创建的资源。宿主传入的数据库连接、HTTP 服务器、日志器、
-//     密钥文件句柄、页面 FS 等由宿主关闭，组件不得关闭。
-//
-// 本步没有内置后台组件，也不实现任务队列；测试用替身模拟后续数据库、HTTP
-// 和任务组件，测试替身不是生产服务。
-type BackgroundComponent interface {
-	// Start 启动组件。它可以使用 ctx 的超时与取消，并在失败时自行清理。
-	Start(ctx context.Context) error
-	// Close 停止组件并释放组件自己创建的资源。它可以被 Instance 在启动
-	// 失败回滚或正常关闭时调用，必须遵守 ctx 的期限。
-	Close(ctx context.Context) error
-}
-
-// Options 是构造 Instance 的显式依赖。
-//
-// 构造本身不启动组件、不监听端口、不打开数据库、不创建协程；宿主可以只
-// New 后使用核心能力而不调用 Start，后台组件在后续步骤接入。
-type Options struct {
-	// Config 为 nil 时使用 Default()；非 nil 时先通过 Config.Validate 校验，
-	// 校验失败时 New 返回 CONFIG_INVALID 的统一错误。
-	Config *Config
-	// Components 是 Instance 接管生命周期的后台组件，按声明顺序启动、按启动
-	// 顺序的逆序关闭。组件对象可以由宿主构造（扩展或测试），但一旦传入就由
-	// Instance 管理启动与关闭；同一组件不得同时交给多个 Instance。
-	Components []BackgroundComponent
-	// Logger 是宿主注入的结构化日志器。非 nil 时实例直接使用，由宿主负责其
-	// 级别、格式与生命周期，实例不会关闭或替换它；此时 Config.Logging 的级别
-	// 与格式不生效。nil 时实例按 Config.Logging 创建默认日志器。
-	Logger *slog.Logger
-	// LogOutput 只在 Logger 为 nil 时使用，作为默认日志器的输出目标；nil 表示
-	// io.Discard，让嵌入模式默认静默。独立服务器在后续步骤会传入标准错误输出。
-	LogOutput io.Writer
-	// Extensions 是宿主注册的扩展（存储适配、通知投递、认证/第二因素适配、
-	// 页面来源或通用后台组件），详见 extension.go。扩展与 Components 一样由实例
-	// 管理启动与关闭：先按声明顺序启动扩展，再按声明顺序启动 Components；关闭时
-	// 先逆序关闭 Components，再逆序关闭扩展。任一启动失败都回滚已启动对象并把
-	// 实例置为 StateClosed（fail-closed）。认证/第二因素扩展必须声明非空版本，
-	// 失败不会被降级为跳过认证。同一个扩展对象不得注册到多个实例。
-	Extensions []Extension
-	// Pages 是可选的内置页面装配。设置后由 New 构造页面处理器并挂载到 HTTP
-	// 处理器的同前缀路径；设置 Pages 时必须同时设置 HTTP，否则 New 返回
-	// CONFIG_INVALID。New 只加载模板/资源，不监听端口、不创建协程。
-	Pages *WebUIOptions
-	// HTTP 是可选的 HTTP 处理器装配。设置后由 New 按选项构造 http.Handler，宿主
-	// 通过 Instance.Mount 挂到自己的 mux（或直接使用 Handler）；New 不监听端口、
-	// 不创建协程。前缀须与 Pages.Prefix 一致。
-	HTTP *HTTPOptions
-	// Database 是宿主拥有的数据库连接，仅供 Ready 做就绪检查；实例绝不关闭它，
-	// 宿主可在多个实例之间共享。返回 nil 表示没有可检查的数据库依赖。
-	Database Database
-	// Notifications 是宿主拥有的生命周期通知器；通知失败只写运行日志告警，不会
-	// 改变 Start/Close 的结果。实例不关闭它，也不把它用于认证或授权判定。
-	Notifications Notifier
-	// AccessControl 是宿主注入的真实授权判定扩展。未注入时 CheckAccess 一律
-	// 拒绝（AUTHZ_UNAVAILABLE）；本包不提供"允许全部"、跳过鉴权或伪造 root 的
-	// 公开选项。
-	AccessControl AccessController
-	// ExtensionStartTimeout 是单个扩展 Start 的墙钟上限；0 使用
-	// DefaultExtensionStartTimeout（30s），允许范围
-	// [MinExtensionStartTimeout, MaxExtensionStartTimeout]。忽略 ctx 且不返回的
-	// 扩展会按超时启动失败处理（扩展契约要求必须遵守 ctx）。
-	ExtensionStartTimeout time.Duration
-}
 
 // Instance 是 login 的隔离实例。
 //
@@ -383,7 +288,7 @@ func (i *Instance) startExtensionSafely(ctx context.Context, extension Extension
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				result <- fmt.Errorf("扩展 %s（%s）Start 发生 panic: %v",
-					info.key(), info.Name, recovered)
+					extensionKey(info), info.Name, recovered)
 			}
 		}()
 		result <- extension.Start(startCtx)
@@ -409,17 +314,17 @@ func (i *Instance) startExtensionSafely(ctx context.Context, extension Extension
 		}
 		if extensionErr != nil {
 			return fmt.Errorf("%w: 扩展 %s（%s）超过 %s 后返回: %w",
-				errExtensionStartTimeout, info.key(), info.Name, i.extensionStartTimeout, extensionErr)
+				errExtensionStartTimeout, extensionKey(info), info.Name, i.extensionStartTimeout, extensionErr)
 		}
 		return fmt.Errorf("%w: 扩展 %s（%s）超过 %s（返回时未报告错误）",
-			errExtensionStartTimeout, info.key(), info.Name, i.extensionStartTimeout)
+			errExtensionStartTimeout, extensionKey(info), info.Name, i.extensionStartTimeout)
 	case <-timer.C:
 		if parentErr != nil {
 			return fmt.Errorf("%w：实例启动已取消，但扩展 %s（%s）未在 %s 内返回，可能遗留资源",
-				parentErr, info.key(), info.Name, grace)
+				parentErr, extensionKey(info), info.Name, grace)
 		}
 		return fmt.Errorf("%w: 扩展 %s（%s）超过 %s 且未在 %s 内返回，可能遗留资源",
-			errExtensionStartTimeout, info.key(), info.Name, i.extensionStartTimeout, grace)
+			errExtensionStartTimeout, extensionKey(info), info.Name, i.extensionStartTimeout, grace)
 	}
 }
 
@@ -539,7 +444,7 @@ func (i *Instance) closeExtensions(ctx context.Context) []error {
 		info := i.extensionInfos[started.index]
 		if err := i.closeExtensionSafely(ctx, started.extension, info); err != nil {
 			errs = append(errs, fmt.Errorf("扩展 %s（%s）关闭失败: %w",
-				info.key(), info.Name, err))
+				extensionKey(info), info.Name, err))
 		}
 	}
 	return errs
@@ -552,7 +457,7 @@ func (i *Instance) closeExtensionSafely(ctx context.Context, extension Extension
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("扩展 %s（%s）Close 发生 panic: %v",
-				info.key(), info.Name, recovered)
+				extensionKey(info), info.Name, recovered)
 		}
 	}()
 	return extension.Close(ctx)

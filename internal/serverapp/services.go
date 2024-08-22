@@ -3,10 +3,7 @@ package serverapp
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"time"
-
-	"github.com/kagurazakayashi/EvernightLogin"
+	"github.com/kagurazakayashi/EvernightLogin/config"
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/appcore"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -27,11 +24,17 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/session"
 	sessionsqlite "github.com/kagurazakayashi/EvernightLogin/internal/session/sqlite"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/version"
+	"log/slog"
+	"time"
 )
 
 // Deps 是装配宿主服务所需的显式依赖；所有资源由调用方拥有和关闭。
 type Deps struct {
-	Config login.Config
+	Config config.Config
+	// Build 是当前进程构建信息（步骤 215）；用于诊断/备份导出等脱敏展示，
+	// 由宿主入口注入，internal 不反向 import 根包。零值表示未注入。
+	Build version.BuildInfo
 	// ConfigPath 是启动时加载的 YAML 配置文件路径（可选）；诊断的“待重启配置”
 	// 摘要只读取该文件计算字段差异，不输出路径或配置值。
 	ConfigPath string
@@ -55,7 +58,7 @@ type Deps struct {
 // writeGuard 非 nil 时接入维护门闸：维护状态激活后所有经存储的写事务被拒绝
 // （错误原样返回）。数据库目录不存在时按 0700 创建；已有目录权限不被放宽。
 // 实现见 internal/appcore.OpenStore（与公开嵌入入口共用）。
-func OpenStore(ctx context.Context, cfg login.Config,
+func OpenStore(ctx context.Context, cfg config.Config,
 	writeGuard func(context.Context) (func(), error)) (*storagesqlite.Store, error) {
 	return appcore.OpenStore(ctx, cfg, writeGuard)
 }
