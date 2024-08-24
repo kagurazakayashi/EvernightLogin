@@ -30,6 +30,9 @@ go doc -all . | more
 | 兼容扩展 | `Options`/`WebUIOptions` 新增可选字段、新增错误码、新增扩展分类、新增命名路由 | 零值等价“未启用”，旧代码行为不变 |
 | 不承诺稳定 | 内置页面 HTML 结构、日志文本、诊断输出文本、`internal/`、`cmd/*` 命令行参数、未公开的仓储/服务装配 | 不要解析 DOM 或依赖输出格式 |
 
+- 运行时按域提供公开 accessor（`Runtime.Diagnostics`/`Settings`/`Backup`/`Support`/
+  `ManualRecovery`/`Protocol`/`ProtocolRevocation`/`UserLifecycle` 等）；完整入口、调用身份、
+  结果/错误、分页与取消语义见 `docs/acceptance/capability-matrix.json` 与 GoDoc。
 - 导入本包**不会**启动后台协程、打开数据库或监听端口（没有 `init()` 副作用）；同一进程
   可以安全创建多个实例，互不共享状态。
 - 构建信息：`login.CurrentBuildInfo()` 返回版本/提交/构建时间等只读信息；
@@ -68,10 +71,12 @@ OpenAPI 仍只有上述两条路径。`login-server init` 是本地受控首次�
 管理 JSON API（`--enable-admin-api` 开启，默认关闭）挂载在 `/admin/v1` 下，本轮新增/验收的
 关键路由包括：`GET /admin/v1/sessions`（强认证管理会话 + 范围授权；步骤 187）、
 `POST /admin/v1/sessions/revoke`（`session.revoke.other` 敏感策略 + 186 证明）、
-`GET /admin/v1/support/recovery/requests[/{id}]`（步骤 188 人工恢复待办/详情，逐条判权）。
-写操作要求管理会话与 186/187 的一次性再认证证明；字段与错误 envelope 以
-`internal/adminapi` GoDoc 和开启 `--enable-admin-api` 后的真实响应为准，不要从页面路由
-推断 API 路径。
+`GET /admin/v1/support/recovery/requests[/{id}]`（步骤 188 人工恢复待办/详情，逐条判权）、
+`GET /admin/v1/settings[/status]`、`POST /admin/v1/settings/validate`、`PUT /admin/v1/settings`
+（`settings.manage`，敏感默认恢复仅 root）、`GET /admin/v1/diagnostics[/errors|/export]`
+（`diagnostics.read` 脱敏只读；步骤 233/236）。写操作要求管理会话与 186/187 的一次性再认证
+证明；字段与错误 envelope 以 `internal/adminapi` GoDoc 和开启 `--enable-admin-api` 后的真实
+响应为准，不要从页面路由推断 API 路径。
 
 预览文档（不监听端口，直接生成）：
 

@@ -2,7 +2,7 @@
   "schema": "evernight.capability-matrix/v1",
   "description": "EvernightLogin 本轮机器可读能力清单：由 scripts/capabilities 扫描源码生成，状态由声明面是否真实解析决定，禁止手写全绿。",
   "metadata": {
-    "generated_at": "2026-11-24T20:55:41Z",
+    "generated_at": "2026-11-25T02:54:40Z",
     "generator": "go run ./scripts/capabilities",
     "repo_root": ".",
     "git_head": "",
@@ -11,8 +11,8 @@
     "go_version": "go1.27.4",
     "platform": "windows",
     "arch": "amd64",
-    "logical_cpus": 4,
-    "concurrency_budget": 2,
+    "logical_cpus": 16,
+    "concurrency_budget": 8,
     "catalog_path": "scripts/capabilities/catalog.json",
     "scan_scope": [
       "根包 package login(非测试)",
@@ -21,108 +21,20 @@
       "internal/",
       "测试函数（根、app、internal、cmd 的 *_test.go）"
     ],
-    "files_scanned": 658
+    "files_scanned": 708
   },
   "summary": {
-    "total": 42,
-    "implemented": 41,
+    "total": 43,
+    "implemented": 43,
     "implemented_untested": 0,
     "missing": 0,
-    "unimplemented": 1,
+    "unimplemented": 0,
     "by_status": {
-      "implemented": 41,
-      "unimplemented": 1
+      "implemented": 43
     },
-    "matched_tests_total": 154
+    "matched_tests_total": 186
   },
   "capabilities": [
-    {
-      "id": "gap.unimplemented_permissions",
-      "title": "已知未实现权限键（settings.manage / diagnostics.read）",
-      "domain": "已知缺口",
-      "expect": "unimplemented",
-      "unimplemented_permissions": [
-        "diagnostics.read",
-        "settings.manage"
-      ],
-      "gaps": [
-        {
-          "summary": "settings.manage 与 diagnostics.read 只在权限目录登记，没有常规设置写入/运行诊断读取的服务端执行路径；不授予任何预设角色，也不能把页面/CLI 的本地受控操作当作该权限已接通。",
-          "evidence": [
-            "internal/preset/catalog.go:没有对应的服务端执行路径",
-            "internal/preset/catalog.go:保持 false 且"
-          ]
-        }
-      ],
-      "notes": "status=unimplemented 表示能力不可用；后续步骤实现后必须把 PermissionDefinition.Implemented 改为 true 并更新本声明，否则扫描会报 missing。",
-      "status": "unimplemented",
-      "surfaces": [
-        {
-          "kind": "internal_service",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "app_api",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "root_api",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "admin_route",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "protocol_path",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "cli",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "page",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "permission",
-          "total": 0,
-          "found": 0
-        },
-        {
-          "kind": "unimplemented_permission",
-          "total": 2,
-          "found": 2
-        },
-        {
-          "kind": "test",
-          "total": 0,
-          "found": 0
-        }
-      ],
-      "gap_evidence": [
-        {
-          "summary": "settings.manage 与 diagnostics.read 只在权限目录登记，没有常规设置写入/运行诊断读取的服务端执行路径；不授予任何预设角色，也不能把页面/CLI 的本地受控操作当作该权限已接通。",
-          "file": "internal/preset/catalog.go",
-          "token": "没有对应的服务端执行路径",
-          "found": true
-        },
-        {
-          "summary": "settings.manage 与 diagnostics.read 只在权限目录登记，没有常规设置写入/运行诊断读取的服务端执行路径；不授予任何预设角色，也不能把页面/CLI 的本地受控操作当作该权限已接通。",
-          "file": "internal/preset/catalog.go",
-          "token": "保持 false 且",
-          "found": true
-        }
-      ]
-    },
     {
       "id": "access.joint_check",
       "title": "令牌与当前权限联合校验",
@@ -397,7 +309,12 @@
         "Runtime.UserBatch",
         "Runtime.UserLifecycle",
         "UserBatchService",
-        "UserLifecycleService"
+        "UserLifecycleService",
+        "AdminUserValidity",
+        "AdminUserValidityRequest",
+        "AdminUserValidityChange",
+        "UserLifecycleService.GetUserValidity",
+        "UserLifecycleService.SetUserValidity"
       ],
       "pagination": {
         "mode": "offset",
@@ -441,9 +358,23 @@
           "files": [
             "app/userbatch_public_test.go"
           ]
+        },
+        {
+          "package": "./app",
+          "run": "TestUserValidityPublicFacade",
+          "files": [
+            "app/validity_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestUserValidityRootProtectedPublic",
+          "files": [
+            "app/validity_public_test.go"
+          ]
         }
       ],
-      "notes": "批量任务列表/邀请/注册审核按 Page+HasMore 分页；批量行结果由 Limit+Truncated 明确截断语义；状态变更保留会话/令牌失效与审计。",
+      "notes": "批量任务列表/邀请/注册审核按 Page+HasMore 分页；批量行结果由 Limit+Truncated 明确截断语义；状态变更保留会话/令牌失效与审计。 账户有效期为全局 UTC 半开区间，与手动禁用/root 保护分离；失效由认证/会话/授权路径在线判断。",
       "status": "implemented",
       "surfaces": [
         {
@@ -453,8 +384,8 @@
         },
         {
           "kind": "app_api",
-          "total": 44,
-          "found": 44
+          "total": 49,
+          "found": 49
         },
         {
           "kind": "root_api",
@@ -493,8 +424,8 @@
         },
         {
           "kind": "test",
-          "total": 4,
-          "found": 4
+          "total": 6,
+          "found": 6
         }
       ],
       "matched_tests": [
@@ -502,7 +433,9 @@
         "./app:TestChangeOwnPassword",
         "./app:TestChangeOwnPasswordRejections",
         "./app:TestInvitationAdminLifecycle",
-        "./app:TestUserBatchImportLifecycle"
+        "./app:TestUserBatchImportLifecycle",
+        "./app:TestUserValidityPublicFacade",
+        "./app:TestUserValidityRootProtectedPublic"
       ]
     },
     {
@@ -1688,6 +1621,67 @@
         "internal/restore",
         "internal/maintenance"
       ],
+      "app_api": [
+        "BackupArtifact",
+        "BackupArtifactRequest",
+        "BackupArtifactService",
+        "BackupCheck",
+        "BackupCheckReport",
+        "BackupExport",
+        "BackupImpact",
+        "BackupJob",
+        "BackupJobCancelRequest",
+        "BackupJobCancelResult",
+        "BackupJobRef",
+        "BackupJobRequest",
+        "BackupJobService",
+        "BackupJobTriggerRequest",
+        "BackupMaintenanceRequest",
+        "BackupPendingRestore",
+        "BackupPlan",
+        "BackupPlanRequest",
+        "BackupPlanService",
+        "BackupPlanStateRequest",
+        "BackupRecoveryConfigRequest",
+        "BackupRecoveryInitializeRequest",
+        "BackupRecoveryLoadRequest",
+        "BackupRecoveryRestoreRequest",
+        "BackupRecoveryService",
+        "BackupRecoverySource",
+        "BackupRecoveryStatus",
+        "BackupRecoveryStatusRequest",
+        "BackupRehearsal",
+        "BackupRestoreResult",
+        "BackupService",
+        "BackupSourceSummary",
+        "Runtime.Backup",
+        "BackupService.Plans",
+        "BackupService.Jobs",
+        "BackupService.Artifacts",
+        "BackupService.Recovery",
+        "BackupPlanService.List",
+        "BackupPlanService.Get",
+        "BackupPlanService.Create",
+        "BackupPlanService.Update",
+        "BackupPlanService.SetEnabled",
+        "BackupPlanService.Delete",
+        "BackupJobService.Trigger",
+        "BackupJobService.Get",
+        "BackupJobService.List",
+        "BackupJobService.Cancel",
+        "BackupArtifactService.List",
+        "BackupArtifactService.Get",
+        "BackupArtifactService.Check",
+        "BackupArtifactService.Export",
+        "BackupRecoveryService.Configure",
+        "BackupRecoveryService.LoadBackup",
+        "BackupRecoveryService.Status",
+        "BackupRecoveryService.Initialize",
+        "BackupRecoveryService.Rehearse",
+        "BackupRecoveryService.Execute",
+        "BackupRecoveryService.EnterMaintenance",
+        "BackupRecoveryService.ExitMaintenance"
+      ],
       "admin_routes": [
         "GET backups*",
         "POST backups*",
@@ -1744,8 +1738,79 @@
         {
           "package": "./internal/adminapi",
           "run": "TestBackupEndpointsWiring"
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupPlanLifecycle",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupTriggerCheckExport",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupCheckAuditFailureFailsClosed",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupRecoveryRoundTrip",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupRecoveryGuards",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupRecoveryCorruptBackupRejected",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupJobCancelAndTerminalState",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupRecoveryAdminSessionDenied",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupInvalidRequestIDRejected",
+          "files": [
+            "app/backup_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestBackupPublicSurfaceHasNoInternalTypesOrPaths",
+          "files": [
+            "app/backup_surface_test.go"
+          ]
         }
       ],
+      "notes": "恢复的配置/装载/预演/执行/维护入口仅受信管理通道；状态与错误如实，不把编译/预演当恢复成功；公开视图不暴露磁盘路径。",
       "status": "implemented",
       "surfaces": [
         {
@@ -1755,8 +1820,8 @@
         },
         {
           "kind": "app_api",
-          "total": 0,
-          "found": 0
+          "total": 59,
+          "found": 59
         },
         {
           "kind": "root_api",
@@ -1795,15 +1860,25 @@
         },
         {
           "kind": "test",
-          "total": 4,
-          "found": 4
+          "total": 14,
+          "found": 14
         }
       ],
       "matched_tests": [
         "./internal/backup:TestCreateBackupWithAttachmentsAndConfig",
         "./internal/restore:TestRestoreReplacesDatabaseAndRevokesCredentials",
         "./internal/maintenance:TestEnterMaintenanceBlocksWritesAndExitRestores",
-        "./internal/adminapi:TestBackupEndpointsWiring"
+        "./internal/adminapi:TestBackupEndpointsWiring",
+        "./app:TestBackupPlanLifecycle",
+        "./app:TestBackupTriggerCheckExport",
+        "./app:TestBackupCheckAuditFailureFailsClosed",
+        "./app:TestBackupRecoveryRoundTrip",
+        "./app:TestBackupRecoveryGuards",
+        "./app:TestBackupRecoveryCorruptBackupRejected",
+        "./app:TestBackupJobCancelAndTerminalState",
+        "./app:TestBackupRecoveryAdminSessionDenied",
+        "./app:TestBackupInvalidRequestIDRejected",
+        "./app:TestBackupPublicSurfaceHasNoInternalTypesOrPaths"
       ]
     },
     {
@@ -2205,6 +2280,140 @@
       ]
     },
     {
+      "id": "diagnostics.operations",
+      "title": "运行诊断与关联错误查询",
+      "domain": "管理",
+      "internal_services": [
+        "internal/diag",
+        "internal/authz",
+        "internal/session"
+      ],
+      "app_api": [
+        "DiagnosticsConfigSummary",
+        "DiagnosticsErrorEntry",
+        "DiagnosticsErrorList",
+        "DiagnosticsErrorsRequest",
+        "DiagnosticsExport",
+        "DiagnosticsQueueCount",
+        "DiagnosticsQueueStatus",
+        "DiagnosticsReloadField",
+        "DiagnosticsReport",
+        "DiagnosticsRequest",
+        "DiagnosticsService",
+        "DiagnosticsStorageHealth",
+        "DiagnosticsVersion",
+        "Runtime.Diagnostics",
+        "DiagnosticsService.Read",
+        "DiagnosticsService.RelatedErrors",
+        "DiagnosticsService.Export"
+      ],
+      "admin_routes": [
+        "GET diagnostics",
+        "GET diagnostics/errors",
+        "GET diagnostics/export"
+      ],
+      "pages": [
+        "name:admin.diagnostics"
+      ],
+      "permissions": [
+        "diagnostics.read"
+      ],
+      "pagination": {
+        "mode": "fixed",
+        "reason": "关联错误列表有固定 Top-N 上限（1–50）并用 Truncated 表示截断，不提供游标/偏移继续；配置字段、队列计数与版本是固定集合。"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestDiagnosticsLocalAdminRedaction",
+          "files": [
+            "app/diagnostics_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestDiagnosticsSessionRequiresManagementAuth",
+          "files": [
+            "app/diagnostics_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestDiagnosticsExportBounded",
+          "files": [
+            "app/diagnostics_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestDiagnosticsManagementSessionWithPermission",
+          "files": [
+            "app/diagnostics_public_test.go"
+          ]
+        }
+      ],
+      "notes": "只读脱敏诊断：LocalAdmin 与真实管理会话分级；不返回主密钥、完整配置、个人资料、审计原文或未脱敏秘密。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 3,
+          "found": 3
+        },
+        {
+          "kind": "app_api",
+          "total": 17,
+          "found": 17
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 3,
+          "found": 3
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "permission",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 4,
+          "found": 4
+        }
+      ],
+      "matched_tests": [
+        "./app:TestDiagnosticsLocalAdminRedaction",
+        "./app:TestDiagnosticsSessionRequiresManagementAuth",
+        "./app:TestDiagnosticsExportBounded",
+        "./app:TestDiagnosticsManagementSessionWithPermission"
+      ]
+    },
+    {
       "id": "mail.delivery",
       "title": "站内邮件投递队列与本地测试邮件服务",
       "domain": "通知",
@@ -2555,6 +2764,22 @@
         "internal/token",
         "internal/oauthclient"
       ],
+      "app_api": [
+        "ProtocolService",
+        "ProtocolIntrospectRequest",
+        "ProtocolTokenInspection",
+        "ProtocolRevocationService",
+        "ProtocolRevokeTokenRequest",
+        "ProtocolRevokeResult",
+        "ProtocolRevokeAuthorizationRequest",
+        "ProtocolLogoutRequest",
+        "Runtime.Protocol",
+        "Runtime.ProtocolRevocation",
+        "ProtocolService.IntrospectToken",
+        "ProtocolRevocationService.RevokeToken",
+        "ProtocolRevocationService.RevokeAuthorization",
+        "ProtocolRevocationService.Logout"
+      ],
       "protocol_paths": [
         "PathDiscovery",
         "PathJWKS",
@@ -2590,8 +2815,23 @@
         {
           "package": "./internal/token",
           "run": "TestIssueAndVerifyAccessToken"
+        },
+        {
+          "package": "./app",
+          "run": "TestProtocolPublicIntrospection",
+          "files": [
+            "app/protocol_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestProtocolPublicRevocation",
+          "files": [
+            "app/protocol_revoke_public_test.go"
+          ]
         }
       ],
+      "notes": "协议处理仍由标准 HTTP 端点/页面承载；公开 Go 只提供受控内省与撤销（受信资源服务/真实会话绑定），不导出内部 handler，不把签名验证等同于业务授权。",
       "status": "implemented",
       "surfaces": [
         {
@@ -2601,8 +2841,8 @@
         },
         {
           "kind": "app_api",
-          "total": 0,
-          "found": 0
+          "total": 14,
+          "found": 14
         },
         {
           "kind": "root_api",
@@ -2641,15 +2881,17 @@
         },
         {
           "kind": "test",
-          "total": 4,
-          "found": 4
+          "total": 6,
+          "found": 6
         }
       ],
       "matched_tests": [
         "./internal/protocolapi:TestDiscoveryOnlyDeclaresImplementedCapabilities",
         "./internal/oauthflow:TestAuthorizationCodeHappyPath",
         "./internal/oidc:TestDiscoveryDocumentOnlyImplemented",
-        "./internal/token:TestIssueAndVerifyAccessToken"
+        "./internal/token:TestIssueAndVerifyAccessToken",
+        "./app:TestProtocolPublicIntrospection",
+        "./app:TestProtocolPublicRevocation"
       ]
     },
     {
@@ -3739,7 +3981,16 @@
         "AdminListUserSessionsRequest",
         "AdminSessionView",
         "AdminUserSessionList",
-        "AdminService.ListUserSessions"
+        "AdminService.ListUserSessions",
+        "SessionDeviceRevokeRequest",
+        "SessionDeviceRevokeResult",
+        "SessionRevokeOthersRequest",
+        "SessionRevokeOthersResult",
+        "AdminRevokeSessionsRequest",
+        "AdminRevokeSessionsResult",
+        "SessionService.RevokeDevice",
+        "SessionService.RevokeOtherDevices",
+        "AdminService.RevokeUserSessions"
       ],
       "admin_routes": [
         "GET sessions",
@@ -3772,8 +4023,30 @@
         {
           "package": "./internal/session",
           "run": "TestAdminRevokeScopes"
+        },
+        {
+          "package": "./app",
+          "run": "TestSessionDeviceManagementPublicFlow",
+          "files": [
+            "app/sessions_oauth_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSessionRevokeAuditFailureRollsBack",
+          "files": [
+            "app/sessions_oauth_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestAdminRevokeSessionsPublicFlow",
+          "files": [
+            "app/sessions_oauth_public_test.go"
+          ]
         }
       ],
+      "notes": " 本步公开撤销：本人指定/其他设备与管理员强制下线（真实管理会话+再认证，LocalAdmin 无管理会话被拒绝）。",
       "status": "implemented",
       "surfaces": [
         {
@@ -3783,8 +4056,8 @@
         },
         {
           "kind": "app_api",
-          "total": 9,
-          "found": 9
+          "total": 18,
+          "found": 18
         },
         {
           "kind": "root_api",
@@ -3823,14 +4096,171 @@
         },
         {
           "kind": "test",
-          "total": 3,
-          "found": 3
+          "total": 6,
+          "found": 6
         }
       ],
       "matched_tests": [
         "./internal/session:TestAdminListSessionsScopeAndAudit",
         "./internal/session:TestListSessionsPaginationAndScope",
-        "./internal/session:TestAdminRevokeScopes"
+        "./internal/session:TestAdminRevokeScopes",
+        "./app:TestSessionDeviceManagementPublicFlow",
+        "./app:TestSessionRevokeAuditFailureRollsBack",
+        "./app:TestAdminRevokeSessionsPublicFlow"
+      ]
+    },
+    {
+      "id": "settings.managed",
+      "title": "常规设置读取、校验、更新与敏感默认恢复",
+      "domain": "配置",
+      "internal_services": [
+        "internal/settings",
+        "internal/policy",
+        "internal/serverapp"
+      ],
+      "app_api": [
+        "SettingField",
+        "SettingValidationError",
+        "SettingsFieldsRequest",
+        "SettingsRestoreSensitiveRequest",
+        "SettingsRestoreSensitiveResult",
+        "SettingsService",
+        "SettingsStatus",
+        "SettingsStatusRequest",
+        "SettingsUpdateRequest",
+        "SettingsUpdateResult",
+        "SettingsValidateRequest",
+        "SettingsValidation",
+        "SettingsView",
+        "Runtime.Settings",
+        "SettingsService.Fields",
+        "SettingsService.Validate",
+        "SettingsService.Update",
+        "SettingsService.Status",
+        "SettingsService.RestoreSensitiveDefaults"
+      ],
+      "admin_routes": [
+        "GET settings",
+        "GET settings/status",
+        "POST settings/validate",
+        "PUT settings",
+        "POST settings/sensitive-policy/restore"
+      ],
+      "pages": [
+        "name:admin.settings*"
+      ],
+      "permissions": [
+        "settings.manage"
+      ],
+      "pagination": {
+        "mode": "none",
+        "reason": "设置为固定字段白名单集合，不是可增长数据列表，不涉及分页。"
+      },
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestSettingsFieldsVersionAndUpdate",
+          "files": [
+            "app/settings_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSettingsVersionConflictAndInvalidConfig",
+          "files": [
+            "app/settings_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSettingsFieldAuthorization",
+          "files": [
+            "app/settings_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSettingsAuditFailureRollsBack",
+          "files": [
+            "app/settings_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSettingsRestoreSensitiveDefaultsRootOnly",
+          "files": [
+            "app/settings_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSettingsSecurityPolicyFieldsRootOnly",
+          "files": [
+            "app/settings_public_test.go"
+          ]
+        }
+      ],
+      "notes": "常规设置与敏感策略分离：敏感字段/安全策略恢复仅 root；磁盘值、当前有效值与待重启字段区分；秘密遮盖不回显；审计失败不落盘部分更新。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 3,
+          "found": 3
+        },
+        {
+          "kind": "app_api",
+          "total": 19,
+          "found": 19
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 5,
+          "found": 5
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "permission",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 6,
+          "found": 6
+        }
+      ],
+      "matched_tests": [
+        "./app:TestSettingsFieldsVersionAndUpdate",
+        "./app:TestSettingsVersionConflictAndInvalidConfig",
+        "./app:TestSettingsFieldAuthorization",
+        "./app:TestSettingsAuditFailureRollsBack",
+        "./app:TestSettingsRestoreSensitiveDefaultsRootOnly",
+        "./app:TestSettingsSecurityPolicyFieldsRootOnly"
       ]
     },
     {
@@ -4011,6 +4441,56 @@
         "internal/manualrecovery",
         "internal/rootrecovery"
       ],
+      "app_api": [
+        "SupportAdminService",
+        "SupportCase",
+        "SupportCaseEvent",
+        "SupportCasePage",
+        "SupportCaseRequest",
+        "SupportCreateCaseRequest",
+        "SupportEventPage",
+        "SupportListCasesRequest",
+        "SupportLookupTargetRequest",
+        "SupportReassignCaseRequest",
+        "SupportSendResetRequest",
+        "SupportSendResult",
+        "SupportTarget",
+        "SupportTransitionCaseRequest",
+        "ManualRecoveryAdminService",
+        "ManualRecoveryApproval",
+        "ManualRecoveryCancelRequest",
+        "ManualRecoveryCreateRequest",
+        "ManualRecoveryDecisionRequest",
+        "ManualRecoveryExecuteRequest",
+        "ManualRecoveryExecutionRecord",
+        "ManualRecoveryExecutionResult",
+        "ManualRecoveryListItem",
+        "ManualRecoveryListPage",
+        "ManualRecoveryListRequest",
+        "ManualRecoveryPolicy",
+        "ManualRecoveryRequest",
+        "ManualRecoveryRequestRef",
+        "Runtime.Support",
+        "Runtime.ManualRecovery",
+        "SupportAdminService.CreateCase",
+        "SupportAdminService.GetCase",
+        "SupportAdminService.ListCases",
+        "SupportAdminService.ListEvents",
+        "SupportAdminService.LookupTarget",
+        "SupportAdminService.ReassignCase",
+        "SupportAdminService.TransitionCase",
+        "SupportAdminService.SendReset",
+        "ManualRecoveryAdminService.Policy",
+        "ManualRecoveryAdminService.Create",
+        "ManualRecoveryAdminService.GetRequest",
+        "ManualRecoveryAdminService.List",
+        "ManualRecoveryAdminService.Approve",
+        "ManualRecoveryAdminService.Reject",
+        "ManualRecoveryAdminService.Cancel",
+        "ManualRecoveryAdminService.Execute",
+        "ManualRecoveryAdminService.GetApproval",
+        "ManualRecoveryAdminService.GetExecution"
+      ],
       "admin_routes": [
         "GET support*",
         "POST support*"
@@ -4034,7 +4514,11 @@
         "mode": "offset",
         "evidence": [
           "internal/support/service.go:Limit",
-          "internal/support/service.go:HasMore"
+          "internal/support/service.go:HasMore",
+          "SupportListCasesRequest.Page",
+          "SupportCasePage.Page",
+          "ManualRecoveryListRequest.Page",
+          "ManualRecoveryListPage.Page"
         ],
         "continuation": "has_more"
       },
@@ -4054,9 +4538,44 @@
         {
           "package": "./internal/support",
           "run": "TestStrongAuthGateAndMissingDependencies"
+        },
+        {
+          "package": "./app",
+          "run": "TestSupportCasePublicFlow",
+          "files": [
+            "app/support_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSupportPublicDenials",
+          "files": [
+            "app/support_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestSupportCreateAuditFailureRollsBack",
+          "files": [
+            "app/support_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestManualRecoveryPublicFlow",
+          "files": [
+            "app/manualrecovery_public_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestManualRecoveryPublicDenials",
+          "files": [
+            "app/manualrecovery_public_test.go"
+          ]
         }
       ],
-      "notes": "root 应急只允许本地受控 CLI（loginctl root-recover），不开放远程 HTTP 入口。",
+      "notes": "root 应急只允许本地受控 CLI（loginctl root-recover），不开放远程 HTTP 入口。 公开 Go 复用真实客服/人工恢复审批链；客服与恢复均要求真实工作人员会话，LocalAdmin 无用户身份被拒绝；恢复执行三权分离，不凭批准直接签发正常用户会话。",
       "status": "implemented",
       "surfaces": [
         {
@@ -4066,8 +4585,8 @@
         },
         {
           "kind": "app_api",
-          "total": 0,
-          "found": 0
+          "total": 48,
+          "found": 48
         },
         {
           "kind": "root_api",
@@ -4106,15 +4625,20 @@
         },
         {
           "kind": "test",
-          "total": 4,
-          "found": 4
+          "total": 9,
+          "found": 9
         }
       ],
       "matched_tests": [
         "./internal/support:TestCreateCaseScopeMaskingAndAudit",
         "./internal/manualrecovery:TestApprovalWaitingPeriodAndExecution",
         "./internal/rootrecovery:TestPasswordAndMFAReset",
-        "./internal/support:TestStrongAuthGateAndMissingDependencies"
+        "./internal/support:TestStrongAuthGateAndMissingDependencies",
+        "./app:TestSupportCasePublicFlow",
+        "./app:TestSupportPublicDenials",
+        "./app:TestSupportCreateAuditFailureRollsBack",
+        "./app:TestManualRecoveryPublicFlow",
+        "./app:TestManualRecoveryPublicDenials"
       ]
     },
     {
@@ -4417,7 +4941,7 @@
           "run": "TestAuditAdapterQueryAndDetail"
         },
         {
-          "package": ".",
+          "package": "./ui",
           "run": "TestUIPageManageRoutesContract"
         }
       ],
@@ -4478,7 +5002,7 @@
         "./internal/serverapp:TestManagementPagesRequireStrongAuthSession",
         "./internal/serverapp:TestThirteenPagesProtocolAndAdminAPI",
         "./internal/uiadminadapter:TestAuditAdapterQueryAndDetail",
-        ".:TestUIPageManageRoutesContract"
+        "./ui:TestUIPageManageRoutesContract"
       ]
     },
     {
@@ -4669,10 +5193,10 @@
     }
   ],
   "coverage": {
-    "app_types_total": 348,
-    "admin_routes_total": 113,
+    "app_types_total": 451,
+    "admin_routes_total": 123,
     "protocol_paths_total": 17,
-    "pages_total": 241,
+    "pages_total": 245,
     "cli_commands_total": 40,
     "permissions_total": 51
   },
@@ -5146,6 +5670,16 @@
         "claim_mode": "offset"
       },
       {
+        "name": "DiagnosticsErrorList",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "Truncated"
+        ],
+        "capability": "diagnostics.operations",
+        "claim_mode": "fixed"
+      },
+      {
         "name": "IterationOptions",
         "kind": "request",
         "bounded": true,
@@ -5173,6 +5707,24 @@
         "bounded": false,
         "capability": "mfa.public_facade",
         "claim_mode": "fixed"
+      },
+      {
+        "name": "ManualRecoveryListPage",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "Page"
+        ],
+        "capability": "support.recovery",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "ManualRecoveryListRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "support.recovery",
+        "claim_mode": "offset"
       },
       {
         "name": "RBACDelegationList",
@@ -5250,10 +5802,39 @@
         "page_field": "Page",
         "capability": "session.admin",
         "claim_mode": "offset"
+      },
+      {
+        "name": "SupportCasePage",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "Page"
+        ],
+        "capability": "support.recovery",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "SupportEventPage",
+        "kind": "result",
+        "bounded": true,
+        "continuation_fields": [
+          "Page"
+        ],
+        "capability": "support.recovery",
+        "claim_mode": "offset"
+      },
+      {
+        "name": "SupportListCasesRequest",
+        "kind": "request",
+        "bounded": true,
+        "page_field": "Page",
+        "capability": "support.recovery",
+        "claim_mode": "offset"
       }
     ],
-    "bounded_lists": 58,
+    "bounded_lists": 64,
     "exceptions": [
+      "DiagnosticsErrorList -\u003e diagnostics.operations（fixed：由能力声明理由承担）",
       "IterationOptions -\u003e pagination.iteration（none：由能力声明理由承担）",
       "MFAFactorList -\u003e mfa.public_facade（fixed：由能力声明理由承担）",
       "MFAFactorListRequest -\u003e mfa.public_facade（fixed：由能力声明理由承担）",
@@ -8451,6 +9032,46 @@
           "Secret": "string"
         }
       },
+      "AdminRevokeSessionsRequest": {
+        "name": "AdminRevokeSessionsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Password",
+          "Reason",
+          "RequestID",
+          "ScopeApplicationID",
+          "TOTPCode",
+          "TargetSessionID",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "ScopeApplicationID": "string",
+          "TOTPCode": "string",
+          "TargetSessionID": "string",
+          "TargetUserID": "string"
+        }
+      },
+      "AdminRevokeSessionsResult": {
+        "name": "AdminRevokeSessionsResult",
+        "kind": "struct",
+        "fields": [
+          "Revoked",
+          "ScopeApplicationID",
+          "TargetSessionID",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Revoked": "int64",
+          "ScopeApplicationID": "string",
+          "TargetSessionID": "string",
+          "TargetUserID": "string"
+        }
+      },
       "AdminRole": {
         "name": "AdminRole",
         "kind": "struct",
@@ -8610,6 +9231,7 @@
           "ListUserSessions",
           "ListUsers",
           "RevokeApplicationRole",
+          "RevokeUserSessions",
           "SetApplicationEnabled",
           "UpdateUserProfile"
         ]
@@ -9322,7 +9944,9 @@
           "Status",
           "Timezone",
           "UpdatedAt",
-          "Username"
+          "Username",
+          "ValidFrom",
+          "ValidUntil"
         ],
         "field_types": {
           "Biography": "string",
@@ -9335,7 +9959,9 @@
           "Status": "string",
           "Timezone": "string",
           "UpdatedAt": "time.Time",
-          "Username": "string"
+          "Username": "string",
+          "ValidFrom": "*time.Time",
+          "ValidUntil": "*time.Time"
         }
       },
       "AdminUserStateChange": {
@@ -9368,6 +9994,68 @@
           "ExpectedRowVersion": "int64",
           "RequestID": "string",
           "UserID": "string"
+        }
+      },
+      "AdminUserValidity": {
+        "name": "AdminUserValidity",
+        "kind": "struct",
+        "fields": [
+          "Available",
+          "CheckedAt",
+          "IsRoot",
+          "Reason",
+          "RowVersion",
+          "Status",
+          "UserID",
+          "ValidFrom",
+          "ValidUntil"
+        ],
+        "field_types": {
+          "Available": "bool",
+          "CheckedAt": "time.Time",
+          "IsRoot": "bool",
+          "Reason": "string",
+          "RowVersion": "int64",
+          "Status": "string",
+          "UserID": "string",
+          "ValidFrom": "*time.Time",
+          "ValidUntil": "*time.Time"
+        }
+      },
+      "AdminUserValidityChange": {
+        "name": "AdminUserValidityChange",
+        "kind": "struct",
+        "fields": [
+          "Changed",
+          "PreviousValidFrom",
+          "PreviousValidUntil",
+          "Validity"
+        ],
+        "field_types": {
+          "Changed": "bool",
+          "PreviousValidFrom": "*time.Time",
+          "PreviousValidUntil": "*time.Time",
+          "Validity": "AdminUserValidity"
+        }
+      },
+      "AdminUserValidityRequest": {
+        "name": "AdminUserValidityRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ExpectedRowVersion",
+          "RequestID",
+          "UserID",
+          "ValidFrom",
+          "ValidUntil"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ExpectedRowVersion": "int64",
+          "RequestID": "string",
+          "UserID": "string",
+          "ValidFrom": "*time.Time",
+          "ValidUntil": "*time.Time"
         }
       },
       "ApplicationLifecycleService": {
@@ -9419,6 +10107,774 @@
           "RecoveryStatus",
           "VerifySecondFactor"
         ]
+      },
+      "BackupArtifact": {
+        "name": "BackupArtifact",
+        "kind": "struct",
+        "fields": [
+          "AppVersion",
+          "BackupID",
+          "CleanedAt",
+          "Cleanup",
+          "ContentAttach",
+          "ContentConfig",
+          "ContentDatabase",
+          "CreatedAt",
+          "Downloadable",
+          "EntryCount",
+          "FileExists",
+          "FileSHA256",
+          "FormatVersion",
+          "Hostname",
+          "IsLastUsable",
+          "JobID",
+          "ManifestSHA256",
+          "Origin",
+          "ProtectionReason",
+          "PublishedAt",
+          "RetentionVersion",
+          "ScheduleID",
+          "SchemaVersion",
+          "SizeBytes",
+          "Verification",
+          "VerifiedAt"
+        ],
+        "field_types": {
+          "AppVersion": "string",
+          "BackupID": "string",
+          "CleanedAt": "time.Time",
+          "Cleanup": "string",
+          "ContentAttach": "string",
+          "ContentConfig": "string",
+          "ContentDatabase": "bool",
+          "CreatedAt": "time.Time",
+          "Downloadable": "bool",
+          "EntryCount": "int",
+          "FileExists": "bool",
+          "FileSHA256": "string",
+          "FormatVersion": "int",
+          "Hostname": "string",
+          "IsLastUsable": "bool",
+          "JobID": "string",
+          "ManifestSHA256": "string",
+          "Origin": "string",
+          "ProtectionReason": "string",
+          "PublishedAt": "time.Time",
+          "RetentionVersion": "int64",
+          "ScheduleID": "string",
+          "SchemaVersion": "string",
+          "SizeBytes": "int64",
+          "Verification": "string",
+          "VerifiedAt": "time.Time"
+        }
+      },
+      "BackupArtifactRequest": {
+        "name": "BackupArtifactRequest",
+        "kind": "struct",
+        "fields": [
+          "BackupID",
+          "Caller",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "BackupID": "string",
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "BackupArtifactService": {
+        "name": "BackupArtifactService",
+        "kind": "interface",
+        "methods": [
+          "Check",
+          "Export",
+          "Get",
+          "List"
+        ]
+      },
+      "BackupCheck": {
+        "name": "BackupCheck",
+        "kind": "struct",
+        "fields": [
+          "Code",
+          "Detail",
+          "Label",
+          "Name",
+          "Status"
+        ],
+        "field_types": {
+          "Code": "string",
+          "Detail": "string",
+          "Label": "string",
+          "Name": "string",
+          "Status": "string"
+        }
+      },
+      "BackupCheckReport": {
+        "name": "BackupCheckReport",
+        "kind": "struct",
+        "fields": [
+          "AppVersion",
+          "Authenticated",
+          "BackupID",
+          "CreatedAt",
+          "DatabaseEngine",
+          "Encrypted",
+          "EntryCount",
+          "FileSHA256",
+          "FileSize",
+          "FormatVersion",
+          "Host",
+          "ManifestAvailable",
+          "ManifestSHA256",
+          "SchemaVersion",
+          "SchemaVersionNum",
+          "StructuralValid"
+        ],
+        "field_types": {
+          "AppVersion": "string",
+          "Authenticated": "bool",
+          "BackupID": "string",
+          "CreatedAt": "time.Time",
+          "DatabaseEngine": "string",
+          "Encrypted": "bool",
+          "EntryCount": "int",
+          "FileSHA256": "string",
+          "FileSize": "int64",
+          "FormatVersion": "int",
+          "Host": "string",
+          "ManifestAvailable": "bool",
+          "ManifestSHA256": "string",
+          "SchemaVersion": "string",
+          "SchemaVersionNum": "int",
+          "StructuralValid": "bool"
+        }
+      },
+      "BackupExport": {
+        "name": "BackupExport",
+        "kind": "struct",
+        "fields": [
+          "BackupID",
+          "ContentType",
+          "Data",
+          "ExpiresAt",
+          "FileName",
+          "SHA256",
+          "Size"
+        ],
+        "field_types": {
+          "BackupID": "string",
+          "ContentType": "string",
+          "Data": "[]byte",
+          "ExpiresAt": "time.Time",
+          "FileName": "string",
+          "SHA256": "string",
+          "Size": "int64"
+        }
+      },
+      "BackupImpact": {
+        "name": "BackupImpact",
+        "kind": "struct",
+        "fields": [
+          "EnabledSchedule",
+          "PendingJobs",
+          "PendingMails",
+          "RecoveryCodes",
+          "RefreshTokens",
+          "Sessions",
+          "SigningKeys"
+        ],
+        "field_types": {
+          "EnabledSchedule": "int64",
+          "PendingJobs": "int64",
+          "PendingMails": "int64",
+          "RecoveryCodes": "int64",
+          "RefreshTokens": "int64",
+          "Sessions": "int64",
+          "SigningKeys": "int64"
+        }
+      },
+      "BackupJob": {
+        "name": "BackupJob",
+        "kind": "struct",
+        "fields": [
+          "Attempt",
+          "BackupID",
+          "CancelRequestedAt",
+          "Canceller",
+          "CreatedAt",
+          "ErrorCode",
+          "FailureReason",
+          "FinishedAt",
+          "ID",
+          "Initiator",
+          "Kind",
+          "MaxAttempts",
+          "NotificationCode",
+          "NotificationState",
+          "Origin",
+          "ProgressDone",
+          "ProgressTotal",
+          "ProgressUnit",
+          "RequestID",
+          "ResultSummary",
+          "ScheduleID",
+          "StageCode",
+          "StageDescription",
+          "StartedAt",
+          "State",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "Attempt": "int",
+          "BackupID": "string",
+          "CancelRequestedAt": "time.Time",
+          "Canceller": "string",
+          "CreatedAt": "time.Time",
+          "ErrorCode": "string",
+          "FailureReason": "string",
+          "FinishedAt": "time.Time",
+          "ID": "string",
+          "Initiator": "string",
+          "Kind": "string",
+          "MaxAttempts": "int",
+          "NotificationCode": "string",
+          "NotificationState": "string",
+          "Origin": "string",
+          "ProgressDone": "*int64",
+          "ProgressTotal": "*int64",
+          "ProgressUnit": "string",
+          "RequestID": "string",
+          "ResultSummary": "string",
+          "ScheduleID": "string",
+          "StageCode": "string",
+          "StageDescription": "string",
+          "StartedAt": "time.Time",
+          "State": "string",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "BackupJobCancelRequest": {
+        "name": "BackupJobCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "JobID",
+          "Reason",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "JobID": "string",
+          "Reason": "string",
+          "RequestID": "string"
+        }
+      },
+      "BackupJobCancelResult": {
+        "name": "BackupJobCancelResult",
+        "kind": "struct",
+        "fields": [
+          "Accepted",
+          "AlreadyRequested",
+          "JobID",
+          "Note",
+          "State"
+        ],
+        "field_types": {
+          "Accepted": "bool",
+          "AlreadyRequested": "bool",
+          "JobID": "string",
+          "Note": "string",
+          "State": "string"
+        }
+      },
+      "BackupJobRef": {
+        "name": "BackupJobRef",
+        "kind": "struct",
+        "fields": [
+          "Existing",
+          "JobID",
+          "State"
+        ],
+        "field_types": {
+          "Existing": "bool",
+          "JobID": "string",
+          "State": "string"
+        }
+      },
+      "BackupJobRequest": {
+        "name": "BackupJobRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "JobID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "JobID": "string",
+          "RequestID": "string"
+        }
+      },
+      "BackupJobService": {
+        "name": "BackupJobService",
+        "kind": "interface",
+        "methods": [
+          "Cancel",
+          "Get",
+          "List",
+          "Trigger"
+        ]
+      },
+      "BackupJobTriggerRequest": {
+        "name": "BackupJobTriggerRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "BackupMaintenanceRequest": {
+        "name": "BackupMaintenanceRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Force",
+          "Reason",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Force": "bool",
+          "Reason": "string",
+          "RequestID": "string"
+        }
+      },
+      "BackupPendingRestore": {
+        "name": "BackupPendingRestore",
+        "kind": "struct",
+        "fields": [
+          "BackupSHA256",
+          "NextGeneration",
+          "OperatorID",
+          "RestoreID",
+          "StartedAt"
+        ],
+        "field_types": {
+          "BackupSHA256": "string",
+          "NextGeneration": "uint64",
+          "OperatorID": "string",
+          "RestoreID": "string",
+          "StartedAt": "time.Time"
+        }
+      },
+      "BackupPlan": {
+        "name": "BackupPlan",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "Enabled",
+          "ExecutionActor",
+          "Expression",
+          "ID",
+          "LastScheduledAt",
+          "MaxAttempts",
+          "MaxCatchUp",
+          "MissedPolicy",
+          "Name",
+          "NextRun",
+          "NextRunUnknown",
+          "NotifyFailures",
+          "NotifySuccess",
+          "Owner",
+          "PeriodDescription",
+          "RetentionVersion",
+          "ScheduleType",
+          "ScopeID",
+          "TimeZone",
+          "TimeoutSeconds",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "CreatedAt": "time.Time",
+          "Enabled": "bool",
+          "ExecutionActor": "string",
+          "Expression": "string",
+          "ID": "string",
+          "LastScheduledAt": "time.Time",
+          "MaxAttempts": "int",
+          "MaxCatchUp": "int",
+          "MissedPolicy": "string",
+          "Name": "string",
+          "NextRun": "time.Time",
+          "NextRunUnknown": "bool",
+          "NotifyFailures": "bool",
+          "NotifySuccess": "bool",
+          "Owner": "string",
+          "PeriodDescription": "string",
+          "RetentionVersion": "int64",
+          "ScheduleType": "string",
+          "ScopeID": "string",
+          "TimeZone": "string",
+          "TimeoutSeconds": "int",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "BackupPlanRequest": {
+        "name": "BackupPlanRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Enabled",
+          "Expression",
+          "MaxAttempts",
+          "MaxCatchUp",
+          "MissedPolicy",
+          "Name",
+          "NotifyFailures",
+          "NotifySuccess",
+          "NotifyTarget",
+          "Password",
+          "Reason",
+          "RequestID",
+          "RetentionVersion",
+          "ScheduleID",
+          "ScheduleType",
+          "TOTPCode",
+          "TimeZone",
+          "TimeoutSeconds"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Enabled": "bool",
+          "Expression": "string",
+          "MaxAttempts": "int",
+          "MaxCatchUp": "int",
+          "MissedPolicy": "string",
+          "Name": "string",
+          "NotifyFailures": "bool",
+          "NotifySuccess": "bool",
+          "NotifyTarget": "string",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "RetentionVersion": "int64",
+          "ScheduleID": "string",
+          "ScheduleType": "string",
+          "TOTPCode": "string",
+          "TimeZone": "string",
+          "TimeoutSeconds": "int"
+        }
+      },
+      "BackupPlanService": {
+        "name": "BackupPlanService",
+        "kind": "interface",
+        "methods": [
+          "Create",
+          "Delete",
+          "Get",
+          "List",
+          "SetEnabled",
+          "Update"
+        ]
+      },
+      "BackupPlanStateRequest": {
+        "name": "BackupPlanStateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Enabled",
+          "Password",
+          "Reason",
+          "RequestID",
+          "ScheduleID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Enabled": "bool",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "ScheduleID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "BackupRecoveryConfigRequest": {
+        "name": "BackupRecoveryConfigRequest",
+        "kind": "struct",
+        "fields": [
+          "AttachmentsDir",
+          "BackupOutputDir",
+          "Caller",
+          "RequestID",
+          "StateDir"
+        ],
+        "field_types": {
+          "AttachmentsDir": "string",
+          "BackupOutputDir": "string",
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "StateDir": "string"
+        }
+      },
+      "BackupRecoveryInitializeRequest": {
+        "name": "BackupRecoveryInitializeRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Confirm",
+          "Reason",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Confirm": "bool",
+          "Reason": "string",
+          "RequestID": "string"
+        }
+      },
+      "BackupRecoveryLoadRequest": {
+        "name": "BackupRecoveryLoadRequest",
+        "kind": "struct",
+        "fields": [
+          "BackupID",
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "BackupID": "string",
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "BackupRecoveryRestoreRequest": {
+        "name": "BackupRecoveryRestoreRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ConfirmToken",
+          "Reason",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ConfirmToken": "string",
+          "Reason": "string",
+          "RequestID": "string"
+        }
+      },
+      "BackupRecoveryService": {
+        "name": "BackupRecoveryService",
+        "kind": "interface",
+        "methods": [
+          "Configure",
+          "EnterMaintenance",
+          "Execute",
+          "ExitMaintenance",
+          "Initialize",
+          "LoadBackup",
+          "Rehearse",
+          "Status"
+        ]
+      },
+      "BackupRecoverySource": {
+        "name": "BackupRecoverySource",
+        "kind": "struct",
+        "fields": [
+          "AppVersion",
+          "BackupID",
+          "CreatedAt",
+          "FileSHA256",
+          "Host",
+          "SchemaVersion",
+          "SizeBytes"
+        ],
+        "field_types": {
+          "AppVersion": "string",
+          "BackupID": "string",
+          "CreatedAt": "time.Time",
+          "FileSHA256": "string",
+          "Host": "string",
+          "SchemaVersion": "string",
+          "SizeBytes": "int64"
+        }
+      },
+      "BackupRecoveryStatus": {
+        "name": "BackupRecoveryStatus",
+        "kind": "struct",
+        "fields": [
+          "BackupLoaded",
+          "Configured",
+          "EnteredAt",
+          "Generation",
+          "JournalEntries",
+          "Machine",
+          "Mode",
+          "OperatorID",
+          "Pending",
+          "Reason",
+          "StateMissing",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "BackupLoaded": "bool",
+          "Configured": "bool",
+          "EnteredAt": "time.Time",
+          "Generation": "uint64",
+          "JournalEntries": "int",
+          "Machine": "string",
+          "Mode": "string",
+          "OperatorID": "string",
+          "Pending": "*BackupPendingRestore",
+          "Reason": "string",
+          "StateMissing": "bool",
+          "UpdatedAt": "time.Time"
+        }
+      },
+      "BackupRecoveryStatusRequest": {
+        "name": "BackupRecoveryStatusRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "BackupRehearsal": {
+        "name": "BackupRehearsal",
+        "kind": "struct",
+        "fields": [
+          "Backup",
+          "BlockingReasons",
+          "Checks",
+          "CompletedAt",
+          "Consequences",
+          "CurrentSchema",
+          "DatabaseGeneration",
+          "ExternalGeneration",
+          "FreeBackupBytes",
+          "FreeDatabaseBytes",
+          "FreeStateBytes",
+          "Impact",
+          "RequiredBackupBytes",
+          "RequiredDatabaseBytes",
+          "RequiredStateBytes",
+          "Restorable",
+          "TargetSchema",
+          "Warnings"
+        ],
+        "field_types": {
+          "Backup": "BackupSourceSummary",
+          "BlockingReasons": "[]string",
+          "Checks": "[]BackupCheck",
+          "CompletedAt": "time.Time",
+          "Consequences": "[]string",
+          "CurrentSchema": "string",
+          "DatabaseGeneration": "uint64",
+          "ExternalGeneration": "uint64",
+          "FreeBackupBytes": "int64",
+          "FreeDatabaseBytes": "int64",
+          "FreeStateBytes": "int64",
+          "Impact": "BackupImpact",
+          "RequiredBackupBytes": "int64",
+          "RequiredDatabaseBytes": "int64",
+          "RequiredStateBytes": "int64",
+          "Restorable": "bool",
+          "TargetSchema": "string",
+          "Warnings": "[]string"
+        }
+      },
+      "BackupRestoreResult": {
+        "name": "BackupRestoreResult",
+        "kind": "struct",
+        "fields": [
+          "AttachmentsRestored",
+          "AuditMerged",
+          "Backup",
+          "CompletedAt",
+          "DurationMS",
+          "Generation",
+          "MaintenanceExited",
+          "RestoreID",
+          "RevokedPausedItems",
+          "RevokedRecovery",
+          "RevokedRefresh",
+          "RevokedSessions",
+          "StartedAt",
+          "SwitchedAt"
+        ],
+        "field_types": {
+          "AttachmentsRestored": "int64",
+          "AuditMerged": "int",
+          "Backup": "BackupSourceSummary",
+          "CompletedAt": "time.Time",
+          "DurationMS": "int64",
+          "Generation": "uint64",
+          "MaintenanceExited": "bool",
+          "RestoreID": "string",
+          "RevokedPausedItems": "int64",
+          "RevokedRecovery": "int64",
+          "RevokedRefresh": "int64",
+          "RevokedSessions": "int64",
+          "StartedAt": "time.Time",
+          "SwitchedAt": "time.Time"
+        }
+      },
+      "BackupService": {
+        "name": "BackupService",
+        "kind": "interface",
+        "methods": [
+          "Artifacts",
+          "Jobs",
+          "Plans",
+          "Recovery"
+        ]
+      },
+      "BackupSourceSummary": {
+        "name": "BackupSourceSummary",
+        "kind": "struct",
+        "fields": [
+          "AppVersion",
+          "AttachmentsIncluded",
+          "BackupID",
+          "ConfigIncluded",
+          "CreatedAt",
+          "DatabaseEngine",
+          "FileSHA256",
+          "FileSizeBytes",
+          "Host",
+          "SchemaVersion",
+          "SchemaVersionNumber"
+        ],
+        "field_types": {
+          "AppVersion": "string",
+          "AttachmentsIncluded": "bool",
+          "BackupID": "string",
+          "ConfigIncluded": "bool",
+          "CreatedAt": "time.Time",
+          "DatabaseEngine": "string",
+          "FileSHA256": "string",
+          "FileSizeBytes": "int64",
+          "Host": "string",
+          "SchemaVersion": "string",
+          "SchemaVersionNumber": "int"
+        }
       },
       "BeginRecoveryRequest": {
         "name": "BeginRecoveryRequest",
@@ -9546,6 +11002,233 @@
           "ListDelegations",
           "RevokeDelegation"
         ]
+      },
+      "DiagnosticsConfigSummary": {
+        "name": "DiagnosticsConfigSummary",
+        "kind": "struct",
+        "fields": [
+          "CheckedAt",
+          "DatabaseDriver",
+          "DatabaseWAL",
+          "FeatureFlags",
+          "LogFormat",
+          "LogLevel",
+          "PendingRestart",
+          "PendingRestartStatus"
+        ],
+        "field_types": {
+          "CheckedAt": "time.Time",
+          "DatabaseDriver": "string",
+          "DatabaseWAL": "bool",
+          "FeatureFlags": "map[string]bool",
+          "LogFormat": "string",
+          "LogLevel": "string",
+          "PendingRestart": "[]DiagnosticsReloadField",
+          "PendingRestartStatus": "string"
+        }
+      },
+      "DiagnosticsErrorEntry": {
+        "name": "DiagnosticsErrorEntry",
+        "kind": "struct",
+        "fields": [
+          "Action",
+          "ErrorCode",
+          "ID",
+          "OccurredAt",
+          "Outcome",
+          "ReasonCode",
+          "RequestID",
+          "TargetType",
+          "TaskID"
+        ],
+        "field_types": {
+          "Action": "string",
+          "ErrorCode": "string",
+          "ID": "string",
+          "OccurredAt": "time.Time",
+          "Outcome": "string",
+          "ReasonCode": "string",
+          "RequestID": "string",
+          "TargetType": "string",
+          "TaskID": "string"
+        }
+      },
+      "DiagnosticsErrorList": {
+        "name": "DiagnosticsErrorList",
+        "kind": "struct",
+        "fields": [
+          "CheckedAt",
+          "Entries",
+          "RequestID",
+          "Status",
+          "Truncated"
+        ],
+        "field_types": {
+          "CheckedAt": "time.Time",
+          "Entries": "[]DiagnosticsErrorEntry",
+          "RequestID": "string",
+          "Status": "string",
+          "Truncated": "bool"
+        }
+      },
+      "DiagnosticsErrorsRequest": {
+        "name": "DiagnosticsErrorsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ErrorRequestID",
+          "Limit",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ErrorRequestID": "string",
+          "Limit": "int",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "DiagnosticsExport": {
+        "name": "DiagnosticsExport",
+        "kind": "struct",
+        "fields": [
+          "Errors",
+          "ExportedAt",
+          "Report"
+        ],
+        "field_types": {
+          "Errors": "*DiagnosticsErrorList",
+          "ExportedAt": "time.Time",
+          "Report": "DiagnosticsReport"
+        }
+      },
+      "DiagnosticsQueueCount": {
+        "name": "DiagnosticsQueueCount",
+        "kind": "struct",
+        "fields": [
+          "Count",
+          "State"
+        ],
+        "field_types": {
+          "Count": "int64",
+          "State": "string"
+        }
+      },
+      "DiagnosticsQueueStatus": {
+        "name": "DiagnosticsQueueStatus",
+        "kind": "struct",
+        "fields": [
+          "CheckedAt",
+          "ErrorCode",
+          "Jobs",
+          "MailDeliveries",
+          "Status"
+        ],
+        "field_types": {
+          "CheckedAt": "time.Time",
+          "ErrorCode": "string",
+          "Jobs": "[]DiagnosticsQueueCount",
+          "MailDeliveries": "[]DiagnosticsQueueCount",
+          "Status": "string"
+        }
+      },
+      "DiagnosticsReloadField": {
+        "name": "DiagnosticsReloadField",
+        "kind": "struct",
+        "fields": [
+          "Class",
+          "Field"
+        ],
+        "field_types": {
+          "Class": "string",
+          "Field": "string"
+        }
+      },
+      "DiagnosticsReport": {
+        "name": "DiagnosticsReport",
+        "kind": "struct",
+        "fields": [
+          "Config",
+          "GeneratedAt",
+          "Queues",
+          "ScopeID",
+          "ScopeKind",
+          "State",
+          "Status",
+          "Storage",
+          "Version"
+        ],
+        "field_types": {
+          "Config": "DiagnosticsConfigSummary",
+          "GeneratedAt": "time.Time",
+          "Queues": "DiagnosticsQueueStatus",
+          "ScopeID": "string",
+          "ScopeKind": "string",
+          "State": "string",
+          "Status": "string",
+          "Storage": "DiagnosticsStorageHealth",
+          "Version": "DiagnosticsVersion"
+        }
+      },
+      "DiagnosticsRequest": {
+        "name": "DiagnosticsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "ScopeID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "ScopeID": "string"
+        }
+      },
+      "DiagnosticsService": {
+        "name": "DiagnosticsService",
+        "kind": "interface",
+        "methods": [
+          "Export",
+          "Read",
+          "RelatedErrors"
+        ]
+      },
+      "DiagnosticsStorageHealth": {
+        "name": "DiagnosticsStorageHealth",
+        "kind": "struct",
+        "fields": [
+          "CheckedAt",
+          "Driver",
+          "ErrorCode",
+          "JournalMode",
+          "LatencyMS",
+          "Status"
+        ],
+        "field_types": {
+          "CheckedAt": "time.Time",
+          "Driver": "string",
+          "ErrorCode": "string",
+          "JournalMode": "string",
+          "LatencyMS": "int64",
+          "Status": "string"
+        }
+      },
+      "DiagnosticsVersion": {
+        "name": "DiagnosticsVersion",
+        "kind": "struct",
+        "fields": [
+          "BuildTime",
+          "Commit",
+          "GoVersion",
+          "Version"
+        ],
+        "field_types": {
+          "BuildTime": "string",
+          "Commit": "string",
+          "GoVersion": "string",
+          "Version": "string"
+        }
       },
       "EmailChangeService": {
         "name": "EmailChangeService",
@@ -10162,6 +11845,328 @@
           "SessionSecret": "[]byte"
         }
       },
+      "ManualRecoveryAdminService": {
+        "name": "ManualRecoveryAdminService",
+        "kind": "interface",
+        "methods": [
+          "Approve",
+          "Cancel",
+          "Create",
+          "Execute",
+          "GetApproval",
+          "GetExecution",
+          "GetRequest",
+          "List",
+          "Policy",
+          "Reject"
+        ]
+      },
+      "ManualRecoveryApproval": {
+        "name": "ManualRecoveryApproval",
+        "kind": "struct",
+        "fields": [
+          "ApprovedAt",
+          "ApproverUserID",
+          "ExpiresAt",
+          "FinishedAt",
+          "ID",
+          "InvalidatedReason",
+          "NotBefore",
+          "Operation",
+          "RequestID",
+          "RowVersion",
+          "Status"
+        ],
+        "field_types": {
+          "ApprovedAt": "string",
+          "ApproverUserID": "string",
+          "ExpiresAt": "string",
+          "FinishedAt": "string",
+          "ID": "string",
+          "InvalidatedReason": "string",
+          "NotBefore": "string",
+          "Operation": "string",
+          "RequestID": "string",
+          "RowVersion": "int64",
+          "Status": "string"
+        }
+      },
+      "ManualRecoveryCancelRequest": {
+        "name": "ManualRecoveryCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Reason",
+          "TargetRequestID",
+          "TraceID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Reason": "string",
+          "TargetRequestID": "string",
+          "TraceID": "string"
+        }
+      },
+      "ManualRecoveryCreateRequest": {
+        "name": "ManualRecoveryCreateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Delivery",
+          "EvidenceSummary",
+          "Operation",
+          "Password",
+          "Reason",
+          "RequestID",
+          "SupportCaseID",
+          "TOTPCode",
+          "TargetUserID",
+          "VerificationBasis",
+          "VerificationReference"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Delivery": "string",
+          "EvidenceSummary": "string",
+          "Operation": "string",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "SupportCaseID": "string",
+          "TOTPCode": "string",
+          "TargetUserID": "string",
+          "VerificationBasis": "string",
+          "VerificationReference": "string"
+        }
+      },
+      "ManualRecoveryDecisionRequest": {
+        "name": "ManualRecoveryDecisionRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Note",
+          "Password",
+          "Reason",
+          "TOTPCode",
+          "TargetRequestID",
+          "TraceID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Note": "string",
+          "Password": "string",
+          "Reason": "string",
+          "TOTPCode": "string",
+          "TargetRequestID": "string",
+          "TraceID": "string"
+        }
+      },
+      "ManualRecoveryExecuteRequest": {
+        "name": "ManualRecoveryExecuteRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Password",
+          "TOTPCode",
+          "TargetRequestID",
+          "TraceID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "TOTPCode": "string",
+          "TargetRequestID": "string",
+          "TraceID": "string"
+        }
+      },
+      "ManualRecoveryExecutionRecord": {
+        "name": "ManualRecoveryExecutionRecord",
+        "kind": "struct",
+        "fields": [
+          "ApprovalID",
+          "ErrorCode",
+          "ExecutorUserID",
+          "FactorsReset",
+          "FinishedAt",
+          "ID",
+          "NotificationState",
+          "Operation",
+          "RequestID",
+          "ResetCredentialIssued",
+          "SessionsRevoked",
+          "StartedAt",
+          "Status"
+        ],
+        "field_types": {
+          "ApprovalID": "string",
+          "ErrorCode": "string",
+          "ExecutorUserID": "string",
+          "FactorsReset": "bool",
+          "FinishedAt": "string",
+          "ID": "string",
+          "NotificationState": "string",
+          "Operation": "string",
+          "RequestID": "string",
+          "ResetCredentialIssued": "bool",
+          "SessionsRevoked": "int",
+          "StartedAt": "string",
+          "Status": "string"
+        }
+      },
+      "ManualRecoveryExecutionResult": {
+        "name": "ManualRecoveryExecutionResult",
+        "kind": "struct",
+        "fields": [
+          "CredentialIssued",
+          "ExecutionID",
+          "FactorsReset",
+          "NotificationSent",
+          "NotificationState",
+          "Operation",
+          "RequestID",
+          "SessionsRevoked",
+          "Status"
+        ],
+        "field_types": {
+          "CredentialIssued": "bool",
+          "ExecutionID": "string",
+          "FactorsReset": "bool",
+          "NotificationSent": "bool",
+          "NotificationState": "string",
+          "Operation": "string",
+          "RequestID": "string",
+          "SessionsRevoked": "int",
+          "Status": "string"
+        }
+      },
+      "ManualRecoveryListItem": {
+        "name": "ManualRecoveryListItem",
+        "kind": "struct",
+        "fields": [
+          "CreatedAt",
+          "ExpiresAt",
+          "MyRelation",
+          "Operation",
+          "RequestID",
+          "Status",
+          "SupportCaseID",
+          "TargetMasked"
+        ],
+        "field_types": {
+          "CreatedAt": "string",
+          "ExpiresAt": "string",
+          "MyRelation": "string",
+          "Operation": "string",
+          "RequestID": "string",
+          "Status": "string",
+          "SupportCaseID": "string",
+          "TargetMasked": "string"
+        }
+      },
+      "ManualRecoveryListPage": {
+        "name": "ManualRecoveryListPage",
+        "kind": "struct",
+        "fields": [
+          "Items",
+          "Page"
+        ],
+        "field_types": {
+          "Items": "[]ManualRecoveryListItem",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "ManualRecoveryListRequest": {
+        "name": "ManualRecoveryListRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Mode",
+          "Operation",
+          "Page",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Mode": "string",
+          "Operation": "string",
+          "Page": "AdminPage",
+          "RequestID": "string"
+        }
+      },
+      "ManualRecoveryPolicy": {
+        "name": "ManualRecoveryPolicy",
+        "kind": "struct",
+        "fields": [
+          "ApprovalTTL",
+          "DeliveryChannels",
+          "Enabled",
+          "RequestTTL",
+          "RequireIndependentApproval",
+          "VerificationBases",
+          "WaitPeriod"
+        ],
+        "field_types": {
+          "ApprovalTTL": "time.Duration",
+          "DeliveryChannels": "[]string",
+          "Enabled": "bool",
+          "RequestTTL": "time.Duration",
+          "RequireIndependentApproval": "bool",
+          "VerificationBases": "[]string",
+          "WaitPeriod": "time.Duration"
+        }
+      },
+      "ManualRecoveryRequest": {
+        "name": "ManualRecoveryRequest",
+        "kind": "struct",
+        "fields": [
+          "ClosedReason",
+          "CreatedAt",
+          "Delivery",
+          "ExpiresAt",
+          "ID",
+          "InitiatorUserID",
+          "Operation",
+          "Reason",
+          "RowVersion",
+          "Status",
+          "SupportCaseID",
+          "TargetUserID",
+          "UpdatedAt",
+          "VerificationBasis",
+          "VerificationReference"
+        ],
+        "field_types": {
+          "ClosedReason": "string",
+          "CreatedAt": "string",
+          "Delivery": "string",
+          "ExpiresAt": "string",
+          "ID": "string",
+          "InitiatorUserID": "string",
+          "Operation": "string",
+          "Reason": "string",
+          "RowVersion": "int64",
+          "Status": "string",
+          "SupportCaseID": "string",
+          "TargetUserID": "string",
+          "UpdatedAt": "string",
+          "VerificationBasis": "string",
+          "VerificationReference": "string"
+        }
+      },
+      "ManualRecoveryRequestRef": {
+        "name": "ManualRecoveryRequestRef",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "TargetRequestID",
+          "TraceID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "TargetRequestID": "string",
+          "TraceID": "string"
+        }
+      },
       "NotFoundError": {
         "name": "NotFoundError",
         "kind": "struct",
@@ -10354,6 +12359,136 @@
           "Username": "string",
           "UsernameChangedAt": "string",
           "UsernameNormalized": "string"
+        }
+      },
+      "ProtocolIntrospectRequest": {
+        "name": "ProtocolIntrospectRequest",
+        "kind": "struct",
+        "fields": [
+          "Audience",
+          "RequestID",
+          "ServiceID",
+          "Token",
+          "TokenTypeHint"
+        ],
+        "field_types": {
+          "Audience": "string",
+          "RequestID": "string",
+          "ServiceID": "string",
+          "Token": "string",
+          "TokenTypeHint": "string"
+        }
+      },
+      "ProtocolLogoutRequest": {
+        "name": "ProtocolLogoutRequest",
+        "kind": "struct",
+        "fields": [
+          "ClientID",
+          "RequestID",
+          "Scope",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "ClientID": "string",
+          "RequestID": "string",
+          "Scope": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "ProtocolRevocationService": {
+        "name": "ProtocolRevocationService",
+        "kind": "interface",
+        "methods": [
+          "Logout",
+          "RevokeAuthorization",
+          "RevokeToken"
+        ]
+      },
+      "ProtocolRevokeAuthorizationRequest": {
+        "name": "ProtocolRevokeAuthorizationRequest",
+        "kind": "struct",
+        "fields": [
+          "AuthorizationID",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "AuthorizationID": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "ProtocolRevokeResult": {
+        "name": "ProtocolRevokeResult",
+        "kind": "struct",
+        "fields": [
+          "Accepted",
+          "AppSessions",
+          "AuthorizationCodes",
+          "Note",
+          "RefreshFamilies",
+          "RefreshTokens"
+        ],
+        "field_types": {
+          "Accepted": "bool",
+          "AppSessions": "int64",
+          "AuthorizationCodes": "int64",
+          "Note": "string",
+          "RefreshFamilies": "int64",
+          "RefreshTokens": "int64"
+        }
+      },
+      "ProtocolRevokeTokenRequest": {
+        "name": "ProtocolRevokeTokenRequest",
+        "kind": "struct",
+        "fields": [
+          "ClientCertificatePEM",
+          "ClientID",
+          "ClientSecret",
+          "RequestID",
+          "Token",
+          "TokenTypeHint"
+        ],
+        "field_types": {
+          "ClientCertificatePEM": "string",
+          "ClientID": "string",
+          "ClientSecret": "string",
+          "RequestID": "string",
+          "Token": "string",
+          "TokenTypeHint": "string"
+        }
+      },
+      "ProtocolService": {
+        "name": "ProtocolService",
+        "kind": "interface",
+        "methods": [
+          "IntrospectToken"
+        ]
+      },
+      "ProtocolTokenInspection": {
+        "name": "ProtocolTokenInspection",
+        "kind": "struct",
+        "fields": [
+          "Active",
+          "Audience",
+          "ClientID",
+          "ExpiresAt",
+          "IssuedAt",
+          "Scope",
+          "Subject",
+          "SubjectType",
+          "TokenType"
+        ],
+        "field_types": {
+          "Active": "bool",
+          "Audience": "[]string",
+          "ClientID": "string",
+          "ExpiresAt": "time.Time",
+          "IssuedAt": "time.Time",
+          "Scope": "string",
+          "Subject": "string",
+          "SubjectType": "string",
+          "TokenType": "string"
         }
       },
       "RBACAuthorizationService": {
@@ -11648,10 +13783,12 @@
           "Applications",
           "Audit",
           "Auth",
+          "Backup",
           "Bootstrap",
           "Close",
           "Config",
           "Delegations",
+          "Diagnostics",
           "EmailChange",
           "HTTPMounts",
           "HTTPPrefix",
@@ -11660,19 +13797,24 @@
           "Invitations",
           "LocalAdmin",
           "MFA",
+          "ManualRecovery",
           "Mount",
           "OAuthClients",
           "PasswordReset",
           "Passwords",
           "Profile",
+          "Protocol",
+          "ProtocolRevocation",
           "RBAC",
           "Ready",
           "Registration",
           "Reports",
           "Security",
           "Sessions",
+          "Settings",
           "Start",
           "State",
+          "Support",
           "UserBatch",
           "UserLifecycle",
           "Users"
@@ -11862,6 +14004,32 @@
           "SessionSecret": "[]byte"
         }
       },
+      "SessionDeviceRevokeRequest": {
+        "name": "SessionDeviceRevokeRequest",
+        "kind": "struct",
+        "fields": [
+          "RequestID",
+          "SessionSecret",
+          "TargetSessionID"
+        ],
+        "field_types": {
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "TargetSessionID": "string"
+        }
+      },
+      "SessionDeviceRevokeResult": {
+        "name": "SessionDeviceRevokeResult",
+        "kind": "struct",
+        "fields": [
+          "Revoked",
+          "TargetSessionID"
+        ],
+        "field_types": {
+          "Revoked": "bool",
+          "TargetSessionID": "string"
+        }
+      },
       "SessionInfo": {
         "name": "SessionInfo",
         "kind": "struct",
@@ -11888,6 +14056,32 @@
           "UserID": "string"
         }
       },
+      "SessionRevokeOthersRequest": {
+        "name": "SessionRevokeOthersRequest",
+        "kind": "struct",
+        "fields": [
+          "KeepCurrent",
+          "RequestID",
+          "SessionSecret"
+        ],
+        "field_types": {
+          "KeepCurrent": "bool",
+          "RequestID": "string",
+          "SessionSecret": "[]byte"
+        }
+      },
+      "SessionRevokeOthersResult": {
+        "name": "SessionRevokeOthersResult",
+        "kind": "struct",
+        "fields": [
+          "KeptCurrent",
+          "Revoked"
+        ],
+        "field_types": {
+          "KeptCurrent": "bool",
+          "Revoked": "int64"
+        }
+      },
       "SessionService": {
         "name": "SessionService",
         "kind": "interface",
@@ -11895,9 +14089,512 @@
           "Authorize",
           "ListDevices",
           "Revoke",
+          "RevokeDevice",
+          "RevokeOtherDevices",
           "Validate",
           "ValidateCSRF"
         ]
+      },
+      "SettingField": {
+        "name": "SettingField",
+        "kind": "struct",
+        "fields": [
+          "Class",
+          "DiskValue",
+          "Field",
+          "PendingRestart",
+          "RootOnly",
+          "Secret",
+          "Value",
+          "Writable"
+        ],
+        "field_types": {
+          "Class": "string",
+          "DiskValue": "string",
+          "Field": "string",
+          "PendingRestart": "bool",
+          "RootOnly": "bool",
+          "Secret": "bool",
+          "Value": "string",
+          "Writable": "bool"
+        }
+      },
+      "SettingValidationError": {
+        "name": "SettingValidationError",
+        "kind": "struct",
+        "fields": [
+          "Code",
+          "Detail",
+          "Field"
+        ],
+        "field_types": {
+          "Code": "string",
+          "Detail": "string",
+          "Field": "string"
+        }
+      },
+      "SettingsFieldsRequest": {
+        "name": "SettingsFieldsRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "SettingsRestoreSensitiveRequest": {
+        "name": "SettingsRestoreSensitiveRequest",
+        "kind": "struct",
+        "fields": [
+          "All",
+          "Caller",
+          "ExpectedVersion",
+          "OperationID",
+          "Password",
+          "Reason",
+          "RequestID",
+          "ScopeID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "All": "bool",
+          "Caller": "AdminCaller",
+          "ExpectedVersion": "int64",
+          "OperationID": "string",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "ScopeID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "SettingsRestoreSensitiveResult": {
+        "name": "SettingsRestoreSensitiveResult",
+        "kind": "struct",
+        "fields": [
+          "RemovedOverrides",
+          "RequestID",
+          "Restored",
+          "ScopeID",
+          "Version"
+        ],
+        "field_types": {
+          "RemovedOverrides": "int",
+          "RequestID": "string",
+          "Restored": "bool",
+          "ScopeID": "string",
+          "Version": "int64"
+        }
+      },
+      "SettingsService": {
+        "name": "SettingsService",
+        "kind": "interface",
+        "methods": [
+          "Fields",
+          "RestoreSensitiveDefaults",
+          "Status",
+          "Update",
+          "Validate"
+        ]
+      },
+      "SettingsStatus": {
+        "name": "SettingsStatus",
+        "kind": "struct",
+        "fields": [
+          "Configured",
+          "EffectiveVersion",
+          "HostReloadNeeded",
+          "LastErrorAt",
+          "LastErrorCode",
+          "LastWriteVersion",
+          "PendingHot",
+          "PendingRestart",
+          "Version",
+          "Writable"
+        ],
+        "field_types": {
+          "Configured": "bool",
+          "EffectiveVersion": "string",
+          "HostReloadNeeded": "bool",
+          "LastErrorAt": "time.Time",
+          "LastErrorCode": "string",
+          "LastWriteVersion": "string",
+          "PendingHot": "[]string",
+          "PendingRestart": "[]string",
+          "Version": "string",
+          "Writable": "bool"
+        }
+      },
+      "SettingsStatusRequest": {
+        "name": "SettingsStatusRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string"
+        }
+      },
+      "SettingsUpdateRequest": {
+        "name": "SettingsUpdateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Changes",
+          "ExpectedVersion",
+          "Reason",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Changes": "map[string]string",
+          "ExpectedVersion": "string",
+          "Reason": "string",
+          "RequestID": "string"
+        }
+      },
+      "SettingsUpdateResult": {
+        "name": "SettingsUpdateResult",
+        "kind": "struct",
+        "fields": [
+          "AppliedNow",
+          "ChangedFields",
+          "HostReloadNeeded",
+          "HotFields",
+          "Note",
+          "PreviousVersion",
+          "RestartFields",
+          "Version"
+        ],
+        "field_types": {
+          "AppliedNow": "bool",
+          "ChangedFields": "[]string",
+          "HostReloadNeeded": "bool",
+          "HotFields": "[]string",
+          "Note": "string",
+          "PreviousVersion": "string",
+          "RestartFields": "[]string",
+          "Version": "string"
+        }
+      },
+      "SettingsValidateRequest": {
+        "name": "SettingsValidateRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Changes",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Changes": "map[string]string",
+          "RequestID": "string"
+        }
+      },
+      "SettingsValidation": {
+        "name": "SettingsValidation",
+        "kind": "struct",
+        "fields": [
+          "ChangedFields",
+          "Errors",
+          "RestartRequired",
+          "RootOnlyFields",
+          "Valid",
+          "Writable"
+        ],
+        "field_types": {
+          "ChangedFields": "[]string",
+          "Errors": "[]SettingValidationError",
+          "RestartRequired": "[]string",
+          "RootOnlyFields": "[]string",
+          "Valid": "bool",
+          "Writable": "bool"
+        }
+      },
+      "SettingsView": {
+        "name": "SettingsView",
+        "kind": "struct",
+        "fields": [
+          "Configured",
+          "EffectiveVersion",
+          "Fields",
+          "HotReloadable",
+          "Note",
+          "RestartRequired",
+          "Version"
+        ],
+        "field_types": {
+          "Configured": "bool",
+          "EffectiveVersion": "string",
+          "Fields": "[]SettingField",
+          "HotReloadable": "[]string",
+          "Note": "string",
+          "RestartRequired": "[]string",
+          "Version": "string"
+        }
+      },
+      "SupportAdminService": {
+        "name": "SupportAdminService",
+        "kind": "interface",
+        "methods": [
+          "CreateCase",
+          "GetCase",
+          "ListCases",
+          "ListEvents",
+          "LookupTarget",
+          "ReassignCase",
+          "SendReset",
+          "TransitionCase"
+        ]
+      },
+      "SupportCase": {
+        "name": "SupportCase",
+        "kind": "struct",
+        "fields": [
+          "ApplicationID",
+          "AssigneeUserID",
+          "CreatedAt",
+          "CreatedByUserID",
+          "ID",
+          "Reason",
+          "RowVersion",
+          "Status",
+          "TargetMaskedEmail",
+          "TargetMaskedUsername",
+          "TargetUserID",
+          "UpdatedAt"
+        ],
+        "field_types": {
+          "ApplicationID": "string",
+          "AssigneeUserID": "string",
+          "CreatedAt": "string",
+          "CreatedByUserID": "string",
+          "ID": "string",
+          "Reason": "string",
+          "RowVersion": "int64",
+          "Status": "string",
+          "TargetMaskedEmail": "string",
+          "TargetMaskedUsername": "string",
+          "TargetUserID": "string",
+          "UpdatedAt": "string"
+        }
+      },
+      "SupportCaseEvent": {
+        "name": "SupportCaseEvent",
+        "kind": "struct",
+        "fields": [
+          "Action",
+          "ActorID",
+          "ActorType",
+          "CaseID",
+          "CreatedAt",
+          "FromStatus",
+          "ID",
+          "Note",
+          "Seq",
+          "ToStatus"
+        ],
+        "field_types": {
+          "Action": "string",
+          "ActorID": "string",
+          "ActorType": "string",
+          "CaseID": "string",
+          "CreatedAt": "string",
+          "FromStatus": "string",
+          "ID": "string",
+          "Note": "string",
+          "Seq": "int64",
+          "ToStatus": "string"
+        }
+      },
+      "SupportCasePage": {
+        "name": "SupportCasePage",
+        "kind": "struct",
+        "fields": [
+          "Cases",
+          "Page"
+        ],
+        "field_types": {
+          "Cases": "[]SupportCase",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "SupportCaseRequest": {
+        "name": "SupportCaseRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "CaseID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "CaseID": "string",
+          "RequestID": "string"
+        }
+      },
+      "SupportCreateCaseRequest": {
+        "name": "SupportCreateCaseRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Password",
+          "Reason",
+          "RequestID",
+          "TOTPCode",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Password": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "TOTPCode": "string",
+          "TargetUserID": "string"
+        }
+      },
+      "SupportEventPage": {
+        "name": "SupportEventPage",
+        "kind": "struct",
+        "fields": [
+          "Events",
+          "Page"
+        ],
+        "field_types": {
+          "Events": "[]SupportCaseEvent",
+          "Page": "AdminPageInfo"
+        }
+      },
+      "SupportListCasesRequest": {
+        "name": "SupportListCasesRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "Page",
+          "RequestID",
+          "Statuses"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "Page": "AdminPage",
+          "RequestID": "string",
+          "Statuses": "[]string"
+        }
+      },
+      "SupportLookupTargetRequest": {
+        "name": "SupportLookupTargetRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "RequestID",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "RequestID": "string",
+          "TargetUserID": "string"
+        }
+      },
+      "SupportReassignCaseRequest": {
+        "name": "SupportReassignCaseRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "CaseID",
+          "NewAssigneeUserID",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "CaseID": "string",
+          "NewAssigneeUserID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "SupportSendResetRequest": {
+        "name": "SupportSendResetRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "CaseID",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "CaseID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "SupportSendResult": {
+        "name": "SupportSendResult",
+        "kind": "struct",
+        "fields": [
+          "ManualReview",
+          "Sent",
+          "Status"
+        ],
+        "field_types": {
+          "ManualReview": "bool",
+          "Sent": "bool",
+          "Status": "string"
+        }
+      },
+      "SupportTarget": {
+        "name": "SupportTarget",
+        "kind": "struct",
+        "fields": [
+          "CanRequestReset",
+          "HasPassword",
+          "HasVerifiedEmail",
+          "MaskedEmail",
+          "MaskedUsername",
+          "Status",
+          "UserID"
+        ],
+        "field_types": {
+          "CanRequestReset": "bool",
+          "HasPassword": "bool",
+          "HasVerifiedEmail": "bool",
+          "MaskedEmail": "string",
+          "MaskedUsername": "string",
+          "Status": "string",
+          "UserID": "string"
+        }
+      },
+      "SupportTransitionCaseRequest": {
+        "name": "SupportTransitionCaseRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "CaseID",
+          "Note",
+          "Password",
+          "RequestID",
+          "TOTPCode",
+          "ToStatus"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "CaseID": "string",
+          "Note": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string",
+          "ToStatus": "string"
+        }
       },
       "TOTPBinding": {
         "name": "TOTPBinding",
@@ -12031,8 +14728,10 @@
           "DisableUser",
           "EnableUser",
           "GetUser",
+          "GetUserValidity",
           "PreviewUserDeletion",
-          "RequestUserDeletion"
+          "RequestUserDeletion",
+          "SetUserValidity"
         ]
       },
       "UserService": {
@@ -12156,7 +14855,9 @@
       "Admin",
       "AdminSession",
       "Applications",
+      "Approve",
       "ApproveRegistration",
+      "Artifacts",
       "AsNotFound",
       "AssignGroup",
       "AssignUser",
@@ -12164,7 +14865,9 @@
       "Auth",
       "Authorization",
       "Authorize",
+      "AuthorizeScope",
       "Availability",
+      "Backup",
       "BeginEmailEnrollment",
       "BeginPasskeyLogin",
       "BeginPasskeyRegistration",
@@ -12191,10 +14894,12 @@
       "Complete",
       "CompleteUserDeletion",
       "Config",
+      "Configure",
       "ConfirmEmailEnrollment",
       "ConfirmTOTPBinding",
       "Create",
       "CreateApplication",
+      "CreateCase",
       "CreateInvitation",
       "CreatePermission",
       "CreateRole",
@@ -12203,6 +14908,7 @@
       "Delegations",
       "Delete",
       "DeleteApplication",
+      "Diagnostics",
       "Disable",
       "DisableApplicationMember",
       "DisableUser",
@@ -12212,27 +14918,37 @@
       "EnableApplicationMember",
       "EnableUser",
       "EnsureRoot",
+      "EnterMaintenance",
       "Error",
       "ErrorStats",
+      "Execute",
+      "ExitMaintenance",
+      "Export",
+      "Fields",
       "FinishPasskeyLogin",
       "FinishPasskeyRegistration",
       "GenerateRecoveryCodes",
       "Get",
       "GetApplication",
       "GetApplicationMember",
+      "GetApproval",
+      "GetCase",
       "GetClient",
       "GetDelegation",
       "GetEvent",
+      "GetExecution",
       "GetExport",
       "GetInvitation",
       "GetJob",
       "GetProfile",
       "GetPurgeRun",
       "GetRegistration",
+      "GetRequest",
       "GetTask",
       "GetUser",
       "GetUserByUsername",
       "GetUserProfile",
+      "GetUserValidity",
       "Grant",
       "GrantApplicationRole",
       "GrantDelegation",
@@ -12241,10 +14957,13 @@
       "HTTPPrefix",
       "HTTPStatus",
       "Handler",
+      "Initialize",
       "Instance",
+      "IntrospectToken",
       "Invitations",
       "IsNotFound",
       "IterateAdminPages",
+      "Jobs",
       "List",
       "ListApplicationGroups",
       "ListApplicationMembers",
@@ -12256,10 +14975,12 @@
       "ListBackupJobs",
       "ListBackupNotifications",
       "ListBackupSchedules",
+      "ListCases",
       "ListClientCertificates",
       "ListClientSecrets",
       "ListDelegations",
       "ListDevices",
+      "ListEvents",
       "ListExports",
       "ListGroupMembers",
       "ListGroups",
@@ -12280,9 +15001,13 @@
       "ListTasks",
       "ListUserSessions",
       "ListUsers",
+      "LoadBackup",
       "LocalAdmin",
       "Login",
+      "Logout",
+      "LookupTarget",
       "MFA",
+      "ManualRecovery",
       "Message",
       "Mount",
       "NewAdminPageInfo",
@@ -12295,6 +15020,8 @@
       "Passwords",
       "PermissionSources",
       "Permissions",
+      "Plans",
+      "Policy",
       "PrecheckImport",
       "Presets",
       "Preview",
@@ -12302,17 +15029,25 @@
       "PreviewPurge",
       "PreviewUserDeletion",
       "Profile",
+      "Protocol",
+      "ProtocolRevocation",
       "PurgeApplication",
       "Query",
       "RBAC",
+      "Read",
       "Ready",
+      "ReassignCase",
+      "Recovery",
       "RecoveryCodes",
       "RecoveryStatus",
       "RegisterAccount",
       "RegisterClient",
       "RegisterClientCertificate",
       "Registration",
+      "Rehearse",
+      "Reject",
       "RejectRegistration",
+      "RelatedErrors",
       "RemoveApplicationMember",
       "RemoveEmail",
       "RemoveMembers",
@@ -12325,29 +15060,42 @@
       "RequestUserDeletion",
       "ResendEmailVerification",
       "Restore",
+      "RestoreSensitiveDefaults",
       "Retention",
       "Retry",
       "RetryJob",
       "Revoke",
       "RevokeApplicationRole",
+      "RevokeAuthorization",
       "RevokeClientCertificate",
       "RevokeClientSecret",
       "RevokeDelegation",
+      "RevokeDevice",
       "RevokeGroup",
+      "RevokeOtherDevices",
+      "RevokeToken",
       "RevokeUser",
+      "RevokeUserSessions",
       "Roles",
       "RotateClientSecret",
       "Security",
       "SendEmailVerification",
+      "SendReset",
       "Sessions",
       "SetApplicationEnabled",
+      "SetEnabled",
       "SetRetention",
+      "SetUserValidity",
+      "Settings",
       "Start",
       "StartExport",
       "StartImport",
       "StartPurge",
       "State",
       "Status",
+      "Support",
+      "TransitionCase",
+      "Trigger",
       "Unwrap",
       "Update",
       "UpdateApplication",
@@ -12402,6 +15150,7 @@
       "Extension",
       "ExtensionInfo",
       "ExtensionKind",
+      "Factory",
       "FieldInfo",
       "FieldValue",
       "HTTPOptions",
@@ -12442,6 +15191,7 @@
       "ReloadClass",
       "ReloadDiff",
       "ResourceServiceConfig",
+      "Runner",
       "Secret",
       "SecretSource",
       "SecretSourceKind",
@@ -12469,6 +15219,11 @@
       "UIAdminBatchStart",
       "UIAdminCreateUser",
       "UIAdminDeletionPreview",
+      "UIAdminDiagnosticsBackend",
+      "UIAdminDiagnosticsError",
+      "UIAdminDiagnosticsFlag",
+      "UIAdminDiagnosticsQueueCount",
+      "UIAdminDiagnosticsView",
       "UIAdminError",
       "UIAdminExportOptions",
       "UIAdminGroup",
@@ -12491,8 +15246,15 @@
       "UIAdminSessionsBackend",
       "UIAdminSessionsCapabilities",
       "UIAdminSessionsError",
+      "UIAdminSettingsBackend",
+      "UIAdminSettingsChange",
+      "UIAdminSettingsField",
+      "UIAdminSettingsView",
       "UIAdminUserPage",
       "UIAdminUserQuery",
+      "UIAdminUserValidityBackend",
+      "UIAdminUserValidityChange",
+      "UIAdminUserValidityView",
       "UIAdminUserView",
       "UIAppCertificate",
       "UIAppCredentials",
@@ -12595,8 +15357,10 @@
       "UIOAuthRegisterResult",
       "UIOAuthSettings",
       "UIPageAccountOptions",
+      "UIPageAdminDiagnosticsOptions",
       "UIPageAdminOptions",
       "UIPageAdminSessionsOptions",
+      "UIPageAdminSettingsOptions",
       "UIPageAppsOptions",
       "UIPageAudienceInfo",
       "UIPageAuditBackend",
@@ -12801,8 +15565,6 @@
       "AsAppError",
       "BuiltinUIRoutes",
       "ClientServiceIdentityFromContext",
-      "ComponentPreviewRoute",
-      "ComponentPreviewSubmitRoute",
       "CurrentBuildInfo",
       "Default",
       "DefaultCookiePolicy",
@@ -12824,40 +15586,12 @@
       "NewSecret",
       "NewSecretString",
       "NewServer",
-      "NewWebUI",
-      "NormalizeSecurityPolicyChange",
       "NormalizeTLSClientAuthMode",
       "OpenAPIDocument",
-      "PageMFARouteNames",
-      "PageOAuthRouteNames",
-      "PageSecurityRouteNames",
       "ParseSecretSource",
       "Ptr",
       "RegisteredErrorCodes",
       "RequestIDFromContext",
-      "SecurityPolicyChangedFields",
-      "UIBackupJobStates",
-      "UIBackupMissedPolicies",
-      "UIBackupScheduleTypes",
-      "UIBackupTimeZones",
-      "UIBackupVerificationStates",
-      "UIPageAccountPublicFormPaths",
-      "UIPageAuthPublicFormPaths",
-      "UIPageMFAPublicFormPaths",
-      "UIPageOAuthPublicFormPaths",
-      "UIReportsCategories",
-      "UIReportsFormats",
-      "UIReportsGranularities",
-      "UIReportsMetrics",
-      "UIReportsMissedPolicies",
-      "UIReportsScheduleTypes",
-      "UIReportsStateValues",
-      "UIReportsTimeZones",
-      "UIStatsCategoryValues",
-      "UIStatsGranularityValues",
-      "UIStatsMetricValues",
-      "UIStatsSortValues",
-      "UIStatsTimeZones",
       "ValidateCorrelationID",
       "ValidateRequestID",
       "ValidateTaskID",
@@ -13005,6 +15739,21 @@
       },
       {
         "method": "GET",
+        "pattern": "diagnostics",
+        "source": "internal/serverapp/diagnostics.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "diagnostics/errors",
+        "source": "internal/serverapp/diagnostics.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "diagnostics/export",
+        "source": "internal/serverapp/diagnostics.go"
+      },
+      {
+        "method": "GET",
         "pattern": "error-codes",
         "source": "internal/adminapi/handler.go"
       },
@@ -13095,6 +15844,16 @@
       },
       {
         "method": "GET",
+        "pattern": "settings",
+        "source": "internal/serverapp/settings.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "settings/status",
+        "source": "internal/serverapp/settings.go"
+      },
+      {
+        "method": "GET",
         "pattern": "support/cases",
         "source": "internal/serverapp/admin_domain_routes.go"
       },
@@ -13132,6 +15891,11 @@
         "method": "GET",
         "pattern": "users/{user_id}",
         "source": "internal/serverapp/admin_domain_routes.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "users/{user_id}/validity",
+        "source": "internal/serverapp/admin_validity_routes.go"
       },
       {
         "method": "POST",
@@ -13320,6 +16084,16 @@
       },
       {
         "method": "POST",
+        "pattern": "settings/sensitive-policy/restore",
+        "source": "internal/serverapp/settings.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "settings/validate",
+        "source": "internal/serverapp/settings.go"
+      },
+      {
+        "method": "POST",
         "pattern": "support/cases",
         "source": "internal/serverapp/admin_domain_writes.go"
       },
@@ -13384,6 +16158,11 @@
         "source": "internal/serverapp/admin_domain_writes.go"
       },
       {
+        "method": "POST",
+        "pattern": "users/{user_id}/validity",
+        "source": "internal/serverapp/admin_validity_routes.go"
+      },
+      {
         "method": "PUT",
         "pattern": "applications/{application_id}",
         "source": "internal/serverapp/admin_domain_writes.go"
@@ -13432,6 +16211,11 @@
         "method": "PUT",
         "pattern": "roles/{role_id}/permissions",
         "source": "internal/serverapp/admin_domain_writes2.go"
+      },
+      {
+        "method": "PUT",
+        "pattern": "settings",
+        "source": "internal/serverapp/settings.go"
       }
     ],
     "protocol_paths": [
@@ -13591,1447 +16375,1471 @@
         "name": "account.activity",
         "method": "GET",
         "path": "/account/activity",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "account.activity_detail",
         "method": "GET",
         "path": "/account/activity/detail",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "account.app_profile",
         "method": "GET",
         "path": "/account/app-profile",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.app_profile.submit",
         "method": "POST",
         "path": "/account/app-profile",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.email_change_verify",
         "method": "GET",
         "path": "/email/change/verify",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.email_change_verify.submit",
         "method": "POST",
         "path": "/email/change/verify",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.grants",
         "method": "GET",
         "path": "/account/grants",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.grants.revoke",
         "method": "POST",
         "path": "/account/grants/revoke",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.password",
         "method": "GET",
         "path": "/account/password",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.password.submit",
         "method": "POST",
         "path": "/account/password",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile",
         "method": "GET",
         "path": "/account/profile",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile.update",
         "method": "POST",
         "path": "/account/profile",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_avatar",
         "method": "GET",
         "path": "/account/profile/avatar",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_avatar.remove",
         "method": "POST",
         "path": "/account/profile/avatar/remove",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_avatar.submit",
         "method": "POST",
         "path": "/account/profile/avatar",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_avatar_image",
         "method": "GET",
         "path": "/account/profile/avatar/image",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_email",
         "method": "GET",
         "path": "/account/profile/email",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_email.cancel",
         "method": "POST",
         "path": "/account/profile/email/cancel",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_email.submit",
         "method": "POST",
         "path": "/account/profile/email",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_username",
         "method": "GET",
         "path": "/account/profile/username",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.profile_username.submit",
         "method": "POST",
         "path": "/account/profile/username",
-        "file": "ui_pages_account.go"
+        "file": "pages_account.go"
       },
       {
         "name": "account.security",
         "method": "GET",
         "path": "/account/security",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_mfa",
         "method": "GET",
         "path": "/account/security/mfa",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_mfa.add_confirm",
         "method": "POST",
         "path": "/account/security/mfa/confirm",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_mfa.add_start",
         "method": "POST",
         "path": "/account/security/mfa",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_mfa.remove",
         "method": "POST",
         "path": "/account/security/mfa/remove",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_passkeys",
         "method": "GET",
         "path": "/account/security/passkeys",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_passkeys.register_finish",
         "method": "POST",
         "path": "/account/security/passkeys/register/finish",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_passkeys.register_start",
         "method": "POST",
         "path": "/account/security/passkeys/register",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_passkeys.rename",
         "method": "POST",
         "path": "/account/security/passkeys/rename",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_passkeys.revoke",
         "method": "POST",
         "path": "/account/security/passkeys/revoke",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_recovery_codes",
         "method": "GET",
         "path": "/account/security/recovery-codes",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_recovery_codes.generate",
         "method": "POST",
         "path": "/account/security/recovery-codes",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_totp",
         "method": "GET",
         "path": "/account/security/totp",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_totp.bind_confirm",
         "method": "POST",
         "path": "/account/security/totp/confirm",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_totp.bind_start",
         "method": "POST",
         "path": "/account/security/totp/bind",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.security_totp.remove",
         "method": "POST",
         "path": "/account/security/totp/remove",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.sessions",
         "method": "GET",
         "path": "/account/sessions",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.sessions.revoke",
         "method": "POST",
         "path": "/account/sessions/revoke",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.sessions.revoke_all",
         "method": "POST",
         "path": "/account/sessions/revoke-all",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "account.sessions.revoke_others",
         "method": "POST",
         "path": "/account/sessions/revoke-others",
-        "file": "ui_pages_security.go"
+        "file": "pages_security.go"
       },
       {
         "name": "admin.access_effective",
         "method": "GET",
         "path": "/admin/access/effective",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.application_create",
         "method": "GET",
         "path": "/admin/applications/create",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_create.submit",
         "method": "POST",
         "path": "/admin/applications/create",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_credentials",
         "method": "GET",
         "path": "/admin/applications/credentials",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_credentials.submit",
         "method": "POST",
         "path": "/admin/applications/credentials",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_delete",
         "method": "POST",
         "path": "/admin/applications/status/delete",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_grants",
         "method": "GET",
         "path": "/admin/applications/grants",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_grants.submit",
         "method": "POST",
         "path": "/admin/applications/grants",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_members",
         "method": "GET",
         "path": "/admin/applications/members",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_members.submit",
         "method": "POST",
         "path": "/admin/applications/members",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_profile",
         "method": "GET",
         "path": "/admin/applications/profile",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_profile.submit",
         "method": "POST",
         "path": "/admin/applications/profile",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_security",
         "method": "GET",
         "path": "/admin/applications/security",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_security.submit",
         "method": "POST",
         "path": "/admin/applications/security",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_status",
         "method": "GET",
         "path": "/admin/applications/status",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.application_status.submit",
         "method": "POST",
         "path": "/admin/applications/status",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.applications",
         "method": "GET",
         "path": "/admin/applications",
-        "file": "ui_pages_apps.go"
+        "file": "pages_apps.go"
       },
       {
         "name": "admin.audit",
         "method": "GET",
         "path": "/admin/audit",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_detail",
         "method": "GET",
         "path": "/admin/audit/detail",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_export_cancel",
         "method": "POST",
         "path": "/admin/audit/exports/cancel",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_export_create",
         "method": "POST",
         "path": "/admin/audit/exports/create",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_export_download",
         "method": "GET",
         "path": "/admin/audit/exports/download",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_exports",
         "method": "GET",
         "path": "/admin/audit/exports",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_maintenance",
         "method": "GET",
         "path": "/admin/audit/maintenance",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_maintenance_cancel",
         "method": "POST",
         "path": "/admin/audit/maintenance/cancel",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_maintenance_preview",
         "method": "POST",
         "path": "/admin/audit/maintenance/preview",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.audit_maintenance_start",
         "method": "POST",
         "path": "/admin/audit/maintenance/start",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.backup_cancel",
         "method": "POST",
         "path": "/admin/backups/jobs/cancel",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_cleanup",
         "method": "POST",
         "path": "/admin/backups/cleanup",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_cleanup_preview",
         "method": "GET",
         "path": "/admin/backups/cleanup/preview",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_detail",
         "method": "GET",
         "path": "/admin/backups/detail",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_download",
         "method": "POST",
         "path": "/admin/backups/download",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_job_detail",
         "method": "GET",
         "path": "/admin/backups/jobs/detail",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_jobs",
         "method": "GET",
         "path": "/admin/backups/jobs",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_reconcile",
         "method": "POST",
         "path": "/admin/backups/reconcile",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_retention",
         "method": "GET",
         "path": "/admin/backups/retention",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_retention_save",
         "method": "POST",
         "path": "/admin/backups/retention",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_run",
         "method": "POST",
         "path": "/admin/backups/run",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_schedule_delete",
         "method": "POST",
         "path": "/admin/backups/schedules/delete",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_schedule_edit",
         "method": "GET",
         "path": "/admin/backups/schedules/edit",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_schedule_new",
         "method": "GET",
         "path": "/admin/backups/schedules/new",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_schedule_save",
         "method": "POST",
         "path": "/admin/backups/schedules/save",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_schedule_state",
         "method": "POST",
         "path": "/admin/backups/schedules/state",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backup_schedules",
         "method": "GET",
         "path": "/admin/backups/schedules",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.backups",
         "method": "GET",
         "path": "/admin/backups",
-        "file": "ui_pages_backup.go"
+        "file": "pages_backup.go"
       },
       {
         "name": "admin.dashboard",
         "method": "GET",
         "path": "/admin/dashboard",
-        "file": "ui_pages_stats.go"
+        "file": "pages_stats.go"
       },
       {
         "name": "admin.delegations",
         "method": "GET",
         "path": "/admin/delegations",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
+      },
+      {
+        "name": "admin.diagnostics",
+        "method": "GET",
+        "path": "/admin/diagnostics",
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.error_codes",
         "method": "GET",
         "path": "/admin/errors",
-        "file": "ui_pages_audit.go"
+        "file": "pages_audit.go"
       },
       {
         "name": "admin.group_create",
         "method": "POST",
         "path": "/admin/groups/create",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.group_delete",
         "method": "POST",
         "path": "/admin/groups/delete",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.group_detail",
         "method": "GET",
         "path": "/admin/groups/detail",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.group_members",
         "method": "POST",
         "path": "/admin/groups/members",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.group_update",
         "method": "POST",
         "path": "/admin/groups/update",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.groups",
         "method": "GET",
         "path": "/admin/groups",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.notification_mail",
         "method": "GET",
         "path": "/admin/notifications/mail",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.notification_mail_secret",
         "method": "POST",
         "path": "/admin/notifications/mail/secret",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.notification_mail_template_preview",
         "method": "POST",
         "path": "/admin/notifications/mail/template/preview",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.notification_mail_test",
         "method": "POST",
         "path": "/admin/notifications/mail/test",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.permission_create",
         "method": "GET",
         "path": "/admin/permissions/create",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.permission_create.submit",
         "method": "POST",
         "path": "/admin/permissions/create",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.permission_delete",
         "method": "POST",
         "path": "/admin/permissions/delete",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.permission_detail",
         "method": "GET",
         "path": "/admin/permissions/detail",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.permission_state",
         "method": "POST",
         "path": "/admin/permissions/state",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.permission_update",
         "method": "POST",
         "path": "/admin/permissions/update",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.permissions",
         "method": "GET",
         "path": "/admin/permissions",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.preset_diff",
         "method": "GET",
         "path": "/admin/presets/diff",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.report_cancel",
         "method": "POST",
         "path": "/admin/reports/cancel",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_cleanup",
         "method": "POST",
         "path": "/admin/reports/cleanup",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_detail",
         "method": "GET",
         "path": "/admin/reports/detail",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_download",
         "method": "POST",
         "path": "/admin/reports/download",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_retention",
         "method": "GET",
         "path": "/admin/reports/retention",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_retry",
         "method": "POST",
         "path": "/admin/reports/retry",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_create",
         "method": "POST",
         "path": "/admin/reports/schedules/create",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_delete",
         "method": "POST",
         "path": "/admin/reports/schedules/delete",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_delete_preview",
         "method": "GET",
         "path": "/admin/reports/schedules/delete",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_detail",
         "method": "GET",
         "path": "/admin/reports/schedules/detail",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_edit",
         "method": "GET",
         "path": "/admin/reports/schedules/edit",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_new",
         "method": "GET",
         "path": "/admin/reports/schedules/new",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_state",
         "method": "POST",
         "path": "/admin/reports/schedules/state",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedule_update",
         "method": "POST",
         "path": "/admin/reports/schedules/update",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.report_schedules",
         "method": "GET",
         "path": "/admin/reports/schedules",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.reports",
         "method": "GET",
         "path": "/admin/reports",
-        "file": "ui_pages_reports.go"
+        "file": "pages_reports.go"
       },
       {
         "name": "admin.review_decide",
         "method": "POST",
         "path": "/admin/reviews/decide",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.review_detail",
         "method": "GET",
         "path": "/admin/reviews/detail",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.reviews",
         "method": "GET",
         "path": "/admin/reviews",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.role_assign",
         "method": "POST",
         "path": "/admin/roles/assignments",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.role_assignments",
         "method": "GET",
         "path": "/admin/roles/assignments",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.role_create",
         "method": "GET",
         "path": "/admin/roles/create",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.role_create.submit",
         "method": "POST",
         "path": "/admin/roles/create",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.role_detail",
         "method": "GET",
         "path": "/admin/roles/detail",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.role_permissions",
         "method": "POST",
         "path": "/admin/roles/permissions",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.role_state",
         "method": "POST",
         "path": "/admin/roles/state",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.role_update",
         "method": "POST",
         "path": "/admin/roles/update",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.roles",
         "method": "GET",
         "path": "/admin/roles",
-        "file": "ui_pages_rbac.go"
+        "file": "pages_rbac.go"
       },
       {
         "name": "admin.security_policies",
         "method": "GET",
         "path": "/admin/security/policies",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.security_policy_detail",
         "method": "GET",
         "path": "/admin/security/policies/detail",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.security_policy_diff",
         "method": "GET",
         "path": "/admin/security/policies/diff",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.security_policy_preview",
         "method": "POST",
         "path": "/admin/security/policies/preview",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.security_policy_restore",
         "method": "POST",
         "path": "/admin/security/policies/restore",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.security_policy_restore_preview",
         "method": "POST",
         "path": "/admin/security/policies/restore/preview",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.security_policy_save",
         "method": "POST",
         "path": "/admin/security/policies/save",
-        "file": "ui_pages_security_policy.go"
+        "file": "pages_security_policy.go"
       },
       {
         "name": "admin.sessions",
         "method": "GET",
         "path": "/admin/sessions",
-        "file": "ui_pages_admin_sessions.go"
+        "file": "pages_admin_sessions.go"
       },
       {
         "name": "admin.sessions.revoke",
         "method": "POST",
         "path": "/admin/sessions/revoke",
-        "file": "ui_pages_admin_sessions.go"
+        "file": "pages_admin_sessions.go"
+      },
+      {
+        "name": "admin.settings",
+        "method": "GET",
+        "path": "/admin/settings",
+        "file": "pages_admin.go"
+      },
+      {
+        "name": "admin.settings_update",
+        "method": "POST",
+        "path": "/admin/settings",
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.statistics",
         "method": "GET",
         "path": "/admin/statistics",
-        "file": "ui_pages_stats.go"
+        "file": "pages_stats.go"
       },
       {
         "name": "admin.statistics_errors",
         "method": "GET",
         "path": "/admin/statistics/errors",
-        "file": "ui_pages_stats.go"
+        "file": "pages_stats.go"
       },
       {
         "name": "admin.user_batch",
         "method": "GET",
         "path": "/admin/users/batch",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_batch_action",
         "method": "POST",
         "path": "/admin/users/batch/action",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_batch_detail",
         "method": "GET",
         "path": "/admin/users/batch/detail",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_batch_report",
         "method": "GET",
         "path": "/admin/users/batch/report",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_create",
         "method": "GET",
         "path": "/admin/users/create",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_create.submit",
         "method": "POST",
         "path": "/admin/users/create",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_delete",
         "method": "POST",
         "path": "/admin/users/delete",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_delete_preview",
         "method": "GET",
         "path": "/admin/users/delete-preview",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_detail",
         "method": "GET",
         "path": "/admin/users/detail",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_export",
         "method": "GET",
         "path": "/admin/users/export",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_export.submit",
         "method": "POST",
         "path": "/admin/users/export",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_import",
         "method": "GET",
         "path": "/admin/users/import",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_import.submit",
         "method": "POST",
         "path": "/admin/users/import",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_state",
         "method": "POST",
         "path": "/admin/users/state",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.user_update",
         "method": "POST",
         "path": "/admin/users/update",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
+      },
+      {
+        "name": "admin.user_validity",
+        "method": "POST",
+        "path": "/admin/users/validity",
+        "file": "pages_admin.go"
       },
       {
         "name": "admin.users",
         "method": "GET",
         "path": "/admin/users",
-        "file": "ui_pages_admin.go"
+        "file": "pages_admin.go"
       },
       {
         "name": "app.scan_confirm",
         "method": "GET",
         "path": "/app/scan",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "app.scan_confirm.decide",
         "method": "POST",
         "path": "/app/scan",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "auth.email_verify",
         "method": "GET",
         "path": "/email/verify",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.email_verify.submit",
         "method": "POST",
         "path": "/email/verify",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.email_verify_resend",
         "method": "POST",
         "path": "/email/verify/resend",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.invitation_accept",
         "method": "GET",
         "path": "/invitation/accept",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.invitation_accept.submit",
         "method": "POST",
         "path": "/invitation/accept",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.landing",
         "method": "GET",
         "path": "/home",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.login",
         "method": "GET",
         "path": "/login",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.login.submit",
         "method": "POST",
         "path": "/login",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.logout",
         "method": "POST",
         "path": "/logout",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.passkey_login",
         "method": "GET",
         "path": "/login/passkey",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.passkey_login.finish",
         "method": "POST",
         "path": "/login/passkey/finish",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.password_forgot",
         "method": "GET",
         "path": "/login/forgot-password",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.password_forgot.submit",
         "method": "POST",
         "path": "/login/forgot-password",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.password_reset",
         "method": "GET",
         "path": "/login/reset-password",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.password_reset.submit",
         "method": "POST",
         "path": "/login/reset-password",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.qr_login",
         "method": "GET",
         "path": "/login/qr",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "auth.qr_login.cancel",
         "method": "POST",
         "path": "/login/qr/cancel",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "auth.qr_login.claim",
         "method": "POST",
         "path": "/login/qr/claim",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "auth.qr_login.poll",
         "method": "POST",
         "path": "/login/qr/poll",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "auth.qr_login.regenerate",
         "method": "POST",
         "path": "/login/qr/regenerate",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "auth.recovery_cancel",
         "method": "POST",
         "path": "/login/recovery/cancel",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.recovery_code",
         "method": "GET",
         "path": "/login/recovery-code",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.recovery_code.submit",
         "method": "POST",
         "path": "/login/recovery-code",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.recovery_rebind",
         "method": "GET",
         "path": "/login/recovery/rebind",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.recovery_rebind.complete",
         "method": "POST",
         "path": "/login/recovery/rebind/complete",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.recovery_rebind.start",
         "method": "POST",
         "path": "/login/recovery/rebind/start",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.register",
         "method": "GET",
         "path": "/register",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.register.submit",
         "method": "POST",
         "path": "/register",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.registration_status",
         "method": "GET",
         "path": "/register/status",
-        "file": "ui_pages_auth.go"
+        "file": "pages_auth.go"
       },
       {
         "name": "auth.second_factor",
         "method": "GET",
         "path": "/login/second-factor",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.second_factor.cancel",
         "method": "POST",
         "path": "/login/second-factor/cancel",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.second_factor.resend",
         "method": "POST",
         "path": "/login/second-factor/resend",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.second_factor.verify",
         "method": "POST",
         "path": "/login/second-factor",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.strong_setup",
         "method": "GET",
         "path": "/login/strong-setup",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.strong_setup.passkey_finish",
         "method": "POST",
         "path": "/login/strong-setup/passkey/finish",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.strong_setup.passkey_start",
         "method": "POST",
         "path": "/login/strong-setup/passkey/start",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.strong_setup.totp_finish",
         "method": "POST",
         "path": "/login/strong-setup/totp/finish",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "auth.strong_setup.totp_start",
         "method": "POST",
         "path": "/login/strong-setup/totp/start",
-        "file": "ui_pages_mfa.go"
+        "file": "pages_mfa.go"
       },
       {
         "name": "manage.apps",
         "method": "GET",
         "path": "/manage/applications",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.members",
         "method": "GET",
         "path": "/manage/applications/members",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.members_submit",
         "method": "POST",
         "path": "/manage/applications/members",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.permission_state",
         "method": "POST",
         "path": "/manage/applications/permissions/state",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.permissions",
         "method": "GET",
         "path": "/manage/applications/permissions",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.role_assign",
         "method": "POST",
         "path": "/manage/applications/roles/assignments",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.role_assignments",
         "method": "GET",
         "path": "/manage/applications/roles/assignments",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.role_detail",
         "method": "GET",
         "path": "/manage/applications/roles/detail",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.role_permissions",
         "method": "POST",
         "path": "/manage/applications/roles/permissions",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.role_state",
         "method": "POST",
         "path": "/manage/applications/roles/state",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "manage.roles",
         "method": "GET",
         "path": "/manage/applications/roles",
-        "file": "ui_pages_manage.go"
+        "file": "pages_manage.go"
       },
       {
         "name": "oauth.consent",
         "method": "GET",
         "path": "/oauth/authorize",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "oauth.consent.decide",
         "method": "POST",
         "path": "/oauth/authorize",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "oauth.device_confirm",
         "method": "GET",
         "path": "/oauth/device/confirm",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "oauth.device_confirm.decide",
         "method": "POST",
         "path": "/oauth/device/confirm",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "oauth.device_verify",
         "method": "GET",
         "path": "/oauth/device",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "oauth.device_verify.describe",
         "method": "POST",
         "path": "/oauth/device",
-        "file": "ui_pages_oauth.go"
+        "file": "pages_oauth.go"
       },
       {
         "name": "support.case_create",
         "method": "GET",
         "path": "/support/cases/create",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.case_create.submit",
         "method": "POST",
         "path": "/support/cases/create",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.case_detail",
         "method": "GET",
         "path": "/support/cases/detail",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.case_reassign.submit",
         "method": "POST",
         "path": "/support/cases/reassign",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.case_send.submit",
         "method": "POST",
         "path": "/support/cases/send",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.case_transition.submit",
         "method": "POST",
         "path": "/support/cases/transition",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.cases",
         "method": "GET",
         "path": "/support/cases",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_approval",
         "method": "GET",
         "path": "/support/recovery/approval",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_approve.submit",
         "method": "POST",
         "path": "/support/recovery/approval",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_cancel.submit",
         "method": "POST",
         "path": "/support/recovery/cancel",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_create.submit",
         "method": "POST",
         "path": "/support/recovery/request",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_execute",
         "method": "GET",
         "path": "/support/recovery/execute",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_execute.submit",
         "method": "POST",
         "path": "/support/recovery/execute",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_inbox",
         "method": "GET",
         "path": "/support/recovery",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_reject.submit",
         "method": "POST",
         "path": "/support/recovery/reject",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "support.recovery_request",
         "method": "GET",
         "path": "/support/recovery/request",
-        "file": "ui_pages_support.go"
+        "file": "pages_support.go"
       },
       {
         "name": "system.error",
         "method": "GET",
         "path": "/500",
-        "file": "ui.go"
+        "file": "contracts.go"
       },
       {
         "name": "system.forbidden",
         "method": "GET",
         "path": "/403",
-        "file": "ui.go"
+        "file": "contracts.go"
       },
       {
         "name": "system.not_found",
         "method": "GET",
         "path": "/404",
-        "file": "ui.go"
+        "file": "contracts.go"
       },
       {
         "name": "system.session_expired",
         "method": "GET",
         "path": "/401",
-        "file": "ui.go"
+        "file": "contracts.go"
       },
       {
         "name": "ui.component_preview",
         "method": "GET",
         "path": "/_ui/preview",
-        "file": "ui.go"
+        "file": "contracts.go"
       },
       {
         "name": "ui.component_preview.submit",
         "method": "POST",
         "path": "/_ui/preview",
-        "file": "ui.go"
+        "file": "contracts.go"
       }
     ],
     "cli": [
@@ -15303,7 +18111,7 @@
       },
       {
         "key": "diagnostics.read",
-        "implemented": false
+        "implemented": true
       },
       {
         "key": "groups.manage",
@@ -15403,7 +18211,7 @@
       },
       {
         "key": "settings.manage",
-        "implemented": false
+        "implemented": true
       },
       {
         "key": "support.cases.create",
@@ -15562,203 +18370,17 @@
         "TestStep91PermissionMatrixAcrossApps",
         "TestStep91SelfEscalationAndCrossAppDenied",
         "TestStep91SupportRecoveryFlow",
-        "TestStep93ReportsPageMatchesReportService",
-        "TestStep93ReportsPageAuthorizationAndExpiry",
-        "TestStep93ReportsPageCancelRequestVersusActualCancel",
-        "TestStep93UserCenterSessionAndRoleGates",
         "TestStep94DatabaseLockBlocksCriticalChangeFailClosed",
         "TestStep94DatabaseUnavailableCriticalChangeFailClosed",
         "TestStep95PerfPasswordHash",
         "TestStep95PerfIdentifierNormalization",
         "TestStep95PerfSQLiteStartupAndAccess",
         "TestStep95PerfSecretEnvelope",
-        "TestWebUIIntegrationWithRealSession",
-        "TestWebUIDisabledKeepsAPIAvailable",
-        "TestAccountIntegrationProfileUpdateAndConflict",
-        "TestAccountIntegrationUsernameReauth",
-        "TestAccountIntegrationAvatarUpload",
-        "TestAccountIntegrationEmailChange",
-        "TestAccountIntegrationPasswordChange",
-        "TestAccountProfileRendersAndUpdates",
-        "TestAccountUsernameReauthAndConflict",
-        "TestAccountAvatarMultipartAndImage",
-        "TestAccountEmailVerifyPublicPage",
-        "TestAccountPasswordChangeRequiresReauth",
-        "TestAccountProfileAutocompleteAndTextarea",
-        "TestAccountErrorsMapToServerFailures",
-        "TestAccountAvatarSizeBoundary",
-        "TestAdminIntegrationUsersAndRoot",
-        "TestAdminIntegrationReviewsRepeat",
-        "TestAdminIntegrationGroupsAndMembers",
-        "TestAdminIntegrationBatchPartialFailure",
-        "TestAdminIntegrationAuthorizationFailClosed",
-        "TestAdminSessionsPageRoutesAndValidation",
-        "TestAdminSessionsPageRevokeFlow",
-        "TestAdminSessionsPageCapabilities",
-        "TestAdminUsersListAndCreate",
-        "TestAdminUserDetailStateAndDelete",
-        "TestAdminReviewsAndDecide",
-        "TestAdminGroupsAndMembers",
-        "TestAdminErrorsFailClosed",
-        "TestAdminBatchPages",
-        "TestAppsBuiltinMessagesRegistered",
-        "TestAppsIntegrationProfileAndMembers",
-        "TestAppsIntegrationSecretAndCallback",
-        "TestAppsIntegrationGrantsStatusAndCrossApp",
-        "TestAppsIntegrationCreate",
-        "TestUIPageAppsGrantsWriteFlow",
-        "TestUIPageAppsGrantsRejectsBadInputs",
-        "TestUIPageAppsGrantsVersionConflict",
-        "TestUIPageAppsGrantsReadOnlyWithoutPolicyBackend",
-        "TestUIPageAppsDeletionPreviewAndReauth",
-        "TestUIPageAppsRoutesContract",
-        "TestUIPageAppsListAndProfile",
-        "TestUIPageAppsSecretOnce",
-        "TestUIPageAppsDangerousCallbackRejected",
-        "TestUIPageAppsGrantsPolicy",
-        "TestUIPageAppsForbiddenAndSession",
-        "TestUIPageAppsMembersAndState",
-        "TestUIPageAppsAdditionalPaths",
-        "TestUIPageAppsSecurityCheckedAndEcho",
-        "TestUIPageAppsCreate",
-        "TestUIPageAppsCreateInvalidForm",
-        "TestAuditHTTPPageWithRealService",
-        "TestAuditListFiltersPaginationAndCorrelation",
-        "TestAuditListEmptyAndFailureStates",
-        "TestAuditDetailPublicAndRestrictedPartition",
-        "TestAuditDetailDisclosureStates",
-        "TestAuditErrorCodesSearch",
-        "TestAuditExportsStatusMachineAndDownload",
-        "TestAuditMaintenanceRootOnlyAndRealStateMachine",
-        "TestAuditExportFailureDoesNotFakeSuccess",
-        "TestAuditDateBoundaryClamp",
-        "TestAuditPageStatesAndCSRF",
-        "TestAuditEscapesUntrustedText",
-        "TestAccountActivitySelfOnly",
-        "TestAuditResponsiveStaticContract",
-        "TestExportStateMachineRendering",
-        "TestAuditOwnActivityFilteredEmpty",
-        "TestAuditDetailRelatedTaskRendered",
-        "TestAuditMaintenanceRawNumberFieldsAndRetentionFailure",
-        "TestAuditPageDenialsAreRecorded",
-        "TestAuditListHonorsControlledTimeZone",
-        "TestAuthPagesRenderWithRealServices",
-        "TestLoginRealBackendAndRedirectWhitelist",
-        "TestRegisterClosedAndNoEmailFlow",
-        "TestEmailVerificationRealFlow",
-        "TestInvitationAcceptRealFlow",
-        "TestAnonymousCSRFProtection",
-        "TestEmailResendGenericAndBinding",
-        "TestBackupPageStateMatrix",
-        "TestBackupPagesRenderAndStates",
-        "TestBackupTemplateI18nKeysRegistered",
-        "TestUIPageManageRoutesContract",
-        "TestUIPageManageRenderingAndStates",
-        "TestMFAPasskeyPageRendering",
-        "TestMFAStrongSetupRendering",
-        "TestMFAStrongSetupTOTPRendering",
-        "TestMFAFormPathsAndRoutes",
-        "TestMFAInternalErrorFallback",
-        "TestMFAPagesEmailSecondFactor",
-        "TestMFAPagesRecoveryCodeRebind",
-        "TestMFAPagesPasswordReset",
-        "TestMFAPagesPasskeySecondFactor",
-        "TestMFAPagesTOTPSecondFactor",
-        "TestMFAPagesErrorCodesAndI18n",
-        "TestOAuthPagesRendering",
-        "TestQRCodeServerRendering",
-        "TestOAuthConsentRealBackend",
-        "TestDeviceFlowRealBackend",
-        "TestQRLoginRealBackend",
-        "TestRBACIntegrationComposeAndGroupIndirect",
-        "TestRBACIntegrationSelfEscalationAndFailClosed",
-        "TestRBACIntegrationSameNameCrossApplication",
-        "TestRBACIntegrationPresetDiffAndRootProtection",
-        "TestRBACIntegrationPageRender",
-        "TestRBACIntegrationSameNameNoSystemFallback",
-        "TestRBACIntegrationAdminMutationsAndDelegation",
-        "TestRBACIntegrationAuthorizeActionNames",
-        "TestRBACIntegrationListScopesSinglePermission",
-        "TestRBACIntegrationRoleDegradesWithoutPermissionRead",
-        "TestRBACIntegrationPermissionCreateDeleteAndImpact",
-        "TestRBACIntegrationPermissionPageFlow",
-        "TestRBACRolesListAndCreate",
-        "TestRBACRoleDetailComposeAndState",
-        "TestRBACAssignments",
-        "TestRBACPermissions",
-        "TestRBACDelegationsReadOnly",
-        "TestRBACEffectivePermissions",
-        "TestRBACPresetDiff",
-        "TestRBACScopeSwitchAndEmptyStates",
-        "TestRBACSessionExpired",
-        "TestRBACErrorsFailClosed",
-        "TestRBACPermissionCreatePage",
-        "TestRBACPermissionImpactAndDelete",
-        "TestRBACPermissionStateConfirmAndReauth",
-        "TestRBACListSortAndPaginationParams",
-        "TestReportTemplateI18nKeysRegistered",
-        "TestReportsPagesRenderAndStates",
-        "TestReportsDownloadHeaders",
-        "TestReportsPlanMutationsRequireCSRFAndVersion",
-        "TestReportsCancelEntry",
-        "TestReportsPreviewFailureVisible",
-        "TestReportsCleanupRequiresCSRFAndShowsResult",
-        "TestSecurityPagesRendering",
-        "TestSecurityBackendRealServices",
-        "TestSecurityCenterCapabilityCombinations",
-        "TestPolicyIntegrationBindingAndConflict",
-        "TestPolicyIntegrationRestoreBinding",
-        "TestPolicyIntegrationNonRoot",
-        "TestPolicyIntegrationReauthAndCSRF",
-        "TestPolicyIntegrationNotificationAuditAndIdempotency",
-        "TestUIPageSecurityPolicyRoutesContract",
-        "TestUIPageSecurityPolicyListAndForbidden",
-        "TestUIPageSecurityPolicyPreviewAndSelfConfirm",
-        "TestUIPageSecurityPolicyConflictAndDraft",
-        "TestUIPageSecurityPolicyRestore",
-        "TestUIPageSecurityPolicyNotificationStates",
-        "TestUIPageSecurityPolicyTemplateAndSecret",
-        "TestUIPageSecurityPolicyReadOnlyNoWriteForms",
-        "TestUIPageSecurityPolicyListLoadFailure",
-        "TestUIPageSecurityPolicyErrorKeysAndTokens",
-        "TestUIPageSecurityPolicyDuplicateActions",
-        "TestUIPageSecurityPolicySessionExpired",
-        "TestDashboardRendersRealSummaryAndHealth",
-        "TestDashboardScopeFromAppContext",
-        "TestStatisticsSameWindowChartsTablesAndDrilldown",
-        "TestErrorsSortingShareAndGrowth",
-        "TestStatisticsPermissionAndFailureStates",
-        "TestStatsCompletenessMissingAndNotEnabled",
-        "TestStatsRefreshEnhancementAndLocalOnlyResources",
-        "TestStatsPagesRespectBasePath",
-        "TestStatsFilterFormsTargetCurrentPageAndCategory",
-        "TestStatsMessagesAndUniqueChartIDs",
-        "TestStatsUnknownValuesRenderDash",
-        "TestStatsDrilldownCarriesRangeTimezoneAndApp",
-        "TestStatsRefreshAndPaginationWhitelist",
-        "TestStatsAppScopeAccountDefaultsAndReset",
-        "TestUIPageSupportIntegrationRealServices",
-        "TestUIPageSupportIntegrationRecoveryDisabled",
-        "TestUIPageSupportIntegrationApproverRevoked",
-        "TestUIPageSupportIntegrationFixRound",
-        "TestUIPageSupportRoutesContract",
-        "TestUIPageSupportCasesFlow",
-        "TestUIPageSupportCaseActions",
-        "TestUIPageSupportRecoveryDisabledAndDetail",
-        "TestUIPageSupportRecoveryCreateAndCancel",
-        "TestUIPageSupportApprovalSelfAndCandidate",
-        "TestUIPageSupportExecuteIdempotent",
-        "TestUIPageSupportInboxUnavailable",
-        "TestUIPageSupportExecuteGatingAndFailedHint",
-        "TestSupportRecoveryNotificationQueuedShown",
-        "TestWebUIRenderBuiltinPages",
-        "TestWebUISessionStates",
-        "TestWebUIReplacementPriority",
-        "TestWebUIAssetsAndI18n",
-        "TestWebUIConstantsAndValidation",
-        "TestUIHTTPOptionsValidation",
         "TestBuildInfoString",
         "TestCurrentBuildInfo"
+      ],
+      "./access": [
+        "TestPermissionAndAccessRequest"
       ],
       "./app": [
         "TestAdminApplicationListsPagination",
@@ -15786,7 +18408,21 @@
         "TestAuditErrorStatsCrossApplicationIsolation",
         "TestAuditExportPublicFacade",
         "TestAuditReportsPublicFacade",
+        "TestBackupPlanLifecycle",
+        "TestBackupTriggerCheckExport",
+        "TestBackupCheckAuditFailureFailsClosed",
+        "TestBackupRecoveryRoundTrip",
+        "TestBackupRecoveryGuards",
+        "TestBackupRecoveryCorruptBackupRejected",
+        "TestBackupJobCancelAndTerminalState",
+        "TestBackupRecoveryAdminSessionDenied",
+        "TestBackupInvalidRequestIDRejected",
+        "TestBackupPublicSurfaceHasNoInternalTypesOrPaths",
         "TestDelegationPublicFlow",
+        "TestDiagnosticsLocalAdminRedaction",
+        "TestDiagnosticsSessionRequiresManagementAuth",
+        "TestDiagnosticsExportBounded",
+        "TestDiagnosticsManagementSessionWithPermission",
         "TestEmailChangePublicFlow",
         "TestHostServerAndReverseProxyTrustedSource",
         "TestEmbeddedHTTPPagesMountAndSecurity",
@@ -15810,6 +18446,8 @@
         "TestIterateAdminPagesCancelStopsFetching",
         "TestIterateAdminPagesNormalizesPageLimit",
         "TestMailConfigAssembledWithoutNetworkOnOpen",
+        "TestManualRecoveryPublicFlow",
+        "TestManualRecoveryPublicDenials",
         "TestMFAPublicFactorListAndTOTPRemoval",
         "TestMFAPublicPasskeyCeremonyAndEmailFailClosed",
         "TestMFAPublicWebAuthnRegistrationAndPasswordlessLogin",
@@ -15829,6 +18467,8 @@
         "TestChangeOwnPasswordRejections",
         "TestProfilePublicFlow",
         "TestProfileChangeUsername",
+        "TestProtocolPublicIntrospection",
+        "TestProtocolPublicRevocation",
         "TestRBACPresetCatalogImplementedFlags",
         "TestRBACPresetAdminSessionDenied",
         "TestRBACPresetLocalAdminPreviewRestore",
@@ -15856,12 +18496,29 @@
         "TestStartCancelFailsClosedAndCloseIsIdempotent",
         "TestHostResourcesAreNotClosedByRuntime",
         "TestOpenRejectsNonSQLiteDriver",
+        "TestSecurityRegressionPasswordResetFullLifecycle",
+        "TestSecurityRegressionPasswordChangeInvalidatesPendingReset",
+        "TestSecurityRegressionPasswordResetPreservesMFA",
+        "TestSecurityRegressionApplicationMembershipAndRoleRevocation",
         "TestSessionAuthorizeBindsApplicationAndPermission",
         "TestSessionAuthorizeRejectsRestrictedSessionDespiteCSRF",
         "TestSessionAuthorizeRequestIDPlumbing",
         "TestSessionServiceValidateAndCSRF",
         "TestSessionServiceValidateExpiry",
         "TestSessionServiceValidateRejectsRestricted",
+        "TestSessionDeviceManagementPublicFlow",
+        "TestSessionRevokeAuditFailureRollsBack",
+        "TestAdminRevokeSessionsPublicFlow",
+        "TestSettingsFieldsVersionAndUpdate",
+        "TestSettingsVersionConflictAndInvalidConfig",
+        "TestSettingsFieldAuthorization",
+        "TestSettingsAuditFailureRollsBack",
+        "TestSettingsRestoreSensitiveDefaultsRootOnly",
+        "TestSettingsSecurityPolicyFieldsRootOnly",
+        "TestOpsRegressionBackupRestoreDataConsistency",
+        "TestSupportCasePublicFlow",
+        "TestSupportPublicDenials",
+        "TestSupportCreateAuditFailureRollsBack",
         "TestTaskPermissionRecheckFailClosed",
         "TestAdminListUsersAndGetByUsername",
         "TestUserBatchImportLifecycle",
@@ -15869,7 +18526,9 @@
         "TestUserLifecycleLocalAdminChain",
         "TestUserLifecyclePermissionBoundaries",
         "TestUserLifecycleAuditFailureRollsBack",
-        "TestUserLifecycleNotFoundAndRequestID"
+        "TestUserLifecycleNotFoundAndRequestID",
+        "TestUserValidityPublicFacade",
+        "TestUserValidityRootProtectedPublic"
       ],
       "./cmd/login-backup": [
         "TestCLICreateVerifyAndInfo",
@@ -16029,6 +18688,9 @@
         "TestTOTPErrorCodesRegistered",
         "TestAccountErrorCodesRegistered"
       ],
+      "./extension": [
+        "TestExtensionInfoValidate"
+      ],
       "./httpapi": [
         "TestIdentityContract",
         "TestDefaultValuesContract",
@@ -16050,7 +18712,13 @@
         "TestAuthorizationBoundaries",
         "TestFailureAuditCodeMatchesFailureClass",
         "TestAuditFailureFailClosed",
-        "TestDisableUserInvokesSessionRevoker"
+        "TestDisableUserInvokesSessionRevoker",
+        "TestValidityHalfOpenWindow",
+        "TestValidityRenewKeepsManualDisabled",
+        "TestValidityRootProtected",
+        "TestValidityValidationAndConcurrency",
+        "TestValidityAuditFailureRollsBack",
+        "TestValidityMigrationColumns"
       ],
       "./internal/account/sqlite": [
         "TestNewValidation",
@@ -16237,7 +18905,8 @@
         "TestSweepGuardDeniesIdentifierFanout",
         "TestSelfChangeReauthThrottled",
         "TestSuccessfulLoginDoesNotConsumeIPBudget",
-        "TestPasswordWorkConcurrencyBounded"
+        "TestPasswordWorkConcurrencyBounded",
+        "TestAuthnLoginEnforcesValidity"
       ],
       "./internal/authn/sqlite": [
         "TestPasswordTraceLifecycle",
@@ -16258,7 +18927,8 @@
         "TestSnapshotConcurrentMutationConsistency",
         "TestSystemScopeEffectivePermissions",
         "TestPermissionSourcesStatusExclusions",
-        "TestEffectiveDeniedStatusesExposeReason"
+        "TestEffectiveDeniedStatusesExposeReason",
+        "TestAuthzValidityImmediate"
       ],
       "./internal/authz/sqlite": [
         "TestNewValidation",
@@ -16446,6 +19116,23 @@
         "TestGuardInputValidation",
         "TestConcurrentTransferAndRevoke"
       ],
+      "./internal/dependencycheck": [
+        "TestPublicLeafPackagesStayLeaf",
+        "TestInternalProductionDoesNotImportRoot",
+        "TestRootImportsInternalWithoutReverseRoot",
+        "TestRootDirectoryAllowlist",
+        "TestModuleImportGraphAcyclic",
+        "TestNoPublicInternalSignatures",
+        "TestExternalExamplesDoNotImportInternal",
+        "TestSubmodulesDoNotImportParentInternal"
+      ],
+      "./internal/diag": [
+        "TestSnapshotRedaction",
+        "TestRelatedErrorsRedactionAndLimit",
+        "TestStorageFailureNoSecretLeak",
+        "TestConfigPendingRestart",
+        "TestScopeAndCancellation"
+      ],
       "./internal/emailchange": [
         "TestRequestChangeSensitivePolicy",
         "TestRequestChangeFailsClosedWithoutSensitiveRunner",
@@ -16608,6 +19295,7 @@
         "TestConfigSetRefusesSecretPlaintext",
         "TestConfigSetSecretWritesSourceReference",
         "TestConfigDiffClassifiesChanges",
+        "TestConfigSetExpectedVersionConflict",
         "TestDiagDatabaseAndReady",
         "TestDiagReadyWithInitializedMaintenance",
         "TestDiagMailReportsUnavailable",
@@ -16662,6 +19350,7 @@
         "TestStep220GroupListAll",
         "TestStep220AppListAll",
         "TestStep220IterationFlagValidation",
+        "TestStep233DiagRuntimeAndErrors",
         "TestTaskListAndGet",
         "TestTaskWaitSucceeds",
         "TestTaskWaitLocalTimeout",
@@ -16674,7 +19363,8 @@
         "TestUserDisableConfirmationRequired",
         "TestUserDisableVersionConflict",
         "TestUserDisableRootProtected",
-        "TestUserUnknownSubcommand"
+        "TestUserUnknownSubcommand",
+        "TestUserValidityCLI"
       ],
       "./internal/managedapi": [
         "TestManagedAPIHTTPRealServices",
@@ -16826,6 +19516,9 @@
         "TestOIDCExchangeEndToEnd",
         "TestExchangeRejectsRedirectRemovedFromRegistration",
         "TestDecideRejectsDisabledClient",
+        "TestInspectTokenAuditFailureIsVisibleNotFatal",
+        "TestRevokeTokenAuditFailureNoFalseSuccess",
+        "TestRevokeRefreshConcurrentWithRotationConverges",
         "TestStep92PKCEDowngradeAndReplay",
         "TestStep92DeviceCodeMixupsAndPolling",
         "TestStep92TokenKindMixups"
@@ -17387,6 +20080,8 @@
         "TestAdminAPIWorksUnderPathPrefix",
         "TestServeRejectsNonRequiredPasskeyUV",
         "TestProtocolJWKSBootstrappedOnStartup",
+        "TestResourceRegistryLookupByServiceID",
+        "TestInspectTokenForResourceServiceFailClosed",
         "TestPublicFormPathsIncludeMFAAndPasswordReset",
         "TestRBACPageReauthFailClosed",
         "TestResourceAuthorizeAndIntrospectE2E",
@@ -17402,11 +20097,16 @@
         "TestConfigValidationFailsClosed",
         "TestServeWithLocalTLS",
         "TestLazySessionScopeAuthorizerFailClosed",
+        "TestAdminSettingsHTTPRoutesAndPage",
         "TestStep209TOTPRebindAfterManualRecovery",
         "TestStep209MFAResetFailClosedWithoutRebindMethod",
         "TestAdminApplicationPathParam",
         "TestParseAdminListQueryApplicationSortWhitelist",
         "TestStep222AllowedStrongSetupMethodsProtectedTransition",
+        "TestDiagnosticsDomainRoutesAuthorization",
+        "TestProtocolIssuanceAuthorizerAccountValidity",
+        "TestUserValidityAdminRoutes",
+        "TestAdminUserValidityPageRealServices",
         "TestTaskRunPermissionKeyMappings",
         "TestCheckTaskPermissionFailClosed"
       ],
@@ -17460,7 +20160,15 @@
         "TestCleanup",
         "TestNewRejectsInvalidOptions",
         "TestSecretRedaction",
-        "TestStrongAuthTimestampGatesManagement"
+        "TestStrongAuthTimestampGatesManagement",
+        "TestSessionValidityImmediate",
+        "TestSessionValidityContextCancellation"
+      ],
+      "./internal/settings": [
+        "TestCoreFieldsMasksSecretsAndMarksRootOnly",
+        "TestCoreUpdateVersionConflictAtomicAndAuditRollback",
+        "TestCoreStatusReportsDiskVsEffective",
+        "TestCoreFieldPolicyFailClosed"
       ],
       "./internal/stats": [
         "TestErrorTrendBucketsCategoriesAndDedup",
@@ -17896,6 +20604,9 @@
         "TestDeliveryWallClockDeadlineNotCancelled",
         "TestDeliveryTrueCancelIsCancelled"
       ],
+      "./lifecycle": [
+        "TestLifecycleContracts"
+      ],
       "./netpolicy": [
         "TestParseListenAddressValid",
         "TestParseListenAddressInvalid",
@@ -17912,6 +20623,208 @@
         "TestXForwardedChain",
         "TestForwardedHeader",
         "TestForwardedLimits"
+      ],
+      "./ui": [
+        "TestWebUIIntegrationWithRealSession",
+        "TestWebUIDisabledKeepsAPIAvailable",
+        "TestAccountIntegrationProfileUpdateAndConflict",
+        "TestAccountIntegrationUsernameReauth",
+        "TestAccountIntegrationAvatarUpload",
+        "TestAccountIntegrationEmailChange",
+        "TestAccountIntegrationPasswordChange",
+        "TestAccountProfileRendersAndUpdates",
+        "TestAccountUsernameReauthAndConflict",
+        "TestAccountAvatarMultipartAndImage",
+        "TestAccountEmailVerifyPublicPage",
+        "TestAccountPasswordChangeRequiresReauth",
+        "TestAccountProfileAutocompleteAndTextarea",
+        "TestAccountErrorsMapToServerFailures",
+        "TestAccountAvatarSizeBoundary",
+        "TestAdminIntegrationUsersAndRoot",
+        "TestAdminIntegrationReviewsRepeat",
+        "TestAdminIntegrationGroupsAndMembers",
+        "TestAdminIntegrationBatchPartialFailure",
+        "TestAdminIntegrationAuthorizationFailClosed",
+        "TestAdminSessionsPageRoutesAndValidation",
+        "TestAdminSessionsPageRevokeFlow",
+        "TestAdminSessionsPageCapabilities",
+        "TestAdminUsersListAndCreate",
+        "TestAdminUserDetailStateAndDelete",
+        "TestAdminReviewsAndDecide",
+        "TestAdminGroupsAndMembers",
+        "TestAdminErrorsFailClosed",
+        "TestAdminBatchPages",
+        "TestAppsBuiltinMessagesRegistered",
+        "TestAppsIntegrationProfileAndMembers",
+        "TestAppsIntegrationSecretAndCallback",
+        "TestAppsIntegrationGrantsStatusAndCrossApp",
+        "TestAppsIntegrationCreate",
+        "TestUIPageAppsGrantsWriteFlow",
+        "TestUIPageAppsGrantsRejectsBadInputs",
+        "TestUIPageAppsGrantsVersionConflict",
+        "TestUIPageAppsGrantsReadOnlyWithoutPolicyBackend",
+        "TestUIPageAppsDeletionPreviewAndReauth",
+        "TestUIPageAppsRoutesContract",
+        "TestUIPageAppsListAndProfile",
+        "TestUIPageAppsSecretOnce",
+        "TestUIPageAppsDangerousCallbackRejected",
+        "TestUIPageAppsGrantsPolicy",
+        "TestUIPageAppsForbiddenAndSession",
+        "TestUIPageAppsMembersAndState",
+        "TestUIPageAppsAdditionalPaths",
+        "TestUIPageAppsSecurityCheckedAndEcho",
+        "TestUIPageAppsCreate",
+        "TestUIPageAppsCreateInvalidForm",
+        "TestAuditHTTPPageWithRealService",
+        "TestAuditListFiltersPaginationAndCorrelation",
+        "TestAuditListEmptyAndFailureStates",
+        "TestAuditDetailPublicAndRestrictedPartition",
+        "TestAuditDetailDisclosureStates",
+        "TestAuditErrorCodesSearch",
+        "TestAuditExportsStatusMachineAndDownload",
+        "TestAuditMaintenanceRootOnlyAndRealStateMachine",
+        "TestAuditExportFailureDoesNotFakeSuccess",
+        "TestAuditDateBoundaryClamp",
+        "TestAuditPageStatesAndCSRF",
+        "TestAuditEscapesUntrustedText",
+        "TestAccountActivitySelfOnly",
+        "TestAuditResponsiveStaticContract",
+        "TestExportStateMachineRendering",
+        "TestAuditOwnActivityFilteredEmpty",
+        "TestAuditDetailRelatedTaskRendered",
+        "TestAuditMaintenanceRawNumberFieldsAndRetentionFailure",
+        "TestAuditPageDenialsAreRecorded",
+        "TestAuditListHonorsControlledTimeZone",
+        "TestAuthPagesRenderWithRealServices",
+        "TestLoginRealBackendAndRedirectWhitelist",
+        "TestRegisterClosedAndNoEmailFlow",
+        "TestEmailVerificationRealFlow",
+        "TestInvitationAcceptRealFlow",
+        "TestAnonymousCSRFProtection",
+        "TestEmailResendGenericAndBinding",
+        "TestBackupPageStateMatrix",
+        "TestBackupPagesRenderAndStates",
+        "TestBackupTemplateI18nKeysRegistered",
+        "TestAdminDiagnosticsPageRendersRedactedView",
+        "TestAdminDiagnosticsPageAbsentWithoutBackend",
+        "TestAdminDiagnosticsPageErrorDenied",
+        "TestUIPageManageRoutesContract",
+        "TestUIPageManageRenderingAndStates",
+        "TestMFAPasskeyPageRendering",
+        "TestMFAStrongSetupRendering",
+        "TestMFAStrongSetupTOTPRendering",
+        "TestMFAFormPathsAndRoutes",
+        "TestMFAInternalErrorFallback",
+        "TestMFAPagesEmailSecondFactor",
+        "TestMFAPagesRecoveryCodeRebind",
+        "TestMFAPagesPasswordReset",
+        "TestMFAPagesPasskeySecondFactor",
+        "TestMFAPagesTOTPSecondFactor",
+        "TestMFAPagesErrorCodesAndI18n",
+        "TestOAuthPagesRendering",
+        "TestQRCodeServerRendering",
+        "TestOAuthConsentRealBackend",
+        "TestDeviceFlowRealBackend",
+        "TestQRLoginRealBackend",
+        "TestRBACIntegrationComposeAndGroupIndirect",
+        "TestRBACIntegrationSelfEscalationAndFailClosed",
+        "TestRBACIntegrationSameNameCrossApplication",
+        "TestRBACIntegrationPresetDiffAndRootProtection",
+        "TestRBACIntegrationPageRender",
+        "TestRBACIntegrationSameNameNoSystemFallback",
+        "TestRBACIntegrationAdminMutationsAndDelegation",
+        "TestRBACIntegrationAuthorizeActionNames",
+        "TestRBACIntegrationListScopesSinglePermission",
+        "TestRBACIntegrationRoleDegradesWithoutPermissionRead",
+        "TestRBACIntegrationPermissionCreateDeleteAndImpact",
+        "TestRBACIntegrationPermissionPageFlow",
+        "TestRBACRolesListAndCreate",
+        "TestRBACRoleDetailComposeAndState",
+        "TestRBACAssignments",
+        "TestRBACPermissions",
+        "TestRBACDelegationsReadOnly",
+        "TestRBACEffectivePermissions",
+        "TestRBACPresetDiff",
+        "TestRBACScopeSwitchAndEmptyStates",
+        "TestRBACSessionExpired",
+        "TestRBACErrorsFailClosed",
+        "TestRBACPermissionCreatePage",
+        "TestRBACPermissionImpactAndDelete",
+        "TestRBACPermissionStateConfirmAndReauth",
+        "TestRBACListSortAndPaginationParams",
+        "TestReportTemplateI18nKeysRegistered",
+        "TestReportsPagesRenderAndStates",
+        "TestReportsDownloadHeaders",
+        "TestReportsPlanMutationsRequireCSRFAndVersion",
+        "TestReportsCancelEntry",
+        "TestReportsPreviewFailureVisible",
+        "TestReportsCleanupRequiresCSRFAndShowsResult",
+        "TestSecurityPagesRendering",
+        "TestSecurityBackendRealServices",
+        "TestSecurityCenterCapabilityCombinations",
+        "TestPolicyIntegrationBindingAndConflict",
+        "TestPolicyIntegrationRestoreBinding",
+        "TestPolicyIntegrationNonRoot",
+        "TestPolicyIntegrationReauthAndCSRF",
+        "TestPolicyIntegrationNotificationAuditAndIdempotency",
+        "TestUIPageSecurityPolicyRoutesContract",
+        "TestUIPageSecurityPolicyListAndForbidden",
+        "TestUIPageSecurityPolicyPreviewAndSelfConfirm",
+        "TestUIPageSecurityPolicyConflictAndDraft",
+        "TestUIPageSecurityPolicyRestore",
+        "TestUIPageSecurityPolicyNotificationStates",
+        "TestUIPageSecurityPolicyTemplateAndSecret",
+        "TestUIPageSecurityPolicyReadOnlyNoWriteForms",
+        "TestUIPageSecurityPolicyListLoadFailure",
+        "TestUIPageSecurityPolicyErrorKeysAndTokens",
+        "TestUIPageSecurityPolicyDuplicateActions",
+        "TestUIPageSecurityPolicySessionExpired",
+        "TestDashboardRendersRealSummaryAndHealth",
+        "TestDashboardScopeFromAppContext",
+        "TestStatisticsSameWindowChartsTablesAndDrilldown",
+        "TestErrorsSortingShareAndGrowth",
+        "TestStatisticsPermissionAndFailureStates",
+        "TestStatsCompletenessMissingAndNotEnabled",
+        "TestStatsRefreshEnhancementAndLocalOnlyResources",
+        "TestStatsPagesRespectBasePath",
+        "TestStatsFilterFormsTargetCurrentPageAndCategory",
+        "TestStatsMessagesAndUniqueChartIDs",
+        "TestStatsUnknownValuesRenderDash",
+        "TestStatsDrilldownCarriesRangeTimezoneAndApp",
+        "TestStatsRefreshAndPaginationWhitelist",
+        "TestStatsAppScopeAccountDefaultsAndReset",
+        "TestUIPageSupportIntegrationRealServices",
+        "TestUIPageSupportIntegrationRecoveryDisabled",
+        "TestUIPageSupportIntegrationApproverRevoked",
+        "TestUIPageSupportIntegrationFixRound",
+        "TestUIPageSupportRoutesContract",
+        "TestUIPageSupportCasesFlow",
+        "TestUIPageSupportCaseActions",
+        "TestUIPageSupportRecoveryDisabledAndDetail",
+        "TestUIPageSupportRecoveryCreateAndCancel",
+        "TestUIPageSupportApprovalSelfAndCandidate",
+        "TestUIPageSupportExecuteIdempotent",
+        "TestUIPageSupportInboxUnavailable",
+        "TestUIPageSupportExecuteGatingAndFailedHint",
+        "TestSupportRecoveryNotificationQueuedShown",
+        "TestAdminUsersListValidityDisplay",
+        "TestAdminUserDetailValidityView",
+        "TestAdminUserValiditySet",
+        "TestAdminUserValidityValidationRejections",
+        "TestAdminUserValidityConflictAndDenied",
+        "TestStep93ReportsPageMatchesReportService",
+        "TestStep93ReportsPageAuthorizationAndExpiry",
+        "TestStep93ReportsPageCancelRequestVersusActualCancel",
+        "TestStep93UserCenterSessionAndRoleGates",
+        "TestWebUIRenderBuiltinPages",
+        "TestWebUISessionStates",
+        "TestWebUIReplacementPriority",
+        "TestWebUIAssetsAndI18n",
+        "TestWebUIConstantsAndValidation",
+        "TestUIHTTPOptionsValidation"
+      ],
+      "./version": [
+        "TestBuildInfoString"
       ]
     }
   }

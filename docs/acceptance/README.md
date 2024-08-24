@@ -31,6 +31,7 @@
 | `capability-matrix.json` / `capability-matrix.md` | 第 10 轮步骤 203：由 `go run ./scripts/capabilities` 扫描源码生成的机器可读能力清单（能力→内部服务/公开 Go/HTTP/CLI/页面/权限/分页/定向测试，状态 implemented/untested/missing/unimplemented，含反向未覆盖项；**自动生成、勿手改**） |
 | `shorttest.md` | 第 10 轮步骤 203：无人值守短测试统一入口契约（临时目录/动态回环端口/合成用户/总超时/子进程清理/结构化 JSON）、场景注册表与新增方式 |
 | `step203-capability-shorttest.md` | 第 10 轮步骤 203：能力清单生成与统一短测试入口验收记录（矩阵口径、真实 login-server 冒烟 14/14 PASS、拒绝/超时路径、清理与未测边界；原始 JSON 证据在本地 gitignored 的 `evidence/step203/`） |
+| `step236-capability-closure.md` | 第 10 轮步骤 236：公开接口覆盖与未映射能力收口（2 新 + 5 扩展能力、删除旧权限 gap、外部消费合同测试、clean 快照严格矩阵 43/43、矩阵 SHA-256 与例外） |
 
 ## 使用约定
 
