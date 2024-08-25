@@ -11,13 +11,13 @@ import (
 // renderIndex 渲染 docs/reference/README.md（参考目录总索引）。
 func (m *Model) renderIndex(used map[string]bool) []byte {
 	fileRows := [][]string{
-		{fileErrors, "公开错误码表（48 个注册码 + 公开说明 + 防泄露边界）"},
+		{fileErrors, fmt.Sprintf("公开错误码表（%d 个注册码 + 公开说明 + 防泄露边界）", len(m.Errors))},
 		{filePermissions, "内置权限目录（权限键/角色/用户组 + 谁能在什么范围做什么）"},
 		{fileConfiguration, "配置字段元数据（字段/环境变量/生效分类/秘密标记；语义以 guide 为准）"},
 		{fileHTTPAPI, "HTTP 契约：管理 JSON API 路由、协议路径、页面命名路由"},
 		{fileCLI, "CLI 参考：三个程序的命令树、flag 与稳定退出码"},
 		{fileGoAPI, "公开 Go API 参考：运行时生命周期与服务接口总览（Phase A 框架，Phase B 方法级补齐）"},
-		{fileCapability, "能力映射：catalog.json 的 42 项能力 → 参考文档与机器 JSON 锚点"},
+		{fileCapability, fmt.Sprintf("能力映射：catalog.json 的 %d 项能力 → 参考文档与机器 JSON 锚点", len(m.Capabilities))},
 		{fileAIIndex, "AI 入口：按任务找文档/机器 JSON/示例与校验命令"},
 		{fileChangeLog, "公开接口变更记录（Phase B 迁入完整历史）"},
 	}
@@ -49,7 +49,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 		{"协议路径", fmt.Sprintf("%d", m.CrossCheck.MatrixProtocol), fmt.Sprintf("%d", len(m.ProtocolPaths))},
 		{"CLI 子命令", fmt.Sprintf("%d", m.CrossCheck.MatrixCLI), fmt.Sprintf("%d", countCLISubcommands(m.CLIBinaries))},
 		{"权限键", fmt.Sprintf("%d", m.CrossCheck.MatrixPermissions), fmt.Sprintf("%d", len(m.Permissions))},
-		{"app 公开函数", fmt.Sprintf("%d", m.CrossCheck.MatrixAppFuncs), fmt.Sprintf("%d", len(m.GoAPI.AppFuncs))},
+		{"app 函数（含导出方法）", fmt.Sprintf("%d", m.CrossCheck.MatrixAppFuncs), fmt.Sprintf("%d", len(m.GoAPI.AppFuncs)+m.GoAPI.ExportedMethodCount)},
 		{"根包公开类型", fmt.Sprintf("%d", m.CrossCheck.MatrixRootTypes), fmt.Sprintf("%d", m.GoAPI.RootTypeCount)},
 	}
 	pendingRows := make([][]string, 0, len(m.PendingSections))
@@ -123,7 +123,7 @@ func (m *Model) renderErrors(used map[string]bool) []byte {
 		})
 	}
 	return joinBlocks(
-		"# 公开错误码参考（48 个注册码）\n\n"+
+		"# 公开错误码参考（"+fmt.Sprintf("%d", len(m.Errors))+" 个注册码）\n\n"+
 			"> 由 `errs.RegisteredErrorCodes()` + `errs.LookupErrorCodeGuidance()` 生成；"+
 			"任务导向排障见 [../guide/troubleshooting.md](../guide/troubleshooting.md)，"+
 			"历史错误码手册见 [../requirements/login_错误码与排障手册.md](../requirements/login_错误码与排障手册.md)。\n\n"+
@@ -202,7 +202,7 @@ func (m *Model) renderConfiguration(used map[string]bool) []byte {
 		})
 	}
 	return joinBlocks(
-		"# 配置字段机器参考（52 个字段）\n\n"+
+		"# 配置字段机器参考（"+fmt.Sprintf("%d", len(m.ConfigFields))+" 个字段）\n\n"+
 			"> **语义权威不在本页**：字段含义、默认值、校验规则、覆盖优先级与迁移说明见 "+
 			"[../guide/configuration.md](../guide/configuration.md)（由 `verify-docs` 逐字段核对）。"+
 			"本页只提供机器元数据（字段/环境变量/生效分类/秘密标记），由 `config.Fields()` 生成。\n\n"+

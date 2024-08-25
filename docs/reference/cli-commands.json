@@ -1,0 +1,818 @@
+{
+  "schema": "evernight.reference/v1/cli-commands",
+  "generated_by": "scripts/reference",
+  "counts": {
+    "binaries": 3,
+    "subcommands": 40,
+    "flags": 98
+  },
+  "binaries": [
+    {
+      "name": "login-server",
+      "source": "cmd/login-server",
+      "subcommands": [
+        {
+          "name": "init",
+          "source": "cmd/login-server/main.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "YAML 配置文件路径（必需）"
+            },
+            {
+              "name": "database",
+              "type": "string",
+              "usage": "覆盖配置中的 SQLite 数据库文件路径"
+            },
+            {
+              "name": "maintenance-state-dir",
+              "type": "string",
+              "usage": "库外维护状态目录（默认与 serve 相同）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径；配置未设置 secrets.master_key 时必需（不存在则生成受保护文件）"
+            },
+            {
+              "name": "operator",
+              "type": "string",
+              "usage": "本地受控操作者标识（默认由操作系统本地管理员身份推导）"
+            },
+            {
+              "name": "password-file",
+              "type": "string",
+              "usage": "受保护密码文件路径（仅所有者可读写；不提供命令行明文密码）"
+            }
+          ]
+        },
+        {
+          "name": "serve",
+          "source": "cmd/login-server/main.go",
+          "flags": [
+            {
+              "name": "access-log",
+              "type": "string",
+              "usage": "W3C 访问日志文件路径（默认写 stderr；文件日志默认受控轮转）"
+            },
+            {
+              "name": "access-log-max-bytes",
+              "type": "int64",
+              "default": "0",
+              "usage": "访问日志单文件字节上限（0 使用默认 64 MiB，允许 1 MiB～1 GiB）"
+            },
+            {
+              "name": "access-log-max-files",
+              "type": "int",
+              "default": "0",
+              "usage": "访问日志保留的历史文件数量（0 使用默认 5，允许 1～100，不含当前文件）"
+            },
+            {
+              "name": "admin-api-prefix",
+              "type": "string",
+              "usage": "管理 API 站内前缀（默认 /admin/v1，不允许覆盖页面命名空间）"
+            },
+            {
+              "name": "allow-legacy-without-sensitive",
+              "type": "bool",
+              "default": "false",
+              "usage": "过渡开关：允许会话管理访问仅走旧强认证闸门（未装配敏感策略，默认 fail-closed）"
+            },
+            {
+              "name": "allow-uninitialized",
+              "type": "bool",
+              "default": "false",
+              "usage": "仅开发/测试：允许数据库尚未完成首次初始化时启动（默认拒绝）"
+            },
+            {
+              "name": "app-support-audience",
+              "type": "string",
+              "usage": "应用客服资源 OAuth audience（默认 urn:evernight:app-support）"
+            },
+            {
+              "name": "app-support-prefix",
+              "type": "string",
+              "usage": "应用客服 API 站内前缀（默认 /api/app/v1/support）"
+            },
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "YAML 配置文件路径（必需）"
+            },
+            {
+              "name": "database",
+              "type": "string",
+              "usage": "覆盖配置中的 SQLite 数据库文件路径"
+            },
+            {
+              "name": "enable-admin-api",
+              "type": "bool",
+              "default": "false",
+              "usage": "启用管理 JSON API（复用管理会话/CSRF 契约；默认关闭，未启用时 404）"
+            },
+            {
+              "name": "enable-app-support",
+              "type": "bool",
+              "default": "false",
+              "usage": "启用应用受限客服 API（需 OAuth 协议端点；默认关闭）"
+            },
+            {
+              "name": "enable-managed-api",
+              "type": "bool",
+              "default": "false",
+              "usage": "启用业务应用托管管理 API（用户 Bearer/应用客户端认证；默认关闭，未启用时 404）"
+            },
+            {
+              "name": "enable-protocol",
+              "type": "bool",
+              "default": "false",
+              "usage": "启用 OAuth 2.0 / OpenID Connect 协议端点（需配置 protocol.issuer；默认关闭，未启用时 404）"
+            },
+            {
+              "name": "init-maintenance-state",
+              "type": "bool",
+              "default": "false",
+              "usage": "显式允许在已有数据库上创建缺失的库外维护状态（默认 fail-closed）"
+            },
+            {
+              "name": "maintenance-state-dir",
+              "type": "string",
+              "usage": "库外维护状态目录（默认：数据库目录同级的 \u003c数据目录名\u003e-maintenance）"
+            },
+            {
+              "name": "managed-api-prefix",
+              "type": "string",
+              "usage": "业务托管 API 站内前缀（默认 /api/managed/v1）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（配置未设置 secrets.master_key 时必需，必须为受保护文件）"
+            },
+            {
+              "name": "migrate",
+              "type": "string",
+              "usage": "执行数据库迁移后再启动：--migrate 或 --migrate=apply（省略值等同于 apply）"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "loginctl",
+      "source": "cmd/loginctl",
+      "subcommands": [
+        {
+          "name": "admin",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "app",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "audit",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "backups",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "case",
+          "source": "internal/managecli/online_support_cmd.go"
+        },
+        {
+          "name": "config",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "confirm",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "diag",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "group",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "maintenance-enter",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "reason",
+              "type": "string",
+              "usage": "进入维护的原因（必填）"
+            }
+          ]
+        },
+        {
+          "name": "maintenance-exit",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "force",
+              "type": "bool",
+              "default": "false",
+              "usage": "存在未完成恢复尝试时仍显式退出（高风险，需明确确认）"
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "usage": "退出维护的原因（必填）"
+            }
+          ]
+        },
+        {
+          "name": "migrate",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "notifications",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "notify",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "permission",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "recovery",
+          "source": "internal/managecli/online_support_cmd.go"
+        },
+        {
+          "name": "reports",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "restore-apply",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "backup",
+              "type": "string",
+              "usage": "待恢复备份文件路径（必填）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "显式确认：必须精确输入 RESTORE"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果"
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "usage": "恢复原因（必填，最多 500 字符）"
+            },
+            {
+              "name": "service-stopped",
+              "type": "bool",
+              "default": "false",
+              "usage": "确认 login 服务已停止或已处于维护状态（必填，降低运行中执行分脑风险）"
+            }
+          ]
+        },
+        {
+          "name": "restore-disposition",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出处置清单"
+            }
+          ]
+        },
+        {
+          "name": "restore-init-state",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "adopt-journal",
+              "type": "bool",
+              "default": "false",
+              "usage": "受控破窗：状态文件丢失但库外审计日志有历史事件时，读取日志重算锚点（高风险，需确认）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "显式确认：必须精确输入 RESTORE"
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "usage": "初始化原因（必填）"
+            }
+          ]
+        },
+        {
+          "name": "restore-merge-audit",
+          "source": "cmd/loginctl/restore.go"
+        },
+        {
+          "name": "restore-preflight",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "backup",
+              "type": "string",
+              "usage": "待恢复备份文件路径（必填）"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出预演结果"
+            }
+          ]
+        },
+        {
+          "name": "restore-reenable",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "kind",
+              "type": "string",
+              "default": "schedule,webhook",
+              "usage": "要重新启用的类型：schedule、webhook 或逗号分隔组合"
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "usage": "重新启用的原因（必填）"
+            },
+            {
+              "name": "restore-id",
+              "type": "string",
+              "usage": "可选：指定恢复运行编号（默认最近一次）"
+            }
+          ]
+        },
+        {
+          "name": "restore-review",
+          "source": "cmd/loginctl/restore.go",
+          "flags": [
+            {
+              "name": "restore-id",
+              "type": "string",
+              "usage": "可选：指定恢复运行编号（默认最近一次）"
+            }
+          ]
+        },
+        {
+          "name": "role",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "root-recover",
+          "source": "cmd/loginctl/loginctl.go",
+          "flags": [
+            {
+              "name": "database",
+              "type": "string",
+              "usage": "目标 SQLite 数据库文件路径（必填）"
+            },
+            {
+              "name": "maintenance",
+              "type": "bool",
+              "default": "false",
+              "usage": "确认实例处于维护状态（与 --service-stopped 至少一个为 true）"
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "usage": "本地应急恢复原因（必填，最多 500 字符）"
+            },
+            {
+              "name": "request-id",
+              "type": "string",
+              "usage": "可选请求编号，用于关联审计与恢复记录"
+            },
+            {
+              "name": "reset-mfa",
+              "type": "bool",
+              "default": "false",
+              "usage": "重置 root 两步验证因素（邮件/TOTP/待处理挑战）"
+            },
+            {
+              "name": "reset-password",
+              "type": "bool",
+              "default": "false",
+              "usage": "重置 root 正式密码（交互式隐藏输入）"
+            },
+            {
+              "name": "revoke-login-passkeys",
+              "type": "bool",
+              "default": "false",
+              "usage": "同时撤销 root 的主登录 Passkey（默认保留，需二次确认）"
+            },
+            {
+              "name": "service-stopped",
+              "type": "bool",
+              "default": "false",
+              "usage": "确认 login 服务已停止（与 --maintenance 至少一个为 true）"
+            }
+          ]
+        },
+        {
+          "name": "session",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "task",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "tasks",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "user",
+          "source": "cmd/loginctl/loginctl.go"
+        }
+      ],
+      "exit_codes": [
+        {
+          "name": "ExitOK",
+          "value": 0,
+          "doc": "稳定退出码：0 成功"
+        },
+        {
+          "name": "ExitError",
+          "value": 1,
+          "doc": "稳定退出码：0 成功"
+        },
+        {
+          "name": "ExitUsage",
+          "value": 2,
+          "doc": "稳定退出码：0 成功"
+        },
+        {
+          "name": "ExitCancelled",
+          "value": 3,
+          "doc": "稳定退出码：0 成功"
+        }
+      ]
+    },
+    {
+      "name": "login-backup",
+      "source": "cmd/login-backup",
+      "subcommands": [
+        {
+          "name": "create",
+          "source": "cmd/login-backup/cli.go",
+          "flags": [
+            {
+              "name": "avatars",
+              "type": "string",
+              "usage": "可选：头像受控存储目录"
+            },
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "可选：要包含进备份的 YAML 配置路径"
+            },
+            {
+              "name": "database",
+              "type": "string",
+              "usage": "目标 SQLite 数据库文件路径（必填）"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果"
+            },
+            {
+              "name": "key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（必填，必须与备份分开）"
+            },
+            {
+              "name": "operator",
+              "type": "string",
+              "usage": "本地操作者标识（必填，可见 ASCII）"
+            },
+            {
+              "name": "output",
+              "type": "string",
+              "usage": "备份输出受控目录（必填，必须已存在）"
+            },
+            {
+              "name": "progress",
+              "type": "bool",
+              "default": "false",
+              "usage": "向 stderr 输出进度"
+            },
+            {
+              "name": "request-id",
+              "type": "string",
+              "usage": "可选请求编号，用于关联审计"
+            },
+            {
+              "name": "timeout",
+              "type": "duration",
+              "default": "backup.DefaultTimeout",
+              "usage": "备份墙钟上限"
+            }
+          ]
+        },
+        {
+          "name": "export",
+          "source": "cmd/login-backup/viewer_cli.go",
+          "flags": [
+            {
+              "name": "columns",
+              "type": "string",
+              "usage": "逗号分隔字段白名单；默认全部非敏感字段"
+            },
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "备份文件路径（必填）"
+            },
+            {
+              "name": "format",
+              "type": "string",
+              "default": "backup.ExportFormatCSV",
+              "usage": "导出格式：csv 或 json"
+            },
+            {
+              "name": "include-sensitive",
+              "type": "bool",
+              "default": "false",
+              "usage": "显式包含默认排除的高敏字段"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果摘要"
+            },
+            {
+              "name": "key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（必填）"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "backup.DefaultExportRows",
+              "usage": "导出行数上限"
+            },
+            {
+              "name": "operator",
+              "type": "string",
+              "usage": "本地操作者标识（写入本地操作记录）"
+            },
+            {
+              "name": "oplog",
+              "type": "string",
+              "usage": "本地操作记录文件路径（默认输出目录下）"
+            },
+            {
+              "name": "output",
+              "type": "string",
+              "usage": "绝对输出文件路径（必填，默认不覆盖）"
+            },
+            {
+              "name": "table",
+              "type": "string",
+              "usage": "受控目录表名（必填）"
+            }
+          ]
+        },
+        {
+          "name": "extract",
+          "source": "cmd/login-backup/viewer_cli.go",
+          "flags": [
+            {
+              "name": "entry",
+              "type": "string",
+              "usage": "清单条目名（必填，可用 list 查看）"
+            },
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "备份文件路径（必填）"
+            },
+            {
+              "name": "include-sensitive",
+              "type": "bool",
+              "default": "false",
+              "usage": "显式允许提取原始数据库条目"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果摘要"
+            },
+            {
+              "name": "key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（必填）"
+            },
+            {
+              "name": "operator",
+              "type": "string",
+              "usage": "本地操作者标识（写入本地操作记录）"
+            },
+            {
+              "name": "oplog",
+              "type": "string",
+              "usage": "本地操作记录文件路径（默认输出目录下）"
+            },
+            {
+              "name": "output",
+              "type": "string",
+              "usage": "绝对输出文件路径（必填，默认不覆盖）"
+            }
+          ]
+        },
+        {
+          "name": "info",
+          "source": "cmd/login-backup/cli.go",
+          "flags": [
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "备份文件路径（必填）"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果"
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "source": "cmd/login-backup/viewer_cli.go",
+          "flags": [
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "备份文件路径（必填）"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果"
+            },
+            {
+              "name": "key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（必填）"
+            }
+          ]
+        },
+        {
+          "name": "preview",
+          "source": "cmd/login-backup/viewer_cli.go",
+          "flags": [
+            {
+              "name": "columns",
+              "type": "string",
+              "usage": "逗号分隔字段白名单；默认全部非敏感字段"
+            },
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "备份文件路径（必填）"
+            },
+            {
+              "name": "include-sensitive",
+              "type": "bool",
+              "default": "false",
+              "usage": "显式包含默认排除的高敏字段"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果"
+            },
+            {
+              "name": "key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（必填）"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "backup.DefaultPreviewRows",
+              "usage": "预览行数上限"
+            },
+            {
+              "name": "table",
+              "type": "string",
+              "usage": "受控目录表名（必填）"
+            }
+          ]
+        },
+        {
+          "name": "tables",
+          "source": "cmd/login-backup/viewer_cli.go",
+          "flags": [
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "备份文件路径（必填）"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果"
+            },
+            {
+              "name": "key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（必填）"
+            }
+          ]
+        },
+        {
+          "name": "verify",
+          "source": "cmd/login-backup/cli.go",
+          "flags": [
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "备份文件路径（必填）"
+            },
+            {
+              "name": "json",
+              "type": "bool",
+              "default": "false",
+              "usage": "以 JSON 输出结果"
+            },
+            {
+              "name": "key-file",
+              "type": "string",
+              "usage": "主密钥环文件路径（必填）"
+            }
+          ]
+        }
+      ],
+      "exit_codes": [
+        {
+          "name": "ExitOK",
+          "value": 0,
+          "doc": "稳定退出码"
+        },
+        {
+          "name": "ExitError",
+          "value": 1,
+          "doc": "稳定退出码"
+        },
+        {
+          "name": "ExitUsage",
+          "value": 2,
+          "doc": "稳定退出码"
+        },
+        {
+          "name": "ExitVerifyFailed",
+          "value": 3,
+          "doc": "稳定退出码"
+        },
+        {
+          "name": "ExitDecryptFailed",
+          "value": 4,
+          "doc": "稳定退出码"
+        },
+        {
+          "name": "ExitOutputConflict",
+          "value": 5,
+          "doc": "稳定退出码"
+        },
+        {
+          "name": "ExitQueryInvalid",
+          "value": 6,
+          "doc": "稳定退出码"
+        },
+        {
+          "name": "ExitCancelled",
+          "value": 130,
+          "doc": "稳定退出码"
+        }
+      ]
+    }
+  ]
+}

@@ -19,10 +19,11 @@ import (
 //   - internal/adminapi 与 internal/serverapp 领域路由中的 add(...) 调用与
 //     DomainRoute{Method, Pattern} 复合字面量。
 func scanAdminRoutes(root string) ([]AdminRoute, error) {
-	handlerPath := filepath.Join(root, filepath.FromSlash(pathAdminHandler))
-	if _, err := os.Stat(handlerPath); err != nil {
-		return nil, fmt.Errorf("管理 API 路由源文件 %s 不存在：%w（重构后需同步 sources.go）", pathAdminHandler, err)
+	handlerRel, err := resolveFirstExisting(root, "管理 JSON API 路由", adminHandlerCandidates)
+	if err != nil {
+		return nil, err
 	}
+	handlerPath := filepath.Join(root, filepath.FromSlash(handlerRel))
 	seen := map[string]bool{}
 	var routes []AdminRoute
 	addRoute := func(method, pattern, source string) {
@@ -42,7 +43,7 @@ func scanAdminRoutes(root string) ([]AdminRoute, error) {
 		return nil, err
 	}
 	collectAddCalls(handlerFile, handlerSet, func(method, pattern string) {
-		addRoute(method, pattern, pathAdminHandler)
+		addRoute(method, pattern, handlerRel)
 	})
 
 	for _, dir := range adminRouteDirs {
@@ -70,15 +71,33 @@ func scanAdminRoutes(root string) ([]AdminRoute, error) {
 					return true
 				}
 				typeName := compositeTypeName(lit)
-				if typeName != "DomainRoute" && typeName != "domainRoute" {
+				if typeName == "DomainRoute" || typeName == "domainRoute" {
+					// 显式元素类型：DomainRoute{Method: ..., Pattern: ...}。
+					methodExpr := compositeKeyValue(lit, "Method")
+					patternExpr := compositeKeyValue(lit, "Pattern")
+					if methodExpr != nil && patternExpr != nil {
+						addRoute(httpMethodName(fset, methodExpr), stringLit(patternExpr), rel)
+					}
 					return true
 				}
-				methodExpr := compositeKeyValue(lit, "Method")
-				patternExpr := compositeKeyValue(lit, "Pattern")
-				if methodExpr == nil || patternExpr == nil {
+				// 隐式元素类型：[]adminapi.DomainRoute{{Method: ..., Pattern: ...}, ...}
+				// （设置/诊断等领域路由使用紧凑写法，元素省略类型）。
+				array, ok := lit.Type.(*ast.ArrayType)
+				if !ok || baseTypeName(array.Elt) != "DomainRoute" {
 					return true
 				}
-				addRoute(httpMethodName(fset, methodExpr), stringLit(patternExpr), rel)
+				for _, element := range lit.Elts {
+					child, ok := element.(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					methodExpr := compositeKeyValue(child, "Method")
+					patternExpr := compositeKeyValue(child, "Pattern")
+					if methodExpr == nil || patternExpr == nil {
+						continue
+					}
+					addRoute(httpMethodName(fset, methodExpr), stringLit(patternExpr), rel)
+				}
 				return true
 			})
 		}
@@ -120,7 +139,11 @@ var protocolEndpointPattern = regexp.MustCompile(`^\s*//\s+(GET|POST|PUT|DELETE|
 //   - internal/protocolapi/protocolapi.go 中导出的 Path* 路径常量（常量名 + 路径）；
 //   - 同一文件包注释中的 HTTP 端点表（方法 + 路径）。
 func scanProtocol(root string) ([]ProtocolPath, []ProtocolEndpoint, error) {
-	protocolPath := filepath.Join(root, filepath.FromSlash(pathProtocolPaths))
+	protocolRel, err := resolveFirstExisting(root, "协议路径常量", protocolPathCandidates)
+	if err != nil {
+		return nil, nil, err
+	}
+	protocolPath := filepath.Join(root, filepath.FromSlash(protocolRel))
 	file, _, err := parseAt(protocolPath)
 	if err != nil {
 		return nil, nil, err
@@ -173,11 +196,38 @@ func scanProtocol(root string) ([]ProtocolPath, []ProtocolEndpoint, error) {
 	return paths, endpoints, nil
 }
 
-// scanPages 扫描根包 UIRoute 复合字面量（内置页面命名路由冻结契约）。
+// scanPages 扫描页面命名路由 UIRoute 复合字面量（内置页面冻结契约）。
+//
+// 214 起页面实现迁到公开包 ui/（ui/pages_*.go 中 routes := []UIRoute{...}，元素
+// 省略类型），根包保留兼容别名；pageScanDirs 依次扫描根目录（非递归）与 ui/（递归），
+// 按 name+method+path 去重。一条都没扫到则失败，提示更新 sources.go 候选目录。
 func scanPages(root string) ([]PageRoute, error) {
-	files, err := listGoFiles(root)
-	if err != nil {
-		return nil, err
+	var files []string
+	for _, dir := range pageScanDirs {
+		dirPath := root
+		if dir != "." {
+			dirPath = filepath.Join(root, filepath.FromSlash(dir))
+		}
+		info, err := os.Stat(dirPath)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if dir == "." {
+			rootFiles, err := listGoFiles(dirPath)
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, rootFiles...)
+			continue
+		}
+		var dirFiles []string
+		if err := walkGoFiles(dirPath, func(path string) error {
+			dirFiles = append(dirFiles, path)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		files = append(files, dirFiles...)
 	}
 	var pages []PageRoute
 	seen := map[string]bool{}
@@ -210,15 +260,15 @@ func scanPages(root string) ([]PageRoute, error) {
 			if name == "" || routePath == "" {
 				return true
 			}
-			key := name + " " + routePath
-			if seen[key] {
-				return true
-			}
-			seen[key] = true
 			method := httpMethodName(fset, compositeKeyValue(lit, "Method"))
 			if method == "" {
 				method = "GET"
 			}
+			key := name + " " + method + " " + routePath
+			if seen[key] {
+				return true
+			}
+			seen[key] = true
 			pages = append(pages, PageRoute{
 				Name: name, Method: method, Path: routePath,
 				Access: exprString(fset, compositeKeyValue(lit, "Access")),
@@ -226,6 +276,11 @@ func scanPages(root string) ([]PageRoute, error) {
 			})
 			return true
 		})
+	}
+	if len(pages) == 0 {
+		return nil, fmt.Errorf("未找到可扫描的页面 UIRoute 定义（已扫描：%s）；"+
+			"若 214/215 把页面契约迁移到其他公共包，请更新 scripts/internal/apidoc/sources.go "+
+			"的 pageScanDirs 后重试", strings.Join(pageScanDirs, "、"))
 	}
 	sort.Slice(pages, func(i, j int) bool {
 		if pages[i].Name != pages[j].Name {

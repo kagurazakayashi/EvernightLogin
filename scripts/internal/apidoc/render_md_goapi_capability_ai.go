@@ -79,7 +79,8 @@ func (m *Model) renderGoAPI(used map[string]bool) []byte {
 			"当前精确签名以 GoDoc 与源码为准。",
 		"## 1. 公开范围与生命周期契约\n\n"+
 			bulletList([]string{
-				"**可导入包**：宿主只能导入模块根包（包名 `login`）与 `app` 包，以及 `config`、`errs`、`httpapi` 等公开叶子包；Go internal 规则禁止模块外导入 `internal/`。",
+				"**可导入包**：宿主只能导入模块根包（包名 `login`）与 `app` 包，以及 `access`、`extension`、`lifecycle`、`version`、`httpapi`、`httppolicy`、`netpolicy`、`proxytrust`、`passkeypolicy`、`ui`、`config`、`errs` 等公开叶子包；根包通过 `alias_*.go` 保留兼容别名（如 `UIRoute = ui.UIRoute`）。Go internal 规则禁止模块外导入 `internal/`。",
+				"**页面契约**：214 起内置页面实现位于公开包 `ui/`，根包保留 `UIRoute`/`BuiltinUIRoutes` 等兼容别名；页面命名路由与来源见 [http-api.md](http-api.md) 第 4 节。",
 				"**构造不启动**：`app.Open` 只构造运行时，不监听端口、不启动后台任务；后台任务必须由宿主显式 `Start`；`Close` 幂等，只关闭运行时自建资源，不关闭宿主注入的数据库/日志/通知器。",
 				"**监听器归宿主**：运行时通过 `Handler`/`Mount`/`HTTPMounts` 暴露 HTTP；宿主自己的 `http.Server` 生命周期与优雅关闭由宿主负责。",
 				"**调用身份**：`LocalAdmin` 仅代表持有宿主进程控制权的可信本地代码（不能由 HTTP 参数获得）；管理门面需要真实管理会话/CSRF；普通业务使用完整会话或受限会话，受限会话不得当登录成功。",

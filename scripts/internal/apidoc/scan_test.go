@@ -66,12 +66,23 @@ var domainRoutes = []DomainRoute{
 	DomainRoute{Method: "GET", Pattern: "sessions"},
 }
 `)
+	writeFixture(t, root, "internal/serverapp/settings_routes.go", `package serverapp
+
+import "example.com/test/internal/adminapi"
+
+func settingsRoutes() []adminapi.DomainRoute {
+	return []adminapi.DomainRoute{
+		{Method: "GET", Pattern: "settings"},
+		{Method: "PUT", Pattern: "settings"},
+	}
+}
+`)
 	routes, err := scanAdminRoutes(root)
 	if err != nil {
 		t.Fatalf("scanAdminRoutes 失败：%v", err)
 	}
-	if len(routes) != 3 {
-		t.Fatalf("管理路由数 = %d，期望 3：%+v", len(routes), routes)
+	if len(routes) != 5 {
+		t.Fatalf("管理路由数 = %d，期望 5：%+v", len(routes), routes)
 	}
 	if routes[0].Method != "GET" || routes[0].Pattern != "sessions" {
 		t.Errorf("路由排序不符合预期：%+v", routes[0])

@@ -1,6 +1,7 @@
 package apidoc
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -122,4 +123,41 @@ func joinNames(names []string) string {
 		result += name
 	}
 	return result
+}
+
+// 生成结果安全下限：低于以下数量通常意味着 214/215 等结构重构后扫描目录/候选路径
+// 过期。继续生成会产出“空参考”并误导调用方，因此 -write/-check 直接失败并提示更新
+// sources.go；阈值按当前盘点留有余量（页面 245、管理路由 118、协议 17、CLI 40、
+// Runtime 51、接口 39）。
+const (
+	minPageRoutes        = 200
+	minAdminRoutes       = 50
+	minProtocolPaths     = 10
+	minCLISubcommands    = 20
+	minRuntimeMethods    = 20
+	minServiceInterfaces = 20
+)
+
+// validateCounts 校验关键盘点数量不低于安全下限，返回可操作的失败信息。
+func validateCounts(model *Model) []string {
+	var issues []string
+	check := func(name string, got, minimum int, hint string) {
+		if got < minimum {
+			issues = append(issues, fmt.Sprintf(
+				"生成结果异常：%s仅 %d 条（安全下限 %d）：%s", name, got, minimum, hint))
+		}
+	}
+	check("页面命名路由", len(model.Pages), minPageRoutes,
+		"检查 sources.go 的 pageScanDirs（214 后页面实现位于公开包 ui/）")
+	check("管理 JSON API 路由", len(model.AdminRoutes), minAdminRoutes,
+		"检查 adminHandlerCandidates 与管理路由源码目录是否移动")
+	check("协议路径常量", len(model.ProtocolPaths), minProtocolPaths,
+		"检查 protocolPathCandidates 是否仍指向协议包")
+	check("CLI 子命令", countCLISubcommands(model.CLIBinaries), minCLISubcommands,
+		"检查 cmdRootDir 与 manageCLIDir 的命令注册方式是否变化")
+	check("Runtime 公开方法", len(model.GoAPI.RuntimeMethods), minRuntimeMethods,
+		"检查 goAPIDirs 与 app 公开门面文件（215 后按领域分文件）")
+	check("app 服务接口", len(model.GoAPI.Interfaces), minServiceInterfaces,
+		"检查 goAPIDirs 与 app 公开类型组织是否变化")
+	return issues
 }

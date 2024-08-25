@@ -1,0 +1,3595 @@
+{
+  "schema": "evernight.reference/v1/http-routes",
+  "generated_by": "scripts/reference",
+  "counts": {
+    "admin_routes": 123,
+    "protocol_paths": 17,
+    "protocol_endpoints": 18,
+    "pages": 245
+  },
+  "admin_routes": [
+    {
+      "method": "DELETE",
+      "pattern": "backups/schedules/{schedule_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "pattern": "groups/{group_id}",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "pattern": "report-plans/{plan_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "pattern": "roles/{role_id}",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "applications",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "applications/{application_id}",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "applications/{application_id}/groups",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "applications/{application_id}/managed-policy",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "applications/{application_id}/members",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "applications/{application_id}/roles",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/events",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/events/{event_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/exports",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/exports/{export_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/exports/{export_id}/download",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/purge-runs",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/purge-runs/{run_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "audit/retention",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/capabilities",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/cleanup-preview",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/jobs",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/jobs/{job_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/retention",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/schedules",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/schedules/{schedule_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "backups/{backup_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "diagnostics",
+      "source": "internal/serverapp/diagnostics.go",
+      "capabilities": [
+        "diagnostics.operations"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "diagnostics/errors",
+      "source": "internal/serverapp/diagnostics.go",
+      "capabilities": [
+        "diagnostics.operations"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "diagnostics/export",
+      "source": "internal/serverapp/diagnostics.go",
+      "capabilities": [
+        "diagnostics.operations"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "error-codes",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "adminapi.core"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "groups",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "groups/{group_id}",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "groups/{group_id}/members",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "meta",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "adminapi.core"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "notifications",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "adminapi.core"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "permissions",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "report-plans",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "report-plans/{plan_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "report-plans/{plan_id}/delete-preview",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "reports",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "reports/cleanup-preview",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "reports/{report_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "reports/{report_id}/snapshot",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "roles",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "roles/{role_id}",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "roles/{role_id}/assignments",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "sessions",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "session.admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "settings",
+      "source": "internal/serverapp/settings.go",
+      "capabilities": [
+        "settings.managed"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "settings/status",
+      "source": "internal/serverapp/settings.go",
+      "capabilities": [
+        "settings.managed"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "support/cases",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "support/cases/{case_id}",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "support/recovery/requests",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "support/recovery/requests/{request_id}",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "tasks",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "admin.observability_lists"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "tasks/{task_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "adminapi.core"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "users",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "users/{user_id}",
+      "source": "internal/serverapp/admin_domain_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "users/{user_id}/validity",
+      "source": "internal/serverapp/admin_validity_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/certificates",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/certificates/{certificate_id}/revoke",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/delete",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/members",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/members/state",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/oauth-settings",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/secrets/rotate",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/secrets/{secret_id}/revoke",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "applications/{application_id}/state",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "audit/exports",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "audit/exports/{export_id}/cancel",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "audit/purge",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "audit/purge/preview",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "audit/purge/{run_id}/cancel",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "backups",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "backups/cleanup",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "backups/download-tickets/redeem",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "backups/jobs/{job_id}/cancel",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "backups/schedules",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "backups/schedules/{schedule_id}/enabled",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "backups/{backup_id}/download-tickets",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "groups",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "groups/{group_id}/members",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "notifications/test",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "adminapi.core"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "permissions/{permission_id}/state",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "report-plans",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "report-plans/{plan_id}/enabled",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "reports/cleanup",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "reports/download-tickets/redeem",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "reports/{report_id}/cancel",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "reports/{report_id}/download-tickets",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "reports/{report_id}/retry",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "roles",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "roles/{role_id}/assignments",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "roles/{role_id}/state",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "sessions/revoke",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "session.admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "settings/sensitive-policy/restore",
+      "source": "internal/serverapp/settings.go",
+      "capabilities": [
+        "settings.managed"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "settings/validate",
+      "source": "internal/serverapp/settings.go",
+      "capabilities": [
+        "settings.managed"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/cases",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/cases/{case_id}/reassign",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/cases/{case_id}/send-reset",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/cases/{case_id}/transition",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/recovery/requests",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/recovery/{request_id}/approve",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/recovery/{request_id}/cancel",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/recovery/{request_id}/execute",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "support/recovery/{request_id}/reject",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/delete",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/delete-preview",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/state",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/validity",
+      "source": "internal/serverapp/admin_validity_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "applications/{application_id}",
+      "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "applications/{application_id}/managed-policy",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "audit/retention",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "backups/retention",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "backups/schedules/{schedule_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "groups/{group_id}",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "permissions/{permission_id}",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "report-plans/{plan_id}",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "roles/{role_id}",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "roles/{role_id}/permissions",
+      "source": "internal/serverapp/admin_domain_writes2.go",
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "method": "PUT",
+      "pattern": "settings",
+      "source": "internal/serverapp/settings.go",
+      "capabilities": [
+        "settings.managed"
+      ]
+    }
+  ],
+  "protocol_paths": [
+    {
+      "name": "PathAuthorize",
+      "path": "/oauth/authorize"
+    },
+    {
+      "name": "PathDeviceAuthorization",
+      "path": "/oauth/device_authorization"
+    },
+    {
+      "name": "PathDeviceCancel",
+      "path": "/oauth/device/cancel"
+    },
+    {
+      "name": "PathDiscovery",
+      "path": "/.well-known/openid-configuration"
+    },
+    {
+      "name": "PathIntrospect",
+      "path": "/oauth/introspect"
+    },
+    {
+      "name": "PathJWKS",
+      "path": "/jwks"
+    },
+    {
+      "name": "PathQRCancel",
+      "path": "/oauth/qr/cancel"
+    },
+    {
+      "name": "PathQRClaim",
+      "path": "/oauth/qr/claim"
+    },
+    {
+      "name": "PathQRDecision",
+      "path": "/oauth/qr/decision"
+    },
+    {
+      "name": "PathQRPrompt",
+      "path": "/oauth/qr/prompt"
+    },
+    {
+      "name": "PathQRRegenerate",
+      "path": "/oauth/qr/regenerate"
+    },
+    {
+      "name": "PathQRRequest",
+      "path": "/oauth/qr/request"
+    },
+    {
+      "name": "PathQRStatus",
+      "path": "/oauth/qr/status"
+    },
+    {
+      "name": "PathRevoke",
+      "path": "/oauth/revoke"
+    },
+    {
+      "name": "PathToken",
+      "path": "/oauth/token"
+    },
+    {
+      "name": "PathTokenAuthorize",
+      "path": "/oauth/token/authorize"
+    },
+    {
+      "name": "PathUserInfo",
+      "path": "/oauth/userinfo"
+    }
+  ],
+  "protocol_endpoints": [
+    {
+      "method": "GET",
+      "path": "/.well-known/openid-configuration"
+    },
+    {
+      "method": "GET",
+      "path": "/jwks"
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/authorize"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/authorize"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/device/cancel"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/device_authorization"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/introspect"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/cancel"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/claim"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/decision"
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/qr/prompt"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/regenerate"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/request"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/status"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/revoke"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token/authorize"
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/userinfo"
+    }
+  ],
+  "pages": [
+    {
+      "name": "account.activity",
+      "method": "GET",
+      "path": "/account/activity",
+      "access": "UIAccessUser",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.activity_detail",
+      "method": "GET",
+      "path": "/account/activity/detail",
+      "access": "UIAccessUser",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.app_profile",
+      "method": "GET",
+      "path": "/account/app-profile",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.app_profile.submit",
+      "method": "POST",
+      "path": "/account/app-profile",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.email_change_verify",
+      "method": "GET",
+      "path": "/email/change/verify",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.email_change_verify.submit",
+      "method": "POST",
+      "path": "/email/change/verify",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.grants",
+      "method": "GET",
+      "path": "/account/grants",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.grants.revoke",
+      "method": "POST",
+      "path": "/account/grants/revoke",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.password",
+      "method": "GET",
+      "path": "/account/password",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.password.submit",
+      "method": "POST",
+      "path": "/account/password",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile",
+      "method": "GET",
+      "path": "/account/profile",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile.update",
+      "method": "POST",
+      "path": "/account/profile",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_avatar",
+      "method": "GET",
+      "path": "/account/profile/avatar",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_avatar.remove",
+      "method": "POST",
+      "path": "/account/profile/avatar/remove",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_avatar.submit",
+      "method": "POST",
+      "path": "/account/profile/avatar",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_avatar_image",
+      "method": "GET",
+      "path": "/account/profile/avatar/image",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_email",
+      "method": "GET",
+      "path": "/account/profile/email",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_email.cancel",
+      "method": "POST",
+      "path": "/account/profile/email/cancel",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_email.submit",
+      "method": "POST",
+      "path": "/account/profile/email",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_username",
+      "method": "GET",
+      "path": "/account/profile/username",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.profile_username.submit",
+      "method": "POST",
+      "path": "/account/profile/username",
+      "access": "UIAccessUser",
+      "source": "ui/pages_account.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security",
+      "method": "GET",
+      "path": "/account/security",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_mfa",
+      "method": "GET",
+      "path": "/account/security/mfa",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_mfa.add_confirm",
+      "method": "POST",
+      "path": "/account/security/mfa/confirm",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_mfa.add_start",
+      "method": "POST",
+      "path": "/account/security/mfa",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_mfa.remove",
+      "method": "POST",
+      "path": "/account/security/mfa/remove",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_passkeys",
+      "method": "GET",
+      "path": "/account/security/passkeys",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_passkeys.register_finish",
+      "method": "POST",
+      "path": "/account/security/passkeys/register/finish",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_passkeys.register_start",
+      "method": "POST",
+      "path": "/account/security/passkeys/register",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_passkeys.rename",
+      "method": "POST",
+      "path": "/account/security/passkeys/rename",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_passkeys.revoke",
+      "method": "POST",
+      "path": "/account/security/passkeys/revoke",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_recovery_codes",
+      "method": "GET",
+      "path": "/account/security/recovery-codes",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_recovery_codes.generate",
+      "method": "POST",
+      "path": "/account/security/recovery-codes",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_totp",
+      "method": "GET",
+      "path": "/account/security/totp",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_totp.bind_confirm",
+      "method": "POST",
+      "path": "/account/security/totp/confirm",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_totp.bind_start",
+      "method": "POST",
+      "path": "/account/security/totp/bind",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.security_totp.remove",
+      "method": "POST",
+      "path": "/account/security/totp/remove",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.sessions",
+      "method": "GET",
+      "path": "/account/sessions",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.sessions.revoke",
+      "method": "POST",
+      "path": "/account/sessions/revoke",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.sessions.revoke_all",
+      "method": "POST",
+      "path": "/account/sessions/revoke-all",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "account.sessions.revoke_others",
+      "method": "POST",
+      "path": "/account/sessions/revoke-others",
+      "access": "UIAccessUser",
+      "source": "ui/pages_security.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "admin.access_effective",
+      "method": "GET",
+      "path": "/admin/access/effective",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_create",
+      "method": "GET",
+      "path": "/admin/applications/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_create.submit",
+      "method": "POST",
+      "path": "/admin/applications/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_credentials",
+      "method": "GET",
+      "path": "/admin/applications/credentials",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_credentials.submit",
+      "method": "POST",
+      "path": "/admin/applications/credentials",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_delete",
+      "method": "POST",
+      "path": "/admin/applications/status/delete",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_grants",
+      "method": "GET",
+      "path": "/admin/applications/grants",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_grants.submit",
+      "method": "POST",
+      "path": "/admin/applications/grants",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_members",
+      "method": "GET",
+      "path": "/admin/applications/members",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_members.submit",
+      "method": "POST",
+      "path": "/admin/applications/members",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_profile",
+      "method": "GET",
+      "path": "/admin/applications/profile",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_profile.submit",
+      "method": "POST",
+      "path": "/admin/applications/profile",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_security",
+      "method": "GET",
+      "path": "/admin/applications/security",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_security.submit",
+      "method": "POST",
+      "path": "/admin/applications/security",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_status",
+      "method": "GET",
+      "path": "/admin/applications/status",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.application_status.submit",
+      "method": "POST",
+      "path": "/admin/applications/status",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.applications",
+      "method": "GET",
+      "path": "/admin/applications",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_apps.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit",
+      "method": "GET",
+      "path": "/admin/audit",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_detail",
+      "method": "GET",
+      "path": "/admin/audit/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_export_cancel",
+      "method": "POST",
+      "path": "/admin/audit/exports/cancel",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_export_create",
+      "method": "POST",
+      "path": "/admin/audit/exports/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_export_download",
+      "method": "GET",
+      "path": "/admin/audit/exports/download",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_exports",
+      "method": "GET",
+      "path": "/admin/audit/exports",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_maintenance",
+      "method": "GET",
+      "path": "/admin/audit/maintenance",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_maintenance_cancel",
+      "method": "POST",
+      "path": "/admin/audit/maintenance/cancel",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_maintenance_preview",
+      "method": "POST",
+      "path": "/admin/audit/maintenance/preview",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.audit_maintenance_start",
+      "method": "POST",
+      "path": "/admin/audit/maintenance/start",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_cancel",
+      "method": "POST",
+      "path": "/admin/backups/jobs/cancel",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_cleanup",
+      "method": "POST",
+      "path": "/admin/backups/cleanup",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_cleanup_preview",
+      "method": "GET",
+      "path": "/admin/backups/cleanup/preview",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_detail",
+      "method": "GET",
+      "path": "/admin/backups/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_download",
+      "method": "POST",
+      "path": "/admin/backups/download",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_job_detail",
+      "method": "GET",
+      "path": "/admin/backups/jobs/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_jobs",
+      "method": "GET",
+      "path": "/admin/backups/jobs",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_reconcile",
+      "method": "POST",
+      "path": "/admin/backups/reconcile",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_retention",
+      "method": "GET",
+      "path": "/admin/backups/retention",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_retention_save",
+      "method": "POST",
+      "path": "/admin/backups/retention",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_run",
+      "method": "POST",
+      "path": "/admin/backups/run",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_schedule_delete",
+      "method": "POST",
+      "path": "/admin/backups/schedules/delete",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_schedule_edit",
+      "method": "GET",
+      "path": "/admin/backups/schedules/edit",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_schedule_new",
+      "method": "GET",
+      "path": "/admin/backups/schedules/new",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_schedule_save",
+      "method": "POST",
+      "path": "/admin/backups/schedules/save",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_schedule_state",
+      "method": "POST",
+      "path": "/admin/backups/schedules/state",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backup_schedules",
+      "method": "GET",
+      "path": "/admin/backups/schedules",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.backups",
+      "method": "GET",
+      "path": "/admin/backups",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_backup.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.dashboard",
+      "method": "GET",
+      "path": "/admin/dashboard",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_stats.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.delegations",
+      "method": "GET",
+      "path": "/admin/delegations",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.diagnostics",
+      "method": "GET",
+      "path": "/admin/diagnostics",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "diagnostics.operations",
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.error_codes",
+      "method": "GET",
+      "path": "/admin/errors",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_audit.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.group_create",
+      "method": "POST",
+      "path": "/admin/groups/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.group_delete",
+      "method": "POST",
+      "path": "/admin/groups/delete",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.group_detail",
+      "method": "GET",
+      "path": "/admin/groups/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.group_members",
+      "method": "POST",
+      "path": "/admin/groups/members",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.group_update",
+      "method": "POST",
+      "path": "/admin/groups/update",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.groups",
+      "method": "GET",
+      "path": "/admin/groups",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.notification_mail",
+      "method": "GET",
+      "path": "/admin/notifications/mail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.notification_mail_secret",
+      "method": "POST",
+      "path": "/admin/notifications/mail/secret",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.notification_mail_template_preview",
+      "method": "POST",
+      "path": "/admin/notifications/mail/template/preview",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.notification_mail_test",
+      "method": "POST",
+      "path": "/admin/notifications/mail/test",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.permission_create",
+      "method": "GET",
+      "path": "/admin/permissions/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.permission_create.submit",
+      "method": "POST",
+      "path": "/admin/permissions/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.permission_delete",
+      "method": "POST",
+      "path": "/admin/permissions/delete",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.permission_detail",
+      "method": "GET",
+      "path": "/admin/permissions/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.permission_state",
+      "method": "POST",
+      "path": "/admin/permissions/state",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.permission_update",
+      "method": "POST",
+      "path": "/admin/permissions/update",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.permissions",
+      "method": "GET",
+      "path": "/admin/permissions",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.preset_diff",
+      "method": "GET",
+      "path": "/admin/presets/diff",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_cancel",
+      "method": "POST",
+      "path": "/admin/reports/cancel",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_cleanup",
+      "method": "POST",
+      "path": "/admin/reports/cleanup",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_detail",
+      "method": "GET",
+      "path": "/admin/reports/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_download",
+      "method": "POST",
+      "path": "/admin/reports/download",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_retention",
+      "method": "GET",
+      "path": "/admin/reports/retention",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_retry",
+      "method": "POST",
+      "path": "/admin/reports/retry",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_create",
+      "method": "POST",
+      "path": "/admin/reports/schedules/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_delete",
+      "method": "POST",
+      "path": "/admin/reports/schedules/delete",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_delete_preview",
+      "method": "GET",
+      "path": "/admin/reports/schedules/delete",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_detail",
+      "method": "GET",
+      "path": "/admin/reports/schedules/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_edit",
+      "method": "GET",
+      "path": "/admin/reports/schedules/edit",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_new",
+      "method": "GET",
+      "path": "/admin/reports/schedules/new",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_state",
+      "method": "POST",
+      "path": "/admin/reports/schedules/state",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedule_update",
+      "method": "POST",
+      "path": "/admin/reports/schedules/update",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.report_schedules",
+      "method": "GET",
+      "path": "/admin/reports/schedules",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.reports",
+      "method": "GET",
+      "path": "/admin/reports",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_reports.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.review_decide",
+      "method": "POST",
+      "path": "/admin/reviews/decide",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.review_detail",
+      "method": "GET",
+      "path": "/admin/reviews/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.reviews",
+      "method": "GET",
+      "path": "/admin/reviews",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_assign",
+      "method": "POST",
+      "path": "/admin/roles/assignments",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_assignments",
+      "method": "GET",
+      "path": "/admin/roles/assignments",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_create",
+      "method": "GET",
+      "path": "/admin/roles/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_create.submit",
+      "method": "POST",
+      "path": "/admin/roles/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_detail",
+      "method": "GET",
+      "path": "/admin/roles/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_permissions",
+      "method": "POST",
+      "path": "/admin/roles/permissions",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_state",
+      "method": "POST",
+      "path": "/admin/roles/state",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.role_update",
+      "method": "POST",
+      "path": "/admin/roles/update",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.roles",
+      "method": "GET",
+      "path": "/admin/roles",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_rbac.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.security_policies",
+      "method": "GET",
+      "path": "/admin/security/policies",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.security_policy_detail",
+      "method": "GET",
+      "path": "/admin/security/policies/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.security_policy_diff",
+      "method": "GET",
+      "path": "/admin/security/policies/diff",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.security_policy_preview",
+      "method": "POST",
+      "path": "/admin/security/policies/preview",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.security_policy_restore",
+      "method": "POST",
+      "path": "/admin/security/policies/restore",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.security_policy_restore_preview",
+      "method": "POST",
+      "path": "/admin/security/policies/restore/preview",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.security_policy_save",
+      "method": "POST",
+      "path": "/admin/security/policies/save",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_security_policy.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.sessions",
+      "method": "GET",
+      "path": "/admin/sessions",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin_sessions.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.sessions.revoke",
+      "method": "POST",
+      "path": "/admin/sessions/revoke",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin_sessions.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.settings",
+      "method": "GET",
+      "path": "/admin/settings",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "settings.managed",
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.settings_update",
+      "method": "POST",
+      "path": "/admin/settings",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "settings.managed",
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.statistics",
+      "method": "GET",
+      "path": "/admin/statistics",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_stats.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.statistics_errors",
+      "method": "GET",
+      "path": "/admin/statistics/errors",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_stats.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_batch",
+      "method": "GET",
+      "path": "/admin/users/batch",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_batch_action",
+      "method": "POST",
+      "path": "/admin/users/batch/action",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_batch_detail",
+      "method": "GET",
+      "path": "/admin/users/batch/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_batch_report",
+      "method": "GET",
+      "path": "/admin/users/batch/report",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_create",
+      "method": "GET",
+      "path": "/admin/users/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_create.submit",
+      "method": "POST",
+      "path": "/admin/users/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_delete",
+      "method": "POST",
+      "path": "/admin/users/delete",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_delete_preview",
+      "method": "GET",
+      "path": "/admin/users/delete-preview",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_detail",
+      "method": "GET",
+      "path": "/admin/users/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_export",
+      "method": "GET",
+      "path": "/admin/users/export",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_export.submit",
+      "method": "POST",
+      "path": "/admin/users/export",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_import",
+      "method": "GET",
+      "path": "/admin/users/import",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_import.submit",
+      "method": "POST",
+      "path": "/admin/users/import",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_state",
+      "method": "POST",
+      "path": "/admin/users/state",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_update",
+      "method": "POST",
+      "path": "/admin/users/update",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_validity",
+      "method": "POST",
+      "path": "/admin/users/validity",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.users",
+      "method": "GET",
+      "path": "/admin/users",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "app.scan_confirm",
+      "method": "GET",
+      "path": "/app/scan",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "app.scan_confirm.decide",
+      "method": "POST",
+      "path": "/app/scan",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.email_verify",
+      "method": "GET",
+      "path": "/email/verify",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.email_verify.submit",
+      "method": "POST",
+      "path": "/email/verify",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.email_verify_resend",
+      "method": "POST",
+      "path": "/email/verify/resend",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.invitation_accept",
+      "method": "GET",
+      "path": "/invitation/accept",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.invitation_accept.submit",
+      "method": "POST",
+      "path": "/invitation/accept",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.landing",
+      "method": "GET",
+      "path": "/home",
+      "access": "UIAccessUser",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.login",
+      "method": "GET",
+      "path": "/login",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.login.submit",
+      "method": "POST",
+      "path": "/login",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.logout",
+      "method": "POST",
+      "path": "/logout",
+      "access": "UIAccessUser",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.passkey_login",
+      "method": "GET",
+      "path": "/login/passkey",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.passkey_login.finish",
+      "method": "POST",
+      "path": "/login/passkey/finish",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.password_forgot",
+      "method": "GET",
+      "path": "/login/forgot-password",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.password_forgot.submit",
+      "method": "POST",
+      "path": "/login/forgot-password",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.password_reset",
+      "method": "GET",
+      "path": "/login/reset-password",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.password_reset.submit",
+      "method": "POST",
+      "path": "/login/reset-password",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.qr_login",
+      "method": "GET",
+      "path": "/login/qr",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.qr_login.cancel",
+      "method": "POST",
+      "path": "/login/qr/cancel",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.qr_login.claim",
+      "method": "POST",
+      "path": "/login/qr/claim",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.qr_login.poll",
+      "method": "POST",
+      "path": "/login/qr/poll",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.qr_login.regenerate",
+      "method": "POST",
+      "path": "/login/qr/regenerate",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.recovery_cancel",
+      "method": "POST",
+      "path": "/login/recovery/cancel",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.recovery_code",
+      "method": "GET",
+      "path": "/login/recovery-code",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.recovery_code.submit",
+      "method": "POST",
+      "path": "/login/recovery-code",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.recovery_rebind",
+      "method": "GET",
+      "path": "/login/recovery/rebind",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.recovery_rebind.complete",
+      "method": "POST",
+      "path": "/login/recovery/rebind/complete",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.recovery_rebind.start",
+      "method": "POST",
+      "path": "/login/recovery/rebind/start",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.register",
+      "method": "GET",
+      "path": "/register",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.register.submit",
+      "method": "POST",
+      "path": "/register",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.registration_status",
+      "method": "GET",
+      "path": "/register/status",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_auth.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.second_factor",
+      "method": "GET",
+      "path": "/login/second-factor",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.second_factor.cancel",
+      "method": "POST",
+      "path": "/login/second-factor/cancel",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.second_factor.resend",
+      "method": "POST",
+      "path": "/login/second-factor/resend",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.second_factor.verify",
+      "method": "POST",
+      "path": "/login/second-factor",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.strong_setup",
+      "method": "GET",
+      "path": "/login/strong-setup",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.strong_setup.passkey_finish",
+      "method": "POST",
+      "path": "/login/strong-setup/passkey/finish",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.strong_setup.passkey_start",
+      "method": "POST",
+      "path": "/login/strong-setup/passkey/start",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.strong_setup.totp_finish",
+      "method": "POST",
+      "path": "/login/strong-setup/totp/finish",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "auth.strong_setup.totp_start",
+      "method": "POST",
+      "path": "/login/strong-setup/totp/start",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_mfa.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "manage.apps",
+      "method": "GET",
+      "path": "/manage/applications",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.members",
+      "method": "GET",
+      "path": "/manage/applications/members",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.members_submit",
+      "method": "POST",
+      "path": "/manage/applications/members",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.permission_state",
+      "method": "POST",
+      "path": "/manage/applications/permissions/state",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.permissions",
+      "method": "GET",
+      "path": "/manage/applications/permissions",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.role_assign",
+      "method": "POST",
+      "path": "/manage/applications/roles/assignments",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.role_assignments",
+      "method": "GET",
+      "path": "/manage/applications/roles/assignments",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.role_detail",
+      "method": "GET",
+      "path": "/manage/applications/roles/detail",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.role_permissions",
+      "method": "POST",
+      "path": "/manage/applications/roles/permissions",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.role_state",
+      "method": "POST",
+      "path": "/manage/applications/roles/state",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "manage.roles",
+      "method": "GET",
+      "path": "/manage/applications/roles",
+      "access": "UIAccessUser",
+      "source": "ui/pages_manage.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "oauth.consent",
+      "method": "GET",
+      "path": "/oauth/authorize",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "oauth_oidc.protocol"
+      ]
+    },
+    {
+      "name": "oauth.consent.decide",
+      "method": "POST",
+      "path": "/oauth/authorize",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "oauth_oidc.protocol"
+      ]
+    },
+    {
+      "name": "oauth.device_confirm",
+      "method": "GET",
+      "path": "/oauth/device/confirm",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "oauth_oidc.protocol"
+      ]
+    },
+    {
+      "name": "oauth.device_confirm.decide",
+      "method": "POST",
+      "path": "/oauth/device/confirm",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "oauth_oidc.protocol"
+      ]
+    },
+    {
+      "name": "oauth.device_verify",
+      "method": "GET",
+      "path": "/oauth/device",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "oauth_oidc.protocol"
+      ]
+    },
+    {
+      "name": "oauth.device_verify.describe",
+      "method": "POST",
+      "path": "/oauth/device",
+      "access": "UIAccessPublic",
+      "source": "ui/pages_oauth.go",
+      "capabilities": [
+        "oauth_oidc.protocol"
+      ]
+    },
+    {
+      "name": "support.case_create",
+      "method": "GET",
+      "path": "/support/cases/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.case_create.submit",
+      "method": "POST",
+      "path": "/support/cases/create",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.case_detail",
+      "method": "GET",
+      "path": "/support/cases/detail",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.case_reassign.submit",
+      "method": "POST",
+      "path": "/support/cases/reassign",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.case_send.submit",
+      "method": "POST",
+      "path": "/support/cases/send",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.case_transition.submit",
+      "method": "POST",
+      "path": "/support/cases/transition",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.cases",
+      "method": "GET",
+      "path": "/support/cases",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_approval",
+      "method": "GET",
+      "path": "/support/recovery/approval",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_approve.submit",
+      "method": "POST",
+      "path": "/support/recovery/approval",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_cancel.submit",
+      "method": "POST",
+      "path": "/support/recovery/cancel",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_create.submit",
+      "method": "POST",
+      "path": "/support/recovery/request",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_execute",
+      "method": "GET",
+      "path": "/support/recovery/execute",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_execute.submit",
+      "method": "POST",
+      "path": "/support/recovery/execute",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_inbox",
+      "method": "GET",
+      "path": "/support/recovery",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_reject.submit",
+      "method": "POST",
+      "path": "/support/recovery/reject",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "support.recovery_request",
+      "method": "GET",
+      "path": "/support/recovery/request",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_support.go",
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "name": "system.error",
+      "method": "GET",
+      "path": "/500",
+      "access": "UIAccessPublic",
+      "source": "ui/contracts.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "system.forbidden",
+      "method": "GET",
+      "path": "/403",
+      "access": "UIAccessPublic",
+      "source": "ui/contracts.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "system.not_found",
+      "method": "GET",
+      "path": "/404",
+      "access": "UIAccessPublic",
+      "source": "ui/contracts.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "system.session_expired",
+      "method": "GET",
+      "path": "/401",
+      "access": "UIAccessPublic",
+      "source": "ui/contracts.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "ui.component_preview",
+      "method": "GET",
+      "path": "/_ui/preview",
+      "access": "UIAccessUser",
+      "source": "ui/contracts.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    },
+    {
+      "name": "ui.component_preview.submit",
+      "method": "POST",
+      "path": "/_ui/preview",
+      "access": "UIAccessUser",
+      "source": "ui/contracts.go",
+      "capabilities": [
+        "ui.public_pages"
+      ]
+    }
+  ]
+}

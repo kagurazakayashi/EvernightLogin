@@ -389,6 +389,7 @@ func loadCrossCheck(root string, model *Model) CrossCheck {
 	compare("CLI 子命令", cross.MatrixCLI, countCLISubcommands(model.CLIBinaries))
 	compare("权限键", cross.MatrixPermissions, len(model.Permissions))
 	compare("app 函数（含导出方法）", cross.MatrixAppFuncs, len(model.GoAPI.AppFuncs)+model.GoAPI.ExportedMethodCount)
+	compare("根包公开类型", cross.MatrixRootTypes, model.GoAPI.RootTypeCount)
 	if len(cross.Mismatches) > 0 {
 		sort.Strings(cross.Mismatches)
 	}

@@ -1,0 +1,1083 @@
+{
+  "schema": "evernight.reference/v1/permission-keys",
+  "generated_by": "scripts/reference",
+  "catalog_version": "1.0.0",
+  "counts": {
+    "permissions": 51,
+    "system_roles": 5,
+    "system_groups": 5,
+    "application_roles": 2,
+    "application_groups": 2
+  },
+  "permissions": [
+    {
+      "key": "self.profile.read",
+      "name": "查看自己的资料",
+      "summary": "查看自己的显示名称、联系资料与账户状态。",
+      "scope": "仅本人；不包含其他人的资料。",
+      "limits": "不能查看他人的资料、管理资格或安全设置。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin",
+        "support",
+        "auditor",
+        "normal_user"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "key": "self.profile.update",
+      "name": "修改自己的资料",
+      "summary": "修改自己的显示资料。",
+      "scope": "仅本人；用户名与邮箱修改遵守单独验证流程。",
+      "limits": "不能修改管理资格、安全版本、已验证状态或他人资料。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin",
+        "support",
+        "auditor",
+        "normal_user"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "key": "self.credentials.manage",
+      "name": "管理自己的登录凭证",
+      "summary": "管理自己的密码、Passkey 与两步验证。",
+      "scope": "仅本人；敏感修改仍需再次确认身份。",
+      "limits": "不能免除再次验证要求，不能为他人重置凭证或解除两步验证。",
+      "requires_reauth": true,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin",
+        "support",
+        "auditor",
+        "normal_user"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "mfa.public_facade",
+        "mfa.totp_recovery"
+      ]
+    },
+    {
+      "key": "self.sessions.manage",
+      "name": "退出自己的设备",
+      "summary": "查看并退出自己的登录会话与设备。",
+      "scope": "仅本人。",
+      "limits": "不能退出或查看其他人的设备与会话。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin",
+        "support",
+        "auditor",
+        "normal_user"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "auth.password_session"
+      ]
+    },
+    {
+      "key": "self.grants.manage",
+      "name": "撤回自己给应用的授权",
+      "summary": "查看并撤回自己授权给应用的访问。",
+      "scope": "仅本人。",
+      "limits": "不能撤回其他人的授权或应用自身的凭证。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin",
+        "support",
+        "auditor",
+        "normal_user"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "oauth_oidc.protocol"
+      ]
+    },
+    {
+      "key": "users.read",
+      "name": "查看普通用户",
+      "summary": "按获准范围查看普通用户的必要资料。",
+      "scope": "仅获准管理的普通用户范围。",
+      "limits": "不能查看 root 或超出管理范围的高权限管理账户资料。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "account.users",
+        "admin.facade_api"
+      ]
+    },
+    {
+      "key": "users.create",
+      "name": "创建普通用户",
+      "summary": "创建普通用户并登记基本资料。",
+      "scope": "仅获准管理的普通用户范围。",
+      "limits": "不能创建 root 或带管理资格的账户，不能设置固定密码。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "key": "users.update",
+      "name": "修改普通用户",
+      "summary": "修改普通用户的显示资料。",
+      "scope": "仅获准管理的普通用户范围。",
+      "limits": "不能修改密码、邮箱验证状态、安全版本或管理资格。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "key": "users.disable",
+      "name": "禁用普通用户",
+      "summary": "禁用获准范围内的普通用户。",
+      "scope": "仅获准管理的普通用户范围。",
+      "limits": "不能禁用 root 或其他高权限管理账户。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "key": "users.delete",
+      "name": "删除普通用户",
+      "summary": "删除获准范围内的普通用户。",
+      "scope": "仅获准普通用户，需确认；删除不清除审计。",
+      "limits": "默认不授予，需另行分配；不能删除 root 或高权限账户。",
+      "requires_reauth": true,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "key": "users.export",
+      "name": "导出用户资料",
+      "summary": "按字段许可批量导出普通用户资料。",
+      "scope": "仅获准普通用户范围，导出仍按字段许可。",
+      "limits": "默认不授予；不能导出密码、MFA 秘密、恢复码或私钥。",
+      "requires_reauth": true,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "key": "recovery.request",
+      "name": "发起密码找回",
+      "summary": "向用户此前已验证的渠道发送一次性密码找回入口。",
+      "scope": "仅获准的普通用户范围；不能选择新地址。",
+      "limits": "不能查看找回入口或验证码，不能解除两步验证，不能为 root 或高权限账户发起。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin",
+        "support"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "passwordreset.self_service",
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "support.cases.read",
+      "name": "查看求助单",
+      "summary": "查看分配给自己的求助单与必要脱敏信息。",
+      "scope": "仅分配给自己的求助单。",
+      "limits": "不能查看未分配求助单或未脱敏的敏感资料。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "support"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "support.cases.create",
+      "name": "登记求助单",
+      "summary": "登记用户求助事项与必要核验结果。",
+      "scope": "仅自己经手且获准的普通用户。",
+      "limits": "不能伪造核验结果，不能记录无关证件材料。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "support"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "support.cases.update",
+      "name": "更新求助单",
+      "summary": "更新分配给自己且未结束的求助单状态。",
+      "scope": "仅分配给自己的求助单。",
+      "limits": "不能改写历史处理记录，不能替用户设置新密码。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "support"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "recovery.approve",
+      "name": "审批人工核验恢复",
+      "summary": "审批通过人工核验的普通账户恢复申请。",
+      "scope": "仅获准的普通账户恢复申请；需独立审批。",
+      "limits": "默认不授予；不能审批本人发起的申请，不能审批 root 或高权限账户。",
+      "requires_reauth": true,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "recovery.mfa.approve",
+      "name": "审批两步验证恢复",
+      "summary": "审批普通用户的两步验证恢复申请。",
+      "scope": "仅获准的普通账户，独立核验与审批。",
+      "limits": "默认不授予；不能与密码恢复合并，完成后必须强制重新绑定。",
+      "requires_reauth": true,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "recovery.execute",
+      "name": "执行人工核验恢复",
+      "summary": "执行已独立批准且等待期结束的人工核验恢复申请。",
+      "scope": "仅获准的普通账户恢复；执行人不得是发起者或审批人。",
+      "limits": "默认不授予；不能跳过审批/等待期，root 与高权限账户拒绝，执行后旧会话/旧凭证失效。",
+      "requires_reauth": true,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "groups.read",
+      "name": "查看用户组",
+      "summary": "查看获准范围内的用户组与成员。",
+      "scope": "仅获准系统或应用范围。",
+      "limits": "不能查看范围外用户组，查看不代表可修改成员。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "groups.manage",
+      "name": "管理用户组",
+      "summary": "创建、修改用户组并管理组成员。",
+      "scope": "仅获准系统或应用范围。",
+      "limits": "涉及赋权仍需角色分配权限；不能借组管理改变全局账户状态。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "roles.read",
+      "name": "查看角色",
+      "summary": "查看获准范围内的普通角色及其权限组合。",
+      "scope": "仅获准系统或应用范围。",
+      "limits": "不能查看 root 能力，查看不代表可修改。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "roles.manage",
+      "name": "管理普通角色",
+      "summary": "创建、修改普通角色及其权限组合。",
+      "scope": "仅获准范围且只能组合可委派权限。",
+      "limits": "不能制造 root 角色，不能组合超出自己委派范围的权限。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "roles.assign",
+      "name": "分配角色",
+      "summary": "把允许转授的角色交给指定用户或用户组。",
+      "scope": "仅获准范围；不能授予超出自己委派范围的权限。",
+      "limits": "不能自行提权，不能把角色分配给 root 或范围外主体。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "permissions.read",
+      "name": "查看权限目录",
+      "summary": "查看系统与获准应用范围的权限定义与说明。",
+      "scope": "仅获准系统或应用范围。",
+      "limits": "不能查看范围外应用权限，不能修改内置权限含义。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "permissions.manage",
+      "name": "管理自定义权限",
+      "summary": "登记、修改与删除自定义权限。",
+      "scope": "仅获准系统或应用范围。",
+      "limits": "不能修改或删除内置系统权限，不能跨应用修改权限。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "permissions.state.update",
+      "name": "启停权限",
+      "summary": "启用或停用获准范围内的权限。",
+      "scope": "仅获准权限，停用即拒绝对应操作。",
+      "limits": "默认仅 root，可明确委派非核心范围；不能取消安全底线。",
+      "requires_reauth": true,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "rbac.roles_permissions"
+      ]
+    },
+    {
+      "key": "applications.read",
+      "name": "查看应用",
+      "summary": "查看获准范围内应用的资料与状态。",
+      "scope": "系统管理员限管理范围；应用管理员仅已分配应用。",
+      "limits": "不能查看未分配应用的资料或凭证。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "key": "applications.create",
+      "name": "创建应用",
+      "summary": "创建新的应用登记。",
+      "scope": "仅系统管理员的管理范围。",
+      "limits": "应用管理员不默认拥有；不能创建后自动获得系统管理资格。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "key": "applications.update",
+      "name": "修改应用资料",
+      "summary": "修改获准应用的显示资料。",
+      "scope": "系统管理员限管理范围；应用管理员仅已分配应用。",
+      "limits": "不能修改应用 ID、client_type 或作用范围，不能借此扩大权限。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "key": "applications.credentials.manage",
+      "name": "管理应用凭证",
+      "summary": "轮换应用密钥或公钥凭证。",
+      "scope": "仅指定应用；需再次确认身份。",
+      "limits": "不包含服务器 HTTPS 私钥；默认不授予应用管理员，需明确授予。",
+      "requires_reauth": true,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "key": "applications.members.manage",
+      "name": "管理应用成员",
+      "summary": "管理应用成员及应用内状态。",
+      "scope": "仅指定应用。",
+      "limits": "不能因此禁用或删除全局账户，不能修改全局管理资格。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "applications.manage"
+      ]
+    },
+    {
+      "key": "authorization.check",
+      "name": "联合校验授权",
+      "summary": "校验访问令牌与所需应用权限。",
+      "scope": "仅获准调用的应用与目标资源。",
+      "limits": "不能查询其他应用的身份详情，不能改变权限或签发令牌。",
+      "requires_reauth": false,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "access.joint_check"
+      ]
+    },
+    {
+      "key": "sessions.revoke",
+      "name": "强制会话退出",
+      "summary": "强制获准范围内的普通用户退出相关会话。",
+      "scope": "仅获准用户或应用会话。",
+      "limits": "不包含 root；不能用于绕过登录验证或冒充用户。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "user_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "session.admin"
+      ]
+    },
+    {
+      "key": "audit.read",
+      "name": "查看安全记录",
+      "summary": "查看获准范围内的安全审计记录。",
+      "scope": "仅获准范围，内容按权限脱敏。",
+      "limits": "不能修改或删除原始记录，不能查看范围外记录。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "auditor"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "key": "audit.export",
+      "name": "导出安全记录",
+      "summary": "按许可导出获准范围内的安全记录。",
+      "scope": "仅获准范围，导出仍脱敏。",
+      "limits": "不能删除记录，不能导出未脱敏的秘密或范围外数据。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "auditor"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "key": "reports.read",
+      "name": "查看统计报告",
+      "summary": "查看获准数据范围内的统计报告。",
+      "scope": "仅获准数据范围。",
+      "limits": "不能查看范围外数据，缺失数据必须标记而不是记为零。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "auditor"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "key": "reports.generate",
+      "name": "生成统计报告",
+      "summary": "生成获准数据范围的统计报告。",
+      "scope": "仅获准数据范围。",
+      "limits": "不能生成超出权限范围的报告，不能伪造数据来源。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "auditor"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "key": "reports.export",
+      "name": "导出统计报告",
+      "summary": "导出获准范围的报告文件。",
+      "scope": "仅获准数据范围，按格式安全转义。",
+      "limits": "不能导出未获准的数据，不能绕过脱敏与注入防护。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "auditor"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "key": "reports.schedule.manage",
+      "name": "管理定期报告",
+      "summary": "安排与暂停定期报告任务。",
+      "scope": "仅获准数据范围；任务不能超出所有者当前权限。",
+      "limits": "不能创建超出权限范围的任务，不能修改他人报告。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin",
+        "auditor"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "key": "reports.cleanup",
+      "name": "清理过期报告文件",
+      "summary": "按保留策略清理已到期的报告产物文件。",
+      "scope": "仅获准数据范围；必须强认证并记录实际目标与结果。",
+      "limits": "不能删除原始审计记录，不能清理未到期或范围外文件。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "reports.generate"
+      ]
+    },
+    {
+      "key": "backups.create",
+      "name": "创建备份",
+      "summary": "创建备份任务；需要再次认证。",
+      "scope": "系统范围；同一时刻只运行一个备份。",
+      "limits": "不能下载数据库文件，不能覆盖既有备份。",
+      "requires_reauth": true,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "key": "backups.read",
+      "name": "查看备份任务",
+      "summary": "查看备份任务、计划与受控清单摘要。",
+      "scope": "获准系统范围。",
+      "limits": "查看清单不代表可下载数据库文件，也不代表可取消或清理。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "key": "backups.cancel",
+      "name": "取消备份任务",
+      "summary": "请求取消获准范围内的备份/清理任务。",
+      "scope": "获准系统范围；取消请求不等于实际取消。",
+      "limits": "不能删除既有备份，不能取消范围外任务。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "key": "backups.export",
+      "name": "下载备份",
+      "summary": "下载备份成品；需要独立权限与再次认证。",
+      "scope": "可能覆盖全系统数据，需明确授予。",
+      "limits": "默认仅 root，可审慎委派；查看列表不代表可下载。",
+      "requires_reauth": true,
+      "root_only": false,
+      "implemented": true,
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "key": "backups.retention",
+      "name": "管理备份保留策略",
+      "summary": "查看与修改数量/天数/容量保留上限。",
+      "scope": "系统范围。",
+      "limits": "修改需再次认证并记录责任身份；不能删除原始审计。",
+      "requires_reauth": true,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "key": "backups.cleanup",
+      "name": "清理备份产物",
+      "summary": "按保留策略清理备份成品文件。",
+      "scope": "系统范围；保护规则优先。",
+      "limits": "不能删除原始审计；最后可用备份与未知状态产物受保护。",
+      "requires_reauth": true,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "key": "backups.restore",
+      "name": "恢复备份",
+      "summary": "用备份恢复系统数据（维护模式 + 预演 + 凭证失效）。",
+      "scope": "全系统高风险操作。",
+      "limits": "仅 root 或受控本地应急管理员；不能通过普通角色分配下放。",
+      "requires_reauth": true,
+      "root_only": true,
+      "implemented": true,
+      "capabilities": [
+        "backup.restore"
+      ]
+    },
+    {
+      "key": "audit.purge",
+      "name": "清理安全记录",
+      "summary": "按保留策略清理安全审计记录。",
+      "scope": "全系统高风险操作。",
+      "limits": "仅 root；不能通过普通角色分配下放。",
+      "requires_reauth": true,
+      "root_only": true,
+      "implemented": true,
+      "capabilities": [
+        "audit.events"
+      ]
+    },
+    {
+      "key": "security.policy.manage",
+      "name": "修改敏感操作规则",
+      "summary": "查看、修改与恢复敏感操作安全策略。",
+      "scope": "全系统高风险操作。",
+      "limits": "仅 root；不能通过普通角色分配下放，不能取消安全底线。",
+      "requires_reauth": true,
+      "root_only": true,
+      "implemented": true,
+      "capabilities": [
+        "security.policy_reauth"
+      ]
+    },
+    {
+      "key": "settings.manage",
+      "name": "修改常规设置",
+      "summary": "修改常规运行设置。",
+      "scope": "仅常规设置，不包含敏感策略。",
+      "limits": "不能修改敏感操作规则、主密钥或未脱敏秘密。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "settings.managed"
+      ]
+    },
+    {
+      "key": "diagnostics.read",
+      "name": "查看运行诊断",
+      "summary": "查看脱敏的运行诊断信息。",
+      "scope": "系统或明确的应用范围；仅返回脱敏运行状态、队列计数、配置生效/待重启字段与关联错误白名单。",
+      "limits": "不能查看未脱敏秘密、主密钥、完整配置、个人资料或审计原文；不能修改任何状态。",
+      "requires_reauth": false,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": true,
+      "capabilities": [
+        "diagnostics.operations"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "key": "system_admin",
+      "name": "系统管理员",
+      "summary": "管理普通用户、应用、用户组和普通角色，维护备份与报告。",
+      "limits": "仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围。",
+      "builtin": true,
+      "default_permissions": [
+        "self.profile.read",
+        "self.profile.update",
+        "self.credentials.manage",
+        "self.sessions.manage",
+        "self.grants.manage",
+        "users.read",
+        "users.create",
+        "users.update",
+        "users.disable",
+        "recovery.request",
+        "groups.read",
+        "groups.manage",
+        "roles.read",
+        "roles.manage",
+        "roles.assign",
+        "permissions.read",
+        "permissions.manage",
+        "applications.read",
+        "applications.create",
+        "applications.update",
+        "applications.credentials.manage",
+        "applications.members.manage",
+        "sessions.revoke",
+        "audit.read",
+        "audit.export",
+        "reports.read",
+        "reports.generate",
+        "reports.export",
+        "reports.schedule.manage",
+        "reports.cleanup",
+        "diagnostics.read",
+        "settings.manage",
+        "backups.create",
+        "backups.read",
+        "backups.cancel",
+        "backups.retention",
+        "backups.cleanup"
+      ],
+      "default_group_key": "system-administrators",
+      "application_scope": false,
+      "capabilities": [
+        "account.users",
+        "admin.facade_api",
+        "applications.manage",
+        "audit.events",
+        "auth.password_session",
+        "backup.restore",
+        "diagnostics.operations",
+        "mfa.public_facade",
+        "mfa.totp_recovery",
+        "oauth_oidc.protocol",
+        "passwordreset.self_service",
+        "rbac.roles_permissions",
+        "reports.generate",
+        "session.admin",
+        "settings.managed",
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "user_admin",
+      "name": "用户管理员",
+      "summary": "创建、查询、修改和禁用普通用户，发起密码找回。",
+      "limits": "仅限获准管理的用户；默认不能操作 root、其他高权限管理账户或修改权限分配。",
+      "builtin": true,
+      "default_permissions": [
+        "self.profile.read",
+        "self.profile.update",
+        "self.credentials.manage",
+        "self.sessions.manage",
+        "self.grants.manage",
+        "users.read",
+        "users.create",
+        "users.update",
+        "users.disable",
+        "recovery.request",
+        "sessions.revoke"
+      ],
+      "default_group_key": "user-administrators",
+      "application_scope": false,
+      "capabilities": [
+        "account.users",
+        "admin.facade_api",
+        "auth.password_session",
+        "mfa.public_facade",
+        "mfa.totp_recovery",
+        "oauth_oidc.protocol",
+        "passwordreset.self_service",
+        "session.admin",
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "support",
+      "name": "客服",
+      "summary": "查询必要的脱敏资料，登记求助事项，向用户原已验证邮箱发送密码重置入口，查询本人负责的处理进度。",
+      "limits": "仅限分配给客服的普通用户；不能查看或指定密码、修改邮箱后再重置、清除两步验证、冒充用户登录或操作高权限账户。",
+      "builtin": true,
+      "default_permissions": [
+        "self.profile.read",
+        "self.profile.update",
+        "self.credentials.manage",
+        "self.sessions.manage",
+        "self.grants.manage",
+        "recovery.request",
+        "support.cases.read",
+        "support.cases.create",
+        "support.cases.update"
+      ],
+      "default_group_key": "support-team",
+      "application_scope": false,
+      "capabilities": [
+        "account.users",
+        "auth.password_session",
+        "mfa.public_facade",
+        "mfa.totp_recovery",
+        "oauth_oidc.protocol",
+        "passwordreset.self_service",
+        "support.recovery"
+      ]
+    },
+    {
+      "key": "auditor",
+      "name": "审计员",
+      "summary": "查看安全记录，查看和生成统计报告，按许可导出记录。",
+      "limits": "仅限获准查看的应用和用户；不能修改用户、改变权限或删除原始记录。",
+      "builtin": true,
+      "default_permissions": [
+        "self.profile.read",
+        "self.profile.update",
+        "self.credentials.manage",
+        "self.sessions.manage",
+        "self.grants.manage",
+        "audit.read",
+        "audit.export",
+        "reports.read",
+        "reports.generate",
+        "reports.export",
+        "reports.schedule.manage"
+      ],
+      "default_group_key": "auditors",
+      "application_scope": false,
+      "capabilities": [
+        "account.users",
+        "audit.events",
+        "auth.password_session",
+        "mfa.public_facade",
+        "mfa.totp_recovery",
+        "oauth_oidc.protocol",
+        "reports.generate"
+      ]
+    },
+    {
+      "key": "normal_user",
+      "name": "普通用户",
+      "summary": "修改自己的资料，管理自己的密码、登录方式、会话和应用授权。",
+      "limits": "仅限自己；敏感修改仍需再次确认身份，不能查看或改变他人资料。",
+      "builtin": true,
+      "default_permissions": [
+        "self.profile.read",
+        "self.profile.update",
+        "self.credentials.manage",
+        "self.sessions.manage",
+        "self.grants.manage"
+      ],
+      "default_group_key": "normal-users",
+      "application_scope": false,
+      "capabilities": [
+        "account.users",
+        "auth.password_session",
+        "mfa.public_facade",
+        "mfa.totp_recovery",
+        "oauth_oidc.protocol"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "key": "system-administrators",
+      "name": "系统管理员组",
+      "description": "系统管理员角色的默认成员组，初始化不自动加入成员。",
+      "application_scope": false
+    },
+    {
+      "key": "user-administrators",
+      "name": "用户管理员组",
+      "description": "用户管理员角色的默认成员组，初始化不自动加入成员。",
+      "application_scope": false
+    },
+    {
+      "key": "support-team",
+      "name": "客服组",
+      "description": "客服角色的默认成员组，初始化不自动加入成员。",
+      "application_scope": false
+    },
+    {
+      "key": "auditors",
+      "name": "审计员组",
+      "description": "审计员角色的默认成员组，初始化不自动加入成员。",
+      "application_scope": false
+    },
+    {
+      "key": "normal-users",
+      "name": "普通用户组",
+      "description": "普通用户角色的默认成员组，初始化不自动加入成员。",
+      "application_scope": false
+    }
+  ],
+  "application_roles": [
+    {
+      "key": "app_admin",
+      "name": "应用管理员",
+      "summary": "管理指定应用资料、成员、应用内角色和应用独有权限。",
+      "limits": "仅限指定应用；不能修改共享密码、其他应用权限或系统管理资格；转授权限需另有许可。",
+      "builtin": false,
+      "default_group_key": "app-administrators",
+      "application_scope": true
+    },
+    {
+      "key": "app_user",
+      "name": "应用普通用户",
+      "summary": "登录已加入的应用，使用明确分配的业务功能。",
+      "limits": "仅限自己已加入的应用和已获准功能；加入应用不代表自动拥有全部功能。",
+      "builtin": false,
+      "default_group_key": "app-users",
+      "application_scope": true
+    }
+  ],
+  "application_groups": [
+    {
+      "key": "app-administrators",
+      "name": "应用管理员组",
+      "description": "应用管理员角色的默认成员组，初始化不自动加入成员。",
+      "application_scope": true
+    },
+    {
+      "key": "app-users",
+      "name": "应用用户组",
+      "description": "应用普通用户角色的默认成员组，初始化不自动加入成员。",
+      "application_scope": true
+    }
+  ]
+}

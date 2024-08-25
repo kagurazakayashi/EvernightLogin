@@ -41,7 +41,7 @@ type cliDraft struct {
 
 // scanCLI 扫描三个命令行程序的命令树、flag 与退出码。
 func scanCLI(root string) ([]CLIBinary, error) {
-	cmdRoot := filepath.Join(root, "cmd")
+	cmdRoot := filepath.Join(root, filepath.FromSlash(cmdRootDir))
 	entries, err := os.ReadDir(cmdRoot)
 	if err != nil {
 		return nil, fmt.Errorf("读取 cmd 目录失败：%w", err)

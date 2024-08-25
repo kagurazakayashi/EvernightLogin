@@ -4,14 +4,18 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // 本文件扫描公开 Go API：
-//   - app 包（递归，步骤 215 可能把类型拆到子目录）：Runtime 的公开方法、公开函数、
-//     服务接口（方法 + 签名 + 文档首句）与公开类型（成员名用于能力声明解析）；
-//   - 根包（仅根目录 .go）：公开函数详情，以及按源文件分组的类型/函数/常量/变量清单。
+//   - app 包（递归）：Runtime 的公开方法、公开函数、服务接口（方法 + 签名 + 文档首句）
+//     与公开类型（成员名用于能力声明解析）；
+//   - 根包（rootPackageDirs）：公开函数详情，以及按源文件分组的类型/函数/常量/变量清单；
+//     215 后根包主要保留薄门面与 alias_*.go 兼容别名，公开实现在 access/extension/
+//     lifecycle/version/httpapi/ui 等叶子包。
 //
 // Phase A 输出“框架 + 稳定领域”的参考；每个内部服务领域的方法级说明（调用身份、
 // 资源范围、分页、幂等、错误、最小例）留给 Phase B，避免在 214/215 重构前固化。
@@ -162,14 +166,35 @@ func scanGoAPI(root string) (*GoAPI, error) {
 		return api.AppVars[i].Source < api.AppVars[j].Source
 	})
 	sort.Slice(api.RuntimeMethods, func(i, j int) bool { return api.RuntimeMethods[i].Name < api.RuntimeMethods[j].Name })
-	if len(api.RuntimeMethods) == 0 || len(api.Interfaces) == 0 {
-		return nil, fmt.Errorf("app 包公开 API 扫描结果为空（Runtime 方法=%d、接口=%d），检查 app/ 目录结构是否变化",
-			len(api.RuntimeMethods), len(api.Interfaces))
+	if len(api.RuntimeMethods) == 0 {
+		return nil, fmt.Errorf("未找到 *Runtime 公开方法（已扫描目录：%s）；215 可能重组了 app 公开"+
+			"入口，请更新 scripts/internal/apidoc/sources.go 的 goAPIDirs 或检查公开门面文件后重试",
+			strings.Join(goAPIDirs, "、"))
+	}
+	if len(api.Interfaces) == 0 {
+		return nil, fmt.Errorf("未找到 app 包公开服务接口（已扫描目录：%s）；检查 app 公开类型组织"+
+			"是否变化，必要时更新 sources.go 的 goAPIDirs 后重试", strings.Join(goAPIDirs, "、"))
 	}
 
-	rootFiles, err := listGoFiles(root)
-	if err != nil {
-		return nil, fmt.Errorf("扫描根包失败：%w", err)
+	var rootFiles []string
+	for _, dir := range rootPackageDirs {
+		dirPath := root
+		if dir != "." {
+			dirPath = filepath.Join(root, filepath.FromSlash(dir))
+		}
+		if info, statErr := os.Stat(dirPath); statErr != nil || !info.IsDir() {
+			continue
+		}
+		files, err := listGoFiles(dirPath)
+		if err != nil {
+			return nil, fmt.Errorf("扫描根包目录 %s 失败：%w", dir, err)
+		}
+		rootFiles = append(rootFiles, files...)
+	}
+	if len(rootFiles) == 0 {
+		return nil, fmt.Errorf("根包公开 API 扫描结果为空（已扫描目录：%s）；若 215 把薄门面"+
+			"迁出根包，请更新 sources.go 的 rootPackageDirs 并确认公开别名保留",
+			strings.Join(rootPackageDirs, "、"))
 	}
 	for _, path := range rootFiles {
 		file, fset, err := parseAt(path)
@@ -227,7 +252,9 @@ func scanGoAPI(root string) (*GoAPI, error) {
 	sort.Slice(api.RootFuncs, func(i, j int) bool { return api.RootFuncs[i].Name < api.RootFuncs[j].Name })
 	sort.Slice(api.RootFiles, func(i, j int) bool { return api.RootFiles[i].File < api.RootFiles[j].File })
 	if api.RootTypeCount == 0 || len(api.RootFuncs) == 0 {
-		return nil, fmt.Errorf("根包公开 API 扫描结果为空（类型=%d、函数=%d）", api.RootTypeCount, len(api.RootFuncs))
+		return nil, fmt.Errorf("根包公开 API 扫描结果为空（类型=%d、函数=%d，已扫描目录：%s）；"+
+			"若 215 把薄门面迁出根包，请更新 sources.go 的 rootPackageDirs 并确认公开别名保留",
+			api.RootTypeCount, len(api.RootFuncs), strings.Join(rootPackageDirs, "、"))
 	}
 	return api, nil
 }

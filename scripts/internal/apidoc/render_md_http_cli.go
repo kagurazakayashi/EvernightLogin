@@ -54,7 +54,10 @@ func (m *Model) renderHTTPAPI(used map[string]bool) []byte {
 			markdownTable([]string{"方法", "路径"}, endpointRows),
 		"## 4. 内置页面命名路由（"+fmt.Sprintf("%d", len(m.Pages))+" 个冻结命名路由）\n\n"+
 			"页面路由是 `ui.v1` 命名契约：名字/路径/访问级别稳定，DOM 与模板不承诺稳定；"+
-			"宿主可用 `PageOverrides` 替换展示，但不改变服务端认证/授权/CSRF。",
+			"宿主可用 `PageOverrides` 替换展示，但不改变服务端认证/授权/CSRF。214 起页面实现"+
+			"位于公开包 `ui/`，根包保留 `UIRoute`/`BuiltinUIRoutes` 等兼容别名；下表“定义位置”"+
+			"即实际定义文件。表中包含仅在 `EnableComponentPreview` 时注册的组件预览路由"+
+			"（默认不注册），不要把它们当作默认页面。",
 		markdownTable([]string{"命名路由", "方法", "路径", "访问级别", "关联能力", "定义位置"}, pageRows),
 		"## 5. OpenAPI 与 Discovery 边界（不造假完整契约）\n\n"+
 			bulletList([]string{

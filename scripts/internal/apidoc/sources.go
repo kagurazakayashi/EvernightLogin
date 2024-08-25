@@ -34,22 +34,33 @@ const schemaVersion = "evernight.reference/v1"
 const (
 	pathCapabilityCatalog = "scripts/capabilities/catalog.json"
 	pathCapabilityMatrix  = "docs/acceptance/capability-matrix.json"
-	pathAdminHandler      = "internal/adminapi/handler.go"
-	pathProtocolPaths     = "internal/protocolapi/protocolapi.go"
 	pathPresetCatalog     = "internal/preset/catalog.go"
 	pathSnippetFile       = "examples/reference-snippets/snippets.go"
+)
+
+// 源码候选路径（相对仓库根）。214/215 重构可能移动文件：按顺序取第一个存在的候选，
+// 全部缺失时返回可操作错误，提示更新本文件后重试。
+var (
+	adminHandlerCandidates  = []string{"internal/adminapi/handler.go"}
+	protocolPathCandidates  = []string{"internal/protocolapi/protocolapi.go"}
+	presetCatalogCandidates = []string{"internal/preset/catalog.go"}
+	// pageScanDirs 是页面命名路由定义目录：214 后页面实现位于公开包 ui/；
+	// "." 保留根包兼容别名/旧结构扫描（不存在 UIRoute 字面量时会自然跳过）。
+	pageScanDirs = []string{".", "ui"}
+	// rootPackageDirs 是根包（包名 login）公开门面与兼容别名所在目录。
+	rootPackageDirs = []string{"."}
 )
 
 // sourceDirs 是 AST 扫描的目录（相对仓库根）；子模块与 examples 不在此列。
 var (
 	// adminRouteDirs 登记管理 JSON API 路由的源码目录（handler 与领域路由）。
 	adminRouteDirs = []string{"internal/adminapi", "internal/serverapp"}
-	// cliScanDirs 登记 CLI 命令树与 flag 的定义目录。
-	cliScanDirs = []string{"cmd"}
+	// cmdRootDir 登记三个命令行程序的源码目录。
+	cmdRootDir = "cmd"
 	// manageCLIDir 登记 loginctl 的本地/在线管理命令组实现。
 	manageCLIDir = "internal/managecli"
-	// goAPIDirs 登记公开 Go API 的源码目录（步骤 215 可能把 app 类型拆到子目录，
-	// 因此递归扫描 app/）。
+	// goAPIDirs 登记公开 Go API 的源码目录（215 后 app 仍为单包、按领域分文件；
+	// 若未来拆子目录，walkGoFiles 会递归覆盖）。
 	goAPIDirs = []string{"app"}
 )
 
@@ -107,6 +118,19 @@ func walkGoFiles(dir string, fn func(path string) error) error {
 	})
 }
 
+// resolveFirstExisting 返回候选路径中第一个存在的普通文件（仓库相对路径）；
+// 全部缺失时返回可操作错误，提示 214/215 重构后更新候选列表。
+func resolveFirstExisting(root, purpose string, candidates []string) (string, error) {
+	for _, rel := range candidates {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return rel, nil
+		}
+	}
+	return "", fmt.Errorf("未找到%s源文件；已尝试 %s。若 214/215 重构移动了文件，请更新 "+
+		"scripts/internal/apidoc/sources.go 的候选列表后重试", purpose, strings.Join(candidates, "、"))
+}
+
 // exprString 用 go/printer 输出表达式文本，用于签名、类型与常量默认值。
 func exprString(fset *token.FileSet, expr ast.Expr) string {
 	if expr == nil {
@@ -149,6 +173,21 @@ func compositeKeyValue(lit *ast.CompositeLit, key string) ast.Expr {
 // compositeTypeName 返回复合字面量的显式类型名（可能为空）。
 func compositeTypeName(lit *ast.CompositeLit) string {
 	switch typed := lit.Type.(type) {
+	case *ast.Ident:
+		return typed.Name
+	case *ast.SelectorExpr:
+		return typed.Sel.Name
+	}
+	return ""
+}
+
+// baseTypeName 返回类型表达式的基础类型名（处理指针/泛型参数/限定名）。
+func baseTypeName(expr ast.Expr) string {
+	switch typed := expr.(type) {
+	case *ast.StarExpr:
+		return baseTypeName(typed.X)
+	case *ast.IndexExpr:
+		return baseTypeName(typed.X)
 	case *ast.Ident:
 		return typed.Name
 	case *ast.SelectorExpr:

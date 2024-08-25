@@ -34,6 +34,10 @@ func Write(root string) ([]string, []string, error) {
 		return nil, model.ClaimIssues, fmt.Errorf(
 			"能力声明存在 %d 个无法解析的公开面，拒绝生成文档（先修声明或代码）", len(model.ClaimIssues))
 	}
+	if countIssues := validateCounts(model); len(countIssues) > 0 {
+		return nil, countIssues, fmt.Errorf(
+			"盘点数量低于安全下限（疑似 214/215 结构迁移未同步），拒绝生成文档")
+	}
 	files, snippetIssues, err := model.Files()
 	if err != nil {
 		return nil, nil, err
@@ -103,6 +107,7 @@ func Check(root string) (CheckResult, error) {
 	result.Warnings = append(result.Warnings, model.Warnings...)
 	result.Warnings = append(result.Warnings, model.CrossCheck.Mismatches...)
 	result.Issues = append(result.Issues, model.ClaimIssues...)
+	result.Issues = append(result.Issues, validateCounts(model)...)
 	files, snippetIssues, err := model.Files()
 	if err != nil {
 		return result, err

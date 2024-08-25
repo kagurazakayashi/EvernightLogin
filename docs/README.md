@@ -16,9 +16,10 @@
 | [acceptance/](acceptance/README.md) | 验收与交付核对记录、能力矩阵（机器可读）、短测试入口；**历史证据不改写** |
 | [licenses/](licenses/THIRD_PARTY_NOTICES.md) | 第三方组件/字体/依赖的版权与许可声明 |
 
-> `docs/reference/`（人类与 AI 共用的接口参考：Go API / HTTP / CLI / 权限 / 错误码 /
-> 配置 / 能力映射）将在步骤 245 建立；在那之前，接口以源码 GoDoc、[guide/api-status.md](guide/api-status.md)
-> 与 [embedding/host_integration.md](embedding/host_integration.md) 为准。
+> [`docs/reference/`](reference/README.md)（人类与 AI 共用的接口参考：Go API / HTTP / CLI / 权限 /
+> 错误码 / 配置 / 能力映射与 4 个机器可读 JSON）由 `scripts/reference` 从代码生成，`-check` 与
+> `verify-docs` 逐字节校验；不要再手工维护第二套接口清单。接口问题可同时参考
+> [guide/api-status.md](guide/api-status.md) 与 [embedding/host_integration.md](embedding/host_integration.md)。
 
 ## 2. 建议阅读路径
 

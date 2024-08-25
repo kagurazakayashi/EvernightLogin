@@ -200,7 +200,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scena
 | [`docs/guide/`](docs/guide/README.md) | 产品使用主干：能力状态、快速开始、两模式、登录/OAuth、应用与权限、角色与范围、配置、客服恢复、CLI、审计报告、备份恢复、错误码与[内置 Web 管理台](docs/guide/admin-console.md) |
 | [`docs/deployment/`](docs/deployment/README.md) | 首次配置、独立服务、TLS/反代、容器、服务托管、邮件子模块、协议/管理 API 接入、一键构建与发布打包 |
 | [`docs/embedding/`](docs/embedding/README.md) | 作为 Go Module 嵌入：公开 API 稳定范围、生命周期与资源所有权、页面替换、示例与宿主调用边界 |
-| `docs/reference/` | 人类与 AI 共用的接口参考（Go API/HTTP/CLI/权限/错误码/配置/能力映射）——**待步骤 245 建立**；当前以源码 GoDoc 与上述 guide/embedding 为准 |
+| [`docs/reference/`](docs/reference/README.md) | 人类与 AI 共用的接口参考：Go API/HTTP/CLI/权限/错误码/配置/能力映射与 4 个机器可读 JSON（由代码生成，勿手改） |
 | [`docs/acceptance/`](docs/acceptance/README.md) | 验收与交付核对记录、能力矩阵、[短测试入口](docs/acceptance/shorttest.md)；历史证据不改写 |
 | [`docs/database/`](docs/database/存储模型与迁移设计.md) | 存储模型、迁移与方言说明 |
 | [`docs/requirements/`](docs/requirements/) | 需求基线（设计目标，不等于已实现）与错误码历史手册 |

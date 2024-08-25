@@ -1,0 +1,439 @@
+{
+  "schema": "evernight.reference/v1/error-codes",
+  "generated_by": "scripts/reference",
+  "count": 48,
+  "codes": [
+    {
+      "code": "REQ_INVALID",
+      "category": "参数",
+      "http_status": 400,
+      "default_message": "请求内容不符合要求",
+      "cause": "字段缺失或格式不对",
+      "advice": "按字段提示对照接口文档修正",
+      "retry": "修正后"
+    },
+    {
+      "code": "AUTH_FAILED",
+      "category": "认证",
+      "http_status": 401,
+      "default_message": "无法完成登录",
+      "cause": "用户名或凭证不正确；对外不细分账户是否存在",
+      "advice": "本人核对输入；管理员用请求编号查受限记录",
+      "retry": "限速内"
+    },
+    {
+      "code": "TOKEN_INVALID",
+      "category": "令牌",
+      "http_status": 401,
+      "default_message": "访问凭证无效",
+      "cause": "签名、格式、签发方或类型不符合要求",
+      "advice": "检查取得的是 Access Token，核对签发配置；不要跳过签名验证",
+      "retry": "重新登录"
+    },
+    {
+      "code": "TOKEN_EXPIRED",
+      "category": "令牌",
+      "http_status": 401,
+      "default_message": "访问凭证已过期",
+      "cause": "超过有效期或时钟异常",
+      "advice": "按允许流程刷新或重新登录，检查服务器时间",
+      "retry": "刷新后"
+    },
+    {
+      "code": "TOKEN_REVOKED",
+      "category": "令牌",
+      "http_status": 401,
+      "default_message": "访问凭证已被撤销",
+      "cause": "退出、密码恢复或管理员撤销",
+      "advice": "重新登录；查撤销事件，勿恢复旧令牌",
+      "retry": "重新登录"
+    },
+    {
+      "code": "TOKEN_AUDIENCE_MISMATCH",
+      "category": "令牌",
+      "http_status": 403,
+      "default_message": "访问凭证不能用于当前应用资源",
+      "cause": "令牌接收方与业务接口不一致",
+      "advice": "检查应用登记和取得令牌时的目标资源",
+      "retry": "修正后"
+    },
+    {
+      "code": "CLIENT_AUTH_FAILED",
+      "category": "应用",
+      "http_status": 401,
+      "default_message": "调用程序身份验证失败",
+      "cause": "程序密钥错误、失效或配置不符",
+      "advice": "核对密钥版本和认证方式，不在日志打印密钥",
+      "retry": "修正后"
+    },
+    {
+      "code": "CLIENT_DISABLED",
+      "category": "应用",
+      "http_status": 403,
+      "default_message": "应用已停用",
+      "cause": "管理员停用应用",
+      "advice": "查应用状态及停用原因，由授权管理员处理",
+      "retry": "启用后"
+    },
+    {
+      "code": "USER_DISABLED",
+      "category": "账户",
+      "http_status": 403,
+      "default_message": "账户当前不可使用",
+      "cause": "账户已禁用",
+      "advice": "授权管理员检查禁用记录；不对匿名请求暴露该细节",
+      "retry": "处理后"
+    },
+    {
+      "code": "APP_MEMBERSHIP_REQUIRED",
+      "category": "权限",
+      "http_status": 403,
+      "default_message": "用户尚未获准使用此应用",
+      "cause": "未加入或成员关系已停用",
+      "advice": "检查该应用成员状态",
+      "retry": "授权后"
+    },
+    {
+      "code": "PERMISSION_REQUIRED",
+      "category": "权限",
+      "http_status": 403,
+      "default_message": "缺少当前操作所需权限",
+      "cause": "角色未包含或已撤销权限",
+      "advice": "检查当前应用、角色来源与 all/any 要求",
+      "retry": "授权后"
+    },
+    {
+      "code": "PERMISSION_DISABLED",
+      "category": "权限",
+      "http_status": 403,
+      "default_message": "此项权限已停用",
+      "cause": "系统或应用权限处于停用状态",
+      "advice": "查权限状态和停用审计",
+      "retry": "启用后"
+    },
+    {
+      "code": "PERMISSION_UNKNOWN",
+      "category": "权限",
+      "http_status": 400,
+      "default_message": "请求的权限未登记",
+      "cause": "代码拼写错误或未部署权限定义",
+      "advice": "核对该应用权限标识；不要自动创建并授权",
+      "retry": "修正后"
+    },
+    {
+      "code": "APP_SCOPE_MISMATCH",
+      "category": "权限",
+      "http_status": 403,
+      "default_message": "请求超出调用应用范围",
+      "cause": "试图检查或管理其他应用的数据",
+      "advice": "核对可信调用身份及应用范围",
+      "retry": "修正后"
+    },
+    {
+      "code": "RESOURCE_FORBIDDEN",
+      "category": "权限",
+      "http_status": 403,
+      "default_message": "不能操作该记录",
+      "cause": "资源不属于获准范围",
+      "advice": "由业务服务核对记录归属，不仅检查功能权限",
+      "retry": "授权后"
+    },
+    {
+      "code": "ACCESS_DENIED",
+      "category": "权限",
+      "http_status": 403,
+      "default_message": "请求未获准",
+      "cause": "精确原因不可向当前调用者公开",
+      "advice": "管理员使用请求编号查询受限审计",
+      "retry": "查明后"
+    },
+    {
+      "code": "REAUTH_REQUIRED",
+      "category": "安全策略",
+      "http_status": 403,
+      "default_message": "需要再次验证身份",
+      "cause": "认证时间太久或操作风险较高",
+      "advice": "完成指定的再次验证流程",
+      "retry": "验证后"
+    },
+    {
+      "code": "MFA_REQUIRED",
+      "category": "安全策略",
+      "http_status": 403,
+      "default_message": "需要完成两步验证",
+      "cause": "当前登录强度不足",
+      "advice": "完成允许的验证方式",
+      "retry": "验证后"
+    },
+    {
+      "code": "MFA_REBIND_REQUIRED",
+      "category": "恢复",
+      "http_status": 403,
+      "default_message": "需要重新绑定两步验证",
+      "cause": "使用了恢复代码，当前只有受限会话",
+      "advice": "完成新因素绑定；不得发放完整业务访问凭证",
+      "retry": "绑定后"
+    },
+    {
+      "code": "CHALLENGE_INVALID",
+      "category": "验证",
+      "http_status": 400,
+      "default_message": "验证请求无效或已失效",
+      "cause": "超时、用途不符或已使用，对外可合并提示",
+      "advice": "重新发起本人需要的验证流程",
+      "retry": "重新发起"
+    },
+    {
+      "code": "REFRESH_REUSE_DETECTED",
+      "category": "令牌",
+      "http_status": 401,
+      "default_message": "检测到旧刷新凭证重复使用",
+      "cause": "泄露或客户端并发刷新",
+      "advice": "撤销关联令牌组并重新登录；检查客户端并发控制",
+      "retry": "不得复用旧凭证"
+    },
+    {
+      "code": "RATE_LIMITED",
+      "category": "限流",
+      "http_status": 429,
+      "default_message": "请求过于频繁",
+      "cause": "超过用户、应用或地址限制",
+      "advice": "按 retry_after_seconds 等待，不循环高速请求",
+      "retry": "等待后"
+    },
+    {
+      "code": "SUPPORT_IDENTITY_UNVERIFIED",
+      "category": "客服恢复",
+      "http_status": 403,
+      "default_message": "尚未完成身份核验",
+      "cause": "只有电话口述资料或核验不足",
+      "advice": "采用预先批准的可靠方式；不能仅凭主管同意跳过核验",
+      "retry": "核验后"
+    },
+    {
+      "code": "SUPPORT_TARGET_PROTECTED",
+      "category": "客服恢复",
+      "http_status": 403,
+      "default_message": "客服不能恢复该账户",
+      "cause": "目标为 root 或高权限管理账户",
+      "advice": "转交指定管理或本地应急流程",
+      "retry": "不能原路重试"
+    },
+    {
+      "code": "RECOVERY_APPROVAL_REQUIRED",
+      "category": "客服恢复",
+      "http_status": 403,
+      "default_message": "还需要独立审批",
+      "cause": "受控人工恢复未批准",
+      "advice": "由具备权限且未发起该申请的人核验审批",
+      "retry": "批准后"
+    },
+    {
+      "code": "RECOVERY_SELF_APPROVAL_DENIED",
+      "category": "客服恢复",
+      "http_status": 403,
+      "default_message": "不能批准自己发起的恢复",
+      "cause": "发起人与审批人相同",
+      "advice": "改由独立获授权工作人员处理",
+      "retry": "换审批人后"
+    },
+    {
+      "code": "CONFLICT",
+      "category": "数据",
+      "http_status": 409,
+      "default_message": "数据已被其他操作修改",
+      "cause": "版本冲突或唯一值重复",
+      "advice": "重新读取再决定修改，不覆盖他人更新",
+      "retry": "确认后"
+    },
+    {
+      "code": "AUTHZ_UNAVAILABLE",
+      "category": "权限服务",
+      "http_status": 503,
+      "default_message": "暂时无法判定访问权限",
+      "cause": "权限存储或策略服务不可用",
+      "advice": "检查数据库和服务健康；业务端保持拒绝访问",
+      "retry": "退避重试"
+    },
+    {
+      "code": "DB_UNAVAILABLE",
+      "category": "数据库",
+      "http_status": 503,
+      "default_message": "数据库暂时不可用",
+      "cause": "连接、锁、磁盘或服务异常",
+      "advice": "核对连接、空间、锁及受限日志",
+      "retry": "排障后"
+    },
+    {
+      "code": "AUDIT_WRITE_FAILED",
+      "category": "审计",
+      "http_status": 503,
+      "default_message": "关键操作未能可靠记录",
+      "cause": "审计存储不可用",
+      "advice": "修复存储；关键管理变更应未提交，核实状态后再试",
+      "retry": "核实后"
+    },
+    {
+      "code": "MAIL_DELIVERY_FAILED",
+      "category": "邮件任务",
+      "http_status": 0,
+      "default_message": "邮件未成功投递",
+      "cause": "邮箱、邮件服务或网络异常",
+      "advice": "检查受限投递记录；已完成的安全变更不因此回滚",
+      "retry": "有界重试"
+    },
+    {
+      "code": "BACKUP_FAILED",
+      "category": "备份任务",
+      "http_status": 0,
+      "default_message": "备份失败",
+      "cause": "空间、读取、加密或文件写入失败",
+      "advice": "用任务编号查看安全错误详情及临时文件清理结果",
+      "retry": "排障后"
+    },
+    {
+      "code": "BACKUP_CANCEL_FORBIDDEN",
+      "category": "备份",
+      "http_status": 403,
+      "default_message": "无权取消该任务",
+      "cause": "缺少取消权限或超出任务范围",
+      "advice": "确认任务范围与申请取消者的当前权限",
+      "retry": "授权后"
+    },
+    {
+      "code": "TASK_CANCEL_CONFLICT",
+      "category": "任务",
+      "http_status": 409,
+      "default_message": "任务已结束或不能在当前阶段取消",
+      "cause": "取消与完成竞争或阶段不可中断",
+      "advice": "读取真实状态；不得把取消已请求显示为已取消",
+      "retry": "不盲目重试"
+    },
+    {
+      "code": "TASK_CANCELLED",
+      "category": "任务结果",
+      "http_status": 0,
+      "default_message": "任务已取消",
+      "cause": "人工或系统取消",
+      "advice": "查看取消执行人、来源、原因和时间；这是终态而非系统故障",
+      "retry": "按需新建"
+    },
+    {
+      "code": "TASK_TIMEOUT",
+      "category": "任务结果",
+      "http_status": 0,
+      "default_message": "任务执行超时",
+      "cause": "超过墙钟时间限制",
+      "advice": "查看执行阶段、负载和残留清理，不直接无限延长",
+      "retry": "排障后"
+    },
+    {
+      "code": "BACKUP_INVALID",
+      "category": "备份",
+      "http_status": 422,
+      "default_message": "备份文件校验未通过",
+      "cause": "文件损坏或格式不符",
+      "advice": "保留原文件，核对校验和及来源；不要强制恢复",
+      "retry": "更换文件"
+    },
+    {
+      "code": "BACKUP_DECRYPT_FAILED",
+      "category": "备份",
+      "http_status": 422,
+      "default_message": "无法解密备份",
+      "cause": "解密材料错误或文件被修改",
+      "advice": "安全核对密钥和完整性；不打印密钥",
+      "retry": "修正后"
+    },
+    {
+      "code": "BACKUP_VERSION_UNSUPPORTED",
+      "category": "备份",
+      "http_status": 422,
+      "default_message": "当前工具不支持此备份版本",
+      "cause": "版本或数据库格式不支持",
+      "advice": "使用兼容工具，不能直接修改版本号伪装兼容",
+      "retry": "升级后"
+    },
+    {
+      "code": "RESTORE_MAINTENANCE_REQUIRED",
+      "category": "恢复",
+      "http_status": 409,
+      "default_message": "恢复需要维护状态",
+      "cause": "服务仍在写数据或未取得排他锁",
+      "advice": "按手册停止写入、取得锁后重试",
+      "retry": "维护后"
+    },
+    {
+      "code": "EXPORT_PATH_UNSAFE",
+      "category": "导出",
+      "http_status": 400,
+      "default_message": "导出位置不安全",
+      "cause": "越出目标目录或存在路径穿越",
+      "advice": "选择受控目录，不关闭路径检查",
+      "retry": "修正后"
+    },
+    {
+      "code": "REPORT_GENERATION_FAILED",
+      "category": "报告任务",
+      "http_status": 0,
+      "default_message": "报告未能生成",
+      "cause": "数据读取或渲染失败",
+      "advice": "检查任务阶段和运行资源，保留错误编号",
+      "retry": "排障后"
+    },
+    {
+      "code": "REPORT_DATA_INCOMPLETE",
+      "category": "报告警告",
+      "http_status": 0,
+      "default_message": "统计数据不完整",
+      "cause": "保留期不足或采样缺失",
+      "advice": "阅读缺失时间范围，不能将缺失当零值",
+      "retry": "不是失败"
+    },
+    {
+      "code": "REPORT_ACCESS_DENIED",
+      "category": "报告",
+      "http_status": 403,
+      "default_message": "无权读取此报告",
+      "cause": "当前权限不足或已撤销",
+      "advice": "核对报告范围和当前权限",
+      "retry": "授权后"
+    },
+    {
+      "code": "CONFIG_INVALID",
+      "category": "配置",
+      "http_status": 0,
+      "default_message": "配置未通过检查",
+      "cause": "字段无效或安全规则冲突",
+      "advice": "查看配置项名称和说明，避免打印秘密值",
+      "retry": "修正后"
+    },
+    {
+      "code": "INTERNAL_ERROR",
+      "category": "内部故障",
+      "http_status": 500,
+      "default_message": "服务发生未预期错误",
+      "cause": "未分类程序异常",
+      "advice": "用请求编号查询受限日志并提交脱敏诊断",
+      "retry": "先核实状态"
+    },
+    {
+      "code": "WEBHOOK_DELIVERY_FAILED",
+      "category": "Webhook 任务",
+      "http_status": 0,
+      "default_message": "Webhook 未成功投递",
+      "cause": "端点不可达、超时、拒绝或重试耗尽",
+      "advice": "查看投递记录的状态码与尝试历史；修复端点后受控重试，不把它当作撤销失败",
+      "retry": "修复后"
+    },
+    {
+      "code": "WEBHOOK_ENDPOINT_BLOCKED",
+      "category": "应用",
+      "http_status": 403,
+      "default_message": "Webhook 地址不被允许",
+      "cause": "指向回环/内网/保留地址、非 https 或危险重定向",
+      "advice": "登记公网 https 地址；不要关闭出站地址校验",
+      "retry": "修正后"
+    }
+  ]
+}
