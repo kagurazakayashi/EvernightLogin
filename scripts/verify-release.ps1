@@ -1,19 +1,25 @@
-# verify-release.ps1 - Step 202 release package verifier.
+# verify-release.ps1 - Step 248 release package verifier.
 #
 # Verifies a local release directory produced by scripts/package-release.ps1:
 # - top-level file set (12 zips + SHA256SUMS.txt + build-matrix.txt +
 #   release-summary.json + RELEASE-NOTES.md);
 # - top-level SHA-256/manifest and build-matrix consistency;
+# - RELEASE-NOTES.md four required headings (completed/failed/unimplemented/
+#   untested in Chinese), version and source commits;
 # - every zip: inner SHA256SUMS.txt (GNU format, LF, sorted, no self entry),
-#   exact file set, forbidden-path scan, required license/metadata files;
+#   exact file set, forbidden-path scan, required license/metadata files,
+#   product docs for login packages (docs/README, guide, deployment, embedding,
+#   database, requirements, licenses; reference when produced by step 245);
 # - binary magic/arch (PE/ELF/Mach-O) and size/sha256 against build-summary v1;
 # - Windows/amd64 short smoke: login-server/loginctl/login-backup/evernightmail
 #   version commands only (no serve, no init, no port).
 #
 # Read-only, no network/git writes, temporary extraction dir always removed.
+# The forbidden-path rule must stay in sync with scripts/package-release.ps1:
+# docs/database is product documentation, acceptance/evidence are never packaged.
 # Exit codes: 0 ok; 10 release/prereq structure invalid; 20 build-summary invalid;
-# 21 zip/extract/file-set/forbidden; 22 checksum mismatch; 30 license/metadata;
-# 31 binary type/arch/smoke; 40 internal error.
+# 21 zip/extract/file-set/forbidden; 22 checksum mismatch; 30 license/metadata/
+# docs/release-notes; 31 binary type/arch/smoke; 40 internal error.
 
 [CmdletBinding()]
 param(
@@ -139,6 +145,33 @@ try {
     foreach ($required in $RequiredTop) {
         if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDir $required) -PathType Leaf)) { Fail 10 "top-level file missing: $required" }
     }
+    # Step 248 release notes: four separated sections + traceable metadata.
+    $notesPath = Join-Path $ReleaseDir "RELEASE-NOTES.md"
+    $notesText = [System.IO.File]::ReadAllText($notesPath)
+    $requiredHeadings = @(
+        ("$([char]0x5DF2)$([char]0x5B8C)$([char]0x6210)"),
+        ("$([char]0x5931)$([char]0x8D25)"),
+        ("$([char]0x672A)$([char]0x5B9E)$([char]0x73B0)"),
+        ("$([char]0x672A)$([char]0x6D4B)")
+    )
+    foreach ($heading in $requiredHeadings) {
+        $pattern = '(?m)^##\s+(?:\d+\.\s*)?' + [regex]::Escape($heading)
+        if ($notesText -notmatch $pattern) {
+            Fail 30 ("RELEASE-NOTES.md missing required section: " + $heading)
+        }
+    }
+    if ($notesText.IndexOf($ExpectedVersion, [System.StringComparison]::Ordinal) -lt 0) {
+        Fail 30 "RELEASE-NOTES.md lacks expected version: $ExpectedVersion"
+    }
+    $sourceCommits = $release.source_commits
+    foreach ($commitField in @([string]$sourceCommits.login, [string]$sourceCommits.mail,
+        [string]$sourceCommits.tool)) {
+        if ([string]::IsNullOrWhiteSpace($commitField)) { Fail 30 "release-summary lacks source commit metadata" }
+        if ($notesText.IndexOf($commitField, [System.StringComparison]::Ordinal) -lt 0) {
+            Fail 30 "RELEASE-NOTES.md lacks source commit: $commitField"
+        }
+    }
+    if ($notesText -notmatch '\b12\b') { Fail 30 "RELEASE-NOTES.md lacks 12 zip count" }
     $expectedTop = New-Object System.Collections.Generic.List[string]
     $expectedTop.AddRange([string[]]$RequiredTop)
     foreach ($zip in $zips) { $expectedTop.Add([string]$zip.name) }
@@ -198,7 +231,10 @@ try {
 
     function Test-Forbidden([string]$Relative) {
         $normalized = $Relative -replace "\\", "/"
-        return ($normalized -cmatch '(^|/)(\.ai|\.agents|AGENTS\.md|MEMORY\.md|database|secrets|scripts|tools|examples|_tools|EvernightMail|go-build-all)(/|$)|\.(db|db-shm|db-wal|log|key|pem|p12|pfx|env|ttf|otf|woff2?)$')
+        # Keep in sync with scripts/package-release.ps1. docs/database is
+        # product documentation; acceptance/evidence are source-only.
+        if ($normalized -cmatch '^docs/database(/|$)') { return $false }
+        return ($normalized -cmatch '(^|/)(\.ai|\.agents|AGENTS\.md|MEMORY\.md|database|secrets|scripts|tools|examples|_tools|EvernightMail|go-build-all|acceptance|evidence)(/|$)|\.(db|db-shm|db-wal|log|key|pem|p12|pfx|env|ttf|otf|woff2?)$')
     }
 
     New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
@@ -246,6 +282,25 @@ try {
             $path = Join-Path $packageRoot $required
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail 30 "$zipName missing $required" }
             if ((Get-Item -LiteralPath $path).Length -eq 0) { Fail 30 "$zipName has empty $required" }
+        }
+        # Step 248: login packages must carry the product documentation tree.
+        if ([string]$zip.product -eq "login") {
+            foreach ($docRel in @("docs/README.md", "docs/guide/README.md",
+                "docs/deployment/README.md", "docs/embedding/README.md")) {
+                $docPath = Join-Path $packageRoot ($docRel -replace "/", "\")
+                if (-not (Test-Path -LiteralPath $docPath -PathType Leaf)) {
+                    Fail 30 "$zipName missing product doc: $docRel"
+                }
+                if ((Get-Item -LiteralPath $docPath).Length -eq 0) {
+                    Fail 30 "$zipName has empty product doc: $docRel"
+                }
+            }
+            foreach ($docDir in @("docs/database", "docs/requirements", "docs/licenses")) {
+                $dirPath = Join-Path $packageRoot ($docDir -replace "/", "\")
+                if (-not (Test-Path -LiteralPath $dirPath -PathType Container)) {
+                    Fail 30 "$zipName missing product docs dir: $docDir"
+                }
+            }
         }
         $license = [System.IO.File]::ReadAllText((Join-Path $packageRoot "LICENSE"))
         if ($license -notmatch "Mulan PSL v2" -or $license -notmatch "KagurazakaYashi\(KagurazakaMiyabi\)") {

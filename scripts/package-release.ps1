@@ -1,19 +1,28 @@
-# package-release.ps1 - Step 202 release packaging (local artifacts only).
+# package-release.ps1 - Step 248 release packaging (local artifacts only).
 #
 # Input: a clean build produced by scripts/build-all.ps1 (step 179) with a v1
 # build-summary.json containing 24 verified product binaries.
 # Output: dist/release/evernight-<version>/ with 12 per-target zip files
 # (2 products x 6 targets), top-level SHA256SUMS.txt, build-matrix.txt,
-# release-summary.json and RELEASE-NOTES.md template.
+# release-summary.json and a four-section RELEASE-NOTES.md.
+#
+# Step 248: Login packages include an explicit allow-list of product docs under
+# docs/ (guide/deployment/embedding/database/requirements/licenses/reference;
+# acceptance/evidence are never packaged); doc links that point to source-only
+# directories are rewritten and checked. Release notes are generated from
+# docs/release-notes/round10.md (or -ReleaseNotes) and must carry the four
+# required headings (completed/failed/unimplemented/untested in Chinese) plus
+# version/commit/12-zip evidence.
 #
 # Safety: no git write, no commit/tag/push/upload, no server/port, no network,
 # no runtime database/key/log access. Only an explicit allow-list of files is
 # copied; everything else is excluded by construction and re-scanned.
-# Windows PowerShell 5.1 and PowerShell 7 compatible (ASCII messages).
+# Windows PowerShell 5.1 and PowerShell 7 compatible (ASCII messages outside
+# the product-doc / release-notes content).
 #
 # Exit codes: 0 ok; 10 prerequisites/build-summary invalid; 20 build-summary
 # verification failed; 21 zip assembly failed; 22 checksum failed; 30 license/
-# metadata missing; 31 type/arch/file-set failed; 40 internal error.
+# metadata/docs/release-notes missing; 31 type/arch/file-set/link failed; 40 internal error.
 
 [CmdletBinding()]
 param(
@@ -23,6 +32,8 @@ param(
     [string]$OutputDir = "",
     [string]$RepoRoot = "",
     [string]$MetadataRoot = "",
+    # Optional release-notes template; empty uses docs\release-notes\round10.md.
+    [string]$ReleaseNotes = "",
     [switch]$SkipBinaryRun
 )
 
@@ -118,9 +129,13 @@ try {
     if (Test-Path -LiteralPath $OutputDir) { Remove-Item -LiteralPath $OutputDir -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
-    $forbiddenPattern = '(^|/)(\.ai|\.agents|AGENTS\.md|MEMORY\.md|database|secrets|scripts|tools|examples|_tools|EvernightMail|go-build-all)(/|$)|\.(db|db-shm|db-wal|log|key|pem|p12|pfx|env|ttf|otf|woff2?)$'
+    $forbiddenPattern = '(^|/)(\.ai|\.agents|AGENTS\.md|MEMORY\.md|database|secrets|scripts|tools|examples|_tools|EvernightMail|go-build-all|acceptance|evidence)(/|$)|\.(db|db-shm|db-wal|log|key|pem|p12|pfx|env|ttf|otf|woff2?)$'
     function Test-ForbiddenPath([string]$Relative) {
         $normalized = $Relative -replace "\\", "/"
+        # Product documentation legitimately contains docs/database/**. The
+        # runtime data directory is the top-level database/; docs/database is
+        # an explicit allow-listed product-doc directory, not runtime data.
+        if ($normalized -cmatch '^docs/database(/|$)') { return $false }
         return ($normalized -cmatch $forbiddenPattern)
     }
 
@@ -182,6 +197,81 @@ try {
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destPath) | Out-Null
             Copy-Item -LiteralPath $_.FullName -Destination $destPath -Force
         }
+    }
+
+    # Product documentation allow-list. Source-only directories (examples/,
+    # docs/acceptance/, docs/evidence/) are never copied into release zips.
+    $ProductDocDirs = @("guide", "deployment", "embedding", "database", "requirements", "licenses")
+
+    function Assert-PackageDocLinks([string]$DocsRoot, [string]$PackageRoot) {
+        $packageFull = [System.IO.Path]::GetFullPath($PackageRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+        $bad = New-Object System.Collections.Generic.List[string]
+        foreach ($file in @(Get-ChildItem -LiteralPath $DocsRoot -Recurse -File -Filter *.md)) {
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            foreach ($match in [regex]::Matches($text, '\]\(([^)]+)\)')) {
+                $targetText = ([string]$match.Groups[1].Value).Trim()
+                if ($targetText.StartsWith('<') -and $targetText.Contains('>')) {
+                    $targetText = $targetText.Substring(1, $targetText.IndexOf('>') - 1).Trim()
+                } elseif ($targetText -match '\s') {
+                    $targetText = ($targetText -split '\s+')[0]
+                }
+                if ([string]::IsNullOrWhiteSpace($targetText)) { continue }
+                if ($targetText -match '^[a-zA-Z][a-zA-Z0-9+.-]*:' -or $targetText.StartsWith('#')) { continue }
+                $pathPart = ($targetText -split '#')[0]
+                if ([string]::IsNullOrWhiteSpace($pathPart)) { continue }
+                try { $decoded = [System.Uri]::UnescapeDataString($pathPart) } catch { $decoded = $pathPart }
+                $resolved = [System.IO.Path]::GetFullPath((Join-Path $file.DirectoryName $decoded))
+                if (-not $resolved.StartsWith($packageFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $bad.Add(($file.Name + " -> " + $targetText))
+                    continue
+                }
+                if (-not (Test-Path -LiteralPath $resolved)) {
+                    $bad.Add(($file.Name + " -> " + $targetText))
+                }
+            }
+        }
+        if ($bad.Count -gt 0) {
+            Fail 31 ("unresolved product document links: " + ($bad -join "; "))
+        }
+    }
+
+    function Copy-ProductDocs([string]$Destination) {
+        # 1) Documentation index and explicit product-doc directories.
+        Copy-OneAs "docs\README.md" "docs/README.md" $Destination
+        foreach ($dir in $ProductDocDirs) {
+            $relative = "docs\" + $dir
+            if (-not (Test-Path -LiteralPath (Join-Path $MetadataRoot $relative) -PathType Container)) {
+                Fail 30 "required product docs dir missing: $relative"
+            }
+            Copy-Dir $relative $Destination $false
+        }
+        # reference is produced by step 245; package it when present, but do not
+        # fabricate a missing directory or fail before that step.
+        $reference = "docs\reference"
+        if (Test-Path -LiteralPath (Join-Path $MetadataRoot $reference) -PathType Container) {
+            Copy-Dir $reference $Destination $false
+        } else {
+            Write-Host "PACKAGE: WARN docs/reference not present; interface reference section is documented as source-only in RELEASE-NOTES.md"
+        }
+
+        # 2) Strip links to source-only directories that are not part of the
+        #    release package (examples/acceptance/evidence/scripts/tools/
+        #    internal/cmd/submodule sources). Keep root README/LICENSE links
+        #    because those files are packaged at the root; docs/database links
+        #    are packaged product docs and must stay.
+        $docRoot = Join-Path $Destination "docs"
+        foreach ($file in @(Get-ChildItem -LiteralPath $docRoot -Recurse -File -Filter *.md)) {
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            $text = [regex]::Replace($text,
+                '\[([^\]]+)\]\((?:\.\./)*(?:acceptance|examples|evidence|scripts|tools|internal|cmd|EvernightMail|go-build-all|_tools)/[^)]*\)',
+                '$1')
+            [System.IO.File]::WriteAllText($file.FullName, $text,
+                (New-Object System.Text.UTF8Encoding($false)))
+        }
+
+        # 3) Fail closed if any remaining relative link escapes the package or
+        #    points at a missing packaged doc.
+        Assert-PackageDocLinks $docRoot $Destination
     }
 
     function New-InnerSums([string]$StagingDir) {
@@ -248,7 +338,7 @@ try {
                 Copy-One "LICENSE" $staging
                 Copy-One "README.md" $staging
                 Copy-OneAs "docs\licenses\THIRD_PARTY_NOTICES.md" "THIRD_PARTY_NOTICES.txt" $staging
-                Copy-Dir "docs\deployment\samples" $staging $false
+                Copy-ProductDocs $staging
                 $buildInfo = @()
                 foreach ($bin in $LoginProducts) {
                     $exe = if ($goos -eq "windows") { "$bin.exe" } else { $bin }
@@ -261,9 +351,11 @@ try {
                 Write-LfLines (Join-Path $staging "DEPENDENCIES.txt") $deps
                 Write-LfLines (Join-Path $staging "README-PACKAGE.txt") @(
                     "EvernightLogin $Version ($goos/$goarch)",
+                    "See docs/README.md for the product documentation index.",
                     "See docs/deployment/samples/ for example config and deployment files.",
                     "On Unix, add execute bits to the three files under bin/ (zip does not preserve +x).",
-                    "This package contains only product binaries, deployment samples and license documents; no database/log/key/AI files."
+                    "This package contains only product binaries, product documentation, deployment samples and license documents; no database/log/key/AI files.",
+                    "Source-repository-only directories (examples/, docs/acceptance/) and their links are intentionally not packaged."
                 )
                 New-VersionFile $staging ([string]$loginModule.commit) ([string]$mailModule.commit) ([string]$summary.tool.commit) ([string]$summary.tool.sha256) "EvernightLogin"
             } else {
@@ -363,28 +455,54 @@ try {
         zips = $sortedZips.ToArray()
     }
     Write-Utf8NoBom (Join-Path $OutputDir "release-summary.json") ($releaseSummary | ConvertTo-Json -Depth 8)
-    $notes = @(
-        "# Evernight release $Version",
-        "",
-        "- build_time_utc: $($buildTime.ToString('o'))",
-        "- login_commit: $($loginModule.commit)",
-        "- mail_commit: $($mailModule.commit)",
-        "- tool_commit: $($summary.tool.commit)",
-        "- targets: $($Targets -join ', ')",
-        "- contents: 6 EvernightLogin zips (login-server/loginctl/login-backup) + 6 EvernightMail zips;",
-        "  license/third-party notices/VERSION/BUILDINFO/DEPENDENCIES and per-package SHA256SUMS.txt included.",
-        "",
-        "## Known limitations",
-        "- Windows/amd64 binaries are the only platform run-tested in this release process; other targets are compile/type checked.",
-        "- Zip archives do not preserve Unix execute bits; chmod +x bin/* after extraction on Linux/macOS.",
-        "- PDF report fonts are external and not bundled.",
-        "",
-        "## Verification",
-        "- Artifacts were produced by scripts/build-all.ps1 (24/24 verified) and packaged by scripts/package-release.ps1;",
-        "  run scripts/verify-release.ps1 against this directory before publishing.",
-        "- Unsupported/dirty builds are not packaged; see build-summary warnings."
-    )
-    Write-LfLines (Join-Path $OutputDir "RELEASE-NOTES.md") $notes
+    function Get-ReleaseNotes([string]$Path, [object[]]$Zips, [string]$VersionValue,
+        [datetime]$BuildTimeValue, [string]$LoginCommit, [string]$MailCommit,
+        [string]$ToolCommit, [string]$ToolSha) {
+        if ([string]::IsNullOrWhiteSpace($Path)) { $Path = "docs\release-notes\round10.md" }
+        if (-not [System.IO.Path]::IsPathRooted($Path)) {
+            $Path = Join-Path $MetadataRoot $Path
+        }
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            Fail 30 "release notes template missing: $Path"
+        }
+        $text = [System.IO.File]::ReadAllText($Path)
+        $table = @("| zip | size | sha256 |", "|---|---:|---|")
+        foreach ($zip in @($Zips)) {
+            $table += ("| " + [string]$zip.name + " | " + [string]$zip.size + " | " + [string]$zip.sha256 + " |")
+        }
+        $text = $text.Replace('{{VERSION}}', $VersionValue).
+            Replace('{{BUILD_TIME}}', $BuildTimeValue.ToString("o")).
+            Replace('{{LOGIN_COMMIT}}', $LoginCommit).
+            Replace('{{MAIL_COMMIT}}', $MailCommit).
+            Replace('{{TOOL_COMMIT}}', $ToolCommit).
+            Replace('{{TOOL_SHA256}}', $ToolSha).
+            Replace('{{ZIP_TABLE}}', ($table -join "`n"))
+        if ($text -match '\{\{[A-Z0-9_]+\}\}') {
+            Fail 30 "release notes template contains unresolved placeholders"
+        }
+        if ($text -match 'TODO-248') {
+            Fail 30 "release notes template still contains TODO-248 markers; fill real results first"
+        }
+        $requiredHeadings = @(
+            ("$([char]0x5DF2)$([char]0x5B8C)$([char]0x6210)"),
+            ("$([char]0x5931)$([char]0x8D25)"),
+            ("$([char]0x672A)$([char]0x5B9E)$([char]0x73B0)"),
+            ("$([char]0x672A)$([char]0x6D4B)")
+        )
+        foreach ($heading in $requiredHeadings) {
+            $pattern = '(?m)^##\s+(?:\d+\.\s*)?' + [regex]::Escape($heading)
+            if ($text -notmatch $pattern) {
+                Fail 30 ("release notes missing required section: " + $heading)
+            }
+        }
+        return $text
+    }
+
+    $notesText = Get-ReleaseNotes -Path $ReleaseNotes -Zips $sortedZips.ToArray() `
+        -VersionValue $Version -BuildTimeValue $buildTime `
+        -LoginCommit ([string]$loginModule.commit) -MailCommit ([string]$mailModule.commit) `
+        -ToolCommit ([string]$summary.tool.commit) -ToolSha ([string]$summary.tool.sha256)
+    Write-LfLines (Join-Path $OutputDir "RELEASE-NOTES.md") @($notesText -split "`r?`n")
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host ("PACKAGE: PASS version={0} zips={1} output={2}" -f $Version, $zipEntries.Count, $OutputDir)
     exit 0
