@@ -20,6 +20,7 @@
 | [protocol-selftest.md](protocol-selftest.md) | 自包含协议与安全集成测试工具：OAuth/OIDC、会话权限、CSRF/来源、防枚举、软件 TOTP/WebAuthn 场景与 CI 用法（243） |
 | [e2e-smoke.md](e2e-smoke.md) | 发布前端到端冒烟测试器说明（真实进程 + 真实 SQLite；依赖源码树脚本与 `tools/`） |
 | [mail-submodule.md](mail-submodule.md) | EvernightMail 子模块前置、构建检查、提交顺序、隔离副本复现与生产包边界 |
+| [mail-source-closure.md](mail-source-closure.md) | 固定 Mail 版本 `aa7ccf5` 的交付归档(bundle)、源码闭包检查脚本、失败诊断码与远端不可得时的取证（步骤 249） |
 | [managed-api.md](managed-api.md) | 业务应用托管管理 API `/api/managed/v1` 的认证、路由、幂等、错误与安全边界（默认关闭） |
 | [app-support-api.md](app-support-api.md) | 应用受限客服 API `/api/app/v1/support`：OAuth 用户委托 Token、应用范围工单、人工升级与禁止自批（默认关闭） |
 | [samples/](samples/) | 可直接对照修改的样例（YAML、Nginx、Caddy、Dockerfile、systemd、WinSW、launchd） |

@@ -56,6 +56,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mail-preflight.ps1 -
 
 ## 4. 可复现版本与用户提交顺序
 
+> 当前固定版本 `aa7ccf5` 在远端不可得（Mail 远端 `main` 仍为 `b9891ac`），交付归档与闭包
+> 检查方法见 [mail-source-closure.md](mail-source-closure.md)（步骤 249，实测）。
+
 父项目要固定 Mail 版本，必须由维护者按以下顺序完成（**不能把未提交的 Mail 目录称为已固定的可复现版本**）：
 
 1. 在 `EvernightMail/` 内审查并提交 Mail 成果，推送到其远端；记录 Mail 提交号。
@@ -87,6 +90,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Mail -Req
 
 若 Mail 尚未提交/gitlink 未提交，上述命令应明确失败（缺少子模块或 pin 不成立），不得据此宣称可复现。当前步骤 137 已提供脚本适配；最终回归在 Mail 提交与步骤 135/136 完成后执行。
 
+远端取不到固定对象时（例如当前 `aa7ccf5`），用交付归档在仓库之外重建闭包：
+
+```powershell
+# 只读闭包检查：全新临时目录 + dist/release/EvernightMail-aa7ccf5.bundle
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\mail-source-closure.ps1 -Build
+# 场景自检（含失败诊断分类）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\mail-source-closure-selftest.ps1 -IncludeNetwork -Proxy http://127.0.0.1:23333
+```
+
+归档 `dist/release/EvernightMail-aa7ccf5.bundle` 被 `.gitignore` 忽略、不随 Git 传递，交付时
+需连同 SHA-256 一起放到发布渠道；详见 [mail-source-closure.md](mail-source-closure.md)。
+
 ## 6. 发布包与测试器边界
 
 - `scripts/build-release.ps1` 只构建 `cmd/login-server`、`cmd/loginctl`、`cmd/login-backup`，**不包含** `EvernightMail`、测试夹具或测试邮件工具。
@@ -101,6 +116,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Mail -Req
 |---|---|
 | `check.ps1 -Mail` 提示子模块未初始化 | 维护者执行 `git submodule update --init --recursive EvernightMail`；确认父仓库已包含 gitlink |
 | Mail 目录存在但 `HEAD` 不存在 | Mail 尚未提交；先完成 Mail 提交/推送，再更新父 gitlink |
+| 新克隆 `submodule update --init` 取不到固定提交 | 固定提交未推到 Mail 远端（`upload-pack: not our ref`）；用交付归档或请维护者推送，见 [mail-source-closure.md](mail-source-closure.md) |
+| 交付归档缺失/损坏/旧版本 | 重跑 `scripts\mail-source-closure.ps1` 查看 `BUNDLE-NOT-FOUND`/`BUNDLE-CORRUPT`/`BUNDLE-PIN-MISSING` 诊断并重新生成 bundle |
 | `-RequirePinned` 失败 | 父仓库无 gitlink、Mail 未提交或工作树不干净；按 §4 顺序提交后再验证 |
 | Mail 构建失败 | 在 `EvernightMail/` 单独运行 `go build ./cmd/evernightmail`；检查 Go 1.27+；不得通过修改父项目去适配 Mail |
 | 夹具找不到二进制 | 设置 `EVERNIGHTMAIL_BIN` 指向可信构建，或允许夹具在临时目录外部构建 |
