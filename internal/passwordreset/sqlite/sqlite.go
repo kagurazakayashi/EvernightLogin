@@ -1,8 +1,9 @@
 // Package sqlite 实现 internal/passwordreset.Store 的 SQLite 生产仓储。
 //
 // 表结构由 migrations/0025_password_reset.sql 创建，0051 追加找回入口的安全代际与
-// 已验证邮箱身份绑定两列；本包不执行迁移、不拥有数据库连接、不保存密码、密码哈希
-// 或找回 token 明文。状态迁移使用条件更新，凭证原子消费由 internal/credential 保证。
+// 已验证邮箱身份绑定两列，0053 再追加已验证邮箱身份代际（A→B→A 往返不复活的单调
+// 绑定）；本包不执行迁移、不拥有数据库连接、不保存密码、密码哈希或找回 token 明文。
+// 状态迁移使用条件更新，凭证原子消费由 internal/credential 保证。
 package sqlite
 
 import (
@@ -19,22 +20,25 @@ import (
 )
 
 const findUserSQL = `SELECT u.id,u.username,u.status,u.is_root,e.email,
-EXISTS(SELECT 1 FROM password_credentials p WHERE p.user_id=u.id),u.security_version,e.email_normalized
+EXISTS(SELECT 1 FROM password_credentials p WHERE p.user_id=u.id),u.security_version,e.email_normalized,
+u.email_identity_version
 FROM user_emails e JOIN users u ON u.id=e.user_id
 WHERE e.email_normalized=? AND e.verified_at_ms IS NOT NULL
 LIMIT 1`
 
 const insertRequestSQL = `INSERT INTO password_reset_requests(
 id,user_id,masked_email,credential_id,token_sha256,state,created_at_ms,expires_at_ms,consumed_at_ms,
-security_version,bound_email_normalized
-) VALUES(?,?,?,?,?,'pending',?,?,NULL,?,?)`
+security_version,bound_email_normalized,bound_email_identity_version
+) VALUES(?,?,?,?,?,'pending',?,?,NULL,?,?,?)`
 
 const selectRequestSQL = `SELECT id,user_id,masked_email,credential_id,token_sha256,state,
-created_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),security_version,bound_email_normalized
+created_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),security_version,bound_email_normalized,
+bound_email_identity_version
 FROM password_reset_requests WHERE id=?`
 
 const listPendingSQL = `SELECT id,user_id,masked_email,credential_id,token_sha256,state,
-created_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),security_version,bound_email_normalized
+created_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),security_version,bound_email_normalized,
+bound_email_identity_version
 FROM password_reset_requests WHERE user_id=? AND state='pending' ORDER BY created_at_ms`
 
 const cancelPendingSQL = `UPDATE password_reset_requests SET state='cancelled'
@@ -44,7 +48,8 @@ const verifiedEmailSQL = `SELECT email FROM user_emails
 WHERE user_id=? AND verified_at_ms IS NOT NULL ORDER BY verified_at_ms DESC LIMIT 1`
 
 const resetTargetSQL = `SELECT u.id,u.username,u.status,u.is_root,e.email,
-EXISTS(SELECT 1 FROM password_credentials p WHERE p.user_id=u.id),u.security_version,e.email_normalized
+EXISTS(SELECT 1 FROM password_credentials p WHERE p.user_id=u.id),u.security_version,e.email_normalized,
+u.email_identity_version
 FROM user_emails e JOIN users u ON u.id=e.user_id
 WHERE e.user_id=? AND e.verified_at_ms IS NOT NULL
 ORDER BY e.verified_at_ms DESC LIMIT 1`
@@ -97,7 +102,8 @@ func (s *Store) CreateRequestTx(ctx context.Context, tx audit.Tx, request passwo
 		request.MaskedEmail, request.CredentialID, request.TokenSHA256,
 		request.CreatedAt.UTC().UnixMilli(),
 		request.ExpiresAt.UTC().UnixMilli(),
-		request.SecurityVersion, nullableString(request.BoundEmailNormalized)); err != nil {
+		request.SecurityVersion, nullableString(request.BoundEmailNormalized),
+		request.BoundEmailIdentityVersion); err != nil {
 		return fmt.Errorf("%w: %w", passwordreset.ErrStoreUnavailable, err)
 	}
 	return nil
@@ -254,14 +260,14 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// scanCandidate 扫描账户可找回快照（含安全版本与最近已验证邮箱）。
+// scanCandidate 扫描账户可找回快照（含安全版本、最近已验证邮箱与邮箱身份代际）。
 func scanCandidate(scanner rowScanner) (passwordreset.Candidate, error) {
 	var candidate passwordreset.Candidate
 	var status string
 	var isRoot, hasPassword int
 	if err := scanner.Scan(&candidate.UserID, &candidate.Username, &status, &isRoot,
 		&candidate.Email, &hasPassword, &candidate.SecurityVersion,
-		&candidate.EmailNormalized); err != nil {
+		&candidate.EmailNormalized, &candidate.EmailIdentityVersion); err != nil {
 		return passwordreset.Candidate{}, err
 	}
 	candidate.HasPassword = hasPassword == 1
@@ -271,15 +277,18 @@ func scanCandidate(scanner rowScanner) (passwordreset.Candidate, error) {
 	return candidate, nil
 }
 
-// scanResetRequest 扫描一条找回请求（含安全代际/邮箱绑定；未绑定旧行 Bound=false）。
+// scanResetRequest 扫描一条找回请求（含安全代际/邮箱文本/邮箱身份代际绑定；未绑定
+// 旧行 Bound=false）。
 func scanResetRequest(scanner rowScanner) (passwordreset.ResetRequest, error) {
 	var request passwordreset.ResetRequest
 	var createdAt, expiresAt, consumedAt int64
 	var securityVersion sql.NullInt64
 	var boundEmail sql.NullString
+	var boundEmailIdentityVersion sql.NullInt64
 	if err := scanner.Scan(&request.ID, &request.UserID, &request.MaskedEmail,
 		&request.CredentialID, &request.TokenSHA256, &request.State, &createdAt,
-		&expiresAt, &consumedAt, &securityVersion, &boundEmail); err != nil {
+		&expiresAt, &consumedAt, &securityVersion, &boundEmail,
+		&boundEmailIdentityVersion); err != nil {
 		return passwordreset.ResetRequest{}, err
 	}
 	request.CreatedAt = time.UnixMilli(createdAt).UTC()
@@ -289,8 +298,11 @@ func scanResetRequest(scanner rowScanner) (passwordreset.ResetRequest, error) {
 	}
 	request.SecurityVersion = securityVersion.Int64
 	request.BoundEmailNormalized = boundEmail.String
+	request.BoundEmailIdentityVersion = boundEmailIdentityVersion.Int64
+	// 完整绑定要求三列都存在：0053 之前（含 0051 补丁后但在 0053 前）签发的行
+	// 没有邮箱身份代际，按未绑定保守失效；不回填、不尝试从当前状态反推。
 	request.Bound = securityVersion.Valid && securityVersion.Int64 > 0 &&
-		boundEmail.Valid && boundEmail.String != ""
+		boundEmail.Valid && boundEmail.String != "" && boundEmailIdentityVersion.Valid
 	return request, nil
 }
 

@@ -79,9 +79,9 @@ func (s *Service) ChangePassword(ctx context.Context, caller Caller, request Cha
 // 差异（发送邮件仍是命中路径独有，残余时序差与传输层限流待 HTTP 接线）。
 //
 // 步骤 206：只允许账户“当前最近已验证邮箱”签发，并在创建请求的审计事务内重新读取
-// 目标，把当次安全版本与已验证邮箱写入绑定；提交后、发送前再复核一次。预读后发生
-// 邮箱切换/禁用等变化时安全失败（统一响应、取消已签发凭证、不发送邮件），绝不向已
-// 失去资格的渠道签发可用入口。
+// 目标，把当次安全版本、已验证邮箱文本与已验证邮箱身份代际（步骤 250）写入绑定；
+// 提交后、发送前再复核一次。预读后发生邮箱切换/禁用等变化时安全失败（统一响应、
+// 取消已签发凭证、不发送邮件），绝不向已失去资格的渠道签发可用入口。
 func (s *Service) BeginReset(ctx context.Context, request BeginResetRequest) (BeginResult, error) {
 	ctx = normalizeContext(ctx)
 	normalized := strings.ToLower(strings.TrimSpace(request.Identifier))
@@ -234,8 +234,9 @@ var (
 )
 
 // createBoundResetEntry 在签发事务内完成“复核目标与绑定 → 作废旧 pending 及凭证 →
-// 写入带安全代际/邮箱身份绑定的新请求”。它返回事务内读取的绑定快照（收件人/版本），
-// 使收件人与绑定值来自同一一致性边界；任何失败由调用方回滚并取消已签发凭证。
+// 写入带安全代际/已验证邮箱文本/已验证邮箱身份代际的新请求”。它返回事务内读取的绑定
+// 快照（收件人/版本/代际），使收件人与绑定值来自同一一致性边界；任何失败由调用方回滚
+// 并取消已签发凭证。
 func (s *Service) createBoundResetEntry(txCtx context.Context, tx audit.Tx, userID,
 	expectedEmailNormalized string, template ResetRequest, now time.Time) (Candidate, error) {
 	target, found, err := s.opts.Store.GetResetTargetTx(txCtx, tx, userID)
@@ -275,6 +276,7 @@ func (s *Service) createBoundResetEntry(txCtx context.Context, tx audit.Tx, user
 	record.ExpiresAt = now.Add(s.opts.TokenTTL)
 	record.SecurityVersion = target.SecurityVersion
 	record.BoundEmailNormalized = target.EmailNormalized
+	record.BoundEmailIdentityVersion = target.EmailIdentityVersion
 	record.Bound = true
 	if err := s.opts.Store.CreateRequestTx(txCtx, tx, record); err != nil {
 		return Candidate{}, err
@@ -282,7 +284,8 @@ func (s *Service) createBoundResetEntry(txCtx context.Context, tx audit.Tx, user
 	return target, nil
 }
 
-// bindingStillCurrent 在签发提交后、发送前复核绑定仍有效（邮箱/安全版本未变化）。
+// bindingStillCurrent 在签发提交后、发送前复核绑定仍有效（安全版本、已验证邮箱文本
+// 与邮箱身份代际均未变化；步骤 250 起代际也会在 A→B→A 往返后失效）。
 // 存储故障按“不发送”处理（默认拒绝）；即使极端调度下已经发出，旧链接也会在完成时
 // 因绑定不符被拒绝，不产生可用入口。
 func (s *Service) bindingStillCurrent(ctx context.Context, bound Candidate) bool {
@@ -294,7 +297,8 @@ func (s *Service) bindingStillCurrent(ctx context.Context, bound Candidate) bool
 		return false
 	}
 	return latest.SecurityVersion == bound.SecurityVersion &&
-		latest.EmailNormalized == bound.EmailNormalized
+		latest.EmailNormalized == bound.EmailNormalized &&
+		latest.EmailIdentityVersion == bound.EmailIdentityVersion
 }
 
 // cancelIssuedCredential 取消已签发但未交付/未持久化的凭证（事务回滚或渠道变化时
@@ -310,15 +314,17 @@ func (s *Service) cancelIssuedCredential(ctx context.Context, credentialID, user
 	}
 }
 
-// verifyRequestBinding 核对签发时的安全代际与已验证邮箱身份是否仍是账户当前值。
-// 未绑定（迁移前旧行）或任一不一致一律返回 ErrTokenInvalid：这是确定性失效——旧链接
-// 在新安全代际/新邮箱身份下永不可用，不是可重试的并发冲突。
+// verifyRequestBinding 核对签发时的安全代际、已验证邮箱文本与已验证邮箱身份代际是否
+// 仍是账户当前值。未绑定（迁移前旧行，或 0051 时代缺少身份代际的行）或任一不一致一律
+// 返回 ErrTokenInvalid：这是确定性失效——旧链接在新安全代际/新邮箱身份下永不可用，
+// 不是可重试的并发冲突。邮箱 A→B→A 往返时文本复原但代际已前进，因此不会复活旧授权。
 func verifyRequestBinding(target Candidate, request ResetRequest) error {
 	if !request.Bound {
 		return ErrTokenInvalid
 	}
 	if target.SecurityVersion != request.SecurityVersion ||
-		target.EmailNormalized != request.BoundEmailNormalized {
+		target.EmailNormalized != request.BoundEmailNormalized ||
+		target.EmailIdentityVersion != request.BoundEmailIdentityVersion {
 		return ErrTokenInvalid
 	}
 	return nil
@@ -370,8 +376,10 @@ func (s *Service) checkRecoverableRequestTx(ctx context.Context, tx audit.Tx,
 //   - 凭证维度：复用 internal/credential 的非消费校验（Peek），覆盖用途/目标绑定、
 //     凭证已消费、已撤销与凭证自身过期；
 //   - 账户维度：token 发出后账户仍必须处于可找回状态（存在、启用、非 root、有密码）；
-//   - 绑定维度：签发时的安全代际（users.security_version）与最近已验证邮箱身份必须
-//     仍是账户当前值，否则旧链接确定性失效（改密/MFA 变更/禁用/邮箱切换后不再可用）。
+//   - 绑定维度：签发时的安全代际（users.security_version）、最近已验证邮箱文本与
+//     已验证邮箱身份代际（users.email_identity_version）必须仍是账户当前值，否则旧
+//     链接确定性失效（改密/MFA 变更/禁用/邮箱切换后不再可用；A→B→A 往返换绑后
+//     文本虽复原、代际已前进，旧链接同样永久失效）。
 //
 // 任何一项不满足或底层存储故障都按“默认拒绝”处理。本方法绝不把预检查结果当作
 // CompleteReset 的最终授权：最终提交会重新验证并原子消费同一凭证。无效 token

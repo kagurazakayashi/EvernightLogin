@@ -144,7 +144,7 @@ WHERE purpose=? AND consumed_at_ms IS NULL AND revoked_at_ms IS NULL AND expires
 }
 
 // TestResetRequestBindsSecurityGenerationAndEmail 验证公开找回与客服通道签发的请求
-// 都写入当前安全版本与最近已验证邮箱身份。
+// 都写入当前安全版本、最近已验证邮箱身份与已验证邮箱身份代际（步骤 250）。
 func TestResetRequestBindsSecurityGenerationAndEmail(t *testing.T) {
 	env := newRealAuthnTestEnv(t, nil, nil)
 	env.now = time.Now().UTC()
@@ -158,10 +158,12 @@ func TestResetRequestBindsSecurityGenerationAndEmail(t *testing.T) {
 		t.Fatalf("读取目标: found=%v err=%v", targetFound, err)
 	}
 	if !request.Bound || request.SecurityVersion != target.SecurityVersion ||
-		request.BoundEmailNormalized != target.EmailNormalized {
-		t.Fatalf("签发绑定不正确: bound=%v version=%d email=%q（期望 %d/%q）",
+		request.BoundEmailNormalized != target.EmailNormalized ||
+		request.BoundEmailIdentityVersion != target.EmailIdentityVersion {
+		t.Fatalf("签发绑定不正确: bound=%v version=%d email=%q identity=%d（期望 %d/%q/%d）",
 			request.Bound, request.SecurityVersion, request.BoundEmailNormalized,
-			target.SecurityVersion, target.EmailNormalized)
+			request.BoundEmailIdentityVersion, target.SecurityVersion,
+			target.EmailNormalized, target.EmailIdentityVersion)
 	}
 	// 客服通道签发同样绑定。
 	if _, err := env.service.SendResetForSupport(env.ctx, passwordreset.SupportResetRequest{
@@ -173,7 +175,8 @@ func TestResetRequestBindsSecurityGenerationAndEmail(t *testing.T) {
 		t.Fatalf("客服通道 pending 数 = %d err=%v", len(pending), err)
 	}
 	if !pending[0].Bound || pending[0].SecurityVersion != target.SecurityVersion ||
-		pending[0].BoundEmailNormalized != target.EmailNormalized {
+		pending[0].BoundEmailNormalized != target.EmailNormalized ||
+		pending[0].BoundEmailIdentityVersion != target.EmailIdentityVersion {
 		t.Fatalf("客服通道绑定不正确: %+v", pending[0])
 	}
 }

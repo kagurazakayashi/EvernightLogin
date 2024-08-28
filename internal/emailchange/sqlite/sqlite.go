@@ -239,6 +239,21 @@ email_normalized,user_id,email,verified_at_ms,created_at_ms,updated_at_ms
 	if rows == 0 {
 		return false, emailchange.ErrEmailInUse
 	}
+	// 步骤 250：已验证邮箱身份在本事务内发生了真实变化（换绑或首次添加），同一事务
+	// 递增 users.email_identity_version（单调、只增不减）。密码找回入口签发时绑定该
+	// 代际并在完成/预检查的提交边界核对，因此邮箱 A→B→A 往返后即使文本复原、安全版本
+	// 未变，旧链接也因代际前进而永久失效，不依赖异步清理。递增失败整体回滚，绝不留下
+	// “邮箱已换而代际未变”的可复活窗口。
+	identityUpdate, err := tx.ExecContext(ctx, `UPDATE users
+SET email_identity_version=email_identity_version+1 WHERE id=?`, record.UserID)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", emailchange.ErrStoreUnavailable, err)
+	}
+	if affected, err := identityUpdate.RowsAffected(); err != nil {
+		return false, fmt.Errorf("%w: %w", emailchange.ErrStoreUnavailable, err)
+	} else if affected != 1 {
+		return false, emailchange.ErrRequestNotFound
+	}
 	updateResult, err := tx.ExecContext(ctx, `UPDATE email_change_requests
 SET status='completed',completed_at_ms=? WHERE id=? AND status='pending'`, now, record.ID)
 	if err != nil {

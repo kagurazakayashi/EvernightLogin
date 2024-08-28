@@ -196,12 +196,13 @@ func insertPendingReset(t *testing.T, runtime *Runtime, userID string) (resetID,
 		t.Fatalf("生成找回请求 ID: %v", err)
 	}
 	resetID = "prq_" + hex.EncodeToString(randomBytes)
-	// 步骤 206：找回请求带安全代际与最近已验证邮箱身份绑定；测试夹具按当前真实状态
-	// 写入两列，避免把“未绑定旧行”误当成生产签发的有效入口。
-	var securityVersion int64
+	// 步骤 206/250：找回请求带安全代际、最近已验证邮箱身份与已验证邮箱身份代际绑定；
+	// 测试夹具按当前真实状态写入三列，避免把“未绑定旧行”误当成生产签发的有效入口。
+	var securityVersion, emailIdentityVersion int64
 	if err := runtime.base.Store.DB().QueryRowContext(ctx,
-		`SELECT security_version FROM users WHERE id=?`, userID).Scan(&securityVersion); err != nil {
-		t.Fatalf("读取账户安全版本: %v", err)
+		`SELECT security_version,email_identity_version FROM users WHERE id=?`, userID).
+		Scan(&securityVersion, &emailIdentityVersion); err != nil {
+		t.Fatalf("读取账户安全代际: %v", err)
 	}
 	var boundEmailNormalized string
 	if err := runtime.base.Store.DB().QueryRowContext(ctx,
@@ -212,11 +213,11 @@ ORDER BY verified_at_ms DESC LIMIT 1`, userID).Scan(&boundEmailNormalized); err 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	if _, err := runtime.base.Store.DB().ExecContext(ctx, `INSERT INTO password_reset_requests(
 id,user_id,masked_email,credential_id,token_sha256,state,created_at_ms,expires_at_ms,consumed_at_ms,
-security_version,bound_email_normalized
-) VALUES(?,?,?,?,?,'pending',?,?,NULL,?,?)`,
+security_version,bound_email_normalized,bound_email_identity_version
+) VALUES(?,?,?,?,?,'pending',?,?,NULL,?,?,?)`,
 		resetID, userID, "r***@example.test", issued.ID, digest[:],
 		now.UnixMilli(), now.Add(15*time.Minute).UnixMilli(),
-		securityVersion, boundEmailNormalized); err != nil {
+		securityVersion, boundEmailNormalized, emailIdentityVersion); err != nil {
 		t.Fatalf("写入找回请求: %v", err)
 	}
 	return resetID, issued.ID, resetID + "." + secret

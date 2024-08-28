@@ -524,6 +524,22 @@ func (s *Store) AcceptInvitationTx(ctx context.Context, tx audit.Tx, params onbo
 			user.UserID, user.Email, verified.UTC().UnixMilli(), now, now); err != nil {
 			return fmt.Errorf("%w: %w", onboarding.ErrInvitationConflict, err)
 		}
+		// 步骤 250：新账户的已验证邮箱身份在本事务内建立，同一事务递增
+		// users.email_identity_version（单调、只增不减）。密码找回入口签发时绑定该
+		// 代际并在完成/预检查的提交边界核对，因此身份建立前可能残留的旧绑定（迁移前
+		// 旧行、恢复/回滚数据）不会因邮箱文本相同而复活；递增失败整体回滚。
+		identityUpdate, err := tx.ExecContext(ctx, `UPDATE users
+SET email_identity_version=email_identity_version+1 WHERE id=?`, user.UserID)
+		if err != nil {
+			return fmt.Errorf("%w: %w", onboarding.ErrStoreUnavailable, err)
+		}
+		identityAffected, err := identityUpdate.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("%w: %w", onboarding.ErrStoreUnavailable, err)
+		}
+		if identityAffected != 1 {
+			return fmt.Errorf("%w: 邮箱身份代际递增影响行数异常", onboarding.ErrStoreUnavailable)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, insertAcceptanceSQL,
 		params.InvitationID, params.UserID, now, nullableString(params.RequestID)); err != nil {

@@ -275,6 +275,22 @@ func (s *Store) CompleteEmailVerification(ctx context.Context, tx audit.Tx, para
 	if affected != 1 {
 		return false, fmt.Errorf("%w: 邮箱验证影响行数异常", registration.ErrStoreUnavailable)
 	}
+	// 步骤 250：该账户“已验证邮箱身份”在本事务内首次建立，同一事务递增
+	// users.email_identity_version（单调、只增不减）。密码找回入口绑定该代际并在
+	// 完成/预检查的提交边界核对，因此任何在身份建立前可能残留的旧绑定（迁移前旧行、
+	// 恢复/回滚数据）都会因代际不符而永久失效；递增失败整体回滚。
+	identityUpdate, err := tx.ExecContext(ctx, `UPDATE users
+SET email_identity_version=email_identity_version+1 WHERE id=?`, params.UserID)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", registration.ErrStoreUnavailable, err)
+	}
+	identityAffected, err := identityUpdate.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", registration.ErrStoreUnavailable, err)
+	}
+	if identityAffected != 1 {
+		return false, fmt.Errorf("%w: 邮箱身份代际递增影响行数异常", registration.ErrStoreUnavailable)
+	}
 	if _, err := tx.ExecContext(ctx, deleteTicketSQL, params.UserID); err != nil {
 		return false, fmt.Errorf("%w: %w", registration.ErrStoreUnavailable, err)
 	}

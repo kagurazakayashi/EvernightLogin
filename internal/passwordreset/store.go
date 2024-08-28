@@ -21,6 +21,12 @@ type Candidate struct {
 	// SecurityVersion 是账户当前安全版本（统一安全代际）；密码/MFA/账户状态等安全
 	// 变更在各自事务内原子递增，旧找回入口据此失效。
 	SecurityVersion int64
+	// EmailIdentityVersion 是账户当前已验证邮箱身份代际（users.email_identity_version，
+	// 0053 迁移引入）。它在每次真实改变已验证邮箱身份时于同一审计事务内单调递增：
+	// 本人换绑/首次添加、注册首次验证、邀请新用户预验证邮箱等。与 EmailNormalized
+	// 不同，代际不会因邮箱文本 A→B→A 往返复原而回退，因此签发时绑定该代际可让旧
+	// 找回入口永久失效，不因“当前邮箱文本又等于签发值”而复活。
+	EmailIdentityVersion int64
 }
 
 // ResetRequest 是一次找回请求的持久化状态；不保存 token 明文。
@@ -41,8 +47,14 @@ type ResetRequest struct {
 	// BoundEmailNormalized 是签发时账户的最近已验证邮箱（规范化）；完成/预检查必须
 	// 与账户当前最近已验证邮箱一致，否则说明验证邮箱已切换。
 	BoundEmailNormalized string
-	// Bound 表示该请求是否带有安全代际与邮箱身份绑定。迁移前旧行（两列为 NULL）为
-	// false，一律按失效处理（保守拒绝，不做回填）。
+	// BoundEmailIdentityVersion 是签发时账户的已验证邮箱身份代际（可选，0053 引入）。
+	// 完成/预检查必须与账户当前代际一致：邮箱 A→B→A 往返后文本复原但代际已前进，
+	// 旧入口据此永久失效。0053 之前已绑定（0051）但无代际的旧行为 NULL，按未绑定
+	// 保守失效（不回填）。
+	BoundEmailIdentityVersion int64
+	// Bound 表示该请求是否带有完整绑定（安全代际 + 已验证邮箱文本 + 已验证邮箱身份
+	// 代际，缺一不可）。迁移前旧行与 0051～0052 期间未写代际的旧行为 false，一律按
+	// 失效处理（保守拒绝，不做回填）。
 	Bound bool
 }
 
