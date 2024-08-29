@@ -363,7 +363,7 @@ func hasRootSegment(key string) bool {
 // 目录；目录版本升级必须同时更新 Version 与内容，并通过 Validate 校验。
 func catalogV1() *Catalog {
 	return &Catalog{
-		Version:           "1.0.0",
+		Version:           "1.1.0",
 		Permissions:       catalogPermissionsV1(),
 		Roles:             catalogRolesV1(),
 		Groups:            catalogGroupsV1(),
@@ -400,6 +400,21 @@ func catalogV1() *Catalog {
 // authorization.check 已标记 Implemented=true：扩展联合判定端点 POST /oauth/token/authorize
 // 在登记 protocol.resource_services 时由生产装配挂载（internal/serverapp/resource_authz.go），
 // 权限键是能力标记、不授予预设角色；端点仍以资源服务 client 凭证 + 令牌当前权限联合判定。
+//
+// 本轮新增的两项直接管理权限（users.username.change.other 直接修改他人用户名、
+// users.password.reset.other 直接重置他人密码）在此只登记目录与预设说明：业务执行入口
+// 由后续步骤 256/257 实现，入口落地前 Implemented 必须保持 false，能力表与能力矩阵
+// 不得提前置为已实现；两键语义互相独立，也不能借 users.update 隐式获得。新安装的
+// system_admin 预设包含两项（客服与用户管理员不含，客服需 root 逐项授予）；既有角色
+// 升级时只提示“待恢复的默认权限”，不静默追加，避免无提示提权。
+//
+// 三者命名对应关系（有意遵循既有规范，不是同一概念两种拼写）：
+//   - 权限键（本目录、角色组合、授权判定使用）：users.username.change.other /
+//     users.password.reset.other。
+//   - 敏感操作 ID（internal/policy 目录，策略与再次验证绑定使用）：沿用该目录的
+//     单数业务域风格 user.username.change.other / user.password.reset.other；先行
+//     键 support.case.create ↔ 权限键 support.cases.create 已是同样对应关系。
+//   - 业务入口在后续步骤按权限键做授权判定、按敏感操作 ID 取再次验证策略。
 func catalogPermissionsV1() []PermissionDefinition {
 	return []PermissionDefinition{
 		// 本人权限：所有正常用户的基础角色。
@@ -440,8 +455,8 @@ func catalogPermissionsV1() []PermissionDefinition {
 			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin"},
 		},
 		{
-			Key: "users.update", Name: "修改普通用户", Summary: "修改普通用户的显示资料。",
-			Scope: "仅获准管理的普通用户范围。", Limits: "不能修改密码、邮箱验证状态、安全版本或管理资格。",
+			Key: "users.update", Name: "修改普通用户", Summary: "修改普通用户的显示资料；用户名与密码各有独立权限和专门操作，不能随资料更新一起提交。",
+			Scope: "仅获准管理的普通用户范围。", Limits: "不能修改用户名或密码、邮箱验证状态、安全版本或管理资格。",
 			Implemented: true, DefaultRoles: []string{"system_admin", "user_admin"},
 		},
 		{
@@ -458,6 +473,20 @@ func catalogPermissionsV1() []PermissionDefinition {
 			Key: "users.export", Name: "导出用户资料", Summary: "按字段许可批量导出普通用户资料。",
 			Scope: "仅获准普通用户范围，导出仍按字段许可。", Limits: "默认不授予；不能导出密码、MFA 秘密、恢复码或私钥。",
 			RequiresReauth: true, Implemented: true,
+		},
+		{
+			Key: "users.username.change.other", Name: "直接修改他人用户名",
+			Summary:        "对获准管理的其他用户直接修改全局用户名；需操作者本次完成两步验证，不需要目标当前密码、目标确认或另一管理员审批。",
+			Scope:          "仅获准管理的普通用户范围；本人改名仍走本人受控流程。",
+			Limits:         "不能修改 root 或超出管理范围的账户；不能修改密码、邮箱、MFA 秘密或管理资格，不能绕过用户名的唯一性、保留名与 Unicode 规则。",
+			RequiresReauth: true, Implemented: false, DefaultRoles: []string{"system_admin"},
+		},
+		{
+			Key: "users.password.reset.other", Name: "直接重置他人密码",
+			Summary:        "为获准管理的其他用户直接设置新密码；需操作者本次完成两步验证，不需要目标旧密码、目标确认或独立审批。",
+			Scope:          "仅获准管理的普通用户范围；成功后使目标旧会话与找回入口失效，并要求目标下次登录改密。",
+			Limits:         "不能读取或回显旧密码、不能重置 root 或高权限管理账户、不能移除或重置 MFA、不能为无密码账户添加密码；不能替代人工恢复审批流程。",
+			RequiresReauth: true, Implemented: false, DefaultRoles: []string{"system_admin"},
 		},
 		// 账户恢复与客服。
 		{
@@ -679,13 +708,14 @@ func catalogRolesV1() []RoleTemplate {
 	return []RoleTemplate{
 		{
 			Key: "system_admin", Name: "系统管理员",
-			Summary: "管理普通用户、应用、用户组和普通角色，维护备份与报告。",
-			Limits:  "仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围。",
+			Summary: "管理普通用户、应用、用户组和普通角色，维护备份与报告；新建预设按专门权限包含直接修改普通用户用户名与直接重置普通用户密码。",
+			Limits:  "仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围；两项直接管理操作仍要求操作者本次完成两步验证，不需要目标确认或独立审批。",
 			Builtin: true, DefaultGroupKey: "system-administrators",
 			DefaultPermissions: []string{
 				"self.profile.read", "self.profile.update", "self.credentials.manage",
 				"self.sessions.manage", "self.grants.manage",
 				"users.read", "users.create", "users.update", "users.disable",
+				"users.username.change.other", "users.password.reset.other",
 				"recovery.request", "groups.read", "groups.manage", "roles.read",
 				"roles.manage", "roles.assign", "permissions.read", "permissions.manage",
 				"applications.read", "applications.create", "applications.update",
@@ -700,7 +730,7 @@ func catalogRolesV1() []RoleTemplate {
 		{
 			Key: "user_admin", Name: "用户管理员",
 			Summary: "创建、查询、修改和禁用普通用户，发起密码找回。",
-			Limits:  "仅限获准管理的用户；默认不能操作 root、其他高权限管理账户或修改权限分配。",
+			Limits:  "仅限获准管理的用户；默认不能操作 root、其他高权限管理账户或修改权限分配；直接修改他人用户名与直接重置他人密码是两项独立高风险权限，默认不授予，需由 root 逐项分配。",
 			Builtin: true, DefaultGroupKey: "user-administrators",
 			DefaultPermissions: []string{
 				"self.profile.read", "self.profile.update", "self.credentials.manage",

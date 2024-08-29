@@ -126,6 +126,13 @@ type Operation struct {
 	RootOnly bool
 	// ImmutableSensitive 表示不允许通过策略取消敏感标记（高风险 root 操作）。
 	ImmutableSensitive bool
+	// ImmutableMinimum 表示该操作的再次验证要求、最低认证强度与认证新鲜度不可被
+	// 策略覆盖降低。启用后 ReauthRequired 必须保持 true，强度不得低于 MinimumStrength，
+	// 新鲜度不得长于目录默认值；MinimumStrength 为空或未知值一律按 StrengthStrong
+	// 处理（fail-closed），不会因为配置缺省或错误而降为单因素。
+	ImmutableMinimum bool
+	// MinimumStrength 是 ImmutableMinimum 生效时覆盖允许的最低认证强度。
+	MinimumStrength Strength
 	// Implemented 表示对应业务执行器是否已实现；未实现时仍登记目录与默认策略，
 	// 但不得让业务调用伪装成功。
 	Implemented bool
@@ -142,7 +149,7 @@ type Catalog struct {
 
 // DefaultCatalog 返回第一版内置目录（新副本，调用方修改不影响内置数据）。
 func DefaultCatalog() *Catalog {
-	return &Catalog{Version: "1.0.0", Operations: defaultOperations()}
+	return &Catalog{Version: "1.1.0", Operations: defaultOperations()}
 }
 
 // DefaultPolicyFor 返回内置目录中某操作的默认策略。
@@ -212,8 +219,86 @@ func (c *Catalog) Validate() error {
 			return fmt.Errorf("%w: 操作 %q 的 root 专属基础权限 %q 不是高风险权限",
 				ErrOptionsInvalid, operation.ID, operation.PermissionKey)
 		}
+		if operation.ImmutableMinimum {
+			// 只有两步验证（strong）及以上才允许作为不可降级下限；显式写更低值属于
+			// 目录缺陷，直接拒绝构造。空值与未知值不在此拒绝：minimumStrength 会按
+			// strong 处理（fail-closed），不因字段缺省把保护降级。
+			if operation.MinimumStrength != "" && operation.MinimumStrength.Known() &&
+				operation.MinimumStrength.rank() < StrengthStrong.rank() {
+				return fmt.Errorf("%w: 操作 %q 的不可降级最低认证强度不能低于 %s",
+					ErrOptionsInvalid, operation.ID, StrengthStrong)
+			}
+			if err := validateMinimum(operation, operation.Default); err != nil {
+				return fmt.Errorf("%w: 操作 %q 默认策略不满足不可降级安全下限: %w",
+					ErrOptionsInvalid, operation.ID, err)
+			}
+		}
 	}
 	return nil
+}
+
+// minimumStrength 返回操作的不可覆盖最低认证强度；未启用不可降级保护时返回空。
+// 启用保护后 MinimumStrength 缺省或未知值一律按 StrengthStrong 处理（fail-closed）。
+func (o Operation) minimumStrength() Strength {
+	if !o.ImmutableMinimum {
+		return ""
+	}
+	if !o.MinimumStrength.Known() || o.MinimumStrength.rank() < StrengthStrong.rank() {
+		return StrengthStrong
+	}
+	return o.MinimumStrength
+}
+
+// validateMinimum 检查一条策略是否满足操作的不可覆盖安全下限：敏感标记不能取消、
+// 必须保留本次再次验证、认证强度不低于下限、认证新鲜度为正且不长于目录默认值。
+// 未启用不可降级保护的操作不受限制。调用方在写入前用它拒绝降级配置，读取时用
+// enforceMinimum 做兜底，二者语义必须一致。
+func validateMinimum(operation Operation, value Policy) error {
+	strength := operation.minimumStrength()
+	if strength == "" {
+		return nil
+	}
+	if !value.Sensitive {
+		return fmt.Errorf("%w: 操作 %q 不能取消敏感标记", ErrInvalidChange, operation.ID)
+	}
+	if !value.ReauthRequired {
+		return fmt.Errorf("%w: 操作 %q 必须保留本次再次验证（两步验证）要求，不能降为单因素", ErrInvalidChange, operation.ID)
+	}
+	if !value.Strength.Known() || value.Strength.rank() < strength.rank() {
+		return fmt.Errorf("%w: 操作 %q 的认证强度不能低于 %s", ErrInvalidChange, operation.ID, strength)
+	}
+	if value.MaxAuthAgeSeconds <= 0 {
+		return fmt.Errorf("%w: 操作 %q 必须限定本次验证的有效新鲜度", ErrInvalidChange, operation.ID)
+	}
+	if defaultAge := operation.Default.MaxAuthAgeSeconds; defaultAge > 0 && value.MaxAuthAgeSeconds > defaultAge {
+		return fmt.Errorf("%w: 操作 %q 的认证新鲜度不能长于目录默认值 %d 秒",
+			ErrInvalidChange, operation.ID, defaultAge)
+	}
+	return nil
+}
+
+// enforceMinimum 把策略提升到操作的不可覆盖下限，用于读取兜底：历史数据或外部写入
+// 的低配覆盖不能绕过下限生效。它返回修正后的副本，不修改存储；对未启用保护的操作
+// 原样返回。
+func enforceMinimum(operation Operation, value Policy) Policy {
+	strength := operation.minimumStrength()
+	if strength == "" {
+		return value
+	}
+	adjusted := value
+	adjusted.Sensitive = true
+	adjusted.ReauthRequired = true
+	if !adjusted.Strength.Known() || adjusted.Strength.rank() < strength.rank() {
+		adjusted.Strength = strength
+	}
+	defaultAge := operation.Default.MaxAuthAgeSeconds
+	if adjusted.MaxAuthAgeSeconds <= 0 || (defaultAge > 0 && adjusted.MaxAuthAgeSeconds > defaultAge) {
+		adjusted.MaxAuthAgeSeconds = defaultAge
+	}
+	if adjusted.MaxAuthAgeSeconds < MinAuthAgeSeconds {
+		adjusted.MaxAuthAgeSeconds = MinAuthAgeSeconds
+	}
+	return adjusted
 }
 
 // validVersion 校验 主.次.修订 版本格式。
@@ -435,6 +520,33 @@ func defaultOperations() []Operation {
 			Default:       passwordChange,
 			PermissionKey: "self.profile.update",
 			Implemented:   true,
+		},
+		{
+			// 操作 ID 用本目录既有的单数业务域风格（同 support.case.create ↔
+			// 权限键 support.cases.create），权限键为 users.username.change.other。
+			ID: "user.username.change.other", Domain: DomainProfile, Name: "直接修改他人用户名",
+			Description:   "持有专门权限的操作者对有权管理的其他普通用户直接修改全局用户名：必须本次完成两步验证并确认，不需要目标当前密码、目标确认或独立审批；不能修改 root 或超出管理范围的账户，不能绕过唯一性/保留名规则，稳定用户 ID 与关联关系不变，成功后按策略告知。",
+			Default:       strongReauth,
+			PermissionKey: "users.username.change.other",
+			// 本轮固定要求：操作者本次两步验证是安全下限，root 只能加严或调整告知，
+			// 不能降为单因素、不能取消再次验证。
+			ImmutableSensitive: true,
+			ImmutableMinimum:   true,
+			MinimumStrength:    StrengthStrong,
+			Implemented:        false,
+		},
+		{
+			// 操作 ID 同上采用单数业务域风格，权限键为 users.password.reset.other。
+			ID: "user.password.reset.other", Domain: DomainPassword, Name: "直接重置他人密码",
+			Description:   "持有专门权限的操作者对有权管理的其他普通用户直接设置新密码：必须本次完成两步验证并确认，不需要目标旧密码、目标确认或独立审批；不能读取或回显旧密码、不能重置 root 或高权限账户、不能重置或移除 MFA、不能为无密码账户添加密码；成功后撤销旧会话并要求下次登录改密，按策略告知。",
+			Default:       strongReauth,
+			PermissionKey: "users.password.reset.other",
+			// 同「直接修改他人用户名」：再次验证与两步验证强度是安全下限，策略覆盖
+			// 只能提高强度/缩短新鲜度/调整告知，不能关闭或降级。
+			ImmutableSensitive: true,
+			ImmutableMinimum:   true,
+			MinimumStrength:    StrengthStrong,
+			Implemented:        false,
 		},
 		{
 			ID: "permission.role.assign", Domain: DomainPermission, Name: "分配或变更角色权限",

@@ -1,6 +1,6 @@
 # 内置权限、角色与用户组参考
 
-> 由 `internal/preset.DefaultCatalog()` 生成（目录版本 `1.0.0`）；授权/委派规则与页面操作见 [../guide/applications-and-permissions.md](../guide/applications-and-permissions.md) 与 [../guide/roles-and-scopes.md](../guide/roles-and-scopes.md)。
+> 由 `internal/preset.DefaultCatalog()` 生成（目录版本 `1.1.0`）；授权/委派规则与页面操作见 [../guide/applications-and-permissions.md](../guide/applications-and-permissions.md) 与 [../guide/roles-and-scopes.md](../guide/roles-and-scopes.md)。
 
 这份参考回答“**谁能对哪些数据做什么**”：系统权限面向整个身份服务，应用权限默认只在该应用范围内生效；权限键创建后不可修改，内置权限不可删除、只能按规则停用。
 
@@ -13,7 +13,7 @@
 - **实现标记**：`Implemented=false` 表示该权限仅登记目录说明、对应操作尚无可执行路径，不能当作开关或已实现能力使用。
 - **委派**：应用委派不能获得系统资格或控制 root；委派范围只减不增。
 
-## 2. 权限键表（51 个）
+## 2. 权限键表（53 个）
 
 | 权限键 | 名称 | 能做什么 | 影响范围 | 不能做什么 | 再认证 | root only | 默认角色 | 已实现 | 关联能力 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -24,10 +24,12 @@
 | `self.grants.manage` | 撤回自己给应用的授权 | 查看并撤回自己授权给应用的访问。 | 仅本人。 | 不能撤回其他人的授权或应用自身的凭证。 | 否 | 否 | `system_admin`、`user_admin`、`support`、`auditor`、`normal_user` | 是 | oauth_oidc.protocol |
 | `users.read` | 查看普通用户 | 按获准范围查看普通用户的必要资料。 | 仅获准管理的普通用户范围。 | 不能查看 root 或超出管理范围的高权限管理账户资料。 | 否 | 否 | `system_admin`、`user_admin` | 是 | account.users、admin.facade_api |
 | `users.create` | 创建普通用户 | 创建普通用户并登记基本资料。 | 仅获准管理的普通用户范围。 | 不能创建 root 或带管理资格的账户，不能设置固定密码。 | 否 | 否 | `system_admin`、`user_admin` | 是 | account.users |
-| `users.update` | 修改普通用户 | 修改普通用户的显示资料。 | 仅获准管理的普通用户范围。 | 不能修改密码、邮箱验证状态、安全版本或管理资格。 | 否 | 否 | `system_admin`、`user_admin` | 是 | account.users |
+| `users.update` | 修改普通用户 | 修改普通用户的显示资料；用户名与密码各有独立权限和专门操作，不能随资料更新一起提交。 | 仅获准管理的普通用户范围。 | 不能修改用户名或密码、邮箱验证状态、安全版本或管理资格。 | 否 | 否 | `system_admin`、`user_admin` | 是 | account.users |
 | `users.disable` | 禁用普通用户 | 禁用获准范围内的普通用户。 | 仅获准管理的普通用户范围。 | 不能禁用 root 或其他高权限管理账户。 | 否 | 否 | `system_admin`、`user_admin` | 是 | account.users |
 | `users.delete` | 删除普通用户 | 删除获准范围内的普通用户。 | 仅获准普通用户，需确认；删除不清除审计。 | 默认不授予，需另行分配；不能删除 root 或高权限账户。 | 是 | 否 | - | 是 | account.users |
 | `users.export` | 导出用户资料 | 按字段许可批量导出普通用户资料。 | 仅获准普通用户范围，导出仍按字段许可。 | 默认不授予；不能导出密码、MFA 秘密、恢复码或私钥。 | 是 | 否 | - | 是 | account.users |
+| `users.username.change.other` | 直接修改他人用户名 | 对获准管理的其他用户直接修改全局用户名；需操作者本次完成两步验证，不需要目标当前密码、目标确认或另一管理员审批。 | 仅获准管理的普通用户范围；本人改名仍走本人受控流程。 | 不能修改 root 或超出管理范围的账户；不能修改密码、邮箱、MFA 秘密或管理资格，不能绕过用户名的唯一性、保留名与 Unicode 规则。 | 是 | 否 | `system_admin` | 否 | - |
+| `users.password.reset.other` | 直接重置他人密码 | 为获准管理的其他用户直接设置新密码；需操作者本次完成两步验证，不需要目标旧密码、目标确认或独立审批。 | 仅获准管理的普通用户范围；成功后使目标旧会话与找回入口失效，并要求目标下次登录改密。 | 不能读取或回显旧密码、不能重置 root 或高权限管理账户、不能移除或重置 MFA、不能为无密码账户添加密码；不能替代人工恢复审批流程。 | 是 | 否 | `system_admin` | 否 | - |
 | `recovery.request` | 发起密码找回 | 向用户此前已验证的渠道发送一次性密码找回入口。 | 仅获准的普通用户范围；不能选择新地址。 | 不能查看找回入口或验证码，不能解除两步验证，不能为 root 或高权限账户发起。 | 否 | 否 | `system_admin`、`user_admin`、`support` | 是 | passwordreset.self_service、support.recovery |
 | `support.cases.read` | 查看求助单 | 查看分配给自己的求助单与必要脱敏信息。 | 仅分配给自己的求助单。 | 不能查看未分配求助单或未脱敏的敏感资料。 | 否 | 否 | `support` | 是 | support.recovery |
 | `support.cases.create` | 登记求助单 | 登记用户求助事项与必要核验结果。 | 仅自己经手且获准的普通用户。 | 不能伪造核验结果，不能记录无关证件材料。 | 否 | 否 | `support` | 是 | support.recovery |
@@ -73,8 +75,8 @@
 
 | 角色键 | 名称 | 说明 | 限制 | 内置 | 默认权限 | 默认用户组 | 关联能力 |
 |---|---|---|---|---|---|---|---|
-| `system_admin` | 系统管理员 | 管理普通用户、应用、用户组和普通角色，维护备份与报告。 | 仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围。 | 是 | `self.profile.read`、`self.profile.update`、`self.credentials.manage`、`self.sessions.manage`、`self.grants.manage`、`users.read`、`users.create`、`users.update`、`users.disable`、`recovery.request`、`groups.read`、`groups.manage`、`roles.read`、`roles.manage`、`roles.assign`、`permissions.read`、`permissions.manage`、`applications.read`、`applications.create`、`applications.update`、`applications.credentials.manage`、`applications.members.manage`、`sessions.revoke`、`audit.read`、`audit.export`、`reports.read`、`reports.generate`、`reports.export`、`reports.schedule.manage`、`reports.cleanup`、`diagnostics.read`、`settings.manage`、`backups.create`、`backups.read`、`backups.cancel`、`backups.retention`、`backups.cleanup` | `system-administrators` | account.users、admin.facade_api、applications.manage、audit.events、auth.password_session、backup.restore、diagnostics.operations、mfa.public_facade、mfa.totp_recovery、oauth_oidc.protocol、passwordreset.self_service、rbac.roles_permissions、reports.generate、session.admin、settings.managed、support.recovery |
-| `user_admin` | 用户管理员 | 创建、查询、修改和禁用普通用户，发起密码找回。 | 仅限获准管理的用户；默认不能操作 root、其他高权限管理账户或修改权限分配。 | 是 | `self.profile.read`、`self.profile.update`、`self.credentials.manage`、`self.sessions.manage`、`self.grants.manage`、`users.read`、`users.create`、`users.update`、`users.disable`、`recovery.request`、`sessions.revoke` | `user-administrators` | account.users、admin.facade_api、auth.password_session、mfa.public_facade、mfa.totp_recovery、oauth_oidc.protocol、passwordreset.self_service、session.admin、support.recovery |
+| `system_admin` | 系统管理员 | 管理普通用户、应用、用户组和普通角色，维护备份与报告；新建预设按专门权限包含直接修改普通用户用户名与直接重置普通用户密码。 | 仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围；两项直接管理操作仍要求操作者本次完成两步验证，不需要目标确认或独立审批。 | 是 | `self.profile.read`、`self.profile.update`、`self.credentials.manage`、`self.sessions.manage`、`self.grants.manage`、`users.read`、`users.create`、`users.update`、`users.disable`、`users.username.change.other`、`users.password.reset.other`、`recovery.request`、`groups.read`、`groups.manage`、`roles.read`、`roles.manage`、`roles.assign`、`permissions.read`、`permissions.manage`、`applications.read`、`applications.create`、`applications.update`、`applications.credentials.manage`、`applications.members.manage`、`sessions.revoke`、`audit.read`、`audit.export`、`reports.read`、`reports.generate`、`reports.export`、`reports.schedule.manage`、`reports.cleanup`、`diagnostics.read`、`settings.manage`、`backups.create`、`backups.read`、`backups.cancel`、`backups.retention`、`backups.cleanup` | `system-administrators` | account.users、admin.facade_api、applications.manage、audit.events、auth.password_session、backup.restore、diagnostics.operations、mfa.public_facade、mfa.totp_recovery、oauth_oidc.protocol、passwordreset.self_service、rbac.roles_permissions、reports.generate、session.admin、settings.managed、support.recovery |
+| `user_admin` | 用户管理员 | 创建、查询、修改和禁用普通用户，发起密码找回。 | 仅限获准管理的用户；默认不能操作 root、其他高权限管理账户或修改权限分配；直接修改他人用户名与直接重置他人密码是两项独立高风险权限，默认不授予，需由 root 逐项分配。 | 是 | `self.profile.read`、`self.profile.update`、`self.credentials.manage`、`self.sessions.manage`、`self.grants.manage`、`users.read`、`users.create`、`users.update`、`users.disable`、`recovery.request`、`sessions.revoke` | `user-administrators` | account.users、admin.facade_api、auth.password_session、mfa.public_facade、mfa.totp_recovery、oauth_oidc.protocol、passwordreset.self_service、session.admin、support.recovery |
 | `support` | 客服 | 查询必要的脱敏资料，登记求助事项，向用户原已验证邮箱发送密码重置入口，查询本人负责的处理进度。 | 仅限分配给客服的普通用户；不能查看或指定密码、修改邮箱后再重置、清除两步验证、冒充用户登录或操作高权限账户。 | 是 | `self.profile.read`、`self.profile.update`、`self.credentials.manage`、`self.sessions.manage`、`self.grants.manage`、`recovery.request`、`support.cases.read`、`support.cases.create`、`support.cases.update` | `support-team` | account.users、auth.password_session、mfa.public_facade、mfa.totp_recovery、oauth_oidc.protocol、passwordreset.self_service、support.recovery |
 | `auditor` | 审计员 | 查看安全记录，查看和生成统计报告，按许可导出记录。 | 仅限获准查看的应用和用户；不能修改用户、改变权限或删除原始记录。 | 是 | `self.profile.read`、`self.profile.update`、`self.credentials.manage`、`self.sessions.manage`、`self.grants.manage`、`audit.read`、`audit.export`、`reports.read`、`reports.generate`、`reports.export`、`reports.schedule.manage` | `auditors` | account.users、audit.events、auth.password_session、mfa.public_facade、mfa.totp_recovery、oauth_oidc.protocol、reports.generate |
 | `normal_user` | 普通用户 | 修改自己的资料，管理自己的密码、登录方式、会话和应用授权。 | 仅限自己；敏感修改仍需再次确认身份，不能查看或改变他人资料。 | 是 | `self.profile.read`、`self.profile.update`、`self.credentials.manage`、`self.sessions.manage`、`self.grants.manage` | `normal-users` | account.users、auth.password_session、mfa.public_facade、mfa.totp_recovery、oauth_oidc.protocol |

@@ -1,9 +1,9 @@
 {
   "schema": "evernight.reference/v1/permission-keys",
   "generated_by": "scripts/reference",
-  "catalog_version": "1.0.0",
+  "catalog_version": "1.1.0",
   "counts": {
-    "permissions": 51,
+    "permissions": 53,
     "system_roles": 5,
     "system_groups": 5,
     "application_roles": 2,
@@ -149,9 +149,9 @@
     {
       "key": "users.update",
       "name": "修改普通用户",
-      "summary": "修改普通用户的显示资料。",
+      "summary": "修改普通用户的显示资料；用户名与密码各有独立权限和专门操作，不能随资料更新一起提交。",
       "scope": "仅获准管理的普通用户范围。",
-      "limits": "不能修改密码、邮箱验证状态、安全版本或管理资格。",
+      "limits": "不能修改用户名或密码、邮箱验证状态、安全版本或管理资格。",
       "requires_reauth": false,
       "root_only": false,
       "default_roles": [
@@ -205,6 +205,32 @@
       "capabilities": [
         "account.users"
       ]
+    },
+    {
+      "key": "users.username.change.other",
+      "name": "直接修改他人用户名",
+      "summary": "对获准管理的其他用户直接修改全局用户名；需操作者本次完成两步验证，不需要目标当前密码、目标确认或另一管理员审批。",
+      "scope": "仅获准管理的普通用户范围；本人改名仍走本人受控流程。",
+      "limits": "不能修改 root 或超出管理范围的账户；不能修改密码、邮箱、MFA 秘密或管理资格，不能绕过用户名的唯一性、保留名与 Unicode 规则。",
+      "requires_reauth": true,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": false
+    },
+    {
+      "key": "users.password.reset.other",
+      "name": "直接重置他人密码",
+      "summary": "为获准管理的其他用户直接设置新密码；需操作者本次完成两步验证，不需要目标旧密码、目标确认或独立审批。",
+      "scope": "仅获准管理的普通用户范围；成功后使目标旧会话与找回入口失效，并要求目标下次登录改密。",
+      "limits": "不能读取或回显旧密码、不能重置 root 或高权限管理账户、不能移除或重置 MFA、不能为无密码账户添加密码；不能替代人工恢复审批流程。",
+      "requires_reauth": true,
+      "root_only": false,
+      "default_roles": [
+        "system_admin"
+      ],
+      "implemented": false
     },
     {
       "key": "recovery.request",
@@ -834,8 +860,8 @@
     {
       "key": "system_admin",
       "name": "系统管理员",
-      "summary": "管理普通用户、应用、用户组和普通角色，维护备份与报告。",
-      "limits": "仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围。",
+      "summary": "管理普通用户、应用、用户组和普通角色，维护备份与报告；新建预设按专门权限包含直接修改普通用户用户名与直接重置普通用户密码。",
+      "limits": "仅限 root 已交给他的管理范围；默认不能修改敏感操作规则、恢复备份、清理审计、操作 root 或自行扩大授权范围；两项直接管理操作仍要求操作者本次完成两步验证，不需要目标确认或独立审批。",
       "builtin": true,
       "default_permissions": [
         "self.profile.read",
@@ -847,6 +873,8 @@
         "users.create",
         "users.update",
         "users.disable",
+        "users.username.change.other",
+        "users.password.reset.other",
         "recovery.request",
         "groups.read",
         "groups.manage",
@@ -901,7 +929,7 @@
       "key": "user_admin",
       "name": "用户管理员",
       "summary": "创建、查询、修改和禁用普通用户，发起密码找回。",
-      "limits": "仅限获准管理的用户；默认不能操作 root、其他高权限管理账户或修改权限分配。",
+      "limits": "仅限获准管理的用户；默认不能操作 root、其他高权限管理账户或修改权限分配；直接修改他人用户名与直接重置他人密码是两项独立高风险权限，默认不授予，需由 root 逐项分配。",
       "builtin": true,
       "default_permissions": [
         "self.profile.read",

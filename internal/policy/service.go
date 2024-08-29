@@ -25,6 +25,21 @@ const maxVerificationClockSkew = time.Minute
 // 通过宿主再次验证，即使 root 取消其他操作的敏感标记也不能跳过该保护。
 const OperationPolicyChange = "security.policy.change"
 
+// 两项直接管理操作的稳定标识；操作者与目标不是同一人，业务入口在后续步骤接通，
+// 接通前不把对应权限标记为已实现。策略覆盖不能把两者的再次验证/两步验证下限降级。
+//
+// 命名对应关系：本目录的操作 ID 沿用既有“单数业务域 + 动作”风格（已有
+// support.case.create ↔ 权限键 support.cases.create 是同样关系），因此操作 ID
+// user.username.change.other / user.password.reset.other 分别对应权限键
+// users.username.change.other / users.password.reset.other（internal/preset 目录）。
+// 两者不是同一命名空间的拼写错误：授权判定用权限键，再次验证/策略用操作 ID。
+const (
+	// OperationDirectUsernameChange 是“直接修改他人用户名”的稳定操作标识。
+	OperationDirectUsernameChange = "user.username.change.other"
+	// OperationDirectPasswordReset 是“直接重置他人密码”的稳定操作标识。
+	OperationDirectPasswordReset = "user.password.reset.other"
+)
+
 // AuditRecorder 是安全审计写入契约；实现必须 fail-closed。
 type AuditRecorder interface {
 	Record(ctx context.Context, event audit.Event) error
@@ -297,6 +312,14 @@ func (s *Service) Set(ctx context.Context, caller Caller, request SetRequest) (s
 	}
 	if err := validatePolicy(next, immutableSensitive); err != nil {
 		return Snapshot{}, err
+	}
+	if hasBuiltin {
+		// 不可降级安全下限：新增的两项直接管理操作固定要求操作者本次两步验证，
+		// root 的覆盖只能加严或调整告知；任何取消再次验证、降为单因素或放宽
+		// 认证新鲜度的配置在这里被拒绝，不能写入存储。
+		if err := validateMinimum(builtin, next); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	// 有效策略没有真正变化时不递增版本、不写成功审计（与恢复默认的幂等语义一致）：
 	// 相同策略重复提交或“显式写回默认值”都不应制造虚假的版本历史。
@@ -749,7 +772,9 @@ func (s *Service) buildSnapshot(ctx context.Context, scope ScopeInfo) (Snapshot,
 		if record, ok := byOperation[operation.ID]; ok {
 			override := record.Policy
 			effective.Override = &override
-			effective.Effective = record.Policy
+			// 读取兜底：历史数据或外部写入的低配覆盖不能绕过不可降级安全下限；
+			// 这里返回修正后的有效策略，不修改存储（写入路径已由 Set 拒绝降级）。
+			effective.Effective = enforceMinimum(operation, record.Policy)
 			effective.Source = SourceOverride
 		}
 		snapshot.Operations = append(snapshot.Operations, effective)

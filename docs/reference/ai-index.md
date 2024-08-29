@@ -16,7 +16,7 @@
 | 文件 | schema 后缀 | 内容 |
 |---|---|---|
 | error-codes.json | error-codes | 48 个错误码 |
-| permission-keys.json | permission-keys | 51 权限 / 5 系统角色 / 5 用户组 |
+| permission-keys.json | permission-keys | 53 权限 / 5 系统角色 / 5 用户组 |
 | http-routes.json | http-routes | 123 管理路由 / 17 协议路径 / 245 页面 |
 | cli-commands.json | cli-commands | 3 程序 / 40 子命令 |
 
@@ -46,7 +46,7 @@
 
 ## 5. 覆盖范围与阶段
 
-- 错误码 48、权限键 51、配置字段 52、管理路由 123、协议路径 17、页面命名路由 245、CLI 子命令 40、能力 43。
+- 错误码 48、权限键 53、配置字段 52、管理路由 123、协议路径 17、页面命名路由 245、CLI 子命令 40、能力 43。
 - Go API：Phase A 提供 Runtime 生命周期/访问器与接口总览；方法级参考（身份/范围/分页/幂等/错误/示例）Phase B 补齐。
 - OpenAPI 仍是最小契约，不构造成完整业务 schema；业务路由以 http-routes.json 为准。
 

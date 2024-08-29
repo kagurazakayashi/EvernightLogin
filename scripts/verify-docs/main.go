@@ -426,8 +426,8 @@ func (v *verifier) checkPermissionKeys() {
 	for _, match := range keyPattern.FindAllStringSubmatch(source[start:end], -1) {
 		keys[match[1]] = true
 	}
-	if len(keys) != 51 {
-		v.fail("系统权限键数量为 %d，文档约定为 51", len(keys))
+	if len(keys) != 53 {
+		v.fail("系统权限键数量为 %d，文档约定为 53", len(keys))
 	}
 	v.pass()
 	text := v.read("docs/guide/applications-and-permissions.md")

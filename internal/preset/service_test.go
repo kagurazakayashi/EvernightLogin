@@ -241,8 +241,8 @@ func TestCatalogIntegrity(t *testing.T) {
 	if err := catalog.Validate(); err != nil {
 		t.Fatalf("默认预设目录不合法: %v", err)
 	}
-	if catalog.Version != "1.0.0" {
-		t.Fatalf("目录版本 = %q，期望 1.0.0", catalog.Version)
+	if catalog.Version != "1.1.0" {
+		t.Fatalf("目录版本 = %q，期望 1.1.0", catalog.Version)
 	}
 	if len(catalog.Permissions) < 40 {
 		t.Fatalf("预设权限数量 = %d，明显少于需求基线", len(catalog.Permissions))
@@ -287,20 +287,27 @@ func TestCatalogIntegrity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("导出机器可读目录失败: %v", err)
 	}
-	if !strings.Contains(string(data), `"version": "1.0.0"`) {
+	if !strings.Contains(string(data), `"version": "1.1.0"`) {
 		t.Fatalf("机器可读目录缺少版本: %s", string(data))
 	}
 	// 未实现的权限必须显式标记，不能伪装成功。逐键核对代码后：权限键对应的真实
-	// 服务端执行路径已实现的标 true；下列键没有真实执行路径，必须保持 false 且不
-	// 授予任何预设角色：
-	//   settings.manage 已在步骤 232 接通：公开 Go 门面、管理 API 设置路由与管理页面
-	//   共用真实执行路径；diagnostics.read 已在步骤 233 接通。
-	notImplemented := map[string]struct{}{}
+	// 服务端执行路径已实现的标 true；下列键没有真实执行路径，必须保持 false。
+	// 本轮新增的两项直接管理权限（直接改名/直接重置他人）在步骤 256/257 的业务
+	// 执行入口落地前保持 false，能力表不得提前置为已实现。
+	notImplemented := map[string]struct{}{
+		"users.username.change.other": {},
+		"users.password.reset.other":  {},
+	}
+	// grantableWhileUnimplemented 是“已登记、业务入口在同轮后续步骤完成”的例外：
+	// 只允许出现在新装 system_admin 预设的默认权限中；其他未实现权限仍不得进入
+	// 任何预设角色，避免把不存在的执行路径展示为已授予能力。
+	grantableWhileUnimplemented := map[string]struct{}{
+		"users.username.change.other": {},
+		"users.password.reset.other":  {},
+	}
 	for _, definition := range catalog.Permissions {
-		want := true
-		if _, missing := notImplemented[definition.Key]; missing {
-			want = false
-		}
+		_, missing := notImplemented[definition.Key]
+		want := !missing
 		if definition.Implemented != want {
 			t.Fatalf("权限 %q Implemented = %v，期望 %v（未实现能力不得标记为已实现）",
 				definition.Key, definition.Implemented, want)
@@ -318,13 +325,45 @@ func TestCatalogIntegrity(t *testing.T) {
 	}
 	for key := range notImplemented {
 		definition := byKey[key]
-		if definition.Implemented || len(definition.DefaultRoles) != 0 {
-			t.Fatalf("未实现权限 %q 必须保持 false 且不授予预设角色: %+v", key, definition)
+		if definition.Implemented {
+			t.Fatalf("未实现权限 %q 不得标记为已实现", key)
+		}
+		_, grantable := grantableWhileUnimplemented[key]
+		if grantable {
+			// 例外只允许授予新装 system_admin，且权限说明必须提示需要本次两步验证。
+			if len(definition.DefaultRoles) != 1 || definition.DefaultRoles[0] != "system_admin" {
+				t.Fatalf("未实现例外权限 %q 只允许默认授予 system_admin: %+v", key, definition)
+			}
+			if !definition.RequiresReauth {
+				t.Fatalf("直接管理权限 %q 必须要求本次再次验证: %+v", key, definition)
+			}
+		} else if len(definition.DefaultRoles) != 0 {
+			t.Fatalf("未实现权限 %q 不得默认授予预设角色: %+v", key, definition)
 		}
 		for _, template := range catalog.Roles {
+			granted := false
+			for _, candidate := range template.DefaultPermissions {
+				if candidate == key {
+					granted = true
+					break
+				}
+			}
+			if !granted {
+				continue
+			}
+			if grantable && template.Key == "system_admin" {
+				continue
+			}
+			t.Fatalf("未实现权限 %q 不得出现在预设角色 %q 的默认权限中", key, template.Key)
+		}
+	}
+	// 客服与用户管理员不因升级/新装自动获得直接管理权限，必须由 root 逐项授予。
+	for _, roleKey := range []string{"user_admin", "support"} {
+		template := findRole(t, catalog.Roles, roleKey)
+		for _, key := range []string{"users.username.change.other", "users.password.reset.other"} {
 			for _, granted := range template.DefaultPermissions {
 				if granted == key {
-					t.Fatalf("未实现权限 %q 不得出现在预设角色 %q 的默认权限中", key, template.Key)
+					t.Fatalf("角色 %q 不应默认包含直接管理权限 %q", roleKey, key)
 				}
 			}
 		}
@@ -375,7 +414,7 @@ func TestInstallInitialAndIdempotent(t *testing.T) {
 	if got := env.queryInt(`SELECT COUNT(*) FROM group_members`); got != 0 {
 		t.Fatalf("初始化不应加入组成员，实际 %d 行", got)
 	}
-	if got := env.queryInt(`SELECT COUNT(*) FROM preset_installations WHERE scope_id='system' AND catalog_version='1.0.0'`); got != 1 {
+	if got := env.queryInt(`SELECT COUNT(*) FROM preset_installations WHERE scope_id='system' AND catalog_version='1.1.0'`); got != 1 {
 		t.Fatalf("初始化版本记录缺失")
 	}
 	// 系统管理员默认组合应等于目录定义，且不含 root_only 权限。
