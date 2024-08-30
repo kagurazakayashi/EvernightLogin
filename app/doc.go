@@ -22,9 +22,11 @@
 //     与 REQ_INVALID 参数错误、ACCESS_DENIED 权限拒绝区分。
 //   - 请求关联：门面调用先统一解析请求编号（空编号生成、非法编号拒绝），同一编号
 //     用于领域调用者/请求、领域审计与返回错误，便于按编号排查整条调用链。
-//   - 会话授权与限流边界（步骤 208）：Sessions.Validate 只证明会话有效，业务/管理
-//     授权必须再用 Sessions.Authorize 同时检查应用绑定与所需权限（复用授权内核）；
-//     ValidateCSRF 通过不会提升受限会话权限。找回密码入口 Request/ValidateToken/
+//   - 会话授权与限流边界（步骤 208 / 251）：Sessions.Validate 只证明会话有效，业务/
+//     管理授权必须再用 Sessions.Authorize 同时检查应用绑定与所需权限（复用授权内核）；
+//     Authorize 不带 ResourceID 时只判定功能权限，需要具体资源结论时提供 ResourceID
+//     由内核按数据范围判定，不能把功能权限当成资源归属已通过。ValidateCSRF 通过不会
+//     提升受限会话权限。找回密码入口 Request/ValidateToken/
 //     Complete 各有有界来源限流，键是宿主从可信边界解析的单一 IP（空来源共享桶，
 //     伪造转发头链直接拒绝），日志不写 token、密码或找回链接。
 //   - 认证/安全域（TOTP/Passkey/MFA/恢复代码/找回/客服）与敏感操作闸门由

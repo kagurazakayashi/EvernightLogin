@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -471,8 +472,17 @@ type accessFacade struct{ r *Runtime }
 
 // Check 是“受信调用者已经确认用户身份”后的权限检查入口：UserID 必须来自已校验
 // 的会话/令牌或宿主可信身份，绝不能来自客户端自填字段。它只做权限判定，不验证
-// 会话；需要“会话有效 + 属于当前应用 + 所需权限”的联合判断时使用
+// 会话；需要“会话有效 + 属于当前应用 + 所需权限（+ 可选资源）”的联合判断时使用
 // Sessions.Authorize。RequestID 用于关联审计与返回错误。
+//
+// 判定语义（步骤 251，功能权限与业务资源归属分离）：
+//   - ResourceID 为空：只判定功能权限；返回 ResourceChecked=false，Allowed 不表示
+//     任何具体资源已通过数据范围/归属检查；
+//   - ResourceID 非空：先判定功能权限，再复用领域内核 CheckResourceAccess 判定该
+//     资源的数据范围；数据范围未声明（undefined）、none 或资源不在允许集合内都
+//     拒绝并返回稳定 RESOURCE_FORBIDDEN 等码，不会只用功能权限结论放行；
+//   - Permission 必填：空权限不是“无需权限”，直接按 REQ_INVALID 拒绝，客户端
+//     不能传空权限自证授权。
 func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDecision, error) {
 	r := f.r
 	requestID, err := resolveRequestID(ctx, req.RequestID)
@@ -482,6 +492,11 @@ func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDeci
 	managed := r.managedServices()
 	if managed == nil || managed.Authz == nil {
 		return AccessDecision{}, configError("权限服务未装配", requestID)
+	}
+	permission := strings.TrimSpace(req.Permission)
+	if permission == "" {
+		return AccessDecision{}, login.NewAppError(login.CodeReqInvalid,
+			"权限检查需要明确的权限键", login.WithRequestID(requestID))
 	}
 	caller, err := authz.UserCaller(req.UserID)
 	if err != nil {
@@ -494,19 +509,42 @@ func (f *accessFacade) Check(ctx context.Context, req AccessRequest) (AccessDeci
 	if mode == "" {
 		mode = authz.ModeAll
 	}
+	if !mode.Valid() {
+		return AccessDecision{}, login.NewAppError(login.CodeReqInvalid,
+			"权限组合模式必须是 all 或 any", login.WithRequestID(requestID))
+	}
 	scope := "system"
 	if req.AppID != "" {
 		scope = req.AppID
 	}
+	decision := AccessDecision{RequestID: requestID, Application: req.AppID}
+	if req.ResourceID != "" {
+		// 资源级判定：复用领域内核（功能权限 + 数据范围交集），不能只返回
+		// Authz.Check 的功能权限 Allowed。
+		result, err := managed.Authz.CheckResourceAccess(ctx, caller, req.UserID,
+			scope, permission, req.ResourceID)
+		if err != nil {
+			return AccessDecision{}, mapDomainError("资源授权检查失败",
+				string(authz.CodeOf(err)), requestID)
+		}
+		decision.Allowed = result.Allowed
+		decision.Code = string(result.Code)
+		decision.Reason = result.Reason
+		decision.ResourceChecked = true
+		decision.ResourceID = result.ResourceID
+		return decision, nil
+	}
 	result, err := managed.Authz.Check(ctx, caller, authz.CheckRequest{
-		SubjectUserID: req.UserID, ScopeID: scope, Permissions: []string{req.Permission}, Mode: mode,
+		SubjectUserID: req.UserID, ScopeID: scope, Permissions: []string{permission}, Mode: mode,
 	})
 	if err != nil {
 		return AccessDecision{}, mapDomainError("权限检查失败",
 			string(authz.CodeOf(err)), requestID)
 	}
-	return AccessDecision{Allowed: result.Allowed, Code: string(result.Code),
-		Reason: result.Reason, RequestID: requestID, Application: req.AppID}, nil
+	decision.Allowed = result.Allowed
+	decision.Code = string(result.Code)
+	decision.Reason = result.Reason
+	return decision, nil
 }
 
 type sessionFacade struct{ r *Runtime }

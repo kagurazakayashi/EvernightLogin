@@ -89,16 +89,19 @@ func (f *sessionFacade) validateCSRF(ctx context.Context, sessionSecret []byte,
 	return nil
 }
 
-// Authorize 执行“会话 + 应用绑定 + 所需权限”的联合检查。
+// Authorize 执行“会话 + 应用绑定 + 所需权限（+ 可选资源）”的联合检查。
 //
 // 判定顺序（默认拒绝）：
 //  1. 输入校验：应用范围与至少一个权限键必填，请求编号空则生成、非法则拒绝；
+//     提供 ResourceID 时要求恰好一个权限键，拒绝“多权限资源判定”的含糊请求；
 //  2. 可选 CSRF 校验：只在请求带 CSRFToken 时执行，通过不改变后续授权结论；
 //  3. 会话有效性：无效/过期/撤销/账户状态变化 → 返回 AUTH_FAILED 等稳定错误；
 //  4. 完整会话：受限会话（待第二因素/受限恢复）直接拒绝，CSRF 不能提升权限；
 //  5. 应用绑定：会话自身绑定到其他应用 → APP_SCOPE_MISMATCH；
-//  6. 权限内核：复用 authz.Check，同时判定账户/应用/成员状态、当前权限与数据范围，
-//     拒绝以决策返回（Allowed=false + 稳定 Code），不向调用者泄露内部细节。
+//  6. 权限内核：复用 authz.Check 判定账户/应用/成员状态与当前权限（含数据范围
+//     交集）；提供 ResourceID 时再复用 authz.CheckResourceAccess 判定该资源的
+//     数据范围。拒绝以决策返回（Allowed=false + 稳定 Code），不向调用者泄露内部
+//     细节；未提供 ResourceID 的结论不证明任何具体业务资源已通过归属检查。
 func (f *sessionFacade) Authorize(ctx context.Context,
 	req SessionAccessRequest) (SessionAccessDecision, error) {
 	requestID, err := resolveRequestID(ctx, req.RequestID)
@@ -130,6 +133,15 @@ func (f *sessionFacade) Authorize(ctx context.Context,
 	if mode == "" {
 		mode = authz.ModeAll
 	}
+	if !mode.Valid() {
+		return SessionAccessDecision{}, login.NewAppError(login.CodeReqInvalid,
+			"权限组合模式必须是 all 或 any", login.WithRequestID(requestID))
+	}
+	resourceID := req.ResourceID
+	if resourceID != "" && len(permissions) != 1 {
+		return SessionAccessDecision{}, login.NewAppError(login.CodeReqInvalid,
+			"资源级会话授权需要恰好一个权限键", login.WithRequestID(requestID))
+	}
 	if len(req.SessionSecret) == 0 {
 		return SessionAccessDecision{}, login.NewAppError(login.CodeAuthFailed,
 			"会话无效或已失效", login.WithRequestID(requestID))
@@ -145,7 +157,7 @@ func (f *sessionFacade) Authorize(ctx context.Context,
 			string(session.CodeOf(err)), requestID)
 	}
 	decision := SessionAccessDecision{UserID: record.UserID, SessionID: record.ID,
-		AppID: appID, RequestID: requestID}
+		AppID: appID, RequestID: requestID, ResourceID: resourceID}
 	if !record.IsNormal() {
 		// 受限会话（待第二因素或受限恢复）不能访问业务；CSRF 通过也不改变这一点。
 		decision.Code = string(login.CodeAccessDenied)
@@ -163,6 +175,28 @@ func (f *sessionFacade) Authorize(ctx context.Context,
 	}
 	if caller, err = bindCaller(caller, requestID); err != nil {
 		return SessionAccessDecision{}, err
+	}
+	if resourceID != "" {
+		// 资源级判定：功能权限 + 该资源的数据范围，复用领域内核，不能只看功能权限。
+		result, err := managed.Authz.CheckResourceAccess(ctx, caller, record.UserID,
+			appID, permissions[0], resourceID)
+		if err != nil {
+			if errors.Is(err, authz.ErrAccessDenied) {
+				// 权限内核拒绝查询该主体（例如非本人且非受信主体）：按无权限拒绝，
+				// 不把内部授权原因以错误文本暴露。
+				decision.Code = string(login.CodeAccessDenied)
+				decision.Reason = "authorization_unavailable"
+				return decision, nil
+			}
+			return SessionAccessDecision{}, mapDomainError("会话资源授权检查失败",
+				string(authz.CodeOf(err)), requestID)
+		}
+		decision.Allowed = result.Allowed
+		decision.Code = string(result.Code)
+		decision.Reason = result.Reason
+		decision.ResourceChecked = true
+		decision.ResourceID = result.ResourceID
+		return decision, nil
 	}
 	result, err := managed.Authz.Check(ctx, caller, authz.CheckRequest{
 		SubjectUserID: record.UserID, ScopeID: appID,

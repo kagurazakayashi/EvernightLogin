@@ -78,10 +78,14 @@ type SessionRevokeOthersResult struct {
 
 // SessionService 会话语义：校验当前会话、应用+权限联合检查、撤销当前会话。
 //
-// 安全边界（步骤 208）：
+// 安全边界（步骤 208 / 251）：
 //   - Validate 只证明“会话此刻有效且是完整会话”，不证明会话属于当前业务应用，
 //     也不证明用户具备当前操作需要的权限；业务/管理操作禁止只靠 Validate 放行。
 //     需要应用绑定与权限联合判断时使用 Authorize（复用既有授权内核）。
+//   - Authorize 不带 ResourceID 时只做“有效会话 + 属于当前应用 + 功能权限”判定，
+//     不校验任何具体业务资源；需要资源级结论时在请求中提供 ResourceID，由领域
+//     内核按数据范围判定（undefined/none/不在集合内都拒绝），不能把功能权限当成
+//     具体资源归属已通过。
 //   - ValidateCSRF 只校验与会话绑定的 CSRF 令牌；CSRF 通过不会提升受限会话权限，
 //     也不代替 Application/权限判断。来源（Origin/Referer）仍由宿主 HTTP 防护层
 //     负责，不能只靠 CSRF 令牌。
@@ -89,11 +93,11 @@ type SessionRevokeOthersResult struct {
 type SessionService interface {
 	Validate(ctx context.Context, sessionSecret []byte) (SessionInfo, error)
 	ValidateCSRF(ctx context.Context, sessionSecret []byte, token string) error
-	// Authorize 对一个完整（非受限）会话执行“应用绑定 + 所需权限”联合检查，复用
-	// 既有授权内核（令牌/当前权限/应用状态/成员状态/数据范围交集语义由权限引擎
-	// 保证）。CSRFToken 非空时先校验 CSRF，但 CSRF 通过不会提高授权结果；受限会话
-	// 一律拒绝。授权拒绝以决策返回（Allowed=false + 稳定 Code/Reason，error 为 nil），
-	// 只有会话无效、输入非法或内部故障才返回 error。
+	// Authorize 对一个完整（非受限）会话执行“应用绑定 + 所需权限（+ 可选资源）”
+	// 联合检查，复用既有授权内核（令牌/当前权限/应用状态/成员状态/数据范围交集
+	// 语义由权限引擎保证）。CSRFToken 非空时先校验 CSRF，但 CSRF 通过不会提高授权
+	// 结果；受限会话一律拒绝。授权拒绝以决策返回（Allowed=false + 稳定 Code/Reason，
+	// error 为 nil），只有会话无效、输入非法或内部故障才返回 error。
 	Authorize(ctx context.Context, req SessionAccessRequest) (SessionAccessDecision, error)
 	Revoke(ctx context.Context, sessionSecret []byte) error
 	// ListDevices 分页列出当前会话所属用户的本人活动会话（设备列表）；不包含会话
@@ -107,7 +111,7 @@ type SessionService interface {
 	RevokeOtherDevices(ctx context.Context, req SessionRevokeOthersRequest) (SessionRevokeOthersResult, error)
 }
 
-// SessionAccessRequest 是“会话 + 应用绑定 + 所需权限”的联合检查请求。
+// SessionAccessRequest 是“会话 + 应用绑定 + 所需权限（+ 可选资源）”的联合检查请求。
 //
 // 安全语义：
 //   - SessionSecret 必须来自可信边界（Cookie/Authorization 或宿主自己的安全存储），
@@ -115,6 +119,8 @@ type SessionService interface {
 //   - AppID 必填：会话没有当前应用边界时不能做业务授权判断；
 //   - Permissions 必须是业务服务端确定的权限键，不能由客户端任意指定后当成“已授权”；
 //     Mode 为空按 all 处理；
+//   - ResourceID 为空表示只判定功能权限，不校验任何具体业务资源；非空时要求恰好
+//     一个权限键，并在功能权限通过后按该资源的数据范围判定（复用领域内核）；
 //   - CSRFToken 可选：适合写操作在同一个入口里同时校验 CSRF；它只参与校验，不会
 //     提升会话或权限。
 type SessionAccessRequest struct {
@@ -125,6 +131,9 @@ type SessionAccessRequest struct {
 	Permissions []string
 	// Mode 是 "all"（默认）或 "any"。
 	Mode string
+	// ResourceID 是可选的业务资源标识。为空表示只判定功能权限；非空表示要求同时
+	// 通过该资源的数据范围判定，此时 Permissions 必须恰好一个权限键。
+	ResourceID string
 	// CSRFToken 是可选的会话绑定 CSRF 令牌；非空时先校验。
 	CSRFToken string
 	// RequestID 用于关联调用、领域审计与返回错误；空编号统一生成，非法编号拒绝。
@@ -132,7 +141,8 @@ type SessionAccessRequest struct {
 }
 
 // SessionAccessDecision 是联合检查结果：Allowed=true 表示会话有效、属于当前应用
-// 且具备所需权限；Allowed=false 时 Code/Reason 是稳定公开拒绝码与原因。
+// 且具备所需权限（提供了 ResourceID 时还包括该资源的数据范围判定通过）；
+// Allowed=false 时 Code/Reason 是稳定公开拒绝码与原因。
 type SessionAccessDecision struct {
 	UserID    string
 	SessionID string
@@ -142,6 +152,13 @@ type SessionAccessDecision struct {
 	Reason    string
 	// RequestID 是与调用/审计/错误一致的请求编号。
 	RequestID string
+	// ResourceChecked 表示本次判定是否包含具体资源的数据范围校验（请求提供了
+	// ResourceID）。为 false 时 Allowed 只代表会话/应用/功能权限，不代表任何具体
+	// 资源归属已验证。
+	ResourceChecked bool
+	// ResourceID 是本次请求携带的资源标识回显（未提供时为 ""）；只有
+	// ResourceChecked=true 时才表示已按该资源完成数据范围判定。
+	ResourceID string
 }
 
 // SessionInfo 是校验通过后的会话快照；不含会话秘密和 CSRF 令牌。
