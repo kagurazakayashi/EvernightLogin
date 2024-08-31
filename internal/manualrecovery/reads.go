@@ -118,6 +118,8 @@ func (s *Service) GetApproval(ctx context.Context, caller Caller, requestID stri
 }
 
 // GetExecution 返回申请的执行记录（若已开始执行），供重复执行提示与完成结果展示。
+// 步骤 265：返回前按稳定业务去重键投影通知的实际投递状态（Notification 字段），
+// 让参与人/执行人可受权查询排队、发送后端接受、失败、取消等真实状态。
 func (s *Service) GetExecution(ctx context.Context, caller Caller, requestID string) (ExecutionRecord, bool, error) {
 	ctx = normalizeContext(ctx)
 	if err := s.requireEnabled(ctx, caller, "get_execution"); err != nil {
@@ -143,7 +145,26 @@ func (s *Service) GetExecution(ctx context.Context, caller Caller, requestID str
 	if executionErr != nil {
 		return ExecutionRecord{}, false, ErrStoreUnavailable
 	}
+	if executionFound {
+		execution.Notification = s.projectNotificationDelivery(ctx, execution)
+	}
 	return execution, executionFound, nil
+}
+
+// GetExecutionNotification 返回执行通知的受权只读视图（步骤 265）：业务通知状态 +
+// 从 mailer 投递记录投影的实际投递状态（queued/sending/succeeded/failed/cancelled）。
+// 授权语义与 GetExecution 完全一致：只有申请参与人或真实执行人可读；未开始执行时
+// found=false。读取不修改任何状态。
+func (s *Service) GetExecutionNotification(ctx context.Context, caller Caller,
+	requestID string) (NotificationDeliveryView, bool, error) {
+	execution, found, err := s.GetExecution(ctx, caller, requestID)
+	if err != nil {
+		return NotificationDeliveryView{}, false, err
+	}
+	if !found {
+		return NotificationDeliveryView{}, false, nil
+	}
+	return execution.Notification, true, nil
 }
 
 // callerIsExecutor 报告调用者是否为该申请真实执行记录的执行人（只读执行结果所需）。

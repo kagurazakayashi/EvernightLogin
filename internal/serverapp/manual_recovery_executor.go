@@ -284,6 +284,11 @@ func (e manualRecoveryExecutor) Compensate(context.Context, manualrecovery.Execu
 
 // manualRecoveryNotifier 通过可靠投递队列（步骤 197）或直接发送器向目标既有已验证
 // 邮箱发送完成/失败告知；不含链接、密码、验证码或秘密。
+//
+// 步骤 265：走可靠队列时返回投递关联回执（投递记录 ID、稳定业务去重键、是否命中
+// 幂等），不再丢弃 mailer.Enqueue 的返回值；业务服务据此在申请/执行结果中记录并可按
+// 去重键投影实际投递状态。同一申请同一类别的重试/重启/重复回调命中同一投递记录，不会
+// 产生第二封邮件。
 type manualRecoveryNotifier struct {
 	sender     mailer.Sender
 	deliveries mailer.DeliveryEnqueuer
@@ -295,18 +300,29 @@ type manualRecoveryNotifier struct {
 
 // Notify 实现 manualrecovery.Notifier；不含链接、密码、验证码或秘密。
 func (n manualRecoveryNotifier) Notify(ctx context.Context, notification manualrecovery.Notification) error {
+	_, err := n.NotifyWithReceipt(ctx, notification)
+	return err
+}
+
+// NotifyWithReceipt 实现 manualrecovery.ReceiptNotifier：返回可靠队列的投递关联回执
+// （步骤 265）。入队成功只代表“已受理/排队”，不代表已送达；直接发送路径返回 sent。
+func (n manualRecoveryNotifier) NotifyWithReceipt(ctx context.Context,
+	notification manualrecovery.Notification) (manualrecovery.NotificationReceipt, error) {
+	dedupKey := manualrecovery.NotificationDedupKey(notification.RequestID, notification.Kind)
+	receipt := manualrecovery.NotificationReceipt{State: manualrecovery.NotificationStateFailed,
+		DedupKey: dedupKey}
 	if n.store == nil || (n.deliveries == nil && n.sender == nil) {
-		return errors.New("人工恢复通知邮件发送器未装配")
+		return receipt, errors.New("人工恢复通知邮件发送器未装配")
 	}
 	var email string
 	if err := n.store.DB().QueryRowContext(ctx,
 		`SELECT email_normalized FROM user_emails
 		 WHERE user_id=? AND verified_at_ms IS NOT NULL
 		 ORDER BY updated_at_ms DESC LIMIT 1`, notification.TargetUserID).Scan(&email); err != nil {
-		return errors.New("读取目标已验证邮箱失败")
+		return receipt, errors.New("读取目标已验证邮箱失败")
 	}
 	if strings.TrimSpace(email) == "" {
-		return errors.New("目标没有已验证邮箱")
+		return receipt, errors.New("目标没有已验证邮箱")
 	}
 	subject := n.appName + " 人工恢复状态更新"
 	body := "你的账户人工恢复申请已处理。若这不是你发起的请求，请立即联系管理员。"
@@ -316,34 +332,57 @@ func (n manualRecoveryNotifier) Notify(ctx context.Context, notification manualr
 		body = "你的账户人工恢复申请未完成；账户状态未被伪造为已恢复，请联系管理员。"
 		event = "人工恢复未完成"
 	}
+	notice := &mailer.SecurityNoticeData{
+		Event: event, OccurredAt: notification.OccurredAt.UTC().Format(time.RFC3339),
+		ClientInfo: "人工恢复", AppName: n.appName, SupportURL: n.supportURL,
+	}
 	if n.deliveries != nil {
 		caller, callerErr := mailer.SystemCaller("manual-recovery")
 		if callerErr != nil {
-			return errors.New("构造人工恢复通知投递身份失败")
+			return receipt, errors.New("构造人工恢复通知投递身份失败")
 		}
-		key := "manual-recovery-" + notification.RequestID + "-" + string(notification.Kind)
-		if len(key) < 8 {
-			return errors.New("人工恢复通知幂等键无效")
-		}
-		if len(key) > 128 {
-			return errors.New("人工恢复通知幂等键超长")
-		}
-		if _, enqueueErr := n.deliveries.Enqueue(ctx, mailer.EnqueueRequest{
-			Caller: caller, IdempotencyKey: key, Kind: mailer.KindSecurityNotice,
-			Recipient: email,
-			Data: mailer.RenderRequest{Kind: mailer.KindSecurityNotice, Notice: &mailer.SecurityNoticeData{
-				Event: event, OccurredAt: notification.OccurredAt.UTC().Format(time.RFC3339),
-				ClientInfo: "人工恢复", AppName: n.appName, SupportURL: n.supportURL,
-			}},
-			RequestID: notification.RequestID,
-		}); enqueueErr != nil {
-			return errors.New("人工恢复通知入队失败")
-		}
-		return nil
+		return enqueueSecurityNotice(ctx, n.deliveries, caller, dedupKey, email,
+			notification.RequestID, notice)
 	}
 	message := mailer.Message{From: n.from,
 		To: []mailer.Address{{Spec: email}}, Subject: subject, TextBody: body}
-	return n.sender.Send(ctx, message)
+	if err := n.sender.Send(ctx, message); err != nil {
+		return receipt, err
+	}
+	receipt.State = manualrecovery.NotificationStateSent
+	return receipt, nil
+}
+
+// enqueueSecurityNotice 通过可靠投递队列发送一条安全告知，并返回投递关联回执
+// （步骤 265）。供人工恢复通知使用；后续管理员“直接改名/直接重置密码”等敏感操作告知
+// 复用同一函数，保证同类业务事件不重复发信，且读取时可按稳定去重键回看实际投递状态。
+//
+// 入队失败返回 State=failed 的回执与错误；调用方必须保留已完成业务，不得回滚，也不得
+// 把失败当成功。入队成功只代表已受理，不代表最终送达。
+func enqueueSecurityNotice(ctx context.Context, deliveries mailer.DeliveryEnqueuer,
+	caller mailer.Caller, dedupKey, recipient, requestID string,
+	notice *mailer.SecurityNoticeData) (manualrecovery.NotificationReceipt, error) {
+	receipt := manualrecovery.NotificationReceipt{State: manualrecovery.NotificationStateFailed,
+		DedupKey: dedupKey}
+	if deliveries == nil {
+		return receipt, errors.New("安全告知投递队列未装配")
+	}
+	if !manualrecovery.ValidNotificationDedupKey(dedupKey) {
+		return receipt, errors.New("安全告知业务去重键无效")
+	}
+	enqueued, err := deliveries.Enqueue(ctx, mailer.EnqueueRequest{
+		Caller: caller, IdempotencyKey: dedupKey, Kind: mailer.KindSecurityNotice,
+		Recipient: recipient,
+		Data:      mailer.RenderRequest{Kind: mailer.KindSecurityNotice, Notice: notice},
+		RequestID: requestID,
+	})
+	if err != nil {
+		return receipt, errors.New("安全告知入队失败")
+	}
+	receipt.State = manualrecovery.NotificationStateQueued
+	receipt.DeliveryID = enqueued.Record.ID
+	receipt.Duplicate = enqueued.Duplicate
+	return receipt, nil
 }
 
 // MarkRebindRequiredTx 实现 mfa 管理员重置事务内的可选标记：MFA 恢复成功后登记
@@ -367,7 +406,8 @@ reason_code=excluded.reason_code,source_request_id=excluded.source_request_id,cl
 
 // 编译期确认适配器满足领域契约。
 var (
-	_ mfa.AdminFactorResetBackend = manualRecoveryMFAAdminBackend{}
-	_ manualrecovery.Executor     = manualRecoveryExecutor{}
-	_ manualrecovery.Notifier     = manualRecoveryNotifier{}
+	_ mfa.AdminFactorResetBackend    = manualRecoveryMFAAdminBackend{}
+	_ manualrecovery.Executor        = manualRecoveryExecutor{}
+	_ manualrecovery.Notifier        = manualRecoveryNotifier{}
+	_ manualrecovery.ReceiptNotifier = manualRecoveryNotifier{}
 )

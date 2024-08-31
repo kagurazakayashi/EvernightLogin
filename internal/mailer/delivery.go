@@ -268,6 +268,59 @@ type DeliveryEnqueuer interface {
 	Enqueue(ctx context.Context, request EnqueueRequest) (EnqueueResult, error)
 }
 
+// DeliveryLookup 是只读投递记录查询契约（步骤 265）：供其他领域在读取自己的业务记录时
+// 投影与之关联的通知投递当前状态（queued/sending/succeeded/failed/cancelled）。
+//
+// 边界：本接口不做授权判断。调用方必须先完成自身业务授权，并且只允许用它查询通过
+// 稳定业务去重键绑定到该业务事件的那一条投递；不得把它当作任意投递枚举/搜索入口。
+// 读取投影不能修改投递记录；查询失败按“未关联”处理，不得据此把通知当成成功。
+type DeliveryLookup interface {
+	LookupDeliveryByIdempotencyKey(ctx context.Context, key string) (Record, bool, error)
+	LookupDeliveryByID(ctx context.Context, id string) (Record, bool, error)
+}
+
+// LookupDeliveryByIdempotencyKey 按业务去重键查询投递记录；不存在返回 found=false。
+func (s *DeliveryService) LookupDeliveryByIdempotencyKey(ctx context.Context, key string) (Record, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.opts.Store == nil {
+		return Record{}, false, fmt.Errorf("%w: 投递存储未装配", ErrStoreUnavailable)
+	}
+	if len(key) < 8 || len(key) > 128 {
+		return Record{}, false, fmt.Errorf("%w: 幂等键长度必须在 8～128 字节", ErrInvalidMessage)
+	}
+	record, err := s.opts.Store.GetByIdempotencyKey(ctx, key)
+	if err != nil {
+		if errors.Is(err, ErrDeliveryNotFound) {
+			return Record{}, false, nil
+		}
+		return Record{}, false, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+	return record, true, nil
+}
+
+// LookupDeliveryByID 按投递记录 ID 查询；不存在返回 found=false。
+func (s *DeliveryService) LookupDeliveryByID(ctx context.Context, id string) (Record, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.opts.Store == nil {
+		return Record{}, false, fmt.Errorf("%w: 投递存储未装配", ErrStoreUnavailable)
+	}
+	if id == "" {
+		return Record{}, false, fmt.Errorf("%w: 投递记录编号为空", ErrInvalidMessage)
+	}
+	record, err := s.opts.Store.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrDeliveryNotFound) {
+			return Record{}, false, nil
+		}
+		return Record{}, false, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+	return record, true, nil
+}
+
 // Enqueue 幂等入队一封邮件：先校验模板数据，再加密模板数据落库，最后创建任务。
 func (s *DeliveryService) Enqueue(ctx context.Context, request EnqueueRequest) (EnqueueResult, error) {
 	if ctx == nil {

@@ -85,8 +85,10 @@ const finishApprovalForExecutionSQL = `UPDATE manual_recovery_approvals
 SET status=?,finished_at_ms=?,row_version=row_version+1
 WHERE id=? AND status='active'`
 
+// 步骤 265：成功与失败执行的通知状态都要可查询，因此不再限定 status='succeeded'；
+// 这里只更新通知状态，不触碰执行/申请/批准状态，失败执行不会被改成成功。
 const setNotificationSQL = `UPDATE manual_recovery_executions
-SET notification_state=? WHERE request_id=? AND status='succeeded'`
+SET notification_state=? WHERE request_id=?`
 
 // Store 是 manualrecovery.Store 的 SQLite 实现。
 type Store struct {
@@ -427,7 +429,7 @@ func (s *Store) FinishExecutionTx(ctx context.Context, tx audit.Tx, requestID, e
 	return true, nil
 }
 
-// SetNotificationState 在独立事务中记录通知结果。
+// SetNotificationState 在独立事务中记录通知结果（成功/失败执行都可记录，步骤 265）。
 func (s *Store) SetNotificationState(ctx context.Context, requestID, state string) error {
 	if _, err := s.store.ExecContext(ctx, setNotificationSQL, state, requestID); err != nil {
 		return storeError("记录人工恢复通知状态", err)

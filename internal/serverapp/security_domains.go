@@ -467,10 +467,15 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		rebindMethods: rebindMethods,
 	}
 	var notifier manualrecovery.Notifier
+	// 步骤 265：读取执行结果时按业务去重键投影通知实际投递状态（只读查询，不做授权）。
+	var manualDeliveryLookup mailer.DeliveryLookup
 	if manualPolicy.Enabled {
 		notifier = manualRecoveryNotifier{sender: deps.Mail.Sender, deliveries: mailDeliveries,
 			store: deps.Store, from: deps.Mail.FromAddress(), appName: deps.Mail.AppDisplayName(),
 			supportURL: mailURLs.Support}
+		if mailDeliveries != nil {
+			manualDeliveryLookup = mailDeliveries
+		}
 	}
 	manualService, err := manualrecovery.New(manualrecovery.Options{
 		Store: manualStore, Audit: deps.Audit,
@@ -480,6 +485,7 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		Executor:            executor,
 		Notifier:            notifier,
 		NotificationsQueued: notifier != nil && mailDeliveries != nil,
+		Deliveries:          manualDeliveryLookup,
 		Policy:              manualPolicy,
 		OperationGuard: func(operation manualrecovery.OperationType) error {
 			if operation == manualrecovery.OperationMFAReset && len(rebindMethods) == 0 {

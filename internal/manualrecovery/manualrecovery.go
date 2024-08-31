@@ -447,6 +447,10 @@ type ExecutionRecord struct {
 	ErrorCode             string
 	StartedAt             time.Time
 	FinishedAt            time.Time
+	// Notification 是**读取时**投影的通知投递视图（步骤 265）：业务通知状态 + 按稳定
+	// 业务去重键从 mailer 投递记录投影的实际投递状态。它不持久化在人工恢复数据库，
+	// 由读取方法按通知状态与投递记录实时填充；直接读取存储得到的是零值。
+	Notification NotificationDeliveryView
 }
 
 // ExecutionCommand 是交给宿主执行器的受控执行命令；执行器必须由可信装配层实现，
@@ -554,6 +558,9 @@ const (
 	ActionExecution        = "manual_recovery.executed"
 	ActionExecutionFail    = "manual_recovery.execution_failed"
 	ActionDenied           = "manual_recovery.denied"
+	// ActionNotification 是执行结果通知的审计动作（步骤 265）：记录通知状态与投递
+	// 关联（dedup_key/delivery_id/delivery_state），不含收件地址、正文或链接。
+	ActionNotification = "manual_recovery.notification"
 )
 
 // ExecutionResult 是执行结果。
@@ -570,6 +577,11 @@ type ExecutionResult struct {
 	// NotificationState 是真实通知状态：sent/queued/failed/not_configured 等；
 	// queued 表示已交给可靠投递队列，不代表已送达（步骤 197）。
 	NotificationState string
+	// Notification 是本次通知的回执与投递投影（步骤 265）：包含稳定业务去重键、
+	// 关联投递记录 ID 与当前投递状态（queued/sending/succeeded/failed/cancelled）。
+	// 未走可靠队列、入队前失败或历史路径时 Matched=false。读取同一执行可使用
+	// Service.GetExecution/GetExecutionNotification 重新投影最新投递状态。
+	Notification NotificationDeliveryView
 }
 
 // newDomainID 生成领域内稳定 ID（前缀 + 128 位安全随机十六进制）。

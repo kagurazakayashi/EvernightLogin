@@ -293,8 +293,17 @@ protocol:
 - 迁移 0049 为 `security_notifications.state` 与 `manual_recovery_executions.notification_state`
   增加 `queued` 枚举（SQLite 按既有模式重建表）。`mail.enabled=false` 时邮件能力明确拒绝；
   人工恢复启用期要求真实邮件通道（队列或 Sender），否则 fail-closed。
-- 未完成（登记 203）：notification 记录 `queued→delivered/failed` 终态回写、通知页与投递
-  证据关联、已有 0048 生产库升级回归。197 未改 EvernightMail 子模块（固定 `b9891ac`）。
+- **步骤 265（人工恢复通知投递关联）**：通知器不再丢弃 `mailer.Enqueue` 返回值，执行结果与
+  受权读取（`GetExecution`/`GetExecutionNotification`）按稳定业务去重键
+  （`manual-recovery-<申请>-<完成|失败>`）投影投递记录的实际状态
+  （queued/sending/succeeded/failed/cancelled）与投递记录 ID；同一业务事件重复触发/重启
+  不会产生第二封邮件；通知状态回写失败不回滚业务且可按去重键回看终态；失败执行的通知
+  同样可查，不会被标记为恢复成功。`mailer` 新增只读 `DeliveryLookup` 契约（无授权判断，
+  调用方先完成自身业务授权）。管理员直接改名/改密告知复用同一个
+  `enqueueSecurityNotice` 入队函数（对应业务入口在本轮后续步骤实现后接线）。
+- 未完成（登记 203/265）：notification 记录 `queued→delivered/failed` 终态回写、通知页与
+  投递证据的**页面/公开门面**展示、已有 0048 生产库升级回归。197 未改 EvernightMail 子模块
+  （固定版本见 `docs/deployment/mail-source-closure.md`）。
 
 ## 7. 服务托管
 

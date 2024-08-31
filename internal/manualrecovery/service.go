@@ -13,6 +13,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/mailer"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 )
 
@@ -33,6 +34,10 @@ type Options struct {
 	// NotificationsQueued 表示 Notifier 走可靠投递队列（步骤 197）：通知成功仅代表
 	// enqueue 已受理，记录 state=queued 而不是 sent；真实送达/失败以投递任务为准。
 	NotificationsQueued bool
+	// Deliveries 是只读投递记录查询（步骤 265）：非空时读取执行结果会按稳定业务去重键
+	// 投影通知的实际投递状态（queued/sending/succeeded/failed/cancelled）；nil 时只显示
+	// 业务通知状态。它不做授权判断，调用方必须先完成自身业务授权。
+	Deliveries mailer.DeliveryLookup
 	// Policy 是 root/宿主显式配置的人工恢复制度；零值表示默认关闭。
 	Policy Policy
 	// OperationGuard 是宿主的操作类型可用性校验（步骤 188）：例如 Passkey 未启用时
@@ -658,7 +663,7 @@ func (s *Service) Execute(ctx context.Context, caller Caller, request ExecuteReq
 	if executeErr != nil {
 		s.logger.Warn("人工恢复执行器失败", "request_id", record.ID, "operation_type", string(record.Operation))
 		failErr := s.finishExecution(ctx, caller.actor, record, approval, execution, "failed", StatusFailed,
-			"not_configured", outcome)
+			NotificationStatePending, outcome)
 		s.notifyFailed(ctx, record)
 		if failErr != nil {
 			return ExecutionResult{}, errors.Join(ErrExecutionFailed, failErr)
@@ -676,14 +681,17 @@ func (s *Service) Execute(ctx context.Context, caller Caller, request ExecuteReq
 		}
 		return ExecutionResult{}, finishErr
 	}
-	_, notificationState := s.notifyCompleted(ctx, record)
+	notification := s.notifyCompleted(ctx, record)
 	s.logger.Info("人工恢复已执行完成", "request_id", record.ID, "execution_id", executionID,
-		"operation_type", string(record.Operation), "sessions_revoked", outcome.SessionsRevoked)
+		"operation_type", string(record.Operation), "sessions_revoked", outcome.SessionsRevoked,
+		"notification_state", notification.State)
 	return ExecutionResult{
 		RequestID: record.ID, ExecutionID: executionID, Status: StatusCompleted,
 		Operation: record.Operation, SessionsRevoked: outcome.SessionsRevoked,
 		FactorsReset: outcome.FactorsReset, CredentialIssued: outcome.ResetCredentialIssued,
-		NotificationSent: notificationState == "sent", NotificationState: notificationState,
+		NotificationSent:  notification.State == NotificationStateSent,
+		NotificationState: notification.State,
+		Notification:      notification,
 	}, nil
 }
 
@@ -1102,47 +1110,16 @@ func (s *Service) finishExecution(ctx context.Context, actor audit.Actor, record
 	return nil
 }
 
-// notifyCompleted 发送完成通知；失败只记录状态，不回滚已完成的恢复。
-func (s *Service) notifyCompleted(ctx context.Context, record RequestRecord) (bool, string) {
-	if isNilInterface(s.opts.Notifier) {
-		return false, "not_configured"
-	}
-	notification := Notification{
-		Kind: NotificationCompleted, RequestID: record.ID,
-		TargetUserID: record.TargetUserID, Operation: record.Operation, OccurredAt: s.clockNow(),
-	}
-	if err := s.opts.Notifier.Notify(ctx, notification); err != nil {
-		s.logger.Warn("人工恢复完成通知发送失败", "request_id", record.ID)
-		s.recordFailure(ctx, audit.Actor{Type: audit.ActorSystem, ID: "manual-recovery-service"},
-			ActionExecution, "manual_recovery_request", record.ID, "notification_failed", string(CodeMailDeliveryFailed), "")
-		if err := s.opts.Store.SetNotificationState(ctx, record.ID, "failed"); err != nil {
-			s.logger.Warn("人工恢复通知状态写入失败", "request_id", record.ID)
-		}
-		return false, "failed"
-	}
-	// 步骤 197：队列投递只代表已受理/排队；直接 Sender 才代表发送成功。
-	state := "sent"
-	if s.opts.NotificationsQueued {
-		state = "queued"
-	}
-	if err := s.opts.Store.SetNotificationState(ctx, record.ID, state); err != nil {
-		s.logger.Warn("人工恢复通知状态写入失败", "request_id", record.ID)
-	}
-	return true, state
+// notifyCompleted 发送完成通知并返回回执/投递投影；失败只记录状态，不回滚已完成的恢复
+// （步骤 265：通知器不再丢弃 Enqueue 返回的投递关联）。
+func (s *Service) notifyCompleted(ctx context.Context, record RequestRecord) NotificationDeliveryView {
+	return s.deliverExecutionNotification(ctx, record, NotificationCompleted)
 }
 
-// notifyFailed 尽力通知既有渠道执行失败（由宿主决定渠道），不改执行结果。
-func (s *Service) notifyFailed(ctx context.Context, record RequestRecord) {
-	if isNilInterface(s.opts.Notifier) {
-		return
-	}
-	notification := Notification{
-		Kind: NotificationFailed, RequestID: record.ID,
-		TargetUserID: record.TargetUserID, Operation: record.Operation, OccurredAt: s.clockNow(),
-	}
-	if err := s.opts.Notifier.Notify(ctx, notification); err != nil {
-		s.logger.Warn("人工恢复失败通知发送失败", "request_id", record.ID)
-	}
+// notifyFailed 尽力通知既有渠道执行失败（由宿主决定渠道），不改执行结果；同样记录
+// 通知状态与投递关联，且绝不把失败执行标记为恢复成功（步骤 265）。
+func (s *Service) notifyFailed(ctx context.Context, record RequestRecord) NotificationDeliveryView {
+	return s.deliverExecutionNotification(ctx, record, NotificationFailed)
 }
 
 // normalizeContext 把 nil ctx 当成 Background。

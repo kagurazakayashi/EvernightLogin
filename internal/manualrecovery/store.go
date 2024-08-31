@@ -53,5 +53,8 @@ type Store interface {
 		executionStatus string, requestStatus Status, approvalStatus ApprovalStatus,
 		outcome ExecutionOutcome, errorCode, notificationState string, now time.Time) (bool, error)
 	// SetNotificationState 在独立事务中记录通知结果（通知失败不回滚已完成的恢复）。
+	// 步骤 265：成功执行与失败执行都要记录通知状态（失败通知同样要可查询），因此不再
+	// 要求执行状态为 succeeded；本方法只更新 manual_recovery_executions.notification_state，
+	// 不改变执行/申请/批准状态，绝不允许把失败执行改成成功或反过来。
 	SetNotificationState(ctx context.Context, requestID, state string) error
 }
