@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"strings"
+
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
@@ -53,6 +55,19 @@ func (f *adminFacade) CreateUser(ctx context.Context,
 		CreatedAt: created.CreatedAt}, nil
 }
 
+// adminUserSearchFields 把公开门面的字符串搜索字段转换为账户领域白名单类型；
+// 空/未知值不在门面层猜测，交给领域服务统一校验并返回 REQ_INVALID。
+func adminUserSearchFields(fields []string) []account.UserSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]account.UserSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, account.UserSearchField(strings.TrimSpace(field)))
+	}
+	return converted
+}
+
 // ListUsers 分页查询用户（本机受信通道，或系统范围 users.read 权限）。
 //
 // 注意区分“领域操作名”与“授权权限键”：领域内部审计动作是 user.list（由账户服务
@@ -81,6 +96,7 @@ func (f *adminFacade) ListUsers(ctx context.Context,
 	result, err := managed.Account.ListUsers(ctx, caller, account.ListRequest{
 		Limit: page.Limit, Offset: page.Offset, Status: account.Status(req.Status),
 		Sort: account.SortField(req.Sort), Descending: req.Descending,
+		Search: req.Search, SearchFields: adminUserSearchFields(req.SearchFields),
 	})
 	if err != nil {
 		return AdminUserList{}, call.domainError("查询用户列表失败",

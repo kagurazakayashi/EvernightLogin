@@ -41,6 +41,17 @@
 <div class="ln-state"><p>{{t "page.admin.applications.members.no_write"}}</p></div>
 {{end}}
 <h2>{{t "page.admin.applications.members.list_title"}}</h2>
+<form method="get" action="{{route "admin.application_members"}}" class="ln-list-search" data-ln-module="list-search"
+      data-ln-loading="{{t "common.search.loading"}}" data-ln-updated="{{t "common.search.updated"}}"
+      data-ln-cancelled="{{t "common.search.cancelled"}}" data-ln-ignored="{{t "common.search.ignored"}}"
+      data-ln-failed="{{t "common.search.failed"}}">
+  <input type="hidden" name="app_id" value="{{$app.ID}}">
+  <label class="ln-field__label" for="members-search">{{t "common.search.label"}}</label>
+  <input class="ln-input" type="search" id="members-search" name="search" value="{{$root.Data.search}}" maxlength="64" placeholder="{{t "common.search.placeholder"}}">
+  <input type="hidden" name="offset" value="0">
+  {{template "component.button" (dict "label" (t "page.admin.applications.members.search_submit") "type" "submit")}}
+</form>
+<p class="ln-meta" data-ln-list-status aria-live="polite">{{t "page.admin.applications.members.search_hint"}}</p>
 {{if $root.Data.members}}
 {{range $root.Data.members}}
 <article class="ln-card" data-ln-component="member">
@@ -97,7 +108,7 @@
 {{else}}
 <div class="ln-state"><p class="ln-state__title">{{t "page.admin.applications.members.empty"}}</p></div>
 {{end}}
-{{if $root.Data.hasMore}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}"><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}&offset={{$root.Data.nextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
+{{if $root.Data.hasMore}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}"><a href="{{route "admin.application_members"}}?app_id={{$app.ID}}&search={{urlquery $root.Data.search}}&offset={{$root.Data.nextOffset}}">{{t "common.action.next"}}</a></nav>{{end}}
 <p><a href="{{route "admin.applications"}}">{{t "common.action.back"}}</a></p>
 {{else}}
 <div class="ln-state"><p class="ln-state__title">{{t "common.state.forbidden"}}</p></div>

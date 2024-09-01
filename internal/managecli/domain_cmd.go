@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	appapi "github.com/kagurazakayashi/EvernightLogin/app"
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	appsqlite "github.com/kagurazakayashi/EvernightLogin/internal/app/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
@@ -1067,6 +1068,7 @@ func (r *runner) runAppMembers(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
 		flagDef{name: "status", value: true}, flagDef{name: "sort", value: true},
+		flagDef{name: "search", value: true}, flagDef{name: "search-fields", value: true},
 		flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
@@ -1074,6 +1076,7 @@ func (r *runner) runAppMembers(args []string) int {
 	if len(positional) != 1 {
 		return r.usage("用法：loginctl app members <application_id> --operator <id> " +
 			"[--status active|disabled] [--sort created_at|updated_at|user_id] " +
+			"[--search <关键字>] [--search-fields username,nickname] " +
 			"[--desc true] [--limit N] [--offset N] [--json]")
 	}
 	r.json = boolFlag(values, "json")
@@ -1110,9 +1113,19 @@ func (r *runner) runAppMembers(args []string) int {
 	if err != nil {
 		return r.usage("--operator 本地管理员标识无效")
 	}
+	searchText := strings.TrimSpace(stringFlag(values, "search"))
+	var searchFields []account.UserSearchField
+	for _, part := range strings.Split(stringFlag(values, "search-fields"), ",") {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		searchFields = append(searchFields, account.UserSearchField(value))
+	}
 	result, err := service.ListApplicationMembers(r.ctx, caller, app.MemberListRequest{
 		ApplicationID: strings.TrimSpace(positional[0]), Limit: limit, Offset: offset,
-		Status: status, Sort: app.MemberSortField(sortField), Descending: descending})
+		Status: status, Sort: app.MemberSortField(sortField), Descending: descending,
+		Search: searchText, SearchFields: searchFields})
 	if err != nil {
 		return r.domainFailure("读取应用成员", app.CodeOf(err), err)
 	}
@@ -1124,7 +1137,7 @@ func (r *runner) runAppMembers(args []string) int {
 	}
 	output := map[string]any{"members": members, "has_more": result.HasMore,
 		"limit": limit, "offset": offset, "next_offset": domainNextOffset(offset, len(members)),
-		"sort": sortField, "desc": descending}
+		"sort": sortField, "desc": descending, "search": searchText}
 	if r.json {
 		return r.succeed(output)
 	}

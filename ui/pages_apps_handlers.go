@@ -255,8 +255,15 @@ func (h *appsPageHandlers) members(ctx context.Context, request *http.Request,
 	if err != nil {
 		return appsErrorOutcome(err, nil, "page.admin.applications.members.load_failed"), nil
 	}
+	search, ok := normalizeListSearchInput(request.URL.Query().Get("search"))
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			Data:         map[string]any{"app": application},
+			ErrorSummary: text("page.admin.applications.members.search_invalid")}, nil
+	}
 	query := UIAppMemberQuery{Status: strings.TrimSpace(request.URL.Query().Get("status")),
-		Sort: strings.TrimSpace(request.URL.Query().Get("sort")), Limit: 20}
+		Sort: strings.TrimSpace(request.URL.Query().Get("sort")), Limit: 20,
+		Search: search}
 	offset, ok := appsParseOffset(request.URL.Query().Get("offset"))
 	if !ok {
 		return UIPageOutcome{StatusCode: http.StatusBadRequest,
@@ -272,6 +279,7 @@ func (h *appsPageHandlers) members(ctx context.Context, request *http.Request,
 	return UIPageOutcome{Data: map[string]any{"app": application,
 			"members": result.Members, "hasMore": result.HasMore,
 			"nextOffset": result.NextOffset, "status": query.Status, "sort": query.Sort,
+			"search": query.Search,
 			"offset": offset, "requestStatus": strings.TrimSpace(request.URL.Query().Get("status"))}},
 		nil
 }

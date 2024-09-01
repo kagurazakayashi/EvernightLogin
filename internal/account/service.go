@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 )
 
@@ -85,12 +86,18 @@ type CompleteDeletionRequest struct {
 
 // ListQuery 是已通过白名单校验的分页查询参数；仓储负责把 SortField 映射为固定
 // SQL 列并加 id 作为稳定次序键。
+//
+// Search 是已按用户名口径规范化（NFKC + Unicode 大小写折叠 + NFC）的字面搜索
+// 文本；空表示不搜索。SearchFields 是已校验、去重后的搜索字段白名单（默认
+// 用户名 + 昵称），仓储据此生成参数化 LIKE 条件（ESCAPE '!'）。
 type ListQuery struct {
-	Limit      int
-	Offset     int
-	Status     Status
-	Sort       SortField
-	Descending bool
+	Limit        int
+	Offset       int
+	Status       Status
+	Sort         SortField
+	Descending   bool
+	Search       string
+	SearchFields []UserSearchField
 }
 
 // Options 是构造账户服务的显式依赖。
@@ -654,13 +661,48 @@ func normalizeListRequest(request ListRequest) (ListQuery, error) {
 	if request.Status != "" && !request.Status.Valid() {
 		return ListQuery{}, fmt.Errorf("%w: 状态过滤值无效", ErrInvalidRequest)
 	}
+	searchText, err := search.NormalizeQuery(request.Search)
+	if err != nil {
+		return ListQuery{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	searchFields, err := NormalizeUserSearchFields(request.SearchFields)
+	if err != nil {
+		return ListQuery{}, err
+	}
 	return ListQuery{
-		Limit:      limit,
-		Offset:     request.Offset,
-		Status:     request.Status,
-		Sort:       sortField,
-		Descending: request.Descending,
+		Limit:        limit,
+		Offset:       request.Offset,
+		Status:       request.Status,
+		Sort:         sortField,
+		Descending:   request.Descending,
+		Search:       searchText,
+		SearchFields: searchFields,
 	}, nil
+}
+
+// NormalizeUserSearchFields 校验并去重用户列表搜索字段白名单：空列表使用默认
+// 字段（用户名、昵称）；未知字段（包括尚未提供字段可见权限的邮箱/电话）一律
+// 返回 ErrInvalidRequest，不静默回退到默认字段。应用成员等复用同一约定的列表
+// 可以直接调用它，避免复制一份容易漂移的白名单。
+func NormalizeUserSearchFields(fields []UserSearchField) ([]UserSearchField, error) {
+	if len(fields) == 0 {
+		return DefaultUserSearchFields(), nil
+	}
+	seen := make(map[UserSearchField]struct{}, len(fields))
+	normalized := make([]UserSearchField, 0, len(fields))
+	for _, field := range fields {
+		value := UserSearchField(strings.TrimSpace(string(field)))
+		if !value.Valid() {
+			return nil, fmt.Errorf("%w: 搜索字段 %q 不在允许列表内（仅支持 username/nickname；"+
+				"邮箱/电话搜索需要独立的数据字段可见权限，当前未提供）", ErrInvalidRequest, field)
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized, nil
 }
 
 // recordProtectedRejection 为受保护账户（root）的普通管理拒绝写一条失败审计，

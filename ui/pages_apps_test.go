@@ -29,10 +29,12 @@ type fakeAppsBackend struct {
 	certificate   *login.UIAppCertificate
 	secret        string
 	profileUpdate login.UIApplicationChange
-	createRequest login.UIApplicationCreate
-	canCreate     bool
-	memberState   bool
-	stateChanged  bool
+	// lastMemberQuery 记录最近一次成员列表查询，供搜索参数透传测试断言。
+	lastMemberQuery login.UIAppMemberQuery
+	createRequest   login.UIApplicationCreate
+	canCreate       bool
+	memberState     bool
+	stateChanged    bool
 	// 步骤 190：删除预览/逻辑删除。
 	deleteImpact login.UIApplicationDeleteImpact
 	deleteCalled bool
@@ -111,8 +113,9 @@ func (f *fakeAppsBackend) SetApplicationState(_ context.Context, _, _ string, en
 	return updated, true, nil
 }
 
-func (f *fakeAppsBackend) ListMembers(context.Context, string,
-	string, login.UIAppMemberQuery) (login.UIAppMemberPage, error) {
+func (f *fakeAppsBackend) ListMembers(_ context.Context, _ string,
+	_ string, query login.UIAppMemberQuery) (login.UIAppMemberPage, error) {
+	f.lastMemberQuery = query
 	if err := f.fail("members"); err != nil {
 		return login.UIAppMemberPage{}, err
 	}

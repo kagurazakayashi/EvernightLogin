@@ -112,7 +112,7 @@ func (a *Adapter) ListUsers(ctx context.Context, adminUserID string,
 	}
 	result, err := a.opts.Account.ListUsers(ctx, caller, account.ListRequest{
 		Limit: limit, Offset: query.Offset, Status: status, Sort: sortField,
-		Descending: query.Descending})
+		Descending: query.Descending, Search: query.Search})
 	if err != nil {
 		return ui.UIAdminUserPage{}, mapAccountError(err)
 	}

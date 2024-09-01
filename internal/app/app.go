@@ -249,6 +249,10 @@ type ListRequest struct {
 	Sort           SortField
 	Descending     bool
 	IncludeDeleted bool
+	// Search 是可选的字面子串搜索（空表示不过滤）：默认匹配应用名称与描述，
+	// 在可管理范围过滤之后执行；SearchFields 非空时只能包含白名单字段。
+	Search       string
+	SearchFields []ApplicationSearchField
 }
 
 // ListResult 是应用列表结果。

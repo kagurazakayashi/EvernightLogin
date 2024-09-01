@@ -2,7 +2,12 @@
 {{define "content"}}
 {{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
 <p>{{t "page.admin.users.scope_hint"}}</p>
-<form method="get" action="{{route "admin.users"}}">
+<form method="get" action="{{route "admin.users"}}" class="ln-list-search" data-ln-module="list-search"
+      data-ln-loading="{{t "common.search.loading"}}" data-ln-updated="{{t "common.search.updated"}}"
+      data-ln-cancelled="{{t "common.search.cancelled"}}" data-ln-ignored="{{t "common.search.ignored"}}"
+      data-ln-failed="{{t "common.search.failed"}}">
+  <label class="ln-field__label" for="users-search">{{t "common.search.label"}}</label>
+  <input class="ln-input" type="search" id="users-search" name="search" value="{{.Data.query.Search}}" maxlength="64" placeholder="{{t "common.search.placeholder"}}">
   <label class="ln-field__label" for="users-status">{{t "common.label.status"}}</label>
   <select class="ln-input" id="users-status" name="status">
     <option value="">{{t "page.admin.users.status_all"}}</option>
@@ -21,7 +26,7 @@
   <input type="hidden" name="offset" value="0">
   {{template "component.button" (dict "label" (t "page.admin.users.filter") "type" "submit")}}
 </form>
-<p class="ln-meta">{{t "page.admin.users.search_unavailable"}} {{t "page.admin.users.total_unknown"}}</p>
+<p class="ln-meta" data-ln-list-status aria-live="polite">{{t "page.admin.users.search_hint"}} {{t "page.admin.users.total_unknown"}}</p>
 <table class="ln-table">
   <caption>{{t "page.admin.users.title"}}</caption>
   <thead><tr><th>{{t "common.label.username"}}</th><th>{{t "common.label.display_name"}}</th><th>{{t "common.label.status"}}</th><th>{{t "page.admin.users.validity_expiry_header"}}</th><th>{{t "page.admin.users.validity_status_header"}}</th><th>{{t "common.label.created"}}</th><th>{{t "common.label.updated"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
@@ -35,6 +40,6 @@
   </tr>{{else}}<tr><td colspan="8">{{t "page.admin.users.empty"}}</td></tr>{{end}}</tbody>
 </table>
 <p><a class="ln-button" href="{{route "admin.user_create"}}">{{t "page.admin.users.create"}}</a></p>
-{{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.users"}}?status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&desc={{if .Data.query.Descending}}1{{else}}0{{end}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
-{{if .Data.hasMore}}<p><a rel="next" href="{{route "admin.users"}}?status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&desc={{if .Data.query.Descending}}1{{else}}0{{end}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.users"}}?search={{urlquery .Data.query.Search}}&status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&desc={{if .Data.query.Descending}}1{{else}}0{{end}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
+{{if .Data.hasMore}}<p><a rel="next" href="{{route "admin.users"}}?search={{urlquery .Data.query.Search}}&status={{.Data.query.Status}}&sort={{.Data.query.Sort}}&desc={{if .Data.query.Descending}}1{{else}}0{{end}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
 {{end}}

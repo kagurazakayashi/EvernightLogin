@@ -57,6 +57,10 @@ type ListQuery struct {
 	ApplicationIDs  []string
 	// IncludeDeleted 为 true 时包含已逻辑删除的应用（默认只返回未删除应用）。
 	IncludeDeleted bool
+	// Search 是已按用户名口径规范化（NFKC + 大小写折叠 + NFC）的字面搜索文本；
+	// 空表示不搜索。SearchFields 是已校验、去重的搜索字段白名单。
+	Search       string
+	SearchFields []ApplicationSearchField
 }
 
 // DeletionChange 是已通过状态机与行版本校验的逻辑删除条件更新。
@@ -878,8 +882,13 @@ func normalizeListRequest(request ListRequest) (ListQuery, error) {
 	if request.Status != "" && !request.Status.Valid() {
 		return ListQuery{}, fmt.Errorf("%w: 状态过滤值无效", ErrInvalidRequest)
 	}
+	searchText, searchFields, err := normalizeApplicationSearch(request.Search, request.SearchFields)
+	if err != nil {
+		return ListQuery{}, err
+	}
 	return ListQuery{Limit: limit, Offset: request.Offset, Status: request.Status,
-		Sort: sortField, Descending: request.Descending}, nil
+		Sort: sortField, Descending: request.Descending,
+		Search: searchText, SearchFields: searchFields}, nil
 }
 
 // mapCriticalError 把事务错误映射为应用领域错误；审计失败优先判定。

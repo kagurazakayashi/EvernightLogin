@@ -16,6 +16,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
@@ -161,6 +162,30 @@ FROM applications a LEFT JOIN scopes s ON s.app_id=a.id AND s.kind='application'
 			args = append(args, id)
 		}
 		conditions = append(conditions, "a.id IN ("+strings.Join(placeholders, ",")+")")
+	}
+	if query.Search != "" {
+		pattern := search.ContainsPattern(query.Search)
+		if pattern != "" {
+			searchClauses := make([]string, 0, len(query.SearchFields))
+			for _, field := range query.SearchFields {
+				switch field {
+				case app.ApplicationSearchName:
+					searchClauses = append(searchClauses, `LOWER(a.name) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				case app.ApplicationSearchDescription:
+					searchClauses = append(searchClauses, `LOWER(a.description) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				default:
+					// 服务层已按白名单校验；仓储再次 fail-closed，不生成未知列。
+					return nil, false, fmt.Errorf("%w: 搜索字段不在允许列表内",
+						app.ErrInvalidRequest)
+				}
+			}
+			if len(searchClauses) == 0 {
+				return nil, false, fmt.Errorf("%w: 搜索字段为空", app.ErrInvalidRequest)
+			}
+			conditions = append(conditions, `(`+strings.Join(searchClauses, ` OR `)+`)`)
+		}
 	}
 	if len(conditions) > 0 {
 		statement += ` WHERE ` + strings.Join(conditions, " AND ")

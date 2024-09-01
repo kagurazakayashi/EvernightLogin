@@ -529,7 +529,7 @@ func (a *AppsAdapter) ListMembers(ctx context.Context, adminUserID, applicationI
 	}
 	result, err := a.opts.Apps.ListApplicationMembers(ctx, caller, app.MemberListRequest{
 		ApplicationID: applicationID, Limit: limit, Offset: query.Offset,
-		Status: status, Sort: sortField, Descending: query.Descending})
+		Status: status, Sort: sortField, Descending: query.Descending, Search: query.Search})
 	if err != nil {
 		return ui.UIAppMemberPage{}, mapAppsError(err)
 	}

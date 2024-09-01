@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/app"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 )
 
 // 应用成员持久化 SQL。表结构来自 migrations/0001_identity_and_scope_core.sql 的
@@ -63,6 +65,10 @@ func (s *Store) GetMembership(ctx context.Context, applicationID, userID string)
 
 // ListMemberships 按应用隔离执行有限分页查询；排序只映射白名单固定列名，不拼接
 // 调用方原文，也不允许查询其他应用。
+// ListMemberships 在指定应用范围内分页列出成员。可选的字面搜索按成员的全局账户
+// 用户名/昵称匹配：先固定 m.app_id 范围，再 JOIN users 做参数化 LIKE（ESCAPE '!'），
+// 因此应用管理员不能借助搜索读取其他应用的成员或枚举未加入本应用的用户。搜索与
+// 状态、白名单排序、Limit/Offset 组合；查询取 Limit+1 行判断 HasMore。
 func (s *Store) ListMemberships(ctx context.Context, query app.MemberListQuery) ([]app.Membership, bool, error) {
 	column, ok := memberSortColumn(query.Sort)
 	if !ok {
@@ -72,12 +78,42 @@ func (s *Store) ListMemberships(ctx context.Context, query app.MemberListQuery) 
 	if query.Descending {
 		direction = "DESC"
 	}
-	statement := `SELECT ` + memberColumns + ` FROM app_memberships m WHERE m.app_id=?`
-	args := make([]any, 0, 4)
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, 6)
 	args = append(args, query.ApplicationID)
 	if query.Status != "" {
-		statement += ` AND m.status=?`
+		conditions = append(conditions, `m.status=?`)
 		args = append(args, string(query.Status))
+	}
+	statement := `SELECT ` + memberColumns + ` FROM app_memberships m`
+	if query.Search != "" {
+		pattern := search.ContainsPattern(query.Search)
+		if pattern != "" {
+			searchClauses := make([]string, 0, len(query.SearchFields))
+			for _, field := range query.SearchFields {
+				switch field {
+				case account.UserSearchUsername:
+					searchClauses = append(searchClauses, `u.username_normalized LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				case account.UserSearchNickname:
+					searchClauses = append(searchClauses, `LOWER(u.nickname) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				default:
+					// 服务层已按白名单校验；仓储再次 fail-closed，不生成未知列。
+					return nil, false, fmt.Errorf("%w: 搜索字段不在允许列表内",
+						app.ErrInvalidRequest)
+				}
+			}
+			if len(searchClauses) == 0 {
+				return nil, false, fmt.Errorf("%w: 搜索字段为空", app.ErrInvalidRequest)
+			}
+			statement += ` JOIN users u ON u.id = m.user_id`
+			conditions = append(conditions, `(`+strings.Join(searchClauses, ` OR `)+`)`)
+		}
+	}
+	statement += ` WHERE m.app_id=?`
+	if len(conditions) > 0 {
+		statement += ` AND ` + strings.Join(conditions, ` AND `)
 	}
 	statement += ` ORDER BY ` + column + ` ` + direction + `, m.user_id ` + direction + ` LIMIT ? OFFSET ?`
 	args = append(args, query.Limit+1, query.Offset)

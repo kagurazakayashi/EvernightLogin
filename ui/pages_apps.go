@@ -259,6 +259,9 @@ type UIAppMemberQuery struct {
 	Descending bool
 	Limit      int
 	Offset     int
+	// Search 是可选的字面子串搜索（成员全局账户用户名/昵称，空表示不过滤）；
+	// 只在当前应用成员范围内匹配，分页链接必须携带它。
+	Search string
 }
 
 // UIAppMemberPage 是成员列表分页结果。
@@ -732,6 +735,7 @@ var builtinAppsMessages = map[string]string{
 	"page.admin.applications.profile.owner_denied":         "应用管理员不能变更负责人；变更负责人也不会自动转移任何权限",
 	"page.admin.applications.members.load_failed":          "无法读取该应用成员列表",
 	"page.admin.applications.members.invalid":              "成员请求未通过校验，请按字段说明修改",
+	"page.admin.applications.members.search_invalid":       "搜索条件无效：仅支持 64 个字符以内的用户名/昵称字面搜索",
 	"page.admin.applications.members.add_failed":           "添加成员未完成；目标账户状态、应用状态、重复成员与可转授权限由服务端校验",
 	"page.admin.applications.members.profile_failed":       "保存应用内成员资料未完成",
 	"page.admin.applications.members.state_failed":         "成员启停未完成",

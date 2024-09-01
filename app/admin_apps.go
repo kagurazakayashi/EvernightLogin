@@ -147,7 +147,8 @@ func (f *adminFacade) ListApplications(ctx context.Context,
 	result, err := managed.App.ListApplications(ctx, caller, app.ListRequest{
 		Limit: page.Limit, Offset: page.Offset, Status: status,
 		Sort:       app.SortField(strings.TrimSpace(req.Sort)),
-		Descending: req.Descending, IncludeDeleted: req.IncludeDeleted})
+		Descending: req.Descending, IncludeDeleted: req.IncludeDeleted,
+		Search: req.Search, SearchFields: adminApplicationSearchFields(req.SearchFields)})
 	if err != nil {
 		return AdminApplicationList{}, call.domainError("查询应用列表失败", string(app.CodeOf(err)))
 	}
@@ -193,7 +194,8 @@ func (f *adminFacade) ListApplicationMembers(ctx context.Context,
 	result, err := managed.App.ListApplicationMembers(ctx, caller, app.MemberListRequest{
 		ApplicationID: applicationID, Limit: page.Limit, Offset: page.Offset,
 		Status: status, Sort: app.MemberSortField(strings.TrimSpace(req.Sort)),
-		Descending: req.Descending})
+		Descending: req.Descending, Search: req.Search,
+		SearchFields: adminUserSearchFields(req.SearchFields)})
 	if err != nil {
 		if replaced, ok := call.notFoundIfTargetMissing(err, app.ErrApplicationNotFound, "application"); ok {
 			return AdminApplicationMemberList{}, replaced
@@ -297,4 +299,17 @@ func (f *adminFacade) ListApplicationGroups(ctx context.Context,
 	}
 	return AdminGroupList{Groups: groups, HasMore: result.HasMore,
 		Page: NewAdminPageInfo(page, len(groups), result.HasMore)}, nil
+}
+
+// adminApplicationSearchFields 把公开门面的字符串搜索字段转换为应用领域白名单；
+// 空/未知值交给领域服务统一校验并返回 REQ_INVALID。
+func adminApplicationSearchFields(fields []string) []app.ApplicationSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]app.ApplicationSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, app.ApplicationSearchField(strings.TrimSpace(field)))
+	}
+	return converted
 }

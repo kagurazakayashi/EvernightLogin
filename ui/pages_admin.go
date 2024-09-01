@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // UIPageAdminOptions 是步骤 68 管理页配置。
@@ -122,6 +123,9 @@ type UIAdminUserQuery struct {
 	Descending bool
 	Limit      int
 	Offset     int
+	// Search 是可选的字面子串搜索（用户名/昵称，空表示不过滤）；超过上限或含
+	// 非法字符时页面返回 REQ_INVALID 提示，不静默截断。分页链接必须携带它。
+	Search string
 }
 
 // UIAdminUserPage 是分页结果（HasMore，无总数）。
@@ -440,11 +444,35 @@ func (h *adminPageHandlers) HandlePage(ctx context.Context, request *http.Reques
 	}
 }
 
+// maxListSearchRunes 是管理页列表搜索框可提交的字符上限（与服务端领域上限一致，
+// 页面只做友好提示；真正校验与规范化仍由领域服务在服务端完成）。
+const maxListSearchRunes = 64
+
+// normalizeListSearchInput 规范化页面搜索框输入：去首尾空白、空值表示不搜索、
+// 超长视为非法（返回 ok=false）。不做大小写/全角折叠，折叠由服务端领域层统一
+// 完成，避免页面与 Go/HTTP/CLI 各自维护一份口径。
+func normalizeListSearchInput(raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", true
+	}
+	if utf8.RuneCountInString(value) > maxListSearchRunes {
+		return "", false
+	}
+	return value, true
+}
+
 // users 渲染状态筛选+受控排序+分页列表。
 func (h *adminPageHandlers) users(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
+	search, ok := normalizeListSearchInput(request.URL.Query().Get("search"))
+	if !ok {
+		return UIPageOutcome{StatusCode: http.StatusBadRequest,
+			ErrorSummary: text("page.admin.users.search_invalid")}, nil
+	}
 	query := UIAdminUserQuery{Status: request.URL.Query().Get("status"),
 		Sort: request.URL.Query().Get("sort"), Limit: 20,
+		Search:     search,
 		Descending: request.URL.Query().Get("desc") == "1"}
 	if raw := request.URL.Query().Get("offset"); raw != "" {
 		offset, err := strconv.Atoi(raw)
@@ -888,6 +916,7 @@ var builtinAdminMessages = map[string]string{
 	"page.admin.common.conflict":                 "数据已被其他操作修改，请重新读取后再试",
 	"page.admin.users.load_failed":               "无法读取用户列表，请稍后重试",
 	"page.admin.users.invalid":                   "用户请求参数无效",
+	"page.admin.users.search_invalid":            "搜索条件无效：仅支持 64 个字符以内的用户名/昵称字面搜索",
 	"page.admin.users.create_failed":             "创建用户未完成，请检查输入",
 	"page.admin.users.update_failed":             "资料保存失败，请重新读取后再试",
 	"page.admin.users.state_failed":              "状态操作未完成，请重新读取后再试",

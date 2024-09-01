@@ -10,6 +10,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	"github.com/kagurazakayashi/EvernightLogin/internal/securityevent"
 )
 
@@ -590,6 +591,16 @@ func normalizeMemberListRequest(request MemberListRequest) (MemberListQuery, err
 	if request.Status != "" && !request.Status.Valid() {
 		return MemberListQuery{}, fmt.Errorf("%w: 成员状态过滤值无效", ErrInvalidRequest)
 	}
+	searchText, err := search.NormalizeQuery(request.Search)
+	if err != nil {
+		return MemberListQuery{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	searchFields, err := account.NormalizeUserSearchFields(request.SearchFields)
+	if err != nil {
+		// 复用账户白名单的错误语义（未知字段/邮箱电话），并保持本领域错误包装，
+		// 调用方用 errors.Is(app.ErrInvalidRequest) 判断仍然成立。
+		return MemberListQuery{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
 	return MemberListQuery{
 		ApplicationID: request.ApplicationID,
 		Limit:         limit,
@@ -597,5 +608,7 @@ func normalizeMemberListRequest(request MemberListRequest) (MemberListQuery, err
 		Status:        request.Status,
 		Sort:          sortField,
 		Descending:    request.Descending,
+		Search:        searchText,
+		SearchFields:  searchFields,
 	}, nil
 }

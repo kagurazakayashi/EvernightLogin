@@ -235,14 +235,53 @@ type CreateRequest struct {
 	Timezone  string
 }
 
+// UserSearchField 是 ListUsers 模糊搜索允许的字段白名单（字面子串匹配）。
+//
+// 默认只搜索用户名与昵称；邮箱/电话不默认纳入，它们需要独立的“字段可见”权限，
+// 本轮没有该权限键，因此显式请求会被拒绝而不是静默忽略。用户名匹配使用存储的
+// username_normalized（NFKC + 大小写折叠 + NFC），与唯一性/登录精确查询同一口径；
+// 昵称匹配在 SQL 层按方言大小写规则（SQLite 仅能折叠 ASCII，中文等无大小写字段
+// 不受影响）。模糊搜索不参与登录或唯一身份判定，GetUserByUsername 仍是精确查找。
+type UserSearchField string
+
+const (
+	// UserSearchUsername 匹配用户名（规范化后的字面子串）。
+	UserSearchUsername UserSearchField = "username"
+	// UserSearchNickname 匹配昵称（字面子串，大小写按方言规则折叠）。
+	UserSearchNickname UserSearchField = "nickname"
+)
+
+// Valid 报告搜索字段是否在白名单内。
+func (f UserSearchField) Valid() bool {
+	switch f {
+	case UserSearchUsername, UserSearchNickname:
+		return true
+	default:
+		return false
+	}
+}
+
+// DefaultUserSearchFields 返回不指定字段时的默认搜索字段（用户名、昵称）。
+func DefaultUserSearchFields() []UserSearchField {
+	return []UserSearchField{UserSearchUsername, UserSearchNickname}
+}
+
 // ListRequest 是分页检索参数。零值 Limit 使用默认值 20，零值 Sort 使用
 // SortCreatedAt；Status 为空表示不过滤状态。
+//
+// Search 为可选的字面子串搜索（空表示不过滤，保持原列表）；SearchFields 为空时
+// 使用 DefaultUserSearchFields，非空时只能包含白名单字段，未知字段（含邮箱/电话）
+// 返回 ErrInvalidRequest。搜索与 Status/Sort/Limit/Offset 在同一查询组合，先按
+// 授权范围过滤（由服务层判定）再搜索与分页；本列表是 offset 分页，没有服务端
+// 游标，因此搜索条件必须随每次请求重新提交，不存在“旧游标套用新搜索”的语义。
 type ListRequest struct {
-	Limit      int
-	Offset     int
-	Status     Status
-	Sort       SortField
-	Descending bool
+	Limit        int
+	Offset       int
+	Status       Status
+	Sort         SortField
+	Descending   bool
+	Search       string
+	SearchFields []UserSearchField
 }
 
 // ListResult 是分页检索结果。HasMore 表示按当前排序在 Offset+Limit 之后仍有

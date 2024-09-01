@@ -10,10 +10,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
@@ -154,6 +156,12 @@ func (s *Store) GetUserByUsername(ctx context.Context, normalizedUsername string
 // ListUsers 执行有限分页查询。Sort 必须是 account.SortField 白名单值，仓储再次
 // 校验并映射为固定列名，绝不拼接调用方字符串。查询同时取 Limit+1 行用于判断
 // HasMore。
+//
+// 可选的字面搜索与状态/排序/分页组合在同一 WHERE 中，且在授权范围过滤之后执行；
+// 只用参数化 LIKE（ESCAPE '!'），模式由 internal/search 转义 `%`、`_`、`\`、`[`、
+// `]` 与 ESCAPE 字符自身，用户输入不会变成 SQL 模式或注入。用户名用已规范化的
+// username_normalized 列匹配（复用 NFKC + 大小写折叠口径，全角/大小写按同一字面）；
+// 昵称用 LOWER(nickname) 按方言大小写规则匹配（SQLite 只折叠 ASCII，中文不受影响）。
 func (s *Store) ListUsers(ctx context.Context, query account.ListQuery) ([]account.User, bool, error) {
 	column, ok := sortColumn(query.Sort)
 	if !ok {
@@ -163,11 +171,39 @@ func (s *Store) ListUsers(ctx context.Context, query account.ListQuery) ([]accou
 	if query.Descending {
 		direction = "DESC"
 	}
-	statement := `SELECT ` + selectUserColumns + ` FROM users`
-	args := make([]any, 0, 4)
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, 6)
 	if query.Status != "" {
-		statement += ` WHERE status=?`
+		conditions = append(conditions, `status=?`)
 		args = append(args, string(query.Status))
+	}
+	if query.Search != "" {
+		pattern := search.ContainsPattern(query.Search)
+		if pattern != "" {
+			searchClauses := make([]string, 0, len(query.SearchFields))
+			for _, field := range query.SearchFields {
+				switch field {
+				case account.UserSearchUsername:
+					searchClauses = append(searchClauses, `username_normalized LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				case account.UserSearchNickname:
+					searchClauses = append(searchClauses, `LOWER(nickname) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				default:
+					// 已由服务层白名单校验；这里再次 fail-closed，不生成未知列。
+					return nil, false, fmt.Errorf("%w: 搜索字段不在允许列表内",
+						account.ErrInvalidRequest)
+				}
+			}
+			if len(searchClauses) == 0 {
+				return nil, false, fmt.Errorf("%w: 搜索字段为空", account.ErrInvalidRequest)
+			}
+			conditions = append(conditions, `(`+strings.Join(searchClauses, ` OR `)+`)`)
+		}
+	}
+	statement := `SELECT ` + selectUserColumns + ` FROM users`
+	if len(conditions) > 0 {
+		statement += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
 	// 列名与方向来自固定白名单与布尔判断，不包含用户输入原文。
 	statement += ` ORDER BY ` + column + ` ` + direction + `, id ` + direction + ` LIMIT ? OFFSET ?`

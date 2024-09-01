@@ -13,6 +13,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/group"
 	"github.com/kagurazakayashi/EvernightLogin/internal/permission"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 )
 
@@ -42,10 +43,15 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 		if err != nil {
 			return nil, err
 		}
+		searchText, searchFields, err := parseAdminListSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.Account.ListUsers(ctx, caller, account.ListRequest{
 			Limit: page.Limit, Offset: page.Offset,
 			Status: account.Status(strings.TrimSpace(request.URL.Query().Get("status"))),
-			Sort:   account.SortField(page.Sort), Descending: page.Descending})
+			Sort:   account.SortField(page.Sort), Descending: page.Descending,
+			Search: searchText, SearchFields: searchFields})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(account.CodeOf(e)) })
 		}
@@ -297,9 +303,14 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 		if status != "" && !status.Valid() {
 			return nil, &adminapi.DomainError{Code: "REQ_INVALID", Message: "成员状态无效"}
 		}
+		searchText, searchFields, err := parseAdminListSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.App.ListApplicationMembers(ctx, appCaller, app.MemberListRequest{
 			ApplicationID: applicationID, Limit: page.Limit, Offset: page.Offset,
-			Status: status, Sort: app.MemberSortField(page.Sort), Descending: page.Descending})
+			Status: status, Sort: app.MemberSortField(page.Sort), Descending: page.Descending,
+			Search: searchText, SearchFields: searchFields})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(app.CodeOf(e)) })
 		}
@@ -476,6 +487,37 @@ type adminListPage struct {
 //     REQ_INVALID（不静默截断/放大，避免调用方误以为取到了请求的页大小）；
 //   - sort 缺省为空（由领域默认），显式值必须在调用方给出的白名单内；
 //   - desc 接受 ""/"0"/"false" 与 "1"/"true"，其他值返回 REQ_INVALID。
+//
+// parseAdminListSearch 解析管理列表的可选搜索参数：search（字面子串）与
+// search_fields（逗号分隔的字段白名单）。搜索文本按 internal/search 规范化
+// （NFKC + Unicode 大小写折叠 + NFC），空值表示不过滤；超长/控制字符/未知字段
+// （含尚未提供字段可见权限的邮箱/电话）返回 REQ_INVALID，不静默忽略或截断。
+// 搜索条件必须随每次请求重发：这些列表使用 offset 分页，没有服务端游标。
+func parseAdminListSearch(request *http.Request) (string, []account.UserSearchField, error) {
+	searchText, err := search.NormalizeQuery(strings.TrimSpace(request.URL.Query().Get("search")))
+	if err != nil {
+		return "", nil, &adminapi.DomainError{Code: "REQ_INVALID",
+			Message: "搜索条件无效：仅支持 64 个字符以内的用户名/昵称字面搜索", Cause: err}
+	}
+	rawFields := strings.TrimSpace(request.URL.Query().Get("search_fields"))
+	var fields []account.UserSearchField
+	if rawFields != "" {
+		for _, part := range strings.Split(rawFields, ",") {
+			value := strings.TrimSpace(part)
+			if value == "" {
+				continue
+			}
+			fields = append(fields, account.UserSearchField(value))
+		}
+	}
+	normalizedFields, err := account.NormalizeUserSearchFields(fields)
+	if err != nil {
+		return "", nil, &adminapi.DomainError{Code: "REQ_INVALID",
+			Message: "搜索字段无效：仅支持 username/nickname", Cause: err}
+	}
+	return searchText, normalizedFields, nil
+}
+
 func parseAdminListQuery(request *http.Request, allowedSorts ...string) (adminListPage, error) {
 	page := adminListPage{Limit: 20}
 	if raw := strings.TrimSpace(request.URL.Query().Get("limit")); raw != "" {

@@ -50,7 +50,14 @@ type AdminListUsersRequest struct {
 	Status     string
 	Sort       string
 	Descending bool
-	RequestID  string
+	// Search 是可选的字面子串搜索（空表示不过滤，保持原列表）。默认匹配用户名与
+	// 昵称（NFKC + 大小写折叠口径）；模糊搜索不参与登录/唯一身份判定。
+	Search string
+	// SearchFields 是可选的搜索字段白名单（"username"/"nickname"）；为空使用默认
+	// 两个字段。未知字段（含邮箱/电话，需独立字段可见权限，当前未提供）返回
+	// REQ_INVALID，不静默忽略。
+	SearchFields []string
+	RequestID    string
 }
 
 // AdminUserList 是用户列表结果。
@@ -215,7 +222,10 @@ type AdminListPermissionsRequest struct {
 	Sort       string
 	Descending bool
 	Page       AdminPage
-	RequestID  string
+	// Search 是可选的字面子串搜索（权限名称/机器标识；空不过滤）。
+	Search       string
+	SearchFields []string
+	RequestID    string
 }
 
 // AdminService 是受信管理门面：用户/资料/应用/角色/权限的受控管理操作。

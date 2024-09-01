@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 )
 
 const (
@@ -123,6 +125,12 @@ type MemberStatusResult struct {
 }
 
 // MemberListRequest 是应用成员列表请求；Status 为空表示不过滤。
+//
+// Search 为可选的字面子串搜索（空表示不过滤），默认匹配成员的**全局账户**用户名
+// 与昵称（不是应用内 profile 显示名），搜索先在当前应用范围内限定成员关系，再在
+// SQL 中 JOIN users 做参数化 LIKE，应用管理员不能借此枚举其他应用成员；邮箱/电话
+// 不在允许字段内（需要独立字段可见权限，当前未提供）。SearchFields 为空时默认
+// 用户名 + 昵称，非空时只能包含 username/nickname（复用 internal/account 白名单）。
 type MemberListRequest struct {
 	ApplicationID string
 	Limit         int
@@ -130,6 +138,8 @@ type MemberListRequest struct {
 	Status        MembershipStatus
 	Sort          MemberSortField
 	Descending    bool
+	Search        string
+	SearchFields  []account.UserSearchField
 }
 
 // MemberListResult 是应用成员列表结果。
@@ -146,6 +156,10 @@ type MemberListQuery struct {
 	Status        MembershipStatus
 	Sort          MemberSortField
 	Descending    bool
+	// Search 是已按用户名口径规范化（NFKC + 大小写折叠 + NFC）的字面搜索文本；
+	// 空表示不搜索。SearchFields 是已校验、去重的搜索字段白名单。
+	Search       string
+	SearchFields []account.UserSearchField
 }
 
 // MemberProfileUpdate 是已通过校验的条件资料更新；仓储只更新 profile_json 与

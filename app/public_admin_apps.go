@@ -56,7 +56,10 @@ type AdminListApplicationsRequest struct {
 	Sort           string
 	Descending     bool
 	Page           AdminPage
-	RequestID      string
+	// Search 是可选的字面子串搜索（应用名称/描述；空不过滤）。
+	Search       string
+	SearchFields []string
+	RequestID    string
 }
 
 // AdminApplicationList 是应用列表结果。
@@ -86,8 +89,14 @@ type AdminListApplicationMembersRequest struct {
 	Status        string
 	Sort          string
 	Descending    bool
-	Page          AdminPage
-	RequestID     string
+	// Search 是可选的字面子串搜索（空表示不过滤）：只在目标应用成员范围内按成员的
+	// 全局账户用户名/昵称匹配，不能跨应用枚举；应用内 profile 显示名不参与搜索。
+	Search string
+	// SearchFields 是可选的搜索字段白名单（"username"/"nickname"）；为空使用默认
+	// 两个字段；邮箱/电话需要独立字段可见权限，当前未提供且会被拒绝。
+	SearchFields []string
+	Page         AdminPage
+	RequestID    string
 }
 
 // AdminApplicationMemberList 是应用成员列表结果。

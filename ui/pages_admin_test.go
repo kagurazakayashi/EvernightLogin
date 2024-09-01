@@ -27,6 +27,8 @@ type fakeAdminBackend struct {
 	failCode     string
 	deleted      bool
 	memberResult login.UIAdminMemberResult
+	// lastUserQuery 记录最近一次用户列表查询，供搜索参数透传测试断言。
+	lastUserQuery login.UIAdminUserQuery
 }
 
 func (f *fakeAdminBackend) fail() error {
@@ -36,8 +38,9 @@ func (f *fakeAdminBackend) fail() error {
 	return nil
 }
 
-func (f *fakeAdminBackend) ListUsers(context.Context, string,
-	login.UIAdminUserQuery) (login.UIAdminUserPage, error) {
+func (f *fakeAdminBackend) ListUsers(_ context.Context, _ string,
+	query login.UIAdminUserQuery) (login.UIAdminUserPage, error) {
+	f.lastUserQuery = query
 	if err := f.fail(); err != nil {
 		return login.UIAdminUserPage{}, err
 	}

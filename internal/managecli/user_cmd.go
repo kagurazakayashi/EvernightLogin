@@ -27,7 +27,7 @@ import (
 // userCommandUsage 是 user 组帮助。
 const userCommandUsage = `用法：
   loginctl user list --operator <id> [--config <file>] [--status <s>] [--sort <f>] \
-[--desc] [--limit N] [--offset N] [--json]
+[--search <关键字>] [--search-fields username,nickname] [--desc] [--limit N] [--offset N] [--json]
   loginctl user get <user_id> --operator <id> [--config <file>] [--json]
   loginctl user disable <user_id> --operator <id> --expected-version N --confirm DISABLE \
 [--config <file>] [--json]
@@ -39,6 +39,8 @@ const userCommandUsage = `用法：
 
 说明：
   - --operator 是本地管理员稳定标识；授权器只允许该标识执行本命令列出的动作。
+  - --search 是可选的字面子串搜索（默认匹配用户名与昵称，最多 64 个字符）；
+    --search-fields 可限定 username/nickname；搜索不参与登录或唯一身份判定。
   - 写操作必须带 --expected-version（来自 user get/list 的 row_version）与确认词；
     版本不匹配返回退出码 6，请重新读取后再决定。
   - root 等受保护账户由账户服务拒绝变更；本命令不提供创建/删除/资料修改。`
@@ -184,6 +186,7 @@ func (r *runner) runUserList(args []string) int {
 		{name: "config", value: true}, {name: "json"}, {name: "operator", value: true},
 		{name: "status", value: true}, {name: "sort", value: true}, {name: "desc"},
 		{name: "limit", value: true}, {name: "offset", value: true},
+		{name: "search", value: true}, {name: "search-fields", value: true},
 	})
 	if err != nil {
 		return r.flagError(err)
@@ -215,6 +218,15 @@ func (r *runner) runUserList(args []string) int {
 	if sortField == "" {
 		sortField = account.SortCreatedAt
 	}
+	searchText := strings.TrimSpace(stringFlag(values, "search"))
+	var searchFields []account.UserSearchField
+	for _, part := range strings.Split(stringFlag(values, "search-fields"), ",") {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		searchFields = append(searchFields, account.UserSearchField(value))
+	}
 	caller, exit := r.userCaller(operator)
 	if exit != ExitOK {
 		return exit
@@ -226,7 +238,8 @@ func (r *runner) runUserList(args []string) int {
 	defer bundle.close()
 	result, err := bundle.service.ListUsers(r.ctx, caller, account.ListRequest{
 		Limit: limit, Offset: offset, Status: status, Sort: sortField,
-		Descending: boolFlag(values, "desc")})
+		Descending: boolFlag(values, "desc"),
+		Search:     searchText, SearchFields: searchFields})
 	if err != nil {
 		return r.userFailure("列出用户", err)
 	}
@@ -235,7 +248,7 @@ func (r *runner) runUserList(args []string) int {
 		items = append(items, newUserOutput(user))
 	}
 	output := map[string]any{"users": items, "has_more": result.HasMore,
-		"limit": limit, "offset": offset}
+		"limit": limit, "offset": offset, "search": searchText}
 	if r.json {
 		return r.succeed(output)
 	}
