@@ -77,6 +77,10 @@ func (h *settingsHTTP) authorizeManage(ctx context.Context, caller account.Calle
 }
 
 // allowRoot 判定调用者是否为 root/受信主体（决定 root-only 字段可写性）。
+//
+// root-only 敏感设置字段是 AGENTS 第 7 节规定的 root 专属身份能力，不能由普通
+// settings.manage 获得，因此这里保留 root 身份判定；常规设置写入仍先经权限内核的
+// settings.manage 检查（停用/未实现对 root 同样拒绝）。
 func (h *settingsHTTP) allowRoot(ctx context.Context, caller account.Caller) bool {
 	if h.managed.Roots == nil {
 		return false

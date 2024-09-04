@@ -202,6 +202,11 @@ type ScopeGrant struct {
 }
 
 // RootChecker 判定可信调用者当前是否为受保护 root；缺失/失败一律拒绝。
+//
+// 用途边界（步骤 252 统一语义）：root 身份只用于 root 专属能力——清理候选/执行、
+// 保留策略维护等 requireRoot 路径，以及读取他人导出记录的 owner-or-root 例外；
+// 普通读/导出/查询授权一律经 Authorizer（生产装配把 root 交权限内核，按已实现且
+// 已启用判定），不再以 root 身份绕过权限关停。
 type RootChecker interface {
 	IsRoot(ctx context.Context, caller account.Caller) (bool, error)
 }
@@ -371,18 +376,18 @@ func callerFromActor(actor audit.Actor) (account.Caller, error) {
 	}
 }
 
-// authorizeScope 统一执行作用范围授权。root 走受保护通道（不经过普通权限引擎），
-// 其余调用者必须由注入的 Authorizer 判定；依赖失败 fail-closed。读/导出/清理的
-// 越权拒绝会写失败审计（不改变拒绝结果）；是否对重复拒绝限频由宿主传输层负责，
-// 本包不额外吞掉拒绝记录。
+// authorizeScope 统一执行作用范围授权。所有用户主体（含真实 root）都必须由注入的
+// Authorizer 判定：生产装配的 Authorizer 会把 root 交给权限内核按「已实现且已启用」
+// 判定，停用/未实现权限对 root 同样拒绝，避免 root 绕过权限关停（步骤 252 统一
+// 多入口语义）。root 专属的清理/保留策略维护走独立的 requireRoot 身份检查（审计
+// 清理仅 root，见 AGENTS 第 7 节）；依赖失败 fail-closed。读/导出/清理的越权拒绝会
+// 写失败审计（不改变拒绝结果）；是否对重复拒绝限频由宿主传输层负责，本包不额外
+// 吞掉拒绝记录。
 func (s *Service) authorizeScope(ctx context.Context, caller account.Caller,
 	permissionKey, scopeID string) (ScopeGrant, error) {
 	scopeID, err := normalizeScopeID(scopeID)
 	if err != nil {
 		return ScopeGrant{}, err
-	}
-	if s.isRoot(ctx, caller) {
-		return ScopeGrant{Allowed: true, AllData: true}, nil
 	}
 	grant, err := s.opts.Authorizer.AuthorizeScope(ctx, caller, permissionKey, scopeID)
 	if err != nil {
@@ -423,6 +428,11 @@ func (s *Service) isRoot(ctx context.Context, caller account.Caller) bool {
 }
 
 // requireRoot 强制 root；非 root 返回 ErrRootRequired 并写失败审计。
+//
+// 这是 AGENTS 第 7 节规定的 root 专属维护能力（仅 root 可清理安全审计与授权保留
+// 策略），按 root 身份判定，属于步骤 252 明确保留的 root 保护/专属例外；它只扩大
+// “谁能做 root 专属维护”的判定，普通的审计读取/导出仍经权限内核，停用/未实现权限
+// 对 root 同样拒绝。
 func (s *Service) requireRoot(ctx context.Context, caller account.Caller) error {
 	if !s.isRoot(ctx, caller) {
 		s.recordScopeDenied(ctx, caller.Actor(), PermissionPurge, ScopeSystem, "root_required")

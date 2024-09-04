@@ -37,6 +37,9 @@ type fakeRBACBackend struct {
 	lastAction string
 	lastTarget string
 	empty      bool
+	// 步骤 262：记录最近一次角色/权限列表查询，供搜索参数透传断言。
+	lastRoleQuery       login.UIRBACRoleQuery
+	lastPermissionQuery login.UIRBACPermissionQuery
 }
 
 func (f *fakeRBACBackend) fail() error {
@@ -57,6 +60,7 @@ func (f *fakeRBACBackend) ListScopes(context.Context, string) ([]login.UIRBACSco
 
 func (f *fakeRBACBackend) ListRoles(_ context.Context, _ string,
 	query login.UIRBACRoleQuery) (login.UIRBACRolePage, error) {
+	f.lastRoleQuery = query
 	if err := f.fail(); err != nil {
 		return login.UIRBACRolePage{}, err
 	}
@@ -167,6 +171,7 @@ func (f *fakeRBACBackend) AssignRole(_ context.Context, _, roleID, targetKind, t
 
 func (f *fakeRBACBackend) ListPermissions(_ context.Context, _ string,
 	query login.UIRBACPermissionQuery) (login.UIRBACPermissionPage, error) {
+	f.lastPermissionQuery = query
 	if err := f.fail(); err != nil {
 		return login.UIRBACPermissionPage{}, err
 	}
@@ -439,6 +444,9 @@ func defaultFakeRBACEffective() login.UIRBACEffectiveView {
 						RoleKey: "user_admin", RoleName: "用户管理员", GroupID: "grp_a",
 						GroupKey: "user-administrators", GroupName: "用户管理员组",
 						Included: true, AssignedBy: "usr_admin", CreatedAt: now},
+					// 步骤 252：真实 root 的权限来源显式标记 root，页面必须与普通
+					// 角色/组来源区分展示，不能显示为组间接来源。
+					{Kind: "root", Included: true, AssignedBy: "root", CreatedAt: now},
 				}},
 			{Key: "roles.read", Name: "读取角色", ScopeID: "system",
 				DataScope: login.UIRBACDataScope{Mode: "all", Display: "全部数据（不限制）"}}}}
@@ -712,7 +720,7 @@ func TestRBACEffectivePermissions(t *testing.T) {
 	}
 	body := page.Body.String()
 	for _, want := range []string{"usr_a", "系统管理员", "用户管理员组",
-		"直接角色", "用户组间接", "未声明（历史数据；资源级检查默认拒绝）",
+		"直接角色", "用户组间接", "root 全权限（受保护主体）", "未声明（历史数据；资源级检查默认拒绝）",
 		"全部数据（不限制）", "实时计算", "正常", "已启用", "有效成员"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("有效权限页缺少 %q", want)

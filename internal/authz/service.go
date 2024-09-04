@@ -32,6 +32,10 @@ type Reader interface {
 	// PermissionSources 返回指定权限集合的候选来源（含停用/被限制项），按固定次序
 	// 排序；用于有效权限来源与诊断查询。
 	PermissionSources(ctx context.Context, scopeID, userID string, permissionIDs []string, limit, offset int) ([]GrantSource, bool, error)
+	// ScopePermissions 返回作用范围内的权限目录页（含 enabled=false 行，不要求
+	// 主体获得角色），按 permission_key、权限 ID 稳定排序；供 root 的「全权限」
+	// 有效权限列表合并分页使用。是否纳入由授权引擎按 enabled/实现状态判定。
+	ScopePermissions(ctx context.Context, scopeID string, limit, offset int) ([]PermissionInfo, bool, error)
 }
 
 // Store 在单个数据库事务快照中执行一组读取，保证账户/应用/成员/角色/权限/分配
@@ -47,6 +51,10 @@ type Options struct {
 	Logger     *slog.Logger
 	// Now 是可注入时钟；nil 使用 time.Now。用于账户有效期即时判断。
 	Now func() time.Time
+	// Catalog 是权限目录「是否已实现」的只读视图（步骤 252）。非 root 判定不需要它；
+	// root 判定必须用它排除未实现权限，未装配时 root 判定 fail-closed。生产装配必须
+	// 注入；nil 只用于不涉及 root 的测试/示例。
+	Catalog PermissionCatalog
 }
 
 // Service 是有效权限计算引擎；构造后不可变，可并发使用，不启动后台协程。
@@ -55,6 +63,7 @@ type Service struct {
 	authorizer Authorizer
 	logger     *slog.Logger
 	now        func() time.Time
+	catalog    PermissionCatalog
 }
 
 // New 校验依赖并构造引擎；缺少 Store/Authorizer 返回 ErrOptionsInvalid。
@@ -74,7 +83,7 @@ func New(options Options) (*Service, error) {
 		now = time.Now
 	}
 	return &Service{store: options.Store, authorizer: options.Authorizer, logger: logger,
-		now: now}, nil
+		now: now, catalog: options.Catalog}, nil
 }
 
 // subjectState 是同一快照内的主体状态。
@@ -83,6 +92,8 @@ type subjectState struct {
 	application ApplicationInfo
 	membership  MembershipInfo
 	scope       Scope
+	// isRoot 表示主体是真实 root；root 不依赖角色分配，权限由内核按目录推导。
+	isRoot bool
 }
 
 // denial 描述整体拒绝码。
@@ -124,25 +135,22 @@ func (s *Service) prepareCheck(ctx context.Context, caller Caller, request Check
 	if err := s.authorizeQuery(ctx, caller, subject, scope); err != nil {
 		return CheckResult{}, err
 	}
-	if caller.actor.Type == audit.ActorUser && caller.actor.ID != subject {
-		// 普通用户不能通过 Check 检查别人；管理员查询入口是 EffectivePermissions/
-		// PermissionSources，避免把业务检查接口变成他人权限探测接口。
-		return CheckResult{}, fmt.Errorf("%w: 普通用户只能检查自己的权限", ErrAccessDenied)
-	}
 	result := CheckResult{SubjectUserID: subject, Scope: scope, Mode: mode}
 	snapshotErr := s.store.Snapshot(ctx, func(snapshotCtx context.Context, reader Reader) error {
 		state, denied, loadErr := s.loadState(snapshotCtx, reader, subject, scope)
 		if loadErr != nil {
 			return loadErr
 		}
+		// 普通用户只能检查自己；真实 root 作为可信管理主体可在快照内独立复核后
+		// 检查他人（不信任可插拔 Authorizer 的单点结论）。
+		if err := authorizeUserCrossQuery(snapshotCtx, reader, caller, subject); err != nil {
+			return err
+		}
 		if denied != nil {
 			result.Allowed = false
 			result.Code = denied.code
 			result.Reason = denied.reason
 			return nil
-		}
-		if caller.actor.Type == audit.ActorUser && caller.actor.ID != subject {
-			return ErrAccessDenied
 		}
 		decisions := make([]PermissionDecision, 0, len(keys))
 		for _, key := range keys {
@@ -251,9 +259,18 @@ func (s *Service) evaluatePermission(ctx context.Context, reader Reader, state s
 		return PermissionDecision{}, err
 	}
 	if !found {
+		if state.isRoot {
+			// root 全权限：数据库尚未登记的内置权限按只读目录的实现状态判定
+			//（新库/未执行预设安装时 root 仍可管理；DB 有记录时以 DB 启停为准）。
+			return s.evaluateRootCatalogPermission(key), nil
+		}
 		decision.Code = CodePermissionUnknown
 		decision.Reason = "permission_unknown"
 		return decision, nil
+	}
+	if state.isRoot {
+		// root 全权限：目录登记 + 已启用 + 已实现才允许；root_only 属于 root 通道。
+		return s.evaluateRootPermission(info), nil
 	}
 	if info.RootOnly {
 		decision.Code = CodeAccessDenied
@@ -350,7 +367,8 @@ func (s *Service) evaluateSource(state subjectState, source GrantSource) (Source
 }
 
 // loadState 读取账户、应用、成员状态并给出优先级拒绝原因。禁用优先：账户 →
-// 应用 → 成员。root 账户在普通引擎中直接拒绝。
+// 应用 → 成员。root 账户不走普通角色/成员推导，但仍要求账户 active 与作用范围
+// 真实有效（应用必须存在且 active），并忽略普通账户期限限制。
 func (s *Service) loadState(ctx context.Context, reader Reader, subject string, scope Scope) (subjectState, *denial, error) {
 	info, found, err := reader.Account(ctx, subject)
 	if err != nil {
@@ -361,7 +379,28 @@ func (s *Service) loadState(ctx context.Context, reader Reader, subject string, 
 	}
 	state := subjectState{account: info, scope: scope}
 	if info.IsRoot {
-		return state, &denial{code: CodeAccessDenied, reason: "root_protected"}, nil
+		state.isRoot = true
+		if info.Status != account.StatusActive {
+			return state, &denial{code: CodeUserDisabled, reason: "account_inactive"}, nil
+		}
+		// root 不受普通账户期限管理锁死（与 account.User.AvailabilityAt 的 root 语义
+		// 一致）：有效期字段对 root 不参与拒绝判断。
+		if scope.Kind == ScopeKindSystem {
+			return state, nil, nil
+		}
+		application, appFound, err := reader.Application(ctx, scope.ApplicationID)
+		if err != nil {
+			return subjectState{}, nil, err
+		}
+		if !appFound {
+			return state, &denial{code: CodeReqInvalid, reason: "application_unknown"}, nil
+		}
+		state.application = application
+		if application.Status != app.StatusActive {
+			return state, &denial{code: CodeClientDisabled, reason: "application_inactive"}, nil
+		}
+		// root 不要求应用成员关系：root 管理所有有效范围。
+		return state, nil, nil
 	}
 	if info.Status != account.StatusActive {
 		return state, &denial{code: CodeUserDisabled, reason: "account_inactive"}, nil
@@ -399,8 +438,250 @@ func (s *Service) loadState(ctx context.Context, reader Reader, subject string, 
 	return state, nil, nil
 }
 
+// evaluateRootPermission 按 root「全权限受保护主体」语义判定单个数据库已登记权限：
+//   - enabled=false：显式停用优先，拒绝（root 也不绕过功能关停）；
+//   - 只读目录登记为未实现：拒绝（不把 root 全权限实现为一律放行）；
+//   - 目录未登记（宿主自定义权限）：按已实现处理；
+//   - root_only 权限属于 root 专属通道，允许；
+//   - 未装配实现目录：fail-closed（AUTHZ_UNAVAILABLE），不猜测为已实现。
+func (s *Service) evaluateRootPermission(info PermissionInfo) PermissionDecision {
+	decision := PermissionDecision{Key: info.Key, Allowed: false,
+		DataScope: DataScope{Mode: DataScopeAll}}
+	source := rootSourceSummary(info)
+	if !info.Enabled {
+		decision.Code = CodePermissionDisabled
+		decision.Reason = "permission_disabled"
+		source.ExcludedReason = "permission_disabled"
+		decision.Sources = []SourceSummary{source}
+		return decision
+	}
+	if s == nil || s.catalog == nil {
+		decision.Code = CodeAuthzUnavailable
+		decision.Reason = "implementation_catalog_unavailable"
+		source.ExcludedReason = "implementation_catalog_unavailable"
+		decision.Sources = []SourceSummary{source}
+		return decision
+	}
+	if implemented, known := s.catalog.IsImplemented(info.Key); known && !implemented {
+		// 目录登记但业务执行路径尚未实现：不能把 root 全权限实现为一律放行。
+		decision.Code = CodeAccessDenied
+		decision.Reason = "permission_not_implemented"
+		source.ExcludedReason = "permission_not_implemented"
+		decision.Sources = []SourceSummary{source}
+		return decision
+	}
+	decision.Allowed = true
+	source.Included = true
+	decision.Sources = []SourceSummary{source}
+	return decision
+}
+
+// evaluateRootCatalogPermission 判定数据库尚未登记、但只读目录已登记实现的权限：
+// 新库/尚未执行预设安装时 root 仍能立即管理（目录是内置权限的权威定义）；显式停用
+// 只能通过数据库记录表达（存在记录时走 evaluateRootPermission）。未知权限与目录
+// 未实现权限仍拒绝，未装配目录时 fail-closed。
+func (s *Service) evaluateRootCatalogPermission(key string) PermissionDecision {
+	decision := PermissionDecision{Key: key, Allowed: false,
+		DataScope: DataScope{Mode: DataScopeAll}}
+	if s == nil || s.catalog == nil {
+		decision.Code = CodeAuthzUnavailable
+		decision.Reason = "implementation_catalog_unavailable"
+		return decision
+	}
+	if entry, ok := s.catalog.ImplementedPermission(key); ok {
+		decision.Allowed = true
+		decision.Sources = []SourceSummary{rootCatalogSourceSummary(entry)}
+		return decision
+	}
+	if implemented, known := s.catalog.IsImplemented(key); known && !implemented {
+		decision.Code = CodeAccessDenied
+		decision.Reason = "permission_not_implemented"
+		return decision
+	}
+	decision.Code = CodePermissionUnknown
+	decision.Reason = "permission_unknown"
+	return decision
+}
+
+// rootSourceSummary 构造数据库权限快照的 root 来源说明：它不是角色分配，也不能被
+// 当成普通用户权限来源；DataScope 固定为 all（root 管理所有有效数据范围）。
+func rootSourceSummary(info PermissionInfo) SourceSummary {
+	return SourceSummary{Kind: SourceKindRoot, PermissionID: info.PermissionID,
+		PermissionKey: info.Key, PermissionName: info.Name,
+		PermissionEnabled: info.Enabled, RootOnly: info.RootOnly,
+		DataScope: DataScope{Mode: DataScopeAll}}
+}
+
+// rootCatalogSourceSummary 构造只读目录权限定义的 root 来源说明（数据库未落地行）。
+func rootCatalogSourceSummary(entry CatalogPermission) SourceSummary {
+	return SourceSummary{Kind: SourceKindRoot, PermissionKey: entry.Key,
+		PermissionName: entry.Name, RootOnly: entry.RootOnly,
+		DataScope: DataScope{Mode: DataScopeAll}, Included: true}
+}
+
+// rootDBPermissionUsable 报告 root 在数据库已登记权限行上是否可用：显式停用优先，
+// 目录登记未实现拒绝，目录未登记（自定义权限）按已实现。未装配目录时不可用。
+func (s *Service) rootDBPermissionUsable(info PermissionInfo) bool {
+	if !info.Enabled {
+		return false
+	}
+	if s == nil || s.catalog == nil {
+		return false
+	}
+	if implemented, known := s.catalog.IsImplemented(info.Key); known && !implemented {
+		return false
+	}
+	return true
+}
+
+// callerIsRealRoot 在同一快照内核对用户调用者是否为真实 root（以账户 is_root 与
+// active 状态为准，不接受调用方自报的身份字段）。系统/本地调用者返回 false。
+func callerIsRealRoot(ctx context.Context, reader Reader, caller Caller) (bool, error) {
+	if caller.actor.Type != audit.ActorUser {
+		return false, nil
+	}
+	info, found, err := reader.Account(ctx, caller.actor.ID)
+	if err != nil {
+		return false, err
+	}
+	if !found || !info.IsRoot || info.Status != account.StatusActive {
+		return false, nil
+	}
+	return true, nil
+}
+
+// authorizeUserCrossQuery 是 Check 的跨主体查询兜底：普通用户只能检查自己；真实
+// root 作为可信管理主体可在快照内复核后检查他人。生产 Authorizer 已先行判定，
+// 这里防止自定义/错误装配的 Authorizer 把普通用户放行成管理查询。
+func authorizeUserCrossQuery(ctx context.Context, reader Reader, caller Caller, subject string) error {
+	if caller.actor.Type != audit.ActorUser || caller.actor.ID == subject {
+		return nil
+	}
+	root, err := callerIsRealRoot(ctx, reader, caller)
+	if err != nil {
+		return err
+	}
+	if !root {
+		return fmt.Errorf("%w: 普通用户只能查询自己的权限", ErrAccessDenied)
+	}
+	return nil
+}
+
+// rootEffectivePermissions 返回 root 在作用范围内的有效权限页：合并「数据库已登记
+// 且可用权限」与「只读目录已实现但数据库尚未登记的内置权限」，来源全部标记 root；
+// 同一权限键以数据库启停/实现状态为准（显式停用不会被目录默认复活）。分页在合并
+// 顺序上稳定（permission_key、权限 ID），数据库目录扫描超过 MaxPermissionDirectoryRows
+// 时 fail-closed，不返回截断伪造的分页。未装配实现目录时 fail-closed。
+func (s *Service) rootEffectivePermissions(ctx context.Context, reader Reader,
+	state subjectState, options ListOptions, result *EffectiveResult) error {
+	if s == nil || s.catalog == nil {
+		result.DeniedCode = CodeAuthzUnavailable
+		result.DeniedReason = "implementation_catalog_unavailable"
+		result.Permissions = []EffectivePermission{}
+		return nil
+	}
+	catalogPermissions := s.catalog.ImplementedPermissions()
+	const dbPageSize = 64
+	var dbRows []PermissionInfo
+	dbOffset := 0
+	dbDone := false
+	dbScanned := 0
+	catalogIndex := 0
+	globalIndex := 0
+	effective := make([]EffectivePermission, 0, options.Limit)
+	hasMore := false
+	for {
+		if !dbDone && len(dbRows) == 0 {
+			page, pageHasMore, err := reader.ScopePermissions(ctx, state.scope.ID,
+				dbPageSize, dbOffset)
+			if err != nil {
+				return err
+			}
+			dbRows = page
+			dbOffset += len(page)
+			dbDone = !pageHasMore
+		}
+		haveDB := len(dbRows) > 0
+		haveCatalog := catalogIndex < len(catalogPermissions)
+		if !haveDB && !haveCatalog {
+			break
+		}
+		var (
+			item    EffectivePermission
+			include bool
+		)
+		dbKey := ""
+		if haveDB {
+			dbKey = dbRows[0].Key
+		}
+		catalogKey := ""
+		if haveCatalog {
+			catalogKey = catalogPermissions[catalogIndex].Key
+		}
+		switch {
+		case haveDB && haveCatalog && dbKey == catalogKey:
+			// 数据库有记录：以数据库启停/实现状态为准，目录默认项被覆盖。
+			row := dbRows[0]
+			dbRows = dbRows[1:]
+			dbScanned++
+			catalogIndex++
+			include = s.rootDBPermissionUsable(row)
+			if include {
+				item = rootEffectiveFromDB(row)
+			}
+		case haveDB && (!haveCatalog || dbKey < catalogKey):
+			row := dbRows[0]
+			dbRows = dbRows[1:]
+			dbScanned++
+			include = s.rootDBPermissionUsable(row)
+			if include {
+				item = rootEffectiveFromDB(row)
+			}
+		default:
+			entry := catalogPermissions[catalogIndex]
+			catalogIndex++
+			include = true
+			item = EffectivePermission{Key: entry.Key, Name: entry.Name,
+				ScopeID: state.scope.ID, DataScope: DataScope{Mode: DataScopeAll},
+				Sources: []SourceSummary{rootCatalogSourceSummary(entry)}}
+		}
+		if dbScanned > MaxPermissionDirectoryRows {
+			result.DeniedCode = CodeAuthzUnavailable
+			result.DeniedReason = "permission_directory_too_large"
+			result.Permissions = []EffectivePermission{}
+			result.HasMore = false
+			return nil
+		}
+		if !include {
+			continue
+		}
+		if globalIndex < options.Offset {
+			globalIndex++
+			continue
+		}
+		globalIndex++
+		if len(effective) >= options.Limit {
+			hasMore = true
+			break
+		}
+		effective = append(effective, item)
+	}
+	result.HasMore = hasMore
+	result.Permissions = effective
+	return nil
+}
+
+// rootEffectiveFromDB 把数据库权限行转换为 root 有效权限条目。
+func rootEffectiveFromDB(info PermissionInfo) EffectivePermission {
+	source := rootSourceSummary(info)
+	source.Included = true
+	return EffectivePermission{Key: info.Key, Name: info.Name, ScopeID: info.ScopeID,
+		DataScope: DataScope{Mode: DataScopeAll}, Sources: []SourceSummary{source}}
+}
+
 // EffectivePermissions 查询指定主体的有效权限分页，必须通过查询授权。结果包含
-// 账户/应用/成员状态、数据范围交集与来源；root 账户不通过普通引擎返回权限。
+// 账户/应用/成员状态、数据范围交集与来源；root 账户返回目录中全部已启用且已实现
+// 权限（来源 root），不依赖角色分配。
 func (s *Service) EffectivePermissions(ctx context.Context, caller Caller, subjectUserID, scopeID string, options ListOptions) (EffectiveResult, error) {
 	ctx = normalizeContext(ctx)
 	options, err := normalizeListOptions(options)
@@ -427,7 +708,17 @@ func (s *Service) EffectivePermissions(ctx context.Context, caller Caller, subje
 		result.AccountStatus = state.account.Status
 		result.ApplicationStatus = state.application.Status
 		result.MembershipStatus = state.membership.Status
-		if caller.actor.Type == audit.ActorUser && caller.actor.ID != subject && scope.Kind == ScopeKindApplication {
+		// root 作为可信调用者可查询他人；普通用户的跨主体查询仍由 Authorizer 把关，
+		// 应用范围下额外拒绝非成员目标，避免把查询接口变成成员存在性探测。
+		rootCaller := false
+		if caller.actor.Type == audit.ActorUser && caller.actor.ID != subject {
+			rootCaller, err = callerIsRealRoot(snapshotCtx, reader, caller)
+			if err != nil {
+				return err
+			}
+		}
+		if caller.actor.Type == audit.ActorUser && caller.actor.ID != subject && !rootCaller &&
+			scope.Kind == ScopeKindApplication {
 			if !state.membership.Found {
 				return ErrAccessDenied
 			}
@@ -437,6 +728,9 @@ func (s *Service) EffectivePermissions(ctx context.Context, caller Caller, subje
 			result.DeniedReason = denied.reason
 			result.Permissions = []EffectivePermission{}
 			return nil
+		}
+		if state.isRoot {
+			return s.rootEffectivePermissions(snapshotCtx, reader, state, options, &result)
 		}
 		permissions, hasMore, listErr := reader.GrantedPermissions(snapshotCtx, scope.ID, subject, options.Limit, options.Offset)
 		if listErr != nil {
@@ -501,9 +795,94 @@ func (s *Service) EffectivePermissions(ctx context.Context, caller Caller, subje
 	return result, nil
 }
 
+// rootPermissionSources 返回 root 主体指定权限的目录来源说明：真实 root 的权限
+// 来源就是 root 本身（不是角色/组），并逐项给出停用、未实现或账户/应用状态导致
+// 不可用的原因；调用方据此准确展示，不伪造普通角色来源。
+func (s *Service) rootPermissionSources(ctx context.Context, reader Reader,
+	state subjectState, key string, options ListOptions, denied *denial,
+	result *SourceResult) error {
+	info, found, err := reader.Permission(ctx, state.scope.ID, key)
+	if err != nil {
+		return err
+	}
+	if !found {
+		// 数据库未登记时 root 仍可从只读目录说明内置权限来源（新库/未安装预设）。
+		return s.rootCatalogPermissionSources(key, options, denied, result)
+	}
+	result.PermissionFound = true
+	result.PermissionName = info.Name
+	source := rootSourceSummary(info)
+	switch {
+	case denied != nil:
+		source.ExcludedReason = denied.reason
+	case !info.Enabled:
+		source.ExcludedReason = "permission_disabled"
+	case s == nil || s.catalog == nil:
+		source.ExcludedReason = "implementation_catalog_unavailable"
+	default:
+		if implemented, known := s.catalog.IsImplemented(info.Key); known && !implemented {
+			source.ExcludedReason = "permission_not_implemented"
+		} else {
+			source.Included = true
+		}
+	}
+	result.Sources = []SourceSummary{source}
+	if options.Limit <= 0 {
+		options.Limit = DefaultListLimit
+	}
+	if len(result.Sources) > options.Limit {
+		result.HasMore = true
+		result.Sources = result.Sources[:options.Limit]
+	}
+	return nil
+}
+
+// rootCatalogPermissionSources 返回数据库未登记、但只读目录登记的内置权限的 root
+// 来源说明；目录未登记（未知自定义键）时 PermissionFound=false。未装配目录时按
+// 无法证明处理（PermissionFound=false），不伪造来源。
+func (s *Service) rootCatalogPermissionSources(key string, options ListOptions,
+	denied *denial, result *SourceResult) error {
+	if s == nil || s.catalog == nil {
+		result.PermissionFound = false
+		return nil
+	}
+	limit := options.Limit
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if entry, ok := s.catalog.ImplementedPermission(key); ok {
+		result.PermissionFound = true
+		result.PermissionName = entry.Name
+		source := rootCatalogSourceSummary(entry)
+		if denied != nil {
+			source.Included = false
+			source.ExcludedReason = denied.reason
+		}
+		result.Sources = []SourceSummary{source}
+		if len(result.Sources) > limit {
+			result.HasMore = true
+			result.Sources = result.Sources[:limit]
+		}
+		return nil
+	}
+	if implemented, known := s.catalog.IsImplemented(key); known && !implemented {
+		result.PermissionFound = true
+		result.Sources = []SourceSummary{{Kind: SourceKindRoot, PermissionKey: key,
+			DataScope:      DataScope{Mode: DataScopeAll},
+			ExcludedReason: "permission_not_implemented"}}
+		if len(result.Sources) > limit {
+			result.HasMore = true
+			result.Sources = result.Sources[:limit]
+		}
+		return nil
+	}
+	result.PermissionFound = false
+	return nil
+}
+
 // PermissionSources 查询指定权限的候选来源，包含被停用/被账户或应用/成员状态限制
 // 的来源及排除原因。它不返回未获授权对象：调用者必须先通过查询授权，应用管理员只
-// 能查询自己获准应用内成员。
+// 能查询自己获准应用内成员；root 主体返回 root 来源说明。
 func (s *Service) PermissionSources(ctx context.Context, caller Caller, subjectUserID, scopeID, permissionKey string, options ListOptions) (SourceResult, error) {
 	ctx = normalizeContext(ctx)
 	options, err := normalizeListOptions(options)
@@ -534,11 +913,20 @@ func (s *Service) PermissionSources(ctx context.Context, caller Caller, subjectU
 		result.AccountStatus = state.account.Status
 		result.ApplicationStatus = state.application.Status
 		result.MembershipStatus = state.membership.Status
-		if denied != nil && denied.reason == "root_protected" {
-			return ErrRootProtected
+		rootCaller := false
+		if caller.actor.Type == audit.ActorUser && caller.actor.ID != subject {
+			var rootErr error
+			rootCaller, rootErr = callerIsRealRoot(snapshotCtx, reader, caller)
+			if rootErr != nil {
+				return rootErr
+			}
+			if !rootCaller && scope.Kind == ScopeKindApplication && !state.membership.Found {
+				return ErrAccessDenied
+			}
 		}
-		if caller.actor.Type == audit.ActorUser && caller.actor.ID != subject && scope.Kind == ScopeKindApplication && !state.membership.Found {
-			return ErrAccessDenied
+		if state.isRoot {
+			return s.rootPermissionSources(snapshotCtx, reader, state, key, options,
+				denied, &result)
 		}
 		info, found, permissionErr := reader.Permission(snapshotCtx, scope.ID, key)
 		if permissionErr != nil {
@@ -569,7 +957,7 @@ func (s *Service) PermissionSources(ctx context.Context, caller Caller, subjectU
 		return nil
 	})
 	if snapshotErr != nil {
-		if errors.Is(snapshotErr, ErrAccessDenied) || errors.Is(snapshotErr, ErrRootProtected) ||
+		if errors.Is(snapshotErr, ErrAccessDenied) ||
 			errors.Is(snapshotErr, ErrSubjectNotFound) || errors.Is(snapshotErr, ErrInvalidRequest) {
 			return SourceResult{}, snapshotErr
 		}

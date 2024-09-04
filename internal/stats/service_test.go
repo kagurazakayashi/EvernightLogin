@@ -627,9 +627,11 @@ AND outcome = 'denied'`).Scan(&deniedCount); err != nil {
 	if deniedCount < 1 {
 		t.Error("统计读取拒绝未写审计")
 	}
-	// root 不经过普通权限引擎：无需 grant 也能查看全量。
+	// root 与其他主体一样经 Authorizer 授权（步骤 252 统一语义；生产装配由权限内核
+	// 判定 root 的已实现且已启用权限）。这里授予系统范围全数据后可见跨应用。
 	rootID := testUserID(104)
 	env.root.roots[rootID] = true
+	env.grant(stats.ScopeSystem, allDataGrant)
 	rootResult, err := env.service.Errors(env.ctx, stats.ErrorRequest{
 		Caller: userCaller(t, rootID), ScopeID: stats.ScopeSystem,
 		Window: nowWindow(3, stats.GranularityDay)})
@@ -1098,6 +1100,9 @@ func TestRootAppScopeStaysApp(t *testing.T) {
 	env.appendSessionIssue(target, userB, "app_beta", false)
 	rootID := testUserID(111)
 	env.root.roots[rootID] = true
+	// root 也经 Authorizer 授权（生产由权限内核判定）；应用范围授权后仍只聚合该应用。
+	env.grant("app_alpha", stats.ScopeGrant{Allowed: true,
+		ResourceIDs: []string{"app_alpha"}})
 	caller := userCaller(t, rootID)
 	appResult, err := env.service.Activity(env.ctx, stats.ActivityRequest{
 		Caller: caller, ScopeID: "app_alpha",
@@ -1110,6 +1115,8 @@ func TestRootAppScopeStaysApp(t *testing.T) {
 	}
 	errorEnv := newTestEnv(t)
 	errorEnv.root.roots[rootID] = true
+	errorEnv.grant("app_alpha", stats.ScopeGrant{Allowed: true,
+		ResourceIDs: []string{"app_alpha"}})
 	errorEnv.appendEvent(eventSpec{At: target, ActorType: audit.ActorUser, ActorID: userA,
 		AppID: "app_alpha", Action: "x", Outcome: audit.OutcomeFailure,
 		ErrorCode: "INTERNAL_ERROR"})

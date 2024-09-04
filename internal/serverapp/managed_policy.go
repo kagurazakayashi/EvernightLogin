@@ -43,8 +43,11 @@ import (
 const managedPolicyReaderID = "login-server-page"
 
 // managedPolicyAuthorizer 是策略配置的受信授权器：
+//
 //   - 系统页面只读通道可 Get/List；
-//   - 策略写只允许 root/受信本地管理员用户主体（页面强认证与一次性批准另行校验）；
+//   - 策略写只允许真实 root/受信本地管理员用户主体（页面强认证与一次性批准另行校验）。
+//     这是 AGENTS 第 7 节定义的 root 专属敏感策略身份能力（root-only 字段/底线不可由
+//     普通 settings.manage 获得），因此保留 root 身份判定，不交给普通权限内核；
 //   - 应用管理员、普通用户、匿名一律拒绝。
 type managedPolicyAuthorizer struct {
 	roots *hostRootChecker

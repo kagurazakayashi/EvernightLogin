@@ -17,7 +17,12 @@ import (
 //   - ResourceID 非空时按资源级语义判定：先判定功能权限，再复用领域授权内核的
 //     数据范围判定（数据范围未声明/为 none/不包含该资源都拒绝），不会只返回功能
 //     权限结论。资源类型与“资源是否属于该用户”的业务含义仍由宿主定义；
-//   - Mode 为空按 all；资源级判定只接受单个权限键，all/any 对单权限判定等价。
+//   - Mode 为空按 all；资源级判定只接受单个权限键，all/any 对单权限判定等价；
+//   - 真实 root 主体由授权内核按唯一初始化记录识别：在有效作用范围内拥有只读预设
+//     目录中「已实现且已启用」的权限（任意有效 scope）以及数据库已启用的自定义/
+//     应用范围权限；未知权限仍 PERMISSION_UNKNOWN、停用权限 PERMISSION_DISABLED、
+//     未实现权限 ACCESS_DENIED + permission_not_implemented、停用/不存在应用与非法
+//     资源仍拒绝。root 身份不会让这些拒绝变成允许。
 type AccessRequest struct {
 	UserID     string
 	AppID      string
@@ -49,6 +54,9 @@ type AccessDecision struct {
 	ResourceChecked bool
 	// ResourceID 是本次做数据范围判定的资源标识；未提供 ResourceID 时为 ""。
 	ResourceID string
+	// 说明：真实 root 主体的允许/拒绝同样以 Code/Reason 表达；root 拒绝对应
+	// PERMISSION_UNKNOWN / PERMISSION_DISABLED / ACCESS_DENIED（reason
+	// permission_not_implemented）等稳定值，不会仅凭 root 身份返回 Allowed=true。
 }
 
 // AccessService 是联合权限检查门面。

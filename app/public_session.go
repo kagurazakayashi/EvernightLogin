@@ -85,7 +85,8 @@ type SessionRevokeOthersResult struct {
 //   - Authorize 不带 ResourceID 时只做“有效会话 + 属于当前应用 + 功能权限”判定，
 //     不校验任何具体业务资源；需要资源级结论时在请求中提供 ResourceID，由领域
 //     内核按数据范围判定（undefined/none/不在集合内都拒绝），不能把功能权限当成
-//     具体资源归属已通过。
+//     具体资源归属已通过。真实 root 会话同样经内核判定：拥有目录中已实现且启用的
+//     权限，但未知/停用/未实现权限与停用应用仍会拒绝，root 身份不跳过这些判断。
 //   - ValidateCSRF 只校验与会话绑定的 CSRF 令牌；CSRF 通过不会提升受限会话权限，
 //     也不代替 Application/权限判断。来源（Origin/Referer）仍由宿主 HTTP 防护层
 //     负责，不能只靠 CSRF 令牌。

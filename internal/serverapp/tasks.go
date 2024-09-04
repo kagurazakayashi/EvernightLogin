@@ -399,8 +399,14 @@ func (r *TaskRuntime) taskPermissionChecker() (*permissionChecker, error) {
 			r.permissionErr = fmt.Errorf("构造任务权限复验存储失败: %w", err)
 			return
 		}
+		permissionCatalog, err := newPresetPermissionCatalog()
+		if err != nil {
+			r.permissionErr = fmt.Errorf("构造任务权限实现目录失败: %w", err)
+			return
+		}
 		access, err := authz.New(authz.Options{Store: authzStore,
-			Authorizer: selfQueryAuthorizer{}, Logger: r.logger, Now: r.now})
+			Authorizer: selfQueryAuthorizer{roots: roots}, Catalog: permissionCatalog,
+			Logger: r.logger, Now: r.now})
 		if err != nil {
 			r.permissionErr = fmt.Errorf("构造任务权限复验引擎失败: %w", err)
 			return

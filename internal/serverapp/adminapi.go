@@ -112,15 +112,12 @@ type hostTaskAuthorizer struct {
 	checker *permissionChecker
 }
 
-// AuthorizeTaskRead 实现 adminapi.TaskAuthorizer。
+// AuthorizeTaskRead 实现 adminapi.TaskAuthorizer。进程受信主体放行；其余主体（含
+// 真实 root）按任务类型映射的权限键经权限内核判定（停用/未实现拒绝）。
 func (a hostTaskAuthorizer) AuthorizeTaskRead(ctx context.Context,
 	caller account.Caller, job task.Job) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	key := taskReadPermissionKey(job.Kind)
@@ -130,17 +127,13 @@ func (a hostTaskAuthorizer) AuthorizeTaskRead(ctx context.Context,
 	return a.checker.check(ctx, actor.ID, key, "system")
 }
 
-// AuthorizeTaskList 实现 adminapi.TaskListAuthorizer：受信主体可看全部；其他主体
-// 需要 diagnostics.read，并且只能看本人发起的任务（列表查询在 SQL 层按发起者过滤，
-// HasMore/计数不会泄露他人任务）。读取失败一律拒绝（fail-closed）。
+// AuthorizeTaskList 实现 adminapi.TaskListAuthorizer：进程受信主体可看全部；其余
+// 主体（含真实 root）需要 diagnostics.read，并且只能看本人发起的任务（列表查询在
+// SQL 层按发起者过滤，HasMore/计数不会泄露他人任务）。读取失败一律拒绝（fail-closed）。
 func (a hostTaskAuthorizer) AuthorizeTaskList(ctx context.Context,
 	caller account.Caller) (adminapi.TaskListScope, error) {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return adminapi.TaskListScope{}, err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return adminapi.TaskListScope{All: true}, nil
 	}
 	if err := a.checker.check(ctx, actor.ID, "diagnostics.read", "system"); err != nil {

@@ -149,9 +149,15 @@ func BuildManagedServices(deps Deps, core *Services, runtime *TaskRuntime,
 	if err != nil {
 		return nil, fmt.Errorf("构造权限引擎存储失败: %w", err)
 	}
+	// 步骤 252：root 全权限集合来自版本化只读预设目录的实现状态；未装配/目录无效
+	// 时构造失败（fail-closed），root 判定不会退化为“全部已实现”。
+	permissionCatalog, err := newPresetPermissionCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("构造权限实现目录失败: %w", err)
+	}
 	access, err := authz.New(authz.Options{
-		Store: authzStore, Authorizer: selfQueryAuthorizer{}, Logger: deps.Logger,
-		Now: deps.Now})
+		Store: authzStore, Authorizer: selfQueryAuthorizer{roots: roots},
+		Logger: deps.Logger, Now: deps.Now, Catalog: permissionCatalog})
 	if err != nil {
 		return nil, fmt.Errorf("构造权限引擎失败: %w", err)
 	}
@@ -364,15 +370,12 @@ type batchAuthorizer struct {
 	checker *permissionChecker
 }
 
-// Authorize 实现 userbatch.Authorizer。
+// Authorize 实现 userbatch.Authorizer。root 与普通主体一样经权限内核判定（已启用
+// 且已实现的权限才允许），进程受信主体（本机管理员/系统）保留受信通道。
 func (a batchAuthorizer) Authorize(ctx context.Context, caller account.Caller,
 	action userbatch.Action, scopeID string) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	key := ""
@@ -399,15 +402,12 @@ type exportScopeAuthorizer struct {
 	checker *permissionChecker
 }
 
-// AuthorizeUser 实现 userbatch.UserScopeAuthorizer。
+// AuthorizeUser 实现 userbatch.UserScopeAuthorizer。进程受信主体可导出全部；root
+// 与普通主体一样先经内核确认权限已启用且已实现（root 全权限不等于绕过权限停用）。
 func (a exportScopeAuthorizer) AuthorizeUser(ctx context.Context,
 	caller account.Caller, permissionKey, userID string) (bool, error) {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return false, err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return true, nil
 	}
 	if err := a.checker.check(ctx, actor.ID, permissionKey, "system"); err != nil {

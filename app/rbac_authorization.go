@@ -13,6 +13,11 @@ import (
 //
 // 所有查询先经领域查询授权（调用者只能查自己或获准范围）；跨应用同名权限按范围隔离，
 // 拒绝不泄露其他应用存在性与数量；结果即时计算、不缓存旧授权。
+//
+// root 语义（步骤 252）：真实 root 主体的权限由授权内核按只读预设目录的「已实现且
+// 已启用」权限（任意有效 scope）与数据库已启用的自定义/应用范围权限统一推导，
+// 不依赖普通角色分配；有效权限来源 Kind 为 "root"。未知/停用/未实现权限与停用应用
+// 仍拒绝，root 身份不会跳过这些判断。
 type RBACAuthorizationService interface {
 	// Check 检查主体是否满足一组权限（Mode 空按 all；未知/停用/root_only 拒绝）。
 	Check(ctx context.Context, req RBACCheckRequest) (RBACCheckResult, error)
@@ -54,6 +59,10 @@ type RBACGrantSource struct {
 	RootOnly          bool
 	DataScopeMode     string
 	DataScope         []string
+	// Included 表示该来源是否计入当前权限；为 false 时 ExcludedReason 说明排除原因。
+	// root 主体的来源 Kind 为 "root"（受保护全权限主体，不是角色/组分配）。
+	Included       bool
+	ExcludedReason string
 }
 
 // RBACPermissionDecision 是单个权限的判定。
@@ -97,6 +106,8 @@ type RBACEffectivePermission struct {
 	DataScopeMode string
 	DataScope     []string
 	Sources       []RBACGrantSource
+	// 说明：root 主体的有效权限来源为 Kind="root"（Included=true），表示受保护
+	// 全权限主体按目录推导的权限，不是角色/组分配。
 }
 
 // RBACEffectiveResult 是有效权限分页结果。
@@ -195,7 +206,9 @@ func rbacSources(values []authz.SourceSummary) []RBACGrantSource {
 			PermissionID: value.PermissionID, PermissionKey: value.PermissionKey,
 			PermissionName: value.PermissionName, PermissionEnabled: value.PermissionEnabled,
 			RootOnly: value.RootOnly, DataScopeMode: string(value.DataScope.Mode),
-			DataScope: append([]string(nil), value.DataScope.Resources...),
+			DataScope:      append([]string(nil), value.DataScope.Resources...),
+			Included:       value.Included,
+			ExcludedReason: value.ExcludedReason,
 		})
 	}
 	return result

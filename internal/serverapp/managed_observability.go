@@ -97,17 +97,14 @@ type auditScopeAuthorizer struct {
 	checker *permissionChecker
 }
 
-// AuthorizeScope 实现 auditops.Authorizer。root/受信主体数据范围不限；普通用户
-// 需在作用范围持有对应权限键，数据范围按“作用范围全覆盖”处理（细粒度资源范围
-// 映射未装配，报告已列缺口）。
+// AuthorizeScope 实现 auditops.Authorizer。进程受信主体数据范围不限；其余主体
+// （含真实 root）经权限内核判定：root 拥有已启用且已实现的权限，但权限停用/未
+// 实现时同样拒绝；数据范围按“作用范围全覆盖”处理（细粒度资源范围映射未装配，
+// 报告已列缺口）。
 func (a auditScopeAuthorizer) AuthorizeScope(ctx context.Context,
 	caller account.Caller, permissionKey, scopeID string) (auditops.ScopeGrant, error) {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return auditops.ScopeGrant{}, err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return auditops.ScopeGrant{Allowed: true, AllData: true}, nil
 	}
 	allowed, evalErr := a.checker.evaluate(ctx, actor.ID, permissionKey, scopeID)
@@ -120,7 +117,9 @@ func (a auditScopeAuthorizer) AuthorizeScope(ctx context.Context,
 	return auditops.ScopeGrant{Allowed: true, AllData: true}, nil
 }
 
-// auditRootChecker 实现 auditops.RootChecker。
+// auditRootChecker 实现 auditops.RootChecker：只回答 root 身份（root 专属清理/保留
+// 策略与 owner-or-root 例外使用）；普通读/导出授权已统一走 auditScopeAuthorizer
+// 的权限内核判定，不再由本适配器放行。
 type auditRootChecker struct {
 	roots *hostRootChecker
 }
@@ -144,15 +143,12 @@ type statsScopeAuthorizer struct {
 	checker *permissionChecker
 }
 
-// AuthorizeScope 实现 stats.Authorizer。
+// AuthorizeScope 实现 stats.Authorizer。进程受信主体数据范围不限；其余主体（含
+// 真实 root）经权限内核判定，权限停用/未实现时拒绝。
 func (a statsScopeAuthorizer) AuthorizeScope(ctx context.Context,
 	caller account.Caller, permissionKey, scopeID string) (stats.ScopeGrant, error) {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return stats.ScopeGrant{}, err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return stats.ScopeGrant{Allowed: true, AllData: true}, nil
 	}
 	allowed, evalErr := a.checker.evaluate(ctx, actor.ID, permissionKey, scopeID)
@@ -166,7 +162,8 @@ func (a statsScopeAuthorizer) AuthorizeScope(ctx context.Context,
 	return stats.ScopeGrant{Allowed: true, AllData: true}, nil
 }
 
-// statsRootChecker 实现 stats.RootChecker。
+// statsRootChecker 实现 stats.RootChecker：只回答 root 身份；步骤 252 起统计读取
+// 授权统一走 statsScopeAuthorizer 的权限内核判定，不再由本适配器放行。
 type statsRootChecker struct {
 	roots *hostRootChecker
 }

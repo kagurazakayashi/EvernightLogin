@@ -76,7 +76,12 @@ func (r *hostRootChecker) isRoot(ctx context.Context, userID string) (bool, erro
 	return true, nil
 }
 
-// isRootCaller 检查 caller.Actor() 是否 root 或受信系统/本地主体。
+// trustedActor 判定调用者是否为「受信身份主体」：系统/本地管理员直接受信，用户
+// 主体必须由唯一 bootstrap 初始化记录确认为真实 root。
+//
+// 它只用于“身份可信豁免”（例如委派 Guard 的 root 不受普通可转授资格限制），不能
+// 代替权限门禁：管理动作的权限判定必须经权限内核，按目录是否启用/已实现决定，
+// root 在权限停用或业务未实现时同样被拒绝（步骤 252）。
 func (r *hostRootChecker) trustedActor(ctx context.Context, actor audit.Actor) (bool, error) {
 	switch actor.Type {
 	case audit.ActorSystem, audit.ActorLocalAdmin:
@@ -85,6 +90,18 @@ func (r *hostRootChecker) trustedActor(ctx context.Context, actor audit.Actor) (
 		return r.isRoot(ctx, actor.ID)
 	default:
 		return false, fmt.Errorf("匿名主体不允许管理操作")
+	}
+}
+
+// trustedProcessActor 判定调用者是否为「进程受信主体」：本机受控管理员或系统服务
+// 身份。真实 root 不在此列——root 权限必须经权限内核按目录启用/实现状态判定，
+// 避免把“root 全权限”实现成“绕过权限关停”的一律放行。
+func (r *hostRootChecker) trustedProcessActor(actor audit.Actor) bool {
+	switch actor.Type {
+	case audit.ActorSystem, audit.ActorLocalAdmin:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -120,18 +137,13 @@ func (p *permissionChecker) SetApplicationScopeLister(lister app.ScopeCandidateL
 	p.appScopes = lister
 }
 
-// Check 实现 session.PermissionChecker：委托真实 authz 引擎；root 在管理强制
-// 下线场景按“受保护超级管理员”语义允许检查自身权限（目标 root 保护仍由会话
-// 服务在读取目标后拒绝），其余调用一律走真实权限判定，不伪造放行。
+// Check 实现 session.PermissionChecker：委托真实 authz 引擎（root 的全权限语义由
+// 内核统一处理：已启用且已实现的权限允许，未知/停用/未实现拒绝）。本适配层不再
+// 对 root 无条件返回 Allowed=true，保证页面/HTTP/CLI/Go 门面结果一致。
 func (p *permissionChecker) Check(ctx context.Context, caller authz.Caller,
 	request authz.CheckRequest) (authz.CheckResult, error) {
 	if p == nil || p.access == nil {
 		return authz.CheckResult{Allowed: false}, errAuthorizerNotConfigured
-	}
-	if caller.Actor().Type == audit.ActorUser {
-		if root, err := p.roots.isRoot(ctx, caller.Actor().ID); err == nil && root {
-			return authz.CheckResult{SubjectUserID: caller.Actor().ID, Allowed: true}, nil
-		}
 	}
 	return p.access.Check(ctx, caller, request)
 }
@@ -145,7 +157,9 @@ func (p *permissionChecker) EffectivePermissions(ctx context.Context, caller aut
 	return p.access.EffectivePermissions(ctx, caller, subjectUserID, scopeID, options)
 }
 
-// check 判定 userID 是否在 scopeID 内持有 permissionKey。
+// check 判定 userID 是否在 scopeID 内持有 permissionKey。真实 root 的权限同样由
+// 权限内核判定（已启用且已实现的权限允许；未知/停用/未实现拒绝），适配层不能以
+// root 身份跳过该判定。
 func (p *permissionChecker) check(ctx context.Context, userID, permissionKey, scopeID string) error {
 	if p == nil || !p.enabled {
 		return errAuthorizerNotConfigured
@@ -156,13 +170,6 @@ func (p *permissionChecker) check(ctx context.Context, userID, permissionKey, sc
 	key := strings.TrimSpace(permissionKey)
 	if key == "" {
 		return fmt.Errorf("缺少权限键")
-	}
-	root, err := p.roots.isRoot(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if root {
-		return nil
 	}
 	scope, err := normalizeAuthzScope(scopeID)
 	if err != nil {
@@ -186,7 +193,8 @@ func (p *permissionChecker) check(ctx context.Context, userID, permissionKey, sc
 }
 
 // evaluate 返回“是否允许”而不把权限不足当作依赖错误；依赖失败仍返回 error。
-// 供 auditops/stats 等 ScopeGrant 风格授权器区分“明确拒绝”和“无法判定”。
+// 供 auditops/stats 等 ScopeGrant 风格授权器区分“明确拒绝”和“无法判定”；
+// root 与普通主体一样交给权限内核判定，不在这里无条件放行。
 func (p *permissionChecker) evaluate(ctx context.Context,
 	userID, permissionKey, scopeID string) (bool, error) {
 	if p == nil || !p.enabled {
@@ -198,13 +206,6 @@ func (p *permissionChecker) evaluate(ctx context.Context,
 	key := strings.TrimSpace(permissionKey)
 	if key == "" {
 		return false, fmt.Errorf("缺少权限键")
-	}
-	root, err := p.roots.isRoot(ctx, userID)
-	if err != nil {
-		return false, err
-	}
-	if root {
-		return true, nil
 	}
 	scope, err := normalizeAuthzScope(scopeID)
 	if err != nil {
@@ -224,20 +225,30 @@ func (p *permissionChecker) evaluate(ctx context.Context,
 	return result.Allowed, nil
 }
 
-// manageableScopes 返回可管理范围；root/受信主体返回 all=true，普通用户返回其
-// 真实持有读取权限的范围（步骤 184：system 或已获应用范围，逐应用由权限引擎判定）。
-// 无法枚举应用范围或没有任何可读范围时 fail-closed 拒绝，不返回空列表成功。
+// manageableScopes 返回可管理范围；进程受信主体与真实 root 返回 all=true，普通
+// 用户返回其真实持有读取权限的范围（步骤 184：system 或已获应用范围，逐应用由
+// 权限引擎判定）。root 返回全部有效范围前先经内核确认读取权限已启用且已实现，
+// 停用/未实现时拒绝，不能借“全权限”绕过关停。无法枚举应用范围或没有任何可读
+// 范围时 fail-closed 拒绝，不返回空列表成功。
 func (p *permissionChecker) manageableScopes(ctx context.Context,
 	actor audit.Actor, readPermission string) (bool, []string, error) {
 	if p == nil || !p.enabled {
 		return false, nil, errAuthorizerNotConfigured
 	}
-	trusted, err := p.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return false, nil, err
-	}
-	if trusted {
+	if p.roots.trustedProcessActor(actor) {
 		return true, nil, nil
+	}
+	if actor.Type == audit.ActorUser {
+		root, err := p.roots.isRoot(ctx, actor.ID)
+		if err != nil {
+			return false, nil, err
+		}
+		if root {
+			if err := p.check(ctx, actor.ID, readPermission, "system"); err != nil {
+				return false, nil, fmt.Errorf("root 缺少系统范围读取权限 %s：拒绝", readPermission)
+			}
+			return true, nil, nil
+		}
 	}
 	// 系统范围读取权限优先（例如系统管理员/系统角色）。
 	if err := p.check(ctx, actor.ID, readPermission, "system"); err == nil {
@@ -303,13 +314,15 @@ func normalizeAuthzScope(scopeID string) (string, error) {
 	return trimmed, nil
 }
 
-// selfQueryAuthorizer 实现 authz.Authorizer：系统/本地管理员可查询任意主体；普通
-// 用户只能查询自己。管理员查询他人有效权限需要的应用管理员/数据范围策略尚未装配，
-// 此时明确拒绝（fail-closed），不猜测范围。
-type selfQueryAuthorizer struct{}
+// selfQueryAuthorizer 实现 authz.Authorizer：系统/本地管理员可查询任意主体；真实
+// root 作为可信管理主体也可查询他人（复核身份来自 bootstrap 记录，不接受请求参数
+// 自报）；其余普通用户只能查询自己。
+type selfQueryAuthorizer struct {
+	roots *hostRootChecker
+}
 
 // AuthorizeQuery 实现 authz.Authorizer。
-func (selfQueryAuthorizer) AuthorizeQuery(_ context.Context, caller authz.Caller,
+func (a selfQueryAuthorizer) AuthorizeQuery(ctx context.Context, caller authz.Caller,
 	subjectUserID string, _ authz.Scope) error {
 	actor := caller.Actor()
 	switch actor.Type {
@@ -318,6 +331,15 @@ func (selfQueryAuthorizer) AuthorizeQuery(_ context.Context, caller authz.Caller
 	case audit.ActorUser:
 		if subjectUserID == actor.ID {
 			return nil
+		}
+		if a.roots != nil {
+			root, err := a.roots.isRoot(ctx, actor.ID)
+			if err != nil {
+				return fmt.Errorf("root 资格判定失败：拒绝查询该主体的权限")
+			}
+			if root {
+				return nil
+			}
 		}
 		return fmt.Errorf("普通管理员查询他人有效权限的数据范围策略未装配：拒绝")
 	default:
@@ -448,11 +470,7 @@ type oauthclientAuthorizer struct {
 func (a oauthclientAuthorizer) AuthorizeClient(ctx context.Context, caller oauthclient.Caller,
 	applicationID string, action oauthclient.Action) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	key := ""
@@ -478,11 +496,7 @@ type accountAuthorizer struct {
 func (a accountAuthorizer) Authorize(ctx context.Context, caller account.Caller,
 	action account.Action) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	key, ok := accountActionPermission(action)
@@ -521,15 +535,12 @@ type profileAuthorizer struct {
 func (a profileAuthorizer) AuthorizeProfile(ctx context.Context,
 	caller profile.Caller, target profile.UserProfile, write bool) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
-	if actor.Type == audit.ActorUser && target.IsRoot {
-		// root 资料禁止普通管理员读写，避免通过资料接口探测/篡改 root。
+	if actor.Type == audit.ActorUser && target.IsRoot && actor.ID != target.UserID {
+		// root 资料禁止普通管理员读写，避免通过资料接口探测/篡改 root；root 本人按
+		// self.* 权限维护自己的资料。
 		return fmt.Errorf("root 账户资料不允许普通管理操作")
 	}
 	key := "users.read"
@@ -555,11 +566,7 @@ type roleAuthorizer struct {
 func (a roleAuthorizer) Authorize(ctx context.Context, caller role.Caller,
 	action role.Action, scopeID string) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	key, ok := roleActionPermission(action)
@@ -602,11 +609,7 @@ type permissionAuthorizer struct {
 func (a permissionAuthorizer) Authorize(ctx context.Context, caller permission.Caller,
 	action permission.Action, scopeID string) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	key, ok := permissionActionPermission(action)
@@ -646,11 +649,7 @@ type groupAuthorizer struct {
 func (a groupAuthorizer) Authorize(ctx context.Context, caller group.Caller,
 	action group.Action, scopeID string) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	key, ok := groupActionPermission(action)
@@ -688,11 +687,7 @@ type appAuthorizer struct {
 func (a appAuthorizer) Authorize(ctx context.Context, caller app.Caller,
 	action app.Action, applicationID string) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	// 列表动作不针对单一应用：范围由 ApplicationScope 过滤；这里不能用空范围
@@ -710,18 +705,27 @@ func (a appAuthorizer) Authorize(ctx context.Context, caller app.Caller,
 	return a.checker.check(ctx, actor.ID, key, applicationID)
 }
 
-// ApplicationScope 实现 app.Authorizer：root/受信主体可管理全部应用；普通用户返回
-// 其真实持有 applications.read 的应用范围（步骤 184：候选枚举 + 权限引擎逐应用判定）。
+// ApplicationScope 实现 app.Authorizer：进程受信主体与真实 root 可管理全部应用；
+// 普通用户返回其真实持有 applications.read 的应用范围（步骤 184：候选枚举 + 权限
+// 引擎逐应用判定）。root 返回全部范围前先经内核确认读取权限已启用且已实现。
 // 无法枚举或没有任何可读应用时返回错误，绝不返回空成功或范围外应用。
 func (a appAuthorizer) ApplicationScope(ctx context.Context,
 	caller app.Caller) (bool, []string, error) {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return false, nil, err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return true, nil, nil
+	}
+	if actor.Type == audit.ActorUser {
+		root, err := a.checker.roots.isRoot(ctx, actor.ID)
+		if err != nil {
+			return false, nil, err
+		}
+		if root {
+			if err := a.checker.check(ctx, actor.ID, "applications.read", "system"); err != nil {
+				return false, nil, fmt.Errorf("root 缺少系统范围应用读取权限：拒绝")
+			}
+			return true, nil, nil
+		}
 	}
 	applicationIDs, err := a.checker.manageableApplicationScopes(ctx, actor.ID, "applications.read")
 	if err != nil {
@@ -764,11 +768,7 @@ type onboardingManagementAuthorizer struct {
 func (a onboardingManagementAuthorizer) AuthorizeManagement(ctx context.Context,
 	caller onboarding.Caller) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	if actor.Type != audit.ActorUser {
@@ -792,11 +792,7 @@ func (a onboardingInviteAuthorizer) AuthorizeInvite(ctx context.Context,
 		return errAuthorizerNotConfigured
 	}
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	if actor.Type != audit.ActorUser {

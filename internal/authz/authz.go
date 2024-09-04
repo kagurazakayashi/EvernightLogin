@@ -7,8 +7,13 @@
 //
 // 安全不变量：
 //   - 禁用优先：账户非 active、应用非 active、应用成员缺失/非 active 时整体拒绝，
-//     不因为角色或权限存在而放行；root 账户不通过普通权限引擎推导权限（root 走
-//     后续受保护通道），直接按 ACCESS_DENIED 拒绝。
+//     不因为角色或权限存在而放行。
+//   - root 语义（步骤 252）：真实 root 账户（账户快照 IsRoot，来源是唯一 bootstrap
+//     初始化记录）不依赖普通角色分配，在有效作用范围内拥有全部「已启用且已实现」
+//     权限；root_only 权限对 root 可用。未知权限仍拒绝（PERMISSION_UNKNOWN）、停用
+//     权限拒绝（PERMISSION_DISABLED）、未实现权限拒绝（ACCESS_DENIED +
+//     permission_not_implemented）、停用/不存在应用拒绝；普通账户期限不限制 root。
+//     root 的权限来源显式标记为 root，不伪造普通角色/组来源。
 //   - 生效条件：角色必须 enabled、权限必须 enabled 且非 root_only、角色分配范围
 //     必须与目标作用范围一致；直接用户角色与用户组成员角色合并，但数据范围取
 //     交集（来源越多不会扩大数据范围）。
@@ -17,14 +22,18 @@
 //     不缓存权限结果，也不使用过期缓存；并发变更下结果要么是旧快照要么是新快照，
 //     不会出现半更新组合。
 //   - 查询别人的有效权限/来源必须通过 Authorizer：普通用户只能查自己；应用管理员
-//     只能查自己获准应用内的成员；本地/系统操作者可查任意普通主体。未获准时返回
-//     ACCESS_DENIED，不泄露目标是否存在。
+//     只能查自己获准应用内的成员；本地/系统操作者可查任意普通主体。真实 root 作为
+//     可信管理主体可查询他人（内核在快照内另行核对 root 身份，防止自定义 Authorizer
+//     误放行非 root）。未获准时返回 ACCESS_DENIED，不泄露目标是否存在。
 //   - 业务资源归属不能从权限名推断：资源检查必须显式传入权限与资源标识，并只依据
 //     本包计算出的数据范围交集判断；数据范围为 undefined（步骤 24 的历史 `{}`）
-//     或 none 时资源检查默认拒绝。
+//     或 none 时资源检查默认拒绝。root 的资源数据范围按 all 处理，但非法资源标识
+//     仍按 REQ_INVALID 拒绝。
 //   - 单个权限的候选来源超过 MaxSourceRows 时无法证明数据范围交集完整：Check、
 //     CheckResourceAccess 与 EffectivePermissions 一律 fail-closed（AUTHZ_UNAVAILABLE
 //     并在结果中置 SourceLimitReached），不会用前 512 个来源的交集放行资源。
+//   - 权限目录的“是否已实现”来自只读 PermissionCatalog（生产装配由预设目录提供）；
+//     未装配目录时 root 判定 fail-closed 返回 AUTHZ_UNAVAILABLE，不猜测为已实现。
 package authz
 
 import (
@@ -58,6 +67,11 @@ const (
 	MaxDataScopeResources = 64
 	// MaxResourceIDBytes 是资源标识长度上限。
 	MaxResourceIDBytes = 256
+	// MaxPermissionDirectoryRows 是 root 有效权限列表合并分页时允许扫描的权限目录
+	// 行数上限。权限目录是管理员维护的有界元数据（不是用户数据增长表）；超过该
+	// 上限时结果无法在有限扫描内证明完整，按 AUTHZ_UNAVAILABLE 拒绝而不是返回
+	// 截断伪造的分页结果。
+	MaxPermissionDirectoryRows = 4096
 )
 
 // ScopeKind 是授权作用范围类型（系统或应用）。
@@ -352,7 +366,39 @@ const (
 	SourceKindUserRole SourceKind = "user_role"
 	// SourceKindGroupRole 表示通过用户组成员身份获得的角色。
 	SourceKindGroupRole SourceKind = "group_role"
+	// SourceKindRoot 表示真实 root 账户按“全权限受保护主体”语义直接拥有的权限；
+	// 它不是角色分配，不能由普通角色组合产生，也不能反过来推断普通用户权限。
+	SourceKindRoot SourceKind = "root"
 )
+
+// CatalogPermission 是一条「已实现」的目录权限定义（只读快照）。
+type CatalogPermission struct {
+	// Key 是稳定权限机器标识。
+	Key string
+	// Name 是中文名称（供 root 有效权限列表展示）。
+	Name string
+	// RootOnly 表示该权限只允许 root 特殊通道使用。
+	RootOnly bool
+}
+
+// PermissionCatalog 是权限目录“实现状态”的只读视图，由装配层注入（生产装配
+// 复用 internal/preset 的版本化只读目录；本包不依赖具体目录实现）。它只回答
+// 目录登记情况，不参与角色/分配计算，也不授予任何权限。
+//
+// 未装配该接口时 root 判定按 AUTHZ_UNAVAILABLE fail-closed（不猜测“已实现”）。
+type PermissionCatalog interface {
+	// IsImplemented 返回权限键的实现状态：known=false 表示目录未登记该键（例如宿主
+	// 自定义权限，按已实现处理）；known=true 时 implemented 表示对应业务能力是否
+	// 已存在真实执行路径。
+	IsImplemented(key string) (implemented bool, known bool)
+	// ImplementedPermissions 返回目录中全部已实现权限定义副本，按 Key 稳定排序、
+	// 数量有界（目录本身是静态版本化数据）。root 全权限集合与有效权限列表以此为
+	// 目录来源；不能据此放行未实现/停用权限。
+	ImplementedPermissions() []CatalogPermission
+	// ImplementedPermission 返回单个已实现权限定义；ok=false 表示目录未登记或
+	// 目录登记为未实现（调用方应再用 IsImplemented 区分两者）。
+	ImplementedPermission(key string) (CatalogPermission, bool)
+}
 
 // GrantSource 是候选权限来源（可能被停用/排除）。
 type GrantSource struct {
@@ -512,11 +558,13 @@ const (
 
 // 领域错误哨兵。
 var (
-	ErrOptionsInvalid   = errors.New("授权引擎选项无效")
-	ErrInvalidRequest   = errors.New("授权请求无效")
-	ErrAccessDenied     = errors.New("未获准查询该主体的权限")
-	ErrSubjectNotFound  = errors.New("被查询账户不存在")
-	ErrRootProtected    = errors.New("root 账户不通过普通权限引擎推导权限")
+	ErrOptionsInvalid  = errors.New("授权引擎选项无效")
+	ErrInvalidRequest  = errors.New("授权请求无效")
+	ErrAccessDenied    = errors.New("未获准查询该主体的权限")
+	ErrSubjectNotFound = errors.New("被查询账户不存在")
+	// ErrRootProtected 保留给其它领域与错误码投影复用；步骤 252 起本包不再用它
+	// 拒绝 root 主体（root 走内核全权限语义），新代码不应再依赖它判断 root。
+	ErrRootProtected    = errors.New("root 账户的保护性资格错误")
 	ErrStoreUnavailable = errors.New("权限存储暂时不可用")
 )
 

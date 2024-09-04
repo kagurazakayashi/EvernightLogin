@@ -41,6 +41,13 @@ JOIN permissions p ON p.id=rp.permission_id AND p.scope_id=chosen.scope_id
 WHERE r.enabled=1 AND p.enabled=1 AND p.root_only=0
 ORDER BY p.permission_key,p.id LIMIT ? OFFSET ?`
 
+	// selectScopePermissionsSQL 读取作用范围内的完整权限目录页（含停用行，是否纳入
+	// 由授权引擎按 enabled/实现状态判定），供 root 有效权限列表合并分页使用；只按
+	// scope_id 过滤，不拼接调用方自由文本。
+	selectScopePermissionsSQL = `SELECT id,scope_id,permission_key,name,enabled,root_only
+FROM permissions WHERE scope_id=?
+ORDER BY permission_key,id LIMIT ? OFFSET ?`
+
 	// selectSourcesTemplate 使用 %s 作为权限 ID IN 占位符；两段对应直接用户角色与
 	// 用户组角色来源。仓储只依据 (user_id, scope_id) 与权限 ID 过滤，不拼接调用方
 	// 自由文本。
@@ -237,6 +244,39 @@ func (r *snapshotReader) Permission(ctx context.Context, scopeID, key string) (a
 // GrantedPermissions 返回已过滤停用角色/权限与 root_only 的有效权限页。
 func (r *snapshotReader) GrantedPermissions(ctx context.Context, scopeID, userID string, limit, offset int) ([]authz.PermissionInfo, bool, error) {
 	rows, err := r.tx.QueryContext(ctx, selectGrantedPermissionsSQL, userID, scopeID, userID, scopeID, limit+1, offset)
+	if err != nil {
+		return nil, false, storeError(err)
+	}
+	defer rows.Close()
+	permissions := make([]authz.PermissionInfo, 0, limit+1)
+	for rows.Next() {
+		info, scanErr := scanPermission(rows)
+		if scanErr != nil {
+			return nil, false, scanErr
+		}
+		permissions = append(permissions, info)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, storeError(err)
+	}
+	hasMore := false
+	if len(permissions) > limit {
+		hasMore = true
+		permissions = permissions[:limit]
+	}
+	return permissions, hasMore, nil
+}
+
+// ScopePermissions 返回作用范围内的权限目录页（含停用行），供 root 有效权限列表
+// 合并分页使用；是否纳入由授权引擎判定，分页在数据源处执行。
+func (r *snapshotReader) ScopePermissions(ctx context.Context, scopeID string, limit, offset int) ([]authz.PermissionInfo, bool, error) {
+	if strings.TrimSpace(scopeID) == "" {
+		return nil, false, fmt.Errorf("%w: 作用范围为空", authz.ErrInvalidRequest)
+	}
+	if limit <= 0 || limit > authz.MaxListLimit || offset < 0 || offset > authz.MaxListOffset {
+		return nil, false, fmt.Errorf("%w: 目录分页边界无效", authz.ErrInvalidRequest)
+	}
+	rows, err := r.tx.QueryContext(ctx, selectScopePermissionsSQL, scopeID, limit+1, offset)
 	if err != nil {
 		return nil, false, storeError(err)
 	}

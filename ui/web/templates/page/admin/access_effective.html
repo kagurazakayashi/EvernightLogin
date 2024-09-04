@@ -39,7 +39,7 @@
     <tbody>
     {{range .Sources}}
     <tr>
-      <td>{{if eq .Kind "user_role"}}{{t "page.admin.rbac.effective.kind_direct"}}{{else}}{{t "page.admin.rbac.effective.kind_group"}}{{end}}</td>
+      <td>{{if eq .Kind "root"}}{{t "page.admin.rbac.effective.kind_root"}}{{else if eq .Kind "user_role"}}{{t "page.admin.rbac.effective.kind_direct"}}{{else}}{{t "page.admin.rbac.effective.kind_group"}}{{end}}</td>
       <td>{{.RoleName}} <code>{{.RoleKey}}</code></td>
       <td>{{if .GroupID}}{{.GroupName}} <code>{{.GroupID}}</code>{{else}}—{{end}}</td>
       <td>{{.DataScope.Display}}{{if and (eq .DataScope.Mode "resources") .DataScope.Resources}}: {{range .DataScope.Resources}}<code>{{.}}</code> {{end}}{{end}}</td>

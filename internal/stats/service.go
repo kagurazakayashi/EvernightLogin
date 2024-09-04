@@ -383,7 +383,10 @@ type HealthHistoryResult struct {
 type Options struct {
 	Store      Store
 	Authorizer Authorizer
-	Root       RootChecker
+	// Root 保留 root 身份判定能力（root-only 统计能力/兼容装配使用）；步骤 252 起
+	// 统计读取授权统一走 Authorizer（生产装配把 root 交权限内核判定），本字段不参与
+	// 普通读取放行。
+	Root RootChecker
 	// Audit 可选：注入后拒绝读取会写失败审计，不改变拒绝结论。
 	Audit AuditRecorder
 	// HealthSources 是当前健康状态来源；未覆盖的必需模块以未知或未启用呈现。
@@ -505,8 +508,9 @@ type scopeConstraint struct {
 	trimmed    bool
 }
 
-// authorize 解析作用范围并重新授权。root 通过显式 root 检查放行；非 root 依赖
-// 注入的 Authorizer，依赖失败一律拒绝（fail-closed）。
+// authorize 解析作用范围并授权。所有用户主体（含真实 root）都依赖注入的
+// Authorizer：生产装配会把 root 交给权限内核按「已实现且已启用」判定，停用/未实现
+// 权限对 root 同样拒绝（步骤 252 统一多入口语义）；依赖失败一律拒绝（fail-closed）。
 func (s *Service) authorize(ctx context.Context, caller account.Caller,
 	scopeID string) (scopeConstraint, error) {
 	scope, err := parseScope(scopeID)
@@ -517,16 +521,6 @@ func (s *Service) authorize(ctx context.Context, caller account.Caller,
 	if err := actor.Validate(); err != nil {
 		s.recordDenied(ctx, actor, scope.ID, "invalid_actor")
 		return scopeConstraint{}, ErrAccessDenied
-	}
-	if s.isRoot(ctx, caller) {
-		// root 只是绕过普通权限引擎，不能绕过调用者显式选择的“应用作用范围”：
-		// root + 具体应用范围仍只聚合该应用，避免把单应用查询静默扩大为全系统。
-		if scope.Kind == "app" {
-			return scopeConstraint{constraint: ScopeConstraint{AppID: scope.ID,
-				AppIDs: []string{scope.ID}}, scope: scope}, nil
-		}
-		return scopeConstraint{constraint: ScopeConstraint{AllData: true,
-			IncludeSystem: true}, scope: scope}, nil
 	}
 	grant, err := s.opts.Authorizer.AuthorizeScope(ctx, caller, PermissionRead, scope.ID)
 	if err != nil {
@@ -567,18 +561,6 @@ func (s *Service) authorize(ctx context.Context, caller account.Caller,
 	}
 	return scopeConstraint{constraint: ScopeConstraint{AppIDs: appIDs,
 		IncludeSystem: includeSystem}, scope: scope, trimmed: true}, nil
-}
-
-// isRoot 判定调用者是否为 root；依赖失败按非 root 处理。
-func (s *Service) isRoot(ctx context.Context, caller account.Caller) bool {
-	if caller.Actor().Type != audit.ActorUser {
-		return false
-	}
-	root, err := s.opts.Root.IsRoot(ctx, caller)
-	if err != nil {
-		return false
-	}
-	return root
 }
 
 // recordDenied 写入一条统计读取拒绝审计；审计不可用只告警，不改变拒绝结论。

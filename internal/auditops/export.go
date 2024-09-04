@@ -420,6 +420,9 @@ func (s *Service) CancelExport(ctx context.Context, caller account.Caller, expor
 	if err != nil {
 		return task.CancelResult{}, err
 	}
+	// 取消/下载绑定发起者或 root：root 的 owner-or-root 例外属于步骤 252 保留的
+	// root 专属身份能力（读取范围仍先经 PermissionExport 内核授权），不是普通权限
+	// 放行。
 	if record.RequestedBy != caller.Actor() && !s.isRoot(ctx, caller) {
 		s.recordFailure(ctx, caller.Actor(), ActionExportRequest, record.ScopeID,
 			"export_cancel_not_owner", CodeAccessDenied, requestID)

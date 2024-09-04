@@ -51,6 +51,7 @@ type testEnv struct {
 	raw        *storagesqlite.Store
 	service    *authz.Service
 	authorizer *authz.StaticAuthorizer
+	catalog    *fakePermissionCatalog
 	system     authz.Caller
 	local      authz.Caller
 }
@@ -83,8 +84,15 @@ func prepareEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("构造查询授权器失败: %v", err)
 	}
+	// 测试目录：只登记两条系统内置权限按已实现处理；invoices.* 是宿主自定义权限
+	//（目录未登记 → 按已实现）。测试可按需改写单项来验证“未实现/新增已实现权限自动
+	// 包含”的 root 语义（目录只影响 root，不改变普通用户判定）。
+	catalog := newFakePermissionCatalog(map[string]bool{
+		"users.read":             true,
+		"security.policy.manage": true,
+	})
 	service, err := authz.New(authz.Options{
-		Store: store, Authorizer: authorizer,
+		Store: store, Authorizer: authorizer, Catalog: catalog,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -98,7 +106,8 @@ func prepareEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("构造本地调用者失败: %v", err)
 	}
-	env := &testEnv{t: t, raw: raw, service: service, authorizer: authorizer, system: system, local: local}
+	env := &testEnv{t: t, raw: raw, service: service, authorizer: authorizer,
+		catalog: catalog, system: system, local: local}
 	env.insertFixtures()
 	return env
 }
@@ -420,16 +429,39 @@ func TestDisabledPriority(t *testing.T) {
 	if result := env.check(testActiveUser, "system", []string{"security.policy.manage"}, authz.ModeAll); result.Allowed || result.Code != authz.CodeAccessDenied {
 		t.Fatalf("root_only 权限应 ACCESS_DENIED: %+v", result)
 	}
-	// root 账户不通过普通引擎推导权限。
-	if result := env.check(testRootUser, testAppOne, []string{"invoices.approve"}, authz.ModeAll); result.Allowed || result.Code != authz.CodeAccessDenied {
-		t.Fatalf("root 账户应 ACCESS_DENIED: %+v", result)
+	// root 账户按“全权限受保护主体”语义：应用范围不要求成员关系，拥有全部已启用
+	// 且已实现的权限，来源标记为 root。
+	rootResult := env.check(testRootUser, testAppOne, []string{"invoices.approve"}, authz.ModeAll)
+	if !rootResult.Allowed || len(rootResult.Permissions) != 1 ||
+		rootResult.Permissions[0].DataScope.Mode != authz.DataScopeAll {
+		t.Fatalf("root 账户应允许已实现权限: %+v", rootResult)
+	}
+	if len(rootResult.Permissions[0].Sources) != 1 ||
+		rootResult.Permissions[0].Sources[0].Kind != authz.SourceKindRoot {
+		t.Fatalf("root 权限来源应标记 root: %+v", rootResult.Permissions[0].Sources)
 	}
 	rootEffective := env.effective(testRootUser, testAppOne, authz.ListOptions{})
-	if rootEffective.DeniedCode != authz.CodeAccessDenied || rootEffective.DeniedReason != "root_protected" {
-		t.Fatalf("root 有效权限 = %+v", rootEffective)
+	// 应用范围 = 该范围数据库已启用权限（invoices.approve、invoices.read）∪ 只读
+	// 目录已实现的内置权限（users.read、security.policy.manage，root 在任意有效
+	// scope 生效）。
+	if rootEffective.DeniedCode != "" || len(rootEffective.Permissions) != 4 {
+		keys := make([]string, 0, len(rootEffective.Permissions))
+		for _, permission := range rootEffective.Permissions {
+			keys = append(keys, permission.Key)
+		}
+		t.Fatalf("root 有效权限 = %+v keys=%v", rootEffective, keys)
 	}
-	if _, err := env.service.PermissionSources(context.Background(), env.system, testRootUser, testAppOne, "invoices.approve", authz.ListOptions{}); !errors.Is(err, authz.ErrRootProtected) {
-		t.Fatalf("root 来源查询错误 = %v", err)
+	for _, permission := range rootEffective.Permissions {
+		if len(permission.Sources) != 1 || permission.Sources[0].Kind != authz.SourceKindRoot ||
+			permission.DataScope.Mode != authz.DataScopeAll {
+			t.Fatalf("root 有效权限条目 = %+v", permission)
+		}
+	}
+	rootSources, err := env.service.PermissionSources(context.Background(), env.system,
+		testRootUser, testAppOne, "invoices.approve", authz.ListOptions{})
+	if err != nil || !rootSources.PermissionFound || len(rootSources.Sources) != 1 ||
+		rootSources.Sources[0].Kind != authz.SourceKindRoot || !rootSources.Sources[0].Included {
+		t.Fatalf("root 来源查询 = %+v err=%v", rootSources, err)
 	}
 }
 

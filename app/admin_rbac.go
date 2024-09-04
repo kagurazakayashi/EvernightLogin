@@ -251,6 +251,10 @@ func (f *adminFacade) ListRolePermissions(ctx context.Context,
 // EffectivePermissions 查询用户在指定范围的有效权限（用户主体只能查询自己；
 // 本机受信通道可查询任意主体）。已授权但目标账户不存在时返回 NotFoundError；
 // 权限检查先于状态与权限数据读取。
+//
+// 目标为真实 root 时返回内核推导的全权限列表（只读预设目录已实现且已启用权限 +
+// 数据库已启用的自定义/应用范围权限，来源 Kind="root"），不依赖普通角色分配；
+// 停用/未实现权限不会出现在列表中。
 func (f *adminFacade) EffectivePermissions(ctx context.Context,
 	req AdminPermissionQuery) (AdminEffectivePermissions, error) {
 	call, err := f.begin(ctx, req.Caller, req.RequestID)

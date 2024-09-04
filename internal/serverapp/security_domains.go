@@ -633,15 +633,13 @@ type avatarAuthorizer struct {
 	checker *permissionChecker
 }
 
-// AuthorizeAvatar 实现 avatar.Authorizer。
+// AuthorizeAvatar 实现 avatar.Authorizer。进程受信主体放行；其余主体（含真实
+// root）经权限内核判定：root 仍需权限已启用且已实现，普通管理员按 self.*/users.*
+// 权限判定；root 作为他人操作目标时继续拒绝。
 func (a avatarAuthorizer) AuthorizeAvatar(ctx context.Context, caller avatar.Caller,
 	target avatar.Target, write bool) error {
 	actor := caller.Actor()
-	trusted, err := a.checker.roots.trustedActor(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if trusted {
+	if a.checker.roots.trustedProcessActor(actor) {
 		return nil
 	}
 	if actor.Type != audit.ActorUser {

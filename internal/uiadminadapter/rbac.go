@@ -1364,6 +1364,12 @@ func deniedReasonText(reason string) string {
 	switch reason {
 	case "root_protected":
 		return "root 账户不通过普通权限引擎推导权限"
+	case "permission_not_implemented":
+		return "该权限对应的业务功能尚未实现"
+	case "implementation_catalog_unavailable":
+		return "权限实现目录不可用，无法判定 root 全权限"
+	case "permission_directory_too_large":
+		return "权限目录过大，无法在安全上限内给出完整结果"
 	case "account_inactive", "account_disabled":
 		return "账户当前不是正常状态"
 	case "application_unknown":
@@ -1389,6 +1395,10 @@ func excludedReasonText(reason string) string {
 		return "来源角色已停用"
 	case "permission_disabled":
 		return "权限已停用"
+	case "permission_not_implemented":
+		return "该权限对应的业务功能尚未实现"
+	case "implementation_catalog_unavailable":
+		return "权限实现目录不可用"
 	case "root_only_permission":
 		return "root_only 权限不能由普通角色生效"
 	case "account_disabled":

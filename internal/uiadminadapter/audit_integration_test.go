@@ -187,6 +187,12 @@ func newIntegrationEnv(t *testing.T, rootUserIDs ...string) *integrationEnv {
 	env.root = &fakeRoot{roots: map[string]bool{}}
 	for _, userID := range rootUserIDs {
 		env.root.roots[userID] = true
+		// 步骤 252：root 的普通读/导出授权也由 Authorizer（生产为权限内核）判定，
+		// 页面适配器不再以 root 身份旁路。测试替身按生产内核的 root 语义授予系统范围。
+		env.authorizer.grants[userID+"|"+auditops.PermissionRead+"|"+auditops.ScopeSystem] =
+			auditops.ScopeGrant{Allowed: true, AllData: true}
+		env.authorizer.grants[userID+"|"+auditops.PermissionExport+"|"+auditops.ScopeSystem] =
+			auditops.ScopeGrant{Allowed: true, AllData: true}
 	}
 	env.sensitive = &fakeSensitive{denied: map[string]bool{}}
 	env.enqueuer = &fakeEnqueuer{}
@@ -486,8 +492,10 @@ func TestAuditAdapterRestrictedDiagnosisGate(t *testing.T) {
 	if noDiag.RestrictedReasonCode != "" || noDiag.Restricted {
 		t.Fatalf("无诊断权限仍返回受限原因: %+v", noDiag)
 	}
-	// 授予 root（同样是独立诊断许可来源）后可见原因码。
+	// 授予 root（同样是独立诊断许可来源）后可见原因码；普通读取授权也由 Authorizer
+	// 判定（生产为权限内核 root 语义），测试替身显式授予系统范围读权限。
 	env.root.roots[rootID] = true
+	env.allow(rootID, auditops.PermissionRead)
 	allowed, err := env.adapter.GetAudit(env.ctx, rootID, event.ID, time.Time{})
 	if err != nil {
 		t.Fatalf("受限诊断详情失败: %v", err)
@@ -516,14 +524,15 @@ func TestAuditAdapterCapabilities(t *testing.T) {
 	}
 	rootCaps, err := env.adapter.Capabilities(env.ctx, rootID)
 	if err != nil || !rootCaps.Read || !rootCaps.Export || !rootCaps.Purge {
-		// 与 internal/auditops 一致：root 旁路普通 audit.read/audit.export 授权，
-		// 页面能力位与后端判定统一，避免 root 被页面 403 而服务层本可访问。
+		// 与 internal/auditops 一致（步骤 252）：root 的普通读/导出由 Authorizer
+		// （生产为权限内核）判定，测试替身已按 root 语义授予系统范围；清理能力位仍由
+		// root 身份决定。页面能力位与后端判定统一，避免 root 被页面 403 而服务层可访问。
 		t.Fatalf("root 能力位 = %+v err=%v", rootCaps, err)
 	}
 	if _, err := env.adapter.Capabilities(env.ctx, "not-a-user"); publicErrorCode(err) != "ACCESS_DENIED" {
 		t.Fatalf("非法用户能力位错误码 = %v", err)
 	}
-	// root 未获普通授权也可经真实 auditops 读取列表与错误码目录（与后端旁路一致）。
+	// root 经真实授权（生产内核）可读取列表与错误码目录；适配器不再走 root 旁路。
 	env.recordUserEvent(rootID, "session.revoke", "success")
 	if page, err := env.adapter.ListAudit(env.ctx, rootID, ui.UIAuditQuery{
 		ScopeID: auditops.ScopeSystem, Limit: 20}); err != nil || len(page.Events) == 0 {

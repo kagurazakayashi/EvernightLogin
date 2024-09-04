@@ -36,8 +36,10 @@ type TaskReadStore interface {
 
 // AuditOptions 是审计页适配器依赖。Authorizer 由宿主注入真实权限引擎；nil 时页面
 // 读取/错误码检索/能力位一律 fail-closed 拒绝（不把“未装配”当放行）。IsRoot 由宿主
-// 实现（读取真实 root 状态），nil 时按非 root；RestrictedDiagnosis nil 时一律隐藏受限
-// 原因码；Recorder 用于拒绝留痕（nil 时拒绝仍生效但不写审计，宿主应装配）。
+// 实现（读取真实 root 状态），仅用于 root 专属清理能力/受限诊断等身份能力，不用于
+// 普通读取/导出授权——后者统一走 Authorizer（生产装配把 root 交权限内核，步骤 252）。
+// RestrictedDiagnosis nil 时一律隐藏受限原因码；Recorder 用于拒绝留痕（nil 时拒绝仍
+// 生效但不写审计，宿主应装配）。
 type AuditOptions struct {
 	Audit      *auditops.Service
 	Authorizer auditops.Authorizer
@@ -88,17 +90,10 @@ func safeDenialToken(value string) string {
 }
 
 // authorize 使用宿主注入的真实权限引擎重新判定页面读取类动作；未装配或失败一律
-// 拒绝（fail-closed），不能把“没有授权器”当成放行。
+// 拒绝（fail-closed），不能把“没有授权器”当成放行。root 也不再走旁路：生产装配的
+// Authorizer 把 root 交权限内核判定，停用/未实现权限对 root 同样拒绝（步骤 252）。
 func (a *AuditAdapter) authorize(ctx context.Context, caller account.Caller,
 	permissionKey string) error {
-	// 与 internal/auditops 一致：受保护 root 走旁路（不要求普通 audit.read/
-	// audit.export 授权），页面能力位与后端判定保持统一；普通调用者仍需真实授权。
-	if a.opts.IsRoot != nil &&
-		caller.Actor().Type == audit.ActorUser {
-		if root, err := a.opts.IsRoot(ctx, caller.Actor().ID); err == nil && root {
-			return nil
-		}
-	}
 	if a.opts.Authorizer == nil {
 		return &ui.UIAuditError{Code: "ACCESS_DENIED"}
 	}
@@ -253,13 +248,9 @@ func (a *AuditAdapter) ListAudit(ctx context.Context, userID string,
 }
 
 // dataScope 返回授权结果对应的可见数据范围摘要（只在授权成功后读取；不显示未授权
-// 应用名称，仅给出范围事实，避免从页面推断跨应用记录）。
+// 应用名称，仅给出范围事实，避免从页面推断跨应用记录）。root 与普通主体一样以
+// Authorizer 的授权结果为准（生产内核为 root 返回 all），不再以 root 身份旁路。
 func (a *AuditAdapter) dataScope(ctx context.Context, caller account.Caller) string {
-	if a.opts.IsRoot != nil {
-		if root, err := a.opts.IsRoot(ctx, caller.Actor().ID); err == nil && root {
-			return "全部数据范围"
-		}
-	}
 	if a.opts.Authorizer == nil {
 		return ""
 	}
