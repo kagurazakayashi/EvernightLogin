@@ -36,6 +36,12 @@ type ChallengeRecord struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	VerifiedAt       time.Time
+	// SessionID 是步骤 255 直接管理挑战绑定的操作者会话 ID；空表示 0019 兼容的
+	// “操作者即目标”旧挑战（不能用于直接管理证明）。
+	SessionID string
+	// IntentSealed 是步骤 255 密封的新值意图密文（internal/secrets AES-GCM）；
+	// 空表示没有意图绑定。挑战表不保存意图明文。
+	IntentSealed []byte
 }
 
 // ApprovalRecord 是持久化的一次性操作批准（令牌只存摘要）。
@@ -55,6 +61,10 @@ type ApprovalRecord struct {
 	ExpiresAt       time.Time
 	ConsumedAt      time.Time
 	CreatedAt       time.Time
+	// SessionID / IntentSealed 是步骤 255 从挑战复制的一次性证明绑定；消费时
+	// 同一事务把 IntentSealed 清空，过期未消费的密文由有界清理擦除。
+	SessionID    string
+	IntentSealed []byte
 }
 
 // NotificationState 是安全告知结果状态（区分“未发送原因”，不能把未发送当成功）。
@@ -104,6 +114,31 @@ type NotificationRecord struct {
 	DeliveryUpdatedAt time.Time
 }
 
+// SessionState 是证明消费事务内重读的最小会话状态（步骤 255 修复）。
+//
+// 只读取 commit-boundary 必需字段：归属用户、会话种类、签发时安全版本、撤销与
+// 到期时间。它与 internal/session 的完整校验语义对齐（revoked/空闲/绝对到期 +
+// users.security_version 一致性），但用**调用方事务连接**读取，避免在 SQLite 写事务
+// 内另开连接导致互锁。这里不复制会话秘密/CSRF 等敏感数据，也不修改会话。
+type SessionState struct {
+	UserID            string
+	Kind              string
+	SecurityVersion   int64
+	Revoked           bool
+	IdleExpiresAt     time.Time
+	AbsoluteExpiresAt time.Time
+}
+
+// UserAuthState 是证明消费事务内重读的最小账户状态（步骤 255 修复）。
+type UserAuthState struct {
+	Status          string
+	SecurityVersion int64
+	IsRoot          bool
+	// ValidFrom/ValidUntil 是账户有效期的可空端点（半开区间）；nil 表示不限制。
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+}
+
 // Store 是再次认证持久化契约，由 internal/reauth/sqlite 实现。挑战与批准的状态
 // 迁移必须使用条件更新，保证一次性消费与状态竞争下只有一方成功。
 type Store interface {
@@ -121,8 +156,19 @@ type Store interface {
 	ApproveTx(ctx context.Context, tx audit.Tx, challengeID string, now time.Time, approval ApprovalRecord) (bool, error)
 	// GetApprovalByTokenDigest 按令牌摘要读取批准。
 	GetApprovalByTokenDigest(ctx context.Context, digest []byte) (ApprovalRecord, bool, error)
+	// GetApprovalByTokenDigestTx 在调用方审计事务内按令牌摘要读取批准：供步骤 255
+	// 的目标绑定证明在同一事务内完成绑定复核与条件消费。
+	GetApprovalByTokenDigestTx(ctx context.Context, tx audit.Tx, digest []byte) (ApprovalRecord, bool, error)
 	// ConsumeApprovalTx 在审计事务内一次性消费批准；已消费/过期返回 ok=false。
+	// 实现必须同时把 intent_sealed 清空（已消费证明不再保留密封意图）。
 	ConsumeApprovalTx(ctx context.Context, tx audit.Tx, approvalID string, now time.Time) (bool, error)
+	// ClearExpiredIntents 有界擦除过期或已消费批准上的意图密文（只清密文，不改状态
+	// 与审计）。返回清理行数；实现不得删除批准/挑战行本身。
+	ClearExpiredIntents(ctx context.Context, now time.Time) error
+	// GetSessionStateTx 在调用方审计事务内只读重读会话状态（步骤 255 修复）。
+	GetSessionStateTx(ctx context.Context, tx audit.Tx, sessionID string) (SessionState, bool, error)
+	// GetUserAuthStateTx 在调用方审计事务内只读重读账户状态与安全版本（步骤 255 修复）。
+	GetUserAuthStateTx(ctx context.Context, tx audit.Tx, userID string) (UserAuthState, bool, error)
 	// UpsertNotification 记录/更新一次告知结果（非关键路径，失败不回滚业务操作）。
 	// 幂等语义：dedup_key 非空且已存在同键记录时更新该记录（状态/错误码/脱敏收件
 	// 人，并在传入非空 delivery_id 时补写投递关联），否则插入新记录。dedup_key 为

@@ -291,6 +291,11 @@ func OpenBase(ctx context.Context, options BaseOptions) (base *Base, err error) 
 		return nil, err
 	}
 	strongPresenceRelay.Set(securityDomains.StrongFactors)
+	// 步骤 255：目标绑定一次性两步验证操作证明的晚接线（会话有效性、操作者权限
+	// 复核、WebAuthn 第二步）；缺少会话服务时拒绝启动，避免静默关闭安全校验。
+	if err := wireReauthOperationProof(gate, services, managed, securityDomains, now); err != nil {
+		return nil, err
+	}
 	managed.Support = securityDomains.Support
 	// 协议域在配置启用时提前构造：HTTP 装配与嵌入式宿主公开 Go 查询入口复用同一
 	// 真实令牌/授权流程服务；构造失败拒绝启动（fail-closed），不发布半可用协议。

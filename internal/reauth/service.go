@@ -22,6 +22,13 @@ const (
 	DefaultChallengeTTL = 5 * time.Minute
 	// DefaultApprovalTTL 是一次性批准默认有效期。
 	DefaultApprovalTTL = 2 * time.Minute
+	// DefaultProofMaxAge 是目标绑定操作证明“准备→最终提交”的默认最大间隔。
+	DefaultProofMaxAge = 5 * time.Second
+	// MinProofMaxAge 是允许的最小间隔（更低会让正常请求频繁失败）。
+	MinProofMaxAge = 500 * time.Millisecond
+	// MaxProofMaxAge 是允许的最大间隔（硬上限 5 秒；不允许放宽到分钟级，否则会把
+	// 权限/会话复核结果的有效期拉长成不可接受的窗口）。
+	MaxProofMaxAge = 5 * time.Second
 	// DefaultMaxAttempts 是挑战允许的密码尝试次数。
 	DefaultMaxAttempts = 5
 	// DefaultFailureNotifyLimit 是失败高风险告知的窗口内频次上限。
@@ -90,9 +97,15 @@ type Options struct {
 	Templates   *mailer.TemplateSet
 	// AvailableStrengths 是当前环境已实现的认证强度；nil 时只认为 none/password
 	// 可用（MFA/Passkey 未实现），要求强认证的操作 fail-closed。
-	AvailableStrengths  []policy.Strength
-	ChallengeTTL        time.Duration
-	ApprovalTTL         time.Duration
+	AvailableStrengths []policy.Strength
+	// IntentSealer 密封直接管理操作的新值意图（步骤 255）；nil 时直接管理证明
+	// fail-closed。生产实现为 *internal/secrets.Sealer。
+	IntentSealer IntentSealer
+	ChallengeTTL time.Duration
+	ApprovalTTL  time.Duration
+	// ProofMaxAge 是目标绑定操作证明的准备→提交最大间隔（步骤 255 修复）；零值使用
+	// DefaultProofMaxAge，允许 500ms～5s，绝不允许放宽到分钟级。
+	ProofMaxAge         time.Duration
 	MaxAttempts         int
 	FailureNotifyLimit  int
 	FailureNotifyWindow time.Duration
@@ -102,10 +115,21 @@ type Options struct {
 }
 
 // Service 是再次认证与安全告知执行侧服务。构造后不可变，不启动协程，不实现 MFA。
+// 步骤 255 起额外承载目标绑定操作证明所需的晚期接线依赖（会话校验、权限复核、
+// WebAuthn 第二步验证器），由宿主在相应服务构造完成后注入；未注入时对直接管理
+// 操作 fail-closed。
 type Service struct {
 	opts           Options
 	available      map[policy.Strength]bool
 	failureLimiter *failureLimiter
+	// proofMu 保护步骤 255 的晚期接线依赖（构造后由宿主一次性 Set）。
+	proofMu           sync.RWMutex
+	intentSealer      IntentSealer
+	sessionVerifier   SessionVerifier
+	permissionChecker PermissionChecker
+	strongWebAuthn    StrongWebAuthnVerifier
+	// proofMaxAge 是目标绑定操作证明的准备→提交最大间隔（≤5s）。
+	proofMaxAge time.Duration
 }
 
 // New 校验依赖并构造服务。
@@ -130,6 +154,13 @@ func New(options Options) (*Service, error) {
 	}
 	if options.ApprovalTTL < 30*time.Second || options.ApprovalTTL > 10*time.Minute {
 		return nil, fmt.Errorf("%w: 批准有效期必须在 30 秒～10 分钟之间", ErrOptionsInvalid)
+	}
+	if options.ProofMaxAge == 0 {
+		options.ProofMaxAge = DefaultProofMaxAge
+	}
+	if options.ProofMaxAge < MinProofMaxAge || options.ProofMaxAge > MaxProofMaxAge {
+		return nil, fmt.Errorf("%w: 操作证明最大准备间隔必须在 %s～%s 之间",
+			ErrOptionsInvalid, MinProofMaxAge, MaxProofMaxAge)
 	}
 	if options.MaxAttempts == 0 {
 		options.MaxAttempts = DefaultMaxAttempts
@@ -186,14 +217,24 @@ func New(options Options) (*Service, error) {
 		options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	service := &Service{
-		opts:      options,
-		available: available,
+		opts:         options,
+		available:    available,
+		proofMaxAge:  options.ProofMaxAge,
+		intentSealer: options.IntentSealer,
 		failureLimiter: &failureLimiter{
 			limit: options.FailureNotifyLimit, window: options.FailureNotifyWindow,
 			entries: make(map[string][]time.Time),
 		},
 	}
 	return service, nil
+}
+
+// proofMaxAgeLimit 返回证明准备→提交允许的最大间隔（构造时已校验不超过 5 秒）。
+func (s *Service) proofMaxAgeLimit() time.Duration {
+	if s == nil || s.proofMaxAge <= 0 {
+		return DefaultProofMaxAge
+	}
+	return s.proofMaxAge
 }
 
 // SupportedStrengths 返回当前可满足的认证强度（用于诊断与装配校验）。
@@ -239,6 +280,13 @@ func (s *Service) Authorize(ctx context.Context, caller Caller, request Request)
 	if err := s.validateRequest(request); err != nil {
 		s.recordRejection(ctx, caller, request, err)
 		return Result{}, err
+	}
+	// 步骤 255：直接管理操作（操作者与目标不同）不允许走“上下文信号/旧一次性批准”
+	// 路径，必须使用会话+目标+意图绑定的 ConsumeProofTx；否则伪造 context 信号或
+	// 参数摘要不能代替会话/意图绑定。
+	if isDirectManagementOperation(request.OperationID) {
+		s.recordRejection(ctx, caller, request, errDirectOperationRequiresProof)
+		return Result{}, errDirectOperationRequiresProof
 	}
 	policyCaller, err := toPolicyCaller(caller.actor)
 	if err != nil {
@@ -318,6 +366,12 @@ type ChallengeRequest struct {
 	// MinimumStrength 是可信页面适配层要求的更强认证下限；只能提高、不能降低
 	// 策略要求的强度。为空表示只按策略。
 	MinimumStrength policy.Strength
+	// SessionID 是操作者本次管理会话的服务器端 ID（步骤 255，可直接管理操作使用）；
+	// 由可信会话解析写入，不能来自普通请求参数自称。非直接管理操作必须为空。
+	SessionID string
+	// Intent 是本次操作将应用的新值意图（步骤 255，直接管理操作使用）；非直接管理
+	// 操作必须为空。服务端只保存其密封密文，不保存明文或无密钥摘要。
+	Intent *Intent
 }
 
 // Challenge 是操作绑定认证挑战。Required=false 表示当前策略不需要额外认证。
@@ -346,6 +400,36 @@ func (s *Service) BeginChallenge(ctx context.Context, caller Caller, request Cha
 	if err := s.validateRequest(policyRequest); err != nil {
 		s.recordRejection(ctx, caller, policyRequest, err)
 		return Challenge{}, err
+	}
+	// 步骤 255：直接管理操作必须显式绑定操作者会话与本次新值意图；普通敏感操作
+	// 不允许混用这两项，避免把“操作者即目标”的旧语义与目标绑定证明混淆。
+	directOperation := isDirectManagementOperation(request.OperationID)
+	if directOperation {
+		if request.ScopeID != "system" || request.TargetType != "user" ||
+			!account.ValidUserID(request.TargetID) {
+			mapped := fmt.Errorf("%w: 直接管理操作的目标/范围非法", ErrInvalidRequest)
+			s.recordRejection(ctx, caller, policyRequest, mapped)
+			return Challenge{}, mapped
+		}
+		if !validSessionBinding(request.SessionID) {
+			mapped := fmt.Errorf("%w: 缺少可信会话绑定", ErrSessionMismatch)
+			s.recordRejection(ctx, caller, policyRequest, mapped)
+			return Challenge{}, mapped
+		}
+		requiredKind, _ := requiredIntentKind(request.OperationID)
+		if request.Intent == nil || request.Intent.Kind != requiredKind {
+			mapped := fmt.Errorf("%w: 缺少本次新值意图", ErrIntentInvalid)
+			s.recordRejection(ctx, caller, policyRequest, mapped)
+			return Challenge{}, mapped
+		}
+		if err := request.Intent.Validate(); err != nil {
+			s.recordRejection(ctx, caller, policyRequest, err)
+			return Challenge{}, err
+		}
+	} else if request.SessionID != "" || request.Intent != nil {
+		mapped := fmt.Errorf("%w: 非直接管理操作不支持会话/意图绑定", ErrInvalidRequest)
+		s.recordRejection(ctx, caller, policyRequest, mapped)
+		return Challenge{}, mapped
 	}
 	policyCaller, err := toPolicyCaller(caller.actor)
 	if err != nil {
@@ -380,27 +464,52 @@ func (s *Service) BeginChallenge(ctx context.Context, caller Caller, request Cha
 		return Challenge{}, err
 	}
 	paramsDigest := ParamsDigest(request.Params)
+	var sealedIntent []byte
+	if directOperation {
+		// 密封绑定以挑战 ID 为对象、作用域为范围；密文跨挑战/跨范围复制无法解密。
+		sealedIntent, err = s.sealIntent(challengeID, request.ScopeID, *request.Intent)
+		if err != nil {
+			s.recordRejection(ctx, caller, policyRequest, err)
+			return Challenge{}, err
+		}
+	}
 	record := ChallengeRecord{
 		ID: challengeID, UserID: caller.actor.ID, ScopeID: request.ScopeID,
 		OperationID: request.OperationID, TargetType: request.TargetType, TargetID: request.TargetID,
 		ParamsSHA256: paramsDigest[:], RequiredStrength: requiredStrength,
 		State: ChallengePending, Attempts: 0, MaxAttempts: s.opts.MaxAttempts,
 		ExpiresAt: now.Add(s.opts.ChallengeTTL), CreatedAt: now, UpdatedAt: now,
+		SessionID: request.SessionID, IntentSealed: sealedIntent,
+	}
+	changes := []audit.FieldChange{
+		{Field: "operation_id", After: request.OperationID},
+		{Field: "target_type", After: request.TargetType},
+		{Field: "target_id", After: safeValue(request.TargetID)},
+		{Field: "required_strength", After: string(requiredStrength)},
+	}
+	if directOperation {
+		changes = append(changes,
+			audit.FieldChange{Field: "session_bound", After: "true"},
+			audit.FieldChange{Field: "intent_bound", After: "true"})
 	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
 			Actor: caller.actor, Action: "reauth.challenge",
 			Target:    audit.Target{Type: "reauth_challenge", ID: challengeID},
 			RequestID: validRequestID(request.RequestID),
-			Changes: []audit.FieldChange{
-				{Field: "operation_id", After: request.OperationID},
-				{Field: "target_type", After: request.TargetType},
-				{Field: "target_id", After: safeValue(request.TargetID)},
-				{Field: "required_strength", After: string(requiredStrength)},
-			},
+			Changes:   changes,
 		},
 		FailureReasonCode:   "reauth.challenge_failed",
 		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
+	}
+	if directOperation {
+		// 发起证明前复核操作者当前权限（事务外只读；权限内核使用独立连接，不能与
+		// 审计写事务同时读取）。消费前的最终复核在 PrepareProof 再做一次。
+		permissionKey, _ := directPermissionKey(request.OperationID)
+		if err := s.checkDirectProofPermission(ctx, caller.actor.ID, permissionKey); err != nil {
+			s.recordRejection(ctx, caller, policyRequest, err)
+			return Challenge{}, err
+		}
 	}
 	err = s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
 		return s.opts.Store.CreateChallengeTx(txCtx, tx, record)
@@ -408,6 +517,8 @@ func (s *Service) BeginChallenge(ctx context.Context, caller Caller, request Cha
 	if err != nil {
 		return Challenge{}, mapCriticalError(err)
 	}
+	// 有界擦除过期/已消费批准上的意图密文（失败不影响本次签发，安全由消费校验保证）。
+	s.purgeExpiredIntents(ctx)
 	return Challenge{ID: challengeID, OperationID: request.OperationID,
 		RequiredStrength: requiredStrength, ExpiresAt: record.ExpiresAt,
 		MaxAttempts: s.opts.MaxAttempts, Required: true}, nil
@@ -419,7 +530,10 @@ type VerifyChallengeRequest struct {
 	Password    string
 	// TOTPCode 是策略要求 strong 时的第二条因素动态码；password-only 不得满足
 	// strong 要求。
-	TOTPCode  string
+	TOTPCode string
+	// SessionID 是操作者当前管理会话 ID（步骤 255）；挑战绑定了会话时必须完全一致，
+	// 用于把一次性批准限制在完成验证的同一会话上。
+	SessionID string
 	RequestID string
 }
 
@@ -431,6 +545,8 @@ type ApprovalGrant struct {
 	OperationID     string
 	TargetType      string
 	TargetID        string
+	// SessionID 是本次批准绑定的操作者会话 ID（直接管理证明非空）。
+	SessionID string
 }
 
 // VerifyChallenge 校验挑战绑定的用户密码；成功返回一次操作批准令牌，失败递增
@@ -465,6 +581,13 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 	}
 	if !now.Before(record.ExpiresAt) {
 		return ApprovalGrant{}, ErrChallengeExpired
+	}
+	// 步骤 255：挑战绑定了会话时，完成验证的调用必须来自同一会话；否则拒绝，
+	// 防止把一步验证能力挪用到其他会话。
+	if record.SessionID != "" &&
+		(!validSessionBinding(request.SessionID) || request.SessionID != record.SessionID) {
+		s.recordVerifyFailure(ctx, caller, record.ID, "session_mismatch")
+		return ApprovalGrant{}, ErrSessionMismatch
 	}
 	if record.Attempts >= record.MaxAttempts {
 		s.recordVerifyFailure(ctx, caller, request.ChallengeID, "attempts_exceeded")
@@ -546,7 +669,22 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 		grantedStrength = policy.StrengthStrong
 		verificationComplete = true
 	}
-	// 以刚完成的真实认证事实重新评估策略：要求更强或不可满足时不出具批准。
+	// 以刚完成的真实认证事实重新评估策略并签发一次性批准（步骤 255 抽出的共用
+	// 签发路径，WebAuthn 路径复用同一逻辑）。
+	return s.issueApproval(ctx, caller, record, grantedStrength, completedAt,
+		verificationComplete, requestID)
+}
+
+// issueApproval 在审计事务内把已核实的真实认证事实固化为一次性批准：
+//   - 以批准授予的事实重新评估策略；不满足/需要更强时不出具批准；
+//   - 高权限操作必须有完整强认证；
+//   - 挑战上绑定的会话与密封意图原样复制到批准（步骤 255 的直接管理证明消费时
+//     再次核对），批准本身不保存意图明文；
+//   - 挑战状态与批准行在同一事务提交，并发只有一个赢家。
+func (s *Service) issueApproval(ctx context.Context, caller Caller, record ChallengeRecord,
+	grantedStrength policy.Strength, completedAt time.Time, verificationComplete bool,
+	requestID string) (ApprovalGrant, error) {
+	now := s.now()
 	policyCaller, policyErr := toPolicyCaller(caller.actor)
 	if policyErr != nil {
 		return ApprovalGrant{}, ErrAccessDenied
@@ -561,10 +699,16 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 		s.recordVerifyFailure(ctx, caller, record.ID, "policy_not_satisfied")
 		return ApprovalGrant{}, mapped
 	}
-	if decision.RootOnly && !verified.Complete {
+	if decision.RootOnly && !verificationComplete {
 		mapped := fmt.Errorf("%w: 高权限操作需要完整强认证", ErrMFARequired)
 		s.recordVerifyFailure(ctx, caller, record.ID, "strong_auth_incomplete")
 		return ApprovalGrant{}, mapped
+	}
+	// 直接管理操作的安全下限：必须两步验证达成 strong，否则不出具可消费证明。
+	if isDirectManagementOperation(record.OperationID) &&
+		(grantedStrength != policy.StrengthStrong || !verificationComplete) {
+		s.recordVerifyFailure(ctx, caller, record.ID, "direct_operation_strong_required")
+		return ApprovalGrant{}, fmt.Errorf("%w: 直接管理操作需要完整两步验证", ErrMFARequired)
 	}
 	token, tokenDigest, err := newApprovalToken(s.opts.Random)
 	if err != nil {
@@ -581,19 +725,27 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 		ParamsSHA256: record.ParamsSHA256, GrantedStrength: grantedStrength,
 		Complete: verificationComplete, GrantedAt: completedAt,
 		ExpiresAt: now.Add(s.opts.ApprovalTTL), CreatedAt: now,
+		SessionID: record.SessionID, IntentSealed: record.IntentSealed,
+	}
+	changes := []audit.FieldChange{
+		{Field: "operation_id", After: record.OperationID},
+		{Field: "target_type", After: record.TargetType},
+		{Field: "target_id", After: safeValue(record.TargetID)},
+		{Field: "granted_strength", After: string(grantedStrength)},
+		{Field: "authentication_complete", After: boolText(verificationComplete)},
+	}
+	if record.SessionID != "" {
+		changes = append(changes, audit.FieldChange{Field: "session_bound", After: "true"})
+	}
+	if len(record.IntentSealed) > 0 {
+		changes = append(changes, audit.FieldChange{Field: "intent_bound", After: "true"})
 	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
 			Actor: caller.actor, Action: "reauth.approved",
 			Target:    audit.Target{Type: "reauth_approval", ID: approvalID},
 			RequestID: requestID,
-			Changes: []audit.FieldChange{
-				{Field: "operation_id", After: record.OperationID},
-				{Field: "target_type", After: record.TargetType},
-				{Field: "target_id", After: safeValue(record.TargetID)},
-				{Field: "granted_strength", After: string(grantedStrength)},
-				{Field: "authentication_complete", After: boolText(verificationComplete)},
-			},
+			Changes:   changes,
 		},
 		FailureReasonCode:   "reauth.approval_failed",
 		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
@@ -613,7 +765,8 @@ func (s *Service) VerifyChallenge(ctx context.Context, caller Caller, request Ve
 	}
 	return ApprovalGrant{Token: token, ExpiresAt: approval.ExpiresAt,
 		GrantedStrength: grantedStrength, OperationID: record.OperationID,
-		TargetType: record.TargetType, TargetID: record.TargetID}, nil
+		TargetType: record.TargetType, TargetID: record.TargetID,
+		SessionID: record.SessionID}, nil
 }
 
 // CancelChallenge 取消用户本人尚未完成的再次认证挑战：pending 条件迁移为
@@ -914,7 +1067,9 @@ func mapCriticalError(err error) error {
 	case errors.Is(err, ErrChallengeInvalid), errors.Is(err, ErrApprovalConsumed),
 		errors.Is(err, ErrApprovalExpired), errors.Is(err, ErrApprovalInvalid),
 		errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrAccessDenied),
-		errors.Is(err, ErrMFARequired), errors.Is(err, ErrOptionsInvalid):
+		errors.Is(err, ErrMFARequired), errors.Is(err, ErrOptionsInvalid),
+		errors.Is(err, ErrIntentInvalid), errors.Is(err, ErrProofBindingMismatch),
+		errors.Is(err, ErrSessionMismatch), errors.Is(err, ErrProofUnavailable):
 		return err
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err

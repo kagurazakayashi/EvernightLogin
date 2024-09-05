@@ -77,8 +77,12 @@ func CodeOf(err error) ErrorCode {
 		errors.Is(err, ErrAttemptsExceeded):
 		return CodeChallengeInvalid
 	case errors.Is(err, ErrApprovalInvalid), errors.Is(err, ErrApprovalExpired),
-		errors.Is(err, ErrApprovalConsumed):
+		errors.Is(err, ErrApprovalConsumed), errors.Is(err, ErrIntentInvalid),
+		errors.Is(err, ErrProofBindingMismatch), errors.Is(err, ErrSessionMismatch),
+		errors.Is(err, ErrProofExpired):
 		return CodeTokenInvalid
+	case errors.Is(err, ErrProofUnavailable):
+		return CodeInternalError
 	case errors.Is(err, ErrRateLimited):
 		return CodeRateLimited
 	case errors.Is(err, ErrPolicyUnavailable):

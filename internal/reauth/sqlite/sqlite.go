@@ -1,8 +1,9 @@
 // Package sqlite 实现 internal/reauth.Store 的 SQLite 生产仓储。
 //
-// 表结构由 migrations/0019_reauth_and_notifications.sql 创建；本包不执行迁移、
-// 不拥有数据库连接。批准令牌只保存 SHA-256 摘要，挑战与批准的状态迁移全部使用
-// 条件更新，保证一次性消费与并发竞争下只有一方成功。
+// 表结构由 migrations/0019_reauth_and_notifications.sql 创建，0054 追加目标绑定
+// 操作证明所需的 session_id/intent_sealed 列；本包不执行迁移、不拥有数据库连接。
+// 批准令牌只保存 SHA-256 摘要，密封意图只保存 AES-GCM 密文（消费/过期时擦除）；
+// 挑战与批准的状态迁移全部使用条件更新，保证一次性消费与并发竞争下只有一方成功。
 package sqlite
 
 import (
@@ -20,12 +21,13 @@ import (
 
 const insertChallengeSQL = `INSERT INTO reauth_challenges(
 id,user_id,scope_id,operation_id,target_type,target_id,params_sha256,required_strength,
-status,attempts,max_attempts,expires_at_ms,created_at_ms,updated_at_ms,verified_at_ms
-) VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?,?,NULL)`
+status,attempts,max_attempts,expires_at_ms,created_at_ms,updated_at_ms,verified_at_ms,
+session_id,intent_sealed
+) VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?,?,NULL,?,?)`
 
 const selectChallengeSQL = `SELECT id,user_id,scope_id,operation_id,target_type,target_id,
 params_sha256,required_strength,status,attempts,max_attempts,expires_at_ms,created_at_ms,
-updated_at_ms,COALESCE(verified_at_ms,0)
+updated_at_ms,COALESCE(verified_at_ms,0),COALESCE(session_id,''),intent_sealed
 FROM reauth_challenges WHERE id=?`
 
 const increaseAttemptsSQL = `UPDATE reauth_challenges SET attempts=attempts+1,updated_at_ms=?
@@ -42,16 +44,27 @@ WHERE id=? AND status='pending'`
 const insertApprovalSQL = `INSERT INTO reauth_approvals(
 id,challenge_id,token_sha256,user_id,scope_id,operation_id,target_type,target_id,
 params_sha256,granted_strength,authentication_complete,granted_at_ms,expires_at_ms,
-consumed_at_ms,created_at_ms
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)`
+consumed_at_ms,created_at_ms,session_id,intent_sealed
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)`
 
 const selectApprovalByTokenSQL = `SELECT id,challenge_id,token_sha256,user_id,scope_id,
 operation_id,target_type,target_id,params_sha256,granted_strength,
-authentication_complete,granted_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),created_at_ms
+authentication_complete,granted_at_ms,expires_at_ms,COALESCE(consumed_at_ms,0),created_at_ms,
+COALESCE(session_id,''),intent_sealed
 FROM reauth_approvals WHERE token_sha256=?`
 
-const consumeApprovalSQL = `UPDATE reauth_approvals SET consumed_at_ms=?
+// consumeApprovalSQL 在消费时同时清空密封意图：已消费证明不再保留新值密文。
+const consumeApprovalSQL = `UPDATE reauth_approvals SET consumed_at_ms=?,intent_sealed=NULL
 WHERE id=? AND consumed_at_ms IS NULL AND expires_at_ms>?`
+
+// clearExpiredChallengeIntentsSQL / clearExpiredApprovalIntentsSQL 是有界密文清理：
+// 挑战已终结（verified/cancelled/expired）或已过期，批准已过期或已消费时，密封意图
+// 不再有消费价值，直接擦除密文；不删除审计/批准/挑战行本身。
+const clearExpiredChallengeIntentsSQL = `UPDATE reauth_challenges SET intent_sealed=NULL
+WHERE intent_sealed IS NOT NULL AND (expires_at_ms<=? OR status<>'pending')`
+
+const clearExpiredApprovalIntentsSQL = `UPDATE reauth_approvals SET intent_sealed=NULL
+WHERE intent_sealed IS NOT NULL AND (expires_at_ms<=? OR consumed_at_ms IS NOT NULL)`
 
 // upsertNotificationSQL 是原子幂等写入：dedup_key 非空且已存在时更新同一行，否则插入。
 //
@@ -117,7 +130,8 @@ func (s *Store) CreateChallengeTx(ctx context.Context, tx audit.Tx, record reaut
 		record.OperationID, record.TargetType, record.TargetID, record.ParamsSHA256,
 		string(record.RequiredStrength), record.Attempts, record.MaxAttempts,
 		record.ExpiresAt.UTC().UnixMilli(), record.CreatedAt.UTC().UnixMilli(),
-		record.UpdatedAt.UTC().UnixMilli()); err != nil {
+		record.UpdatedAt.UTC().UnixMilli(), nullString(record.SessionID),
+		nullableBytes(record.IntentSealed)); err != nil {
 		return fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
 	return nil
@@ -137,12 +151,15 @@ func (s *Store) GetChallenge(ctx context.Context, id string) (reauth.ChallengeRe
 	var params []byte
 	var strength, state string
 	var expiresAt, createdAt, updatedAt, verifiedAt int64
+	var sealedIntent []byte
 	if err := rows.Scan(&record.ID, &record.UserID, &record.ScopeID, &record.OperationID,
 		&record.TargetType, &record.TargetID, &params, &strength, &state, &record.Attempts,
-		&record.MaxAttempts, &expiresAt, &createdAt, &updatedAt, &verifiedAt); err != nil {
+		&record.MaxAttempts, &expiresAt, &createdAt, &updatedAt, &verifiedAt,
+		&record.SessionID, &sealedIntent); err != nil {
 		return reauth.ChallengeRecord{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
 	record.ParamsSHA256 = params
+	record.IntentSealed = sealedIntent
 	record.RequiredStrength = policy.Strength(strength)
 	record.State = reauth.ChallengeState(state)
 	record.ExpiresAt = time.UnixMilli(expiresAt).UTC()
@@ -214,7 +231,8 @@ func (s *Store) ApproveTx(ctx context.Context, tx audit.Tx, challengeID string, 
 		approval.TargetType, approval.TargetID, approval.ParamsSHA256,
 		string(approval.GrantedStrength), boolInt(approval.Complete),
 		approval.GrantedAt.UTC().UnixMilli(), approval.ExpiresAt.UTC().UnixMilli(),
-		approval.CreatedAt.UTC().UnixMilli()); err != nil {
+		approval.CreatedAt.UTC().UnixMilli(), nullString(approval.SessionID),
+		nullableBytes(approval.IntentSealed)); err != nil {
 		return false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
 	return true, nil
@@ -222,7 +240,29 @@ func (s *Store) ApproveTx(ctx context.Context, tx audit.Tx, challengeID string, 
 
 // GetApprovalByTokenDigest 按令牌摘要读取批准。
 func (s *Store) GetApprovalByTokenDigest(ctx context.Context, digest []byte) (reauth.ApprovalRecord, bool, error) {
-	rows, err := s.store.QueryContext(ctx, selectApprovalByTokenSQL, digest)
+	return s.queryApproval(ctx, nil, digest)
+}
+
+// GetApprovalByTokenDigestTx 在调用方审计事务内按令牌摘要读取批准；步骤 255 的
+// 目标绑定证明据此在同一事务里核对绑定并条件消费。
+func (s *Store) GetApprovalByTokenDigestTx(ctx context.Context, tx audit.Tx,
+	digest []byte) (reauth.ApprovalRecord, bool, error) {
+	if tx == nil {
+		return reauth.ApprovalRecord{}, false, fmt.Errorf("%w: 审计事务为空", reauth.ErrOptionsInvalid)
+	}
+	return s.queryApproval(ctx, tx, digest)
+}
+
+// queryApproval 是独立读取与事务内读取共用的批准扫描实现。
+func (s *Store) queryApproval(ctx context.Context, tx audit.Tx,
+	digest []byte) (reauth.ApprovalRecord, bool, error) {
+	var rows *sql.Rows
+	var err error
+	if tx != nil {
+		rows, err = tx.QueryContext(ctx, selectApprovalByTokenSQL, digest)
+	} else {
+		rows, err = s.store.QueryContext(ctx, selectApprovalByTokenSQL, digest)
+	}
 	if err != nil {
 		return reauth.ApprovalRecord{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
@@ -235,13 +275,16 @@ func (s *Store) GetApprovalByTokenDigest(ctx context.Context, digest []byte) (re
 	var strength string
 	var complete int
 	var grantedAt, expiresAt, consumedAt, createdAt int64
+	var sealedIntent []byte
 	if err := rows.Scan(&record.ID, &record.ChallengeID, &token, &record.UserID, &record.ScopeID,
 		&record.OperationID, &record.TargetType, &record.TargetID, &params, &strength,
-		&complete, &grantedAt, &expiresAt, &consumedAt, &createdAt); err != nil {
+		&complete, &grantedAt, &expiresAt, &consumedAt, &createdAt,
+		&record.SessionID, &sealedIntent); err != nil {
 		return reauth.ApprovalRecord{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
 	}
 	record.TokenSHA256 = token
 	record.ParamsSHA256 = params
+	record.IntentSealed = sealedIntent
 	record.GrantedStrength = policy.Strength(strength)
 	record.Complete = complete == 1
 	record.GrantedAt = time.UnixMilli(grantedAt).UTC()
@@ -486,6 +529,90 @@ func (s *Store) queryString(ctx context.Context, query string, argument string) 
 	return value, true, nil
 }
 
+// ClearExpiredIntents 有界擦除过期/已终结记录上的意图密文（步骤 255）：
+// 只把 intent_sealed 置空，不删除行、不改变状态与审计；任何一条语句失败返回错误
+// （调用方按尽力清理处理，不影响已签发证明的安全语义）。
+func (s *Store) ClearExpiredIntents(ctx context.Context, now time.Time) error {
+	nowMS := now.UTC().UnixMilli()
+	if _, err := s.store.ExecContext(ctx, clearExpiredChallengeIntentsSQL, nowMS); err != nil {
+		return fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	if _, err := s.store.ExecContext(ctx, clearExpiredApprovalIntentsSQL, nowMS); err != nil {
+		return fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	return nil
+}
+
+// sessionStateSQL / userAuthStateSQL 是步骤 255 修复的 commit-boundary 只读查询：
+// 在调用方审计事务连接上重读会话与账户状态，语义与 internal/session 的完整校验对齐
+// （未撤销、空闲/绝对未过期、security_version 一致、账户 active 且在有效期内），但
+// 不另开连接以避免 SQLite 写事务互锁。只读，不修改会话/账户。
+const sessionStateSQL = `SELECT user_id,kind,security_version,idle_expires_at_ms,
+absolute_expires_at_ms,revoked_at_ms FROM sessions WHERE id=?`
+
+const userAuthStateSQL = `SELECT status,security_version,is_root,valid_from_ms,valid_until_ms
+FROM users WHERE id=?`
+
+// GetSessionStateTx 在调用方审计事务内只读重读会话状态（步骤 255 修复）。
+func (s *Store) GetSessionStateTx(ctx context.Context, tx audit.Tx,
+	sessionID string) (reauth.SessionState, bool, error) {
+	if tx == nil {
+		return reauth.SessionState{}, false, fmt.Errorf("%w: 审计事务为空", reauth.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, sessionStateSQL, sessionID)
+	if err != nil {
+		return reauth.SessionState{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return reauth.SessionState{}, false, nil
+	}
+	var state reauth.SessionState
+	var idleExpiresAt, absoluteExpiresAt int64
+	var revokedAt sql.NullInt64
+	if err := rows.Scan(&state.UserID, &state.Kind, &state.SecurityVersion,
+		&idleExpiresAt, &absoluteExpiresAt, &revokedAt); err != nil {
+		return reauth.SessionState{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	state.Revoked = revokedAt.Valid
+	state.IdleExpiresAt = time.UnixMilli(idleExpiresAt).UTC()
+	state.AbsoluteExpiresAt = time.UnixMilli(absoluteExpiresAt).UTC()
+	return state, true, nil
+}
+
+// GetUserAuthStateTx 在调用方审计事务内只读重读账户状态与安全版本（步骤 255 修复）。
+func (s *Store) GetUserAuthStateTx(ctx context.Context, tx audit.Tx,
+	userID string) (reauth.UserAuthState, bool, error) {
+	if tx == nil {
+		return reauth.UserAuthState{}, false, fmt.Errorf("%w: 审计事务为空", reauth.ErrOptionsInvalid)
+	}
+	rows, err := tx.QueryContext(ctx, userAuthStateSQL, userID)
+	if err != nil {
+		return reauth.UserAuthState{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return reauth.UserAuthState{}, false, nil
+	}
+	var state reauth.UserAuthState
+	var isRoot int
+	var validFrom, validUntil sql.NullInt64
+	if err := rows.Scan(&state.Status, &state.SecurityVersion, &isRoot,
+		&validFrom, &validUntil); err != nil {
+		return reauth.UserAuthState{}, false, fmt.Errorf("%w: %w", reauth.ErrStoreUnavailable, err)
+	}
+	state.IsRoot = isRoot == 1
+	if validFrom.Valid {
+		value := time.UnixMilli(validFrom.Int64).UTC()
+		state.ValidFrom = &value
+	}
+	if validUntil.Valid {
+		value := time.UnixMilli(validUntil.Int64).UTC()
+		state.ValidUntil = &value
+	}
+	return state, true, nil
+}
+
 func boolInt(value bool) int {
 	if value {
 		return 1
@@ -495,6 +622,14 @@ func boolInt(value bool) int {
 
 func nullString(value string) any {
 	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// nullableBytes 把空密文映射为 SQL NULL（未绑定意图）。
+func nullableBytes(value []byte) any {
+	if len(value) == 0 {
 		return nil
 	}
 	return value
