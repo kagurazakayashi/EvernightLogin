@@ -11,12 +11,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
-const selectProfileColumns = `id,is_root,username,username_normalized,nickname,biography,
+const selectProfileColumns = `id,is_root,status,username,username_normalized,nickname,biography,
 language,timezone,phone,phone_verified_at_ms,row_version,created_at_ms,updated_at_ms,
 username_changed_at_ms`
 
@@ -78,8 +79,9 @@ func (s *Store) queryProfile(ctx context.Context, tx audit.Tx, userID string) (p
 	var phone, phoneVerified sql.NullString
 	var phoneVerifiedMS sql.NullInt64
 	var isRoot int
+	var status string
 	var createdAt, updatedAt, usernameChangedAt int64
-	if err := rows.Scan(&record.UserID, &isRoot, &record.Username, &record.UsernameNormalized,
+	if err := rows.Scan(&record.UserID, &isRoot, &status, &record.Username, &record.UsernameNormalized,
 		&record.Nickname, &record.Biography, &record.Language, &record.Timezone,
 		&phone, &phoneVerifiedMS, &record.RowVersion, &createdAt, &updatedAt,
 		&usernameChangedAt); err != nil {
@@ -87,6 +89,10 @@ func (s *Store) queryProfile(ctx context.Context, tx audit.Tx, userID string) (p
 	}
 	_ = phoneVerified
 	record.IsRoot = isRoot == 1
+	record.Status = account.Status(status)
+	if !record.Status.Valid() {
+		return profile.UserProfile{}, false, fmt.Errorf("%w: 账户状态非法", profile.ErrStoreUnavailable)
+	}
 	record.Phone = phone.String
 	record.PhoneVerified = phoneVerifiedMS.Valid
 	record.CreatedAt = time.UnixMilli(createdAt).UTC()

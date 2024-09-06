@@ -402,11 +402,14 @@ func catalogV1() *Catalog {
 // 权限键是能力标记、不授予预设角色；端点仍以资源服务 client 凭证 + 令牌当前权限联合判定。
 //
 // 本轮新增的两项直接管理权限（users.username.change.other 直接修改他人用户名、
-// users.password.reset.other 直接重置他人密码）在此只登记目录与预设说明：业务执行入口
-// 由后续步骤 256/257 实现，入口落地前 Implemented 必须保持 false，能力表与能力矩阵
-// 不得提前置为已实现；两键语义互相独立，也不能借 users.update 隐式获得。新安装的
-// system_admin 预设包含两项（客服与用户管理员不含，客服需 root 逐项授予）；既有角色
-// 升级时只提示“待恢复的默认权限”，不静默追加，避免无提示提权。
+// users.password.reset.other 直接重置他人密码）在此登记目录与预设说明：业务执行入口
+// 由步骤 256/257 实现。步骤 256 已落地直接改名 Go 入口，因此
+// users.username.change.other 的 Implemented 置 true（root 全权限与获授权角色的
+// 授权内核据此判定可用）；直接重置他人密码入口在步骤 257 落地前继续保持 false，
+// 能力表与能力矩阵的全量刷新留给步骤 267/271，不提前置全绿。两键语义互相独立，
+// 也不能借 users.update 隐式获得。新安装的 system_admin 预设包含两项（客服与用户
+// 管理员不含，客服需 root 逐项授予）；既有角色升级时只提示“待恢复的默认权限”，
+// 不静默追加，避免无提示提权。
 //
 // 三者命名对应关系（有意遵循既有规范，不是同一概念两种拼写）：
 //   - 权限键（本目录、角色组合、授权判定使用）：users.username.change.other /
@@ -479,7 +482,7 @@ func catalogPermissionsV1() []PermissionDefinition {
 			Summary:        "对获准管理的其他用户直接修改全局用户名；需操作者本次完成两步验证，不需要目标当前密码、目标确认或另一管理员审批。",
 			Scope:          "仅获准管理的普通用户范围；本人改名仍走本人受控流程。",
 			Limits:         "不能修改 root 或超出管理范围的账户；不能修改密码、邮箱、MFA 秘密或管理资格，不能绕过用户名的唯一性、保留名与 Unicode 规则。",
-			RequiresReauth: true, Implemented: false, DefaultRoles: []string{"system_admin"},
+			RequiresReauth: true, Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		{
 			Key: "users.password.reset.other", Name: "直接重置他人密码",

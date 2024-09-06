@@ -292,18 +292,16 @@ func TestCatalogIntegrity(t *testing.T) {
 	}
 	// 未实现的权限必须显式标记，不能伪装成功。逐键核对代码后：权限键对应的真实
 	// 服务端执行路径已实现的标 true；下列键没有真实执行路径，必须保持 false。
-	// 本轮新增的两项直接管理权限（直接改名/直接重置他人）在步骤 256/257 的业务
-	// 执行入口落地前保持 false，能力表不得提前置为已实现。
+	// 步骤 256 已落地直接改名 Go 入口 → users.username.change.other 已实现；
+	// 直接重置他人密码入口由步骤 257 落地，届时再改为 true。
 	notImplemented := map[string]struct{}{
-		"users.username.change.other": {},
-		"users.password.reset.other":  {},
+		"users.password.reset.other": {},
 	}
 	// grantableWhileUnimplemented 是“已登记、业务入口在同轮后续步骤完成”的例外：
 	// 只允许出现在新装 system_admin 预设的默认权限中；其他未实现权限仍不得进入
 	// 任何预设角色，避免把不存在的执行路径展示为已授予能力。
 	grantableWhileUnimplemented := map[string]struct{}{
-		"users.username.change.other": {},
-		"users.password.reset.other":  {},
+		"users.password.reset.other": {},
 	}
 	for _, definition := range catalog.Permissions {
 		_, missing := notImplemented[definition.Key]

@@ -114,6 +114,7 @@ var domainCodeToPublic = map[string]login.ErrorCode{
 	"MFA_REQUIRED":         login.CodeMFARequired,
 	"MFA_REBIND_REQUIRED":  login.CodeMFARebindRequired,
 	"CHALLENGE_INVALID":    login.CodeChallengeInvalid,
+	"TOKEN_INVALID":        login.CodeTokenInvalid,
 	"RATE_LIMITED":         login.CodeRateLimited,
 	"CONFLICT":             login.CodeConflict,
 	"AUTHZ_UNAVAILABLE":    login.CodeAuthzUnavailable,

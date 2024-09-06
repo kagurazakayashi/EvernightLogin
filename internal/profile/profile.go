@@ -66,7 +66,7 @@ func CodeOf(err error) ErrorCode {
 		return ""
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrPhoneInvalid):
 		return CodeReqInvalid
-	case errors.Is(err, ErrAccessDenied):
+	case errors.Is(err, ErrAccessDenied), errors.Is(err, ErrTargetNotManageable):
 		return CodeAccessDenied
 	case errors.Is(err, ErrVersionConflict), errors.Is(err, ErrUsernameTaken):
 		return CodeConflict
@@ -137,7 +137,10 @@ func (c Caller) WithRequestID(requestID string) (Caller, error) {
 type UserProfile struct {
 	UserID string
 	// IsRoot 表示唯一 root 账户；更名等受保护操作据此拒绝普通资料流程。
-	IsRoot             bool
+	IsRoot bool
+	// Status 是账户状态；直接管理操作只允许稳定账户（active/disabled），
+	// pending/pending_delete 拒绝（步骤 256）。
+	Status             account.Status
 	Username           string
 	UsernameNormalized string
 	Nickname           string
