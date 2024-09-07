@@ -19,6 +19,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
@@ -271,6 +272,30 @@ LEFT JOIN applications a ON a.id=s.app_id`
 	if query.Builtin != nil {
 		conditions = append(conditions, "r.is_builtin=?")
 		args = append(args, boolToInt(*query.Builtin))
+	}
+	if query.Search != "" {
+		pattern := search.ContainsPattern(query.Search)
+		if pattern != "" {
+			searchClauses := make([]string, 0, len(query.SearchFields))
+			for _, field := range query.SearchFields {
+				switch field {
+				case role.RoleSearchName:
+					searchClauses = append(searchClauses, `LOWER(r.name) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				case role.RoleSearchKey:
+					searchClauses = append(searchClauses, `r.role_key LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				default:
+					// 服务层已按白名单校验；仓储再次 fail-closed，不生成未知列。
+					return nil, false, fmt.Errorf("%w: 搜索字段不在允许列表内",
+						role.ErrInvalidRequest)
+				}
+			}
+			if len(searchClauses) == 0 {
+				return nil, false, fmt.Errorf("%w: 搜索字段为空", role.ErrInvalidRequest)
+			}
+			conditions = append(conditions, `(`+strings.Join(searchClauses, ` OR `)+`)`)
+		}
 	}
 	if len(conditions) > 0 {
 		statement += ` WHERE ` + strings.Join(conditions, " AND ")

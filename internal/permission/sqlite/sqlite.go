@@ -16,6 +16,7 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/delegation"
 	"github.com/kagurazakayashi/EvernightLogin/internal/permission"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
@@ -226,6 +227,30 @@ func (s *Store) ListPermissions(ctx context.Context, query permission.ListQuery)
 	if query.Enabled != nil {
 		conditions = append(conditions, "p.enabled=?")
 		args = append(args, boolToInt(*query.Enabled))
+	}
+	if query.Search != "" {
+		pattern := search.ContainsPattern(query.Search)
+		if pattern != "" {
+			searchClauses := make([]string, 0, len(query.SearchFields))
+			for _, field := range query.SearchFields {
+				switch field {
+				case permission.PermissionSearchName:
+					searchClauses = append(searchClauses, `LOWER(p.name) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				case permission.PermissionSearchKey:
+					searchClauses = append(searchClauses, `p.permission_key LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				default:
+					// 服务层已按白名单校验；仓储再次 fail-closed，不生成未知列。
+					return nil, false, fmt.Errorf("%w: 搜索字段不在允许列表内",
+						permission.ErrInvalidRequest)
+				}
+			}
+			if len(searchClauses) == 0 {
+				return nil, false, fmt.Errorf("%w: 搜索字段为空", permission.ErrInvalidRequest)
+			}
+			conditions = append(conditions, `(`+strings.Join(searchClauses, ` OR `)+`)`)
+		}
 	}
 	if len(conditions) > 0 {
 		statement += ` WHERE ` + strings.Join(conditions, " AND ")

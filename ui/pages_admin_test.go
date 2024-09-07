@@ -29,6 +29,8 @@ type fakeAdminBackend struct {
 	memberResult login.UIAdminMemberResult
 	// lastUserQuery 记录最近一次用户列表查询，供搜索参数透传测试断言。
 	lastUserQuery login.UIAdminUserQuery
+	// lastGroupQuery 记录最近一次用户组列表查询。
+	lastGroupQuery login.UIAdminGroupQuery
 }
 
 func (f *fakeAdminBackend) fail() error {
@@ -134,8 +136,9 @@ func (f *fakeAdminBackend) DecideReview(context.Context, string, string, bool,
 	return login.UIAdminReviewDecision{Review: f.review, Notified: true}, nil
 }
 
-func (f *fakeAdminBackend) ListGroups(context.Context, string, string, int,
-	int) (login.UIAdminGroupPage, error) {
+func (f *fakeAdminBackend) ListGroups(_ context.Context, _ string,
+	query login.UIAdminGroupQuery) (login.UIAdminGroupPage, error) {
+	f.lastGroupQuery = query
 	if err := f.fail(); err != nil {
 		return login.UIAdminGroupPage{}, err
 	}

@@ -1,0 +1,64 @@
+{{define "page-title"}}后台任务{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+{{with .Data.tasks}}
+<p class="ln-meta">只读通用后台任务列表：数据来自 internal/task 的真实状态，分页游标绑定筛选条件；不包含任务载荷、业务数据、收件人或秘密。</p>
+<section aria-labelledby="tasks-filter-title">
+  <h2 id="tasks-filter-title">筛选</h2>
+  <form method="get" action="/admin/tasks">
+    <label>状态
+      <select name="state">
+        <option value=""{{if eq $.Data.state ""}} selected{{end}}>全部</option>
+        <option value="queued"{{if eq $.Data.state "queued"}} selected{{end}}>排队中</option>
+        <option value="running"{{if eq $.Data.state "running"}} selected{{end}}>执行中</option>
+        <option value="succeeded"{{if eq $.Data.state "succeeded"}} selected{{end}}>成功</option>
+        <option value="failed"{{if eq $.Data.state "failed"}} selected{{end}}>失败</option>
+        <option value="cancel_requested"{{if eq $.Data.state "cancel_requested"}} selected{{end}}>取消已请求</option>
+        <option value="cancelled"{{if eq $.Data.state "cancelled"}} selected{{end}}>已取消</option>
+        <option value="timed_out"{{if eq $.Data.state "timed_out"}} selected{{end}}>已超时</option>
+      </select>
+    </label>
+    <label>任务类型 <input type="text" name="kind" value="{{$.Data.kind}}" maxlength="64" placeholder="如 user.batch.export"></label>
+    <label>每页 <input type="number" name="limit" value="{{$.Data.limit}}" min="1" max="100"></label>
+    <button type="submit" class="ln-button ln-button--secondary">筛选</button>
+    <a class="ln-button ln-button--secondary" href="/admin/tasks">重置</a>
+  </form>
+</section>
+<section aria-labelledby="tasks-list-title">
+  <h2 id="tasks-list-title">任务列表</h2>
+  {{if .Tasks}}
+  <table class="ln-table">
+    <caption>最近任务（单页最多 100 条；状态与尝试次数为服务端真实值）</caption>
+    <thead><tr>
+      <th scope="col">任务编号</th><th scope="col">类型</th><th scope="col">状态</th>
+      <th scope="col">发起者</th><th scope="col">尝试</th><th scope="col">错误码</th>
+      <th scope="col">创建</th><th scope="col">更新</th>
+    </tr></thead>
+    <tbody>
+    {{range .Tasks}}<tr>
+      <td><code>{{.ID}}</code></td>
+      <td>{{.Kind}}</td>
+      <td>{{.State}}</td>
+      <td>{{if .InitiatorID}}{{.InitiatorType}}:{{.InitiatorID}}{{else}}—{{end}}</td>
+      <td>{{.Attempt}}/{{.MaxAttempts}}</td>
+      <td>{{if .ErrorCode}}{{.ErrorCode}}{{else}}—{{end}}</td>
+      <td>{{.CreatedAt}}</td>
+      <td>{{.UpdatedAt}}</td>
+    </tr>{{end}}
+    </tbody>
+  </table>
+  {{else}}<p>没有符合筛选条件的任务。</p>{{end}}
+  {{if .HasMore}}
+  <p><a class="ln-button ln-button--secondary" href="/admin/tasks?state={{$.Data.state}}&kind={{$.Data.kind}}&limit={{$.Data.limit}}&cursor={{.NextCursor}}">下一页</a></p>
+  {{else}}<p class="ln-meta">已到最后一页。</p>{{end}}
+</section>
+<section aria-labelledby="tasks-cancel-title">
+  <h2 id="tasks-cancel-title">取消语义（任务与邮件投递不同）</h2>
+  <ul>
+    <li><strong>取消任务</strong>：使用 <code>loginctl task cancel</code> 或任务 API 提交取消请求，仅表示“请求已受理”；最终是否取消以 <code>cancel_requested → cancelled/failed</code> 等真实终态为准，处理器可能仍在收尾。</li>
+    <li><strong>取消邮件投递</strong>：终止某封邮件在可靠投递队列中的发送（投递记录状态转为 <code>cancelled</code>），它不是取消产生该邮件的后台任务，也不会回滚已完成的业务操作或已发送邮件。</li>
+  </ul>
+  <p>本页为只读视图：不提供在此直接取消任务的按钮，避免把“已请求”误显示为“已取消”。</p>
+</section>
+{{end}}
+{{end}}

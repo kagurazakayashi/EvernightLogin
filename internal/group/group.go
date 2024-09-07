@@ -172,6 +172,10 @@ type ListRequest struct {
 	// 同值时按稳定 ID 次序，保证分页不重复/不跳行。
 	Sort       GroupSortField
 	Descending bool
+	// Search 是可选的字面子串搜索（空表示不过滤），在可管理范围过滤之后执行；
+	// SearchFields 为空时默认匹配 name/key，非空时只能包含白名单字段。
+	Search       string
+	SearchFields []GroupSearchField
 }
 
 // ListResult 是组列表结果。

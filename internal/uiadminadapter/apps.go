@@ -315,7 +315,7 @@ func (a *AppsAdapter) ListApplications(ctx context.Context, adminUserID string,
 	}
 	result, err := a.opts.Apps.ListApplications(ctx, caller, app.ListRequest{
 		Limit: limit, Offset: query.Offset, Status: status, Sort: sortField,
-		Descending: query.Descending})
+		Descending: query.Descending, Search: query.Search})
 	if err != nil {
 		return ui.UIAppPage{}, mapAppsError(err)
 	}

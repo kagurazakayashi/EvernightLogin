@@ -86,10 +86,15 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 		if err != nil {
 			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
 		}
+		searchText, searchFields, err := parseAdminDomainSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.Group.ListGroups(ctx, groupCaller, group.ListRequest{
 			ScopeID: strings.TrimSpace(request.URL.Query().Get("scope_id")),
 			Limit:   page.Limit, Offset: page.Offset,
-			Sort: group.GroupSortField(page.Sort), Descending: page.Descending})
+			Sort: group.GroupSortField(page.Sort), Descending: page.Descending,
+			Search: searchText, SearchFields: toGroupSearchFields(searchFields)})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(group.CodeOf(e)) })
 		}
@@ -148,10 +153,15 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 		if err != nil {
 			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
 		}
+		searchText, searchFields, err := parseAdminDomainSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.Role.ListRoles(ctx, roleCaller, role.ListRequest{
 			ScopeID: strings.TrimSpace(request.URL.Query().Get("scope_id")),
 			Limit:   page.Limit, Offset: page.Offset,
-			Sort: role.SortField(page.Sort), Descending: page.Descending})
+			Sort: role.SortField(page.Sort), Descending: page.Descending,
+			Search: searchText, SearchFields: toRoleSearchFields(searchFields)})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(role.CodeOf(e)) })
 		}
@@ -224,10 +234,15 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 		if err != nil {
 			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
 		}
+		searchText, searchFields, err := parseAdminDomainSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.Permission.ListPermissions(ctx, permCaller, permission.ListRequest{
 			ScopeID: strings.TrimSpace(request.URL.Query().Get("scope_id")),
 			Limit:   page.Limit, Offset: page.Offset,
-			Sort: permission.SortField(page.Sort), Descending: page.Descending})
+			Sort: permission.SortField(page.Sort), Descending: page.Descending,
+			Search: searchText, SearchFields: toPermissionSearchFields(searchFields)})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(permission.CodeOf(e)) })
 		}
@@ -253,10 +268,15 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 			return nil, &adminapi.DomainError{Code: "REQ_INVALID", Message: "应用状态无效"}
 		}
 		includeDeleted := strings.TrimSpace(request.URL.Query().Get("include_deleted")) == "true"
+		searchText, searchFields, err := parseAdminDomainSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.App.ListApplications(ctx, appCaller, app.ListRequest{
 			Limit: page.Limit, Offset: page.Offset, Status: status,
 			Sort: app.SortField(page.Sort), Descending: page.Descending,
-			IncludeDeleted: includeDeleted})
+			IncludeDeleted: includeDeleted, Search: searchText,
+			SearchFields: toApplicationSearchFields(searchFields)})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(app.CodeOf(e)) })
 		}
@@ -334,9 +354,14 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
 		}
 		applicationID := strings.TrimSpace(adminApplicationPathParam(request))
+		searchText, searchFields, err := parseAdminDomainSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.Role.ListRoles(ctx, roleCaller, role.ListRequest{
 			ScopeID: applicationID, Limit: page.Limit, Offset: page.Offset,
-			Sort: role.SortField(page.Sort), Descending: page.Descending})
+			Sort: role.SortField(page.Sort), Descending: page.Descending,
+			Search: searchText, SearchFields: toRoleSearchFields(searchFields)})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(role.CodeOf(e)) })
 		}
@@ -359,9 +384,14 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 			return nil, &adminapi.DomainError{Code: "ACCESS_DENIED", Cause: err}
 		}
 		applicationID := strings.TrimSpace(adminApplicationPathParam(request))
+		searchText, searchFields, err := parseAdminDomainSearch(request)
+		if err != nil {
+			return nil, err
+		}
 		result, err := managed.Group.ListGroups(ctx, groupCaller, group.ListRequest{
 			ScopeID: applicationID, Limit: page.Limit, Offset: page.Offset,
-			Sort: group.GroupSortField(page.Sort), Descending: page.Descending})
+			Sort: group.GroupSortField(page.Sort), Descending: page.Descending,
+			Search: searchText, SearchFields: toGroupSearchFields(searchFields)})
 		if err != nil {
 			return nil, adminDomainError(err, func(e error) string { return string(group.CodeOf(e)) })
 		}

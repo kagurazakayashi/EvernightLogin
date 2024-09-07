@@ -67,6 +67,7 @@ func (h *appsPageHandlers) list(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	query := UIAppQuery{Status: strings.TrimSpace(request.URL.Query().Get("status")),
 		Sort:       strings.TrimSpace(request.URL.Query().Get("sort")),
+		Search:     strings.TrimSpace(request.URL.Query().Get("search")),
 		Descending: request.URL.Query().Get("desc") == "1", Limit: 20}
 	offset, ok := appsParseOffset(request.URL.Query().Get("offset"))
 	if !ok {
@@ -82,6 +83,7 @@ func (h *appsPageHandlers) list(ctx context.Context, request *http.Request,
 		"applications": result.Applications, "hasMore": result.HasMore,
 		"nextOffset": result.NextOffset, "status": query.Status, "sort": query.Sort,
 		"desc": request.URL.Query().Get("desc"), "offset": offset,
+		"search":    query.Search,
 		"canCreate": h.canCreate(ctx, page.Session.UserID),
 	}}, nil
 }

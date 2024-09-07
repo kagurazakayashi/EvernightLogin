@@ -599,7 +599,7 @@
   "common.state.all": "全部",
   "page.admin.rbac.roles.title": "角色",
   "page.admin.rbac.search_submit": "搜索",
-  "page.admin.rbac.search_hint": "可按名称或机器标识做字面子串搜索（大小写/全角按同一字面）；搜索先限定可管理范围，应用管理员不能借此读取其他应用的角色或权限。",
+  "page.admin.rbac.search_hint": "可按名称或机器标识做字面子串搜索（大小写/全角按同一字面）；搜索在可管理范围之后执行，不跨应用范围。",
   "page.admin.rbac.roles.intro": "角色只是权限组合与分配关系的容器：角色存在或启用不代表任何账户自动获得权限。每项角色显示中文说明、生效范围、不能做什么，以及预设默认值与当前实际权限的差别。",
   "page.admin.rbac.roles_empty": "当前作用范围没有可读取的角色；可新建自定义角色，或由受信通道初始化预设目录。",
   "page.admin.rbac.filtered_no_results": "没有符合当前筛选的角色时，请清除筛选；不把“筛选无结果”当作系统没有角色。",

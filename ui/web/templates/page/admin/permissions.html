@@ -23,6 +23,19 @@
   <a class="ln-button ln-button--secondary" href="{{route "admin.permissions"}}?scope_id={{.Data.scopeID}}&enabled=1">{{t "page.admin.rbac.enabled"}}</a>
   <a class="ln-button ln-button--secondary" href="{{route "admin.permissions"}}?scope_id={{.Data.scopeID}}&enabled=0">{{t "page.admin.rbac.disabled"}}</a>
 </nav>
+<form method="get" action="{{route "admin.permissions"}}" class="ln-list-search" data-ln-module="list-search"
+      data-ln-loading="{{t "common.search.loading"}}" data-ln-updated="{{t "common.search.updated"}}"
+      data-ln-cancelled="{{t "common.search.cancelled"}}" data-ln-ignored="{{t "common.search.ignored"}}"
+      data-ln-failed="{{t "common.search.failed"}}">
+  <input type="hidden" name="scope_id" value="{{.Data.scopeID}}">
+  {{if .Data.enabled}}<input type="hidden" name="enabled" value="{{.Data.enabled}}">{{end}}
+  <input type="hidden" name="sort" value="{{.Data.sort}}">
+  <input type="hidden" name="desc" value="{{.Data.desc}}">
+  <label class="ln-field__label" for="permissions-search">{{t "common.search.label"}}</label>
+  <input class="ln-input" type="search" id="permissions-search" name="search" value="{{.Data.search}}" maxlength="64" placeholder="{{t "common.search.placeholder"}}">
+  <button class="ln-button ln-button--secondary" type="submit">{{t "page.admin.rbac.search_submit"}}</button>
+</form>
+<p class="ln-meta" data-ln-list-status aria-live="polite">{{t "page.admin.rbac.search_hint"}}</p>
 <table class="ln-table">
   <caption>{{t "page.admin.rbac.permissions.title"}}</caption>
   <thead><tr>
@@ -70,7 +83,7 @@
   <button class="ln-button ln-button--secondary" type="submit">{{t "common.sort.apply"}}</button>
 </form>
 {{if .Data.hasPrevious}}<p><a class="ln-button ln-button--secondary" rel="prev" href="{{route "admin.permissions"}}?scope_id={{.Data.scopeID}}&enabled={{.Data.enabled}}&sort={{.Data.sort}}&desc={{.Data.desc}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
-{{if .Data.hasMore}}<p><a class="ln-button ln-button--secondary" rel="next" href="{{route "admin.permissions"}}?scope_id={{.Data.scopeID}}&enabled={{.Data.enabled}}&sort={{.Data.sort}}&desc={{.Data.desc}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{if .Data.hasMore}}<p><a class="ln-button ln-button--secondary" rel="next" href="{{route "admin.permissions"}}?scope_id={{.Data.scopeID}}&enabled={{.Data.enabled}}&search={{urlquery .Data.search}}&sort={{.Data.sort}}&desc={{.Data.desc}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
 <section>
   <h2>{{t "page.admin.rbac.terms_title"}}</h2>
   <p>{{t "page.admin.rbac.terms_intro"}}</p>

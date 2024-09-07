@@ -39,6 +39,9 @@ type Options struct {
 	// Diagnostics 是可选的脱敏运行诊断收集器；nil 时诊断页面返回不可用（不伪造
 	// 数据，也不越权读取）。
 	Diagnostics *diag.Collector
+	// Tasks 是通用后台任务页的只读列表依赖（步骤 266）；nil 时任务页返回不可用，
+	// 不伪造任务状态。
+	Tasks TaskLister
 	// Validity 复用同一账户服务（users.read/users.update）与审计；页面与 234
 	// 管理 API 使用相同授权判定。
 	Now    func() time.Time
@@ -335,8 +338,8 @@ func (a *Adapter) DecideReview(ctx context.Context, adminUserID, userID string,
 }
 
 // ListGroups 列出当前范围用户组。
-func (a *Adapter) ListGroups(ctx context.Context, adminUserID, scopeID string,
-	limit, offset int) (ui.UIAdminGroupPage, error) {
+func (a *Adapter) ListGroups(ctx context.Context, adminUserID string,
+	query ui.UIAdminGroupQuery) (ui.UIAdminGroupPage, error) {
 	if err := a.check(ctx, adminUserID, "groups.read"); err != nil {
 		return ui.UIAdminGroupPage{}, err
 	}
@@ -344,11 +347,24 @@ func (a *Adapter) ListGroups(ctx context.Context, adminUserID, scopeID string,
 	if err != nil {
 		return ui.UIAdminGroupPage{}, adminErr("ACCESS_DENIED")
 	}
+	limit := query.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	sortField := group.GroupSortField(strings.TrimSpace(query.Sort))
+	if sortField == "" {
+		sortField = group.GroupSortCreatedAt
+	}
+	if !sortField.Valid() {
+		return ui.UIAdminGroupPage{}, adminErr("REQ_INVALID")
+	}
+	if query.Offset < 0 || query.Offset > group.MaxMemberOffset {
+		return ui.UIAdminGroupPage{}, adminErr("REQ_INVALID")
+	}
 	result, err := a.opts.Groups.ListGroups(ctx, caller,
-		group.ListRequest{ScopeID: strings.TrimSpace(scopeID), Limit: limit, Offset: offset})
+		group.ListRequest{ScopeID: strings.TrimSpace(query.ScopeID), Limit: limit,
+			Offset: query.Offset, Sort: sortField, Descending: query.Descending,
+			Search: query.Search})
 	if err != nil {
 		return ui.UIAdminGroupPage{}, mapGroupError(err)
 	}

@@ -30,27 +30,28 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/preset"
 	"github.com/kagurazakayashi/EvernightLogin/internal/role"
 	rolesqlite "github.com/kagurazakayashi/EvernightLogin/internal/role/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
 // domainCommandUsage 是组/角色/应用/通知命令帮助。
 const domainCommandUsage = `用法：
-  loginctl group list --operator <id> [--scope system|<app_id>] [--limit N] [--offset N] [--all [--max-pages N] [--max-items N]] [--json]
+  loginctl group list --operator <id> [--scope system|<app_id>] [--search <关键字>] [--search-fields name,key] [--limit N] [--offset N] [--all [--max-pages N] [--max-items N]] [--json]
   loginctl group get <group_id> --operator <id> [--json]
   loginctl group members <group_id> --operator <id> [--limit N] [--json]
   loginctl group create --operator <id> --scope <system|<app_id>> --key <key> --name <名称> \
 --confirm CREATE [--json]
-  loginctl role list --operator <id> [--scope system|<app_id>] [--limit N] [--json]
+  loginctl role list --operator <id> [--scope system|<app_id>] [--search <关键字>] [--search-fields name,key] [--limit N] [--json]
   loginctl role get <role_id> --operator <id> [--json]
   loginctl role permissions <role_id> --operator <id> [--json]
-  loginctl app list --operator <id> [--status active|disabled|pending] [--sort created_at|updated_at|name|id] [--desc true] [--limit N] [--offset N] [--all [--max-pages N] [--max-items N]] [--json]
+  loginctl app list --operator <id> [--status active|disabled|pending] [--sort created_at|updated_at|name|id] [--desc true] [--search <关键字>] [--search-fields name,description] [--limit N] [--offset N] [--all [--max-pages N] [--max-items N]] [--json]
   loginctl app get <application_id> --operator <id> [--json]
   loginctl app members <application_id> --operator <id> [--status active|disabled] [--sort created_at|updated_at|user_id] [--desc true] [--limit N] [--offset N] [--json]
-  loginctl app roles <application_id> --operator <id> [--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]
-  loginctl app groups <application_id> --operator <id> [--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]
+  loginctl app roles <application_id> --operator <id> [--sort created_at|updated_at|name|key] [--desc true] [--search <关键字>] [--search-fields name,key] [--limit N] [--offset N] [--json]
+  loginctl app groups <application_id> --operator <id> [--sort created_at|updated_at|name|key] [--desc true] [--search <关键字>] [--search-fields name,key] [--limit N] [--offset N] [--json]
   loginctl app delete <application_id> --operator <id> --expected-version <n> --confirm DELETE [--json]
   loginctl app purge <application_id> --operator <id> --confirm PURGE [--json]（仅限已逻辑删除且超过保留期）
-  loginctl permission list [--scope system|application] [--json]（只读预设目录）
+  loginctl permission list [--scope system|application] [--search <关键字>] [--search-fields key,name] [--json]（只读预设目录，本地有界过滤）
   loginctl notify status [--json] / loginctl notify test（禁止真实外发，明确拒绝）
 
 说明：
@@ -385,6 +386,7 @@ func (r *runner) runGroupList(args []string) int {
 	flags := []flagDef{
 		{name: "scope", value: true}, {name: "limit", value: true},
 		{name: "offset", value: true}, {name: "sort", value: true},
+		{name: "search", value: true}, {name: "search-fields", value: true},
 		{name: "desc", value: true},
 	}
 	flags = append(flags, listIterationFlagDefs()...)
@@ -433,10 +435,12 @@ func (r *runner) runGroupList(args []string) int {
 	if err != nil {
 		return r.usage("%v", err)
 	}
+	searchText, searchFieldNames := parseDomainSearch(values)
 	fetch := func(page appapi.AdminPage) ([]groupOutput, appapi.AdminPageInfo, error) {
 		result, listErr := service.ListGroups(r.ctx, caller, group.ListRequest{ScopeID: scope,
 			Limit: page.Limit, Offset: page.Offset, Sort: group.GroupSortField(sortField),
-			Descending: descending})
+			Descending: descending, Search: searchText,
+			SearchFields: groupSearchFieldsFromStrings(searchFieldNames)})
 		if listErr != nil {
 			return nil, appapi.AdminPageInfo{}, listErr
 		}
@@ -661,6 +665,7 @@ func (r *runner) runRoleList(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "scope", value: true}, flagDef{name: "limit", value: true},
 		flagDef{name: "offset", value: true}, flagDef{name: "sort", value: true},
+		flagDef{name: "search", value: true}, flagDef{name: "search-fields", value: true},
 		flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
@@ -702,9 +707,11 @@ func (r *runner) runRoleList(args []string) int {
 	if err != nil {
 		return r.usage("%v", err)
 	}
+	searchText, searchFieldNames := parseDomainSearch(values)
 	result, err := service.ListRoles(r.ctx, caller, role.ListRequest{ScopeID: scope,
 		Limit: limit, Offset: offset, Sort: role.SortField(sortField),
-		Descending: descending})
+		Descending: descending, Search: searchText,
+		SearchFields: roleSearchFieldsFromStrings(searchFieldNames)})
 	if err != nil {
 		return r.domainFailure("列出角色", role.CodeOf(err), err)
 	}
@@ -924,6 +931,7 @@ func (r *runner) runAppList(args []string) int {
 	flags := []flagDef{
 		{name: "status", value: true}, {name: "limit", value: true},
 		{name: "offset", value: true}, {name: "sort", value: true},
+		{name: "search", value: true}, {name: "search-fields", value: true},
 		{name: "desc", value: true},
 	}
 	flags = append(flags, listIterationFlagDefs()...)
@@ -972,10 +980,12 @@ func (r *runner) runAppList(args []string) int {
 	if err != nil {
 		return r.usage("--operator 本地管理员标识无效")
 	}
+	searchText, searchFieldNames := parseDomainSearch(values)
 	fetch := func(page appapi.AdminPage) ([]appOutput, appapi.AdminPageInfo, error) {
 		result, listErr := service.ListApplications(r.ctx, caller, app.ListRequest{
 			Limit: page.Limit, Offset: page.Offset, Status: status,
-			Sort: app.SortField(sortField), Descending: descending})
+			Sort: app.SortField(sortField), Descending: descending,
+			Search: searchText, SearchFields: appSearchFieldsFromStrings(searchFieldNames)})
 		if listErr != nil {
 			return nil, appapi.AdminPageInfo{}, listErr
 		}
@@ -1159,13 +1169,15 @@ func (r *runner) runAppMembers(args []string) int {
 func (r *runner) runAppRoles(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
-		flagDef{name: "sort", value: true}, flagDef{name: "desc", value: true}))
+		flagDef{name: "sort", value: true}, flagDef{name: "search", value: true},
+		flagDef{name: "search-fields", value: true}, flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
 	if len(positional) != 1 {
 		return r.usage("用法：loginctl app roles <application_id> --operator <id> " +
-			"[--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]")
+			"[--sort created_at|updated_at|name|key] [--desc true] " +
+			"[--search <关键字>] [--search-fields name,key] [--limit N] [--offset N] [--json]")
 	}
 	r.json = boolFlag(values, "json")
 	operator, exit := r.requireOperator(values)
@@ -1198,9 +1210,11 @@ func (r *runner) runAppRoles(args []string) int {
 		return r.usage("--operator 本地管理员标识无效")
 	}
 	applicationID := strings.TrimSpace(positional[0])
+	searchText, searchFieldNames := parseDomainSearch(values)
 	result, err := service.ListRoles(r.ctx, caller, role.ListRequest{
 		ScopeID: applicationID, Limit: limit, Offset: offset,
-		Sort: role.SortField(sortField), Descending: descending})
+		Sort: role.SortField(sortField), Descending: descending,
+		Search: searchText, SearchFields: roleSearchFieldsFromStrings(searchFieldNames)})
 	if err != nil {
 		return r.domainFailure("读取应用角色", role.CodeOf(err), err)
 	}
@@ -1232,13 +1246,15 @@ func (r *runner) runAppRoles(args []string) int {
 func (r *runner) runAppGroups(args []string) int {
 	values, positional, err := parseFlags(args, domainFlags(
 		flagDef{name: "limit", value: true}, flagDef{name: "offset", value: true},
-		flagDef{name: "sort", value: true}, flagDef{name: "desc", value: true}))
+		flagDef{name: "sort", value: true}, flagDef{name: "search", value: true},
+		flagDef{name: "search-fields", value: true}, flagDef{name: "desc", value: true}))
 	if err != nil {
 		return r.flagError(err)
 	}
 	if len(positional) != 1 {
 		return r.usage("用法：loginctl app groups <application_id> --operator <id> " +
-			"[--sort created_at|updated_at|name|key] [--desc true] [--limit N] [--offset N] [--json]")
+			"[--sort created_at|updated_at|name|key] [--desc true] " +
+			"[--search <关键字>] [--search-fields name,key] [--limit N] [--offset N] [--json]")
 	}
 	r.json = boolFlag(values, "json")
 	operator, exit := r.requireOperator(values)
@@ -1271,9 +1287,11 @@ func (r *runner) runAppGroups(args []string) int {
 		return r.usage("--operator 本地管理员标识无效")
 	}
 	applicationID := strings.TrimSpace(positional[0])
+	searchText, searchFieldNames := parseDomainSearch(values)
 	result, err := service.ListGroups(r.ctx, caller, group.ListRequest{
 		ScopeID: applicationID, Limit: limit, Offset: offset,
-		Sort: group.GroupSortField(sortField), Descending: descending})
+		Sort: group.GroupSortField(sortField), Descending: descending,
+		Search: searchText, SearchFields: groupSearchFieldsFromStrings(searchFieldNames)})
 	if err != nil {
 		return r.domainFailure("读取应用用户组", group.CodeOf(err), err)
 	}
@@ -1404,7 +1422,8 @@ func (r *runner) runPermission(subcommand string, args []string) int {
 		}
 		return r.usage("未知的 permission 子命令 %q（可用：list）", subcommand)
 	}
-	values, positional, err := parseFlags(args, []flagDef{{name: "json"}})
+	values, positional, err := parseFlags(args, []flagDef{
+		{name: "json"}, {name: "search", value: true}, {name: "search-fields", value: true}})
 	if err != nil {
 		return r.flagError(err)
 	}
@@ -1412,9 +1431,45 @@ func (r *runner) runPermission(subcommand string, args []string) int {
 		return r.usage("permission list 不接受位置参数")
 	}
 	r.json = boolFlag(values, "json")
+	searchText, searchFieldNames := parseDomainSearch(values)
+	normalizedSearch, searchErr := search.NormalizeQuery(searchText)
+	if searchErr != nil {
+		return r.usage("--search 无效：%v", searchErr)
+	}
+	searchText = normalizedSearch
+	for _, field := range searchFieldNames {
+		if field != "key" && field != "name" {
+			return r.usage("--search-fields 只支持 key,name")
+		}
+	}
 	catalog := preset.DefaultCatalog()
 	if err := catalog.Validate(); err != nil {
 		return r.fail("INTERNAL_ERROR", ExitError, "内置权限目录无效", nil)
+	}
+	// 权限目录是固定有界的只读预设（不出数据库），搜索在内存按名称/键做字面过滤；
+	// 与数据库列表共用 internal/search 的规范化口径（大小写/全角折叠）。
+	selectedFields := searchFieldNames
+	if len(selectedFields) == 0 {
+		selectedFields = []string{"key", "name"}
+	}
+	matchCatalogItem := func(item preset.PermissionDefinition) bool {
+		if searchText == "" {
+			return true
+		}
+		for _, field := range selectedFields {
+			candidate := ""
+			switch field {
+			case "key":
+				candidate = item.Key
+			case "name":
+				candidate = item.Name
+			}
+			folded, foldErr := search.NormalizeQuery(candidate)
+			if foldErr == nil && strings.Contains(folded, searchText) {
+				return true
+			}
+		}
+		return false
 	}
 	type permissionOutput struct {
 		Key            string `json:"key"`
@@ -1425,6 +1480,9 @@ func (r *runner) runPermission(subcommand string, args []string) int {
 	}
 	items := make([]permissionOutput, 0, len(catalog.Permissions))
 	for _, item := range catalog.Permissions {
+		if !matchCatalogItem(item) {
+			continue
+		}
 		items = append(items, permissionOutput{Key: item.Key, Name: item.Name,
 			RootOnly: item.RootOnly, RequiresReauth: item.RequiresReauth,
 			Implemented: item.Implemented})
@@ -1504,4 +1562,60 @@ func (r *runner) domainFailure(operation string, code any, err error) int {
 		exitCode = ExitUsage
 	}
 	return r.fail(codeText, exitCode, operation+"失败："+err.Error(), nil)
+}
+
+// parseDomainSearch 解析域列表的通用搜索参数：--search 文本原样交给领域层做
+// internal/search 规范化与长度/控制字符校验；--search-fields 按逗号拆分为字段
+// 白名单，空表示使用该领域默认字段。非法字段由领域层返回 REQ_INVALID（退出码 2）。
+func parseDomainSearch(values map[string]string) (string, []string) {
+	text := strings.TrimSpace(stringFlag(values, "search"))
+	rawFields := stringFlag(values, "search-fields")
+	if strings.TrimSpace(rawFields) == "" {
+		return text, nil
+	}
+	fields := make([]string, 0, 2)
+	for _, part := range strings.Split(rawFields, ",") {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		fields = append(fields, value)
+	}
+	return text, fields
+}
+
+// roleSearchFieldsFromStrings 把 CLI 字符串字段转换为角色领域白名单类型。
+func roleSearchFieldsFromStrings(fields []string) []role.RoleSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]role.RoleSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, role.RoleSearchField(field))
+	}
+	return converted
+}
+
+// groupSearchFieldsFromStrings 同上，用于用户组领域。
+func groupSearchFieldsFromStrings(fields []string) []group.GroupSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]group.GroupSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, group.GroupSearchField(field))
+	}
+	return converted
+}
+
+// appSearchFieldsFromStrings 同上，用于应用领域。
+func appSearchFieldsFromStrings(fields []string) []app.ApplicationSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]app.ApplicationSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, app.ApplicationSearchField(field))
+	}
+	return converted
 }

@@ -91,6 +91,8 @@ type UIRBACRoleQuery struct {
 	Offset     int
 	Sort       string
 	Descending bool
+	// Search 是可选的字面子串搜索（角色名称/机器标识；空不过滤）。
+	Search string
 }
 
 // UIRBACPermissionQuery 是权限目录筛选/分页/排序。
@@ -102,6 +104,8 @@ type UIRBACPermissionQuery struct {
 	Offset     int
 	Sort       string
 	Descending bool
+	// Search 是可选的字面子串搜索（权限名称/机器标识；空不过滤）。
+	Search string
 }
 
 // UIRBACTextChange 是可修改的直白文本（名称/说明/明确限制）。
@@ -576,7 +580,7 @@ func (h *rbacPageHandlers) HandlePage(ctx context.Context, request *http.Request
 func (h *rbacPageHandlers) roles(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	query := UIRBACRoleQuery{ScopeID: strings.TrimSpace(request.URL.Query().Get("scope_id")),
-		Limit: 20}
+		Limit: 20, Search: strings.TrimSpace(request.URL.Query().Get("search"))}
 	if raw := request.URL.Query().Get("enabled"); raw == "1" || raw == "0" {
 		enabled := raw == "1"
 		query.Enabled = &enabled
@@ -611,6 +615,7 @@ func (h *rbacPageHandlers) roles(ctx context.Context, request *http.Request,
 		"offset": offset, "hasPrevious": offset > 0, "prevOffset": prevOffset,
 		"sort": sortValue, "desc": descending,
 		"scopeID": query.ScopeID, "enabled": request.URL.Query().Get("enabled"),
+		"search": query.Search,
 		"scopes": scopes}}, nil
 }
 
@@ -839,7 +844,8 @@ func (h *rbacPageHandlers) roleAssign(ctx context.Context, request *http.Request
 func (h *rbacPageHandlers) permissions(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
 	query := UIRBACPermissionQuery{
-		ScopeID: strings.TrimSpace(request.URL.Query().Get("scope_id")), Limit: 20}
+		ScopeID: strings.TrimSpace(request.URL.Query().Get("scope_id")), Limit: 20,
+		Search: strings.TrimSpace(request.URL.Query().Get("search"))}
 	if raw := request.URL.Query().Get("enabled"); raw == "1" || raw == "0" {
 		enabled := raw == "1"
 		query.Enabled = &enabled
@@ -874,6 +880,7 @@ func (h *rbacPageHandlers) permissions(ctx context.Context, request *http.Reques
 		"offset": offset, "hasPrevious": offset > 0, "prevOffset": prevOffset,
 		"sort": sortValue, "desc": descending,
 		"scopeID": query.ScopeID, "enabled": request.URL.Query().Get("enabled"),
+		"search": query.Search,
 		// 步骤 189：只有后端实现可选权限登记扩展契约时才显示“创建自定义权限”入口。
 		"canCreate": h.permissionAdminAvailable(),
 		"status":    request.URL.Query().Get("status"),

@@ -11,10 +11,21 @@
   <div class="ln-actions">{{template "component.button" (dict "label" (t "common.action.create") "variant" "primary" "type" "submit")}}</div>
 </form>
 <h2>{{t "page.admin.groups.list_title"}}</h2>
+<form method="get" action="{{route "admin.groups"}}" class="ln-list-search" data-ln-module="list-search"
+      data-ln-loading="{{t "common.search.loading"}}" data-ln-updated="{{t "common.search.updated"}}"
+      data-ln-cancelled="{{t "common.search.cancelled"}}" data-ln-ignored="{{t "common.search.ignored"}}"
+      data-ln-failed="{{t "common.search.failed"}}">
+  <input type="hidden" name="scope_id" value="{{.Data.scopeID}}">
+  <label class="ln-field__label" for="groups-search">{{t "common.search.label"}}</label>
+  <input class="ln-input" type="search" id="groups-search" name="search" value="{{.Data.search}}" maxlength="64" placeholder="{{t "common.search.placeholder"}}">
+  <input type="hidden" name="sort" value="{{.Data.sort}}">
+  <button class="ln-button ln-button--secondary" type="submit">{{t "page.admin.groups.search_submit"}}</button>
+</form>
+<p class="ln-meta" data-ln-list-status aria-live="polite">{{t "page.admin.groups.search_hint"}}</p>
 <table class="ln-table"><thead><tr><th>{{t "common.label.name"}}</th><th>{{t "page.admin.groups.group_key"}}</th><th>{{t "page.admin.groups.scope"}}</th><th>{{t "common.label.actions"}}</th></tr></thead>
 <tbody>{{range .Data.groups}}<tr><td>{{.Name}}</td><td><code>{{.GroupKey}}</code></td><td><code>{{.ScopeID}}</code></td>
 <td><a href="{{route "admin.group_detail"}}?group_id={{.ID}}">{{t "page.admin.groups.open"}}</a></td></tr>
 {{else}}<tr><td colspan="4">{{t "page.admin.groups.empty"}}</td></tr>{{end}}</tbody></table>
-{{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
-{{if .Data.hasMore}}<p><a rel="next" href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
+{{if .Data.hasPrevious}}<p><a rel="prev" href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&search={{urlquery .Data.search}}&offset={{.Data.prevOffset}}">{{t "common.action.previous"}}</a></p>{{end}}
+{{if .Data.hasMore}}<p><a rel="next" href="{{route "admin.groups"}}?scope_id={{.Data.scopeID}}&search={{urlquery .Data.search}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></p>{{end}}
 {{end}}

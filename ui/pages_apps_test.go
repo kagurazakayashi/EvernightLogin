@@ -31,10 +31,12 @@ type fakeAppsBackend struct {
 	profileUpdate login.UIApplicationChange
 	// lastMemberQuery 记录最近一次成员列表查询，供搜索参数透传测试断言。
 	lastMemberQuery login.UIAppMemberQuery
-	createRequest   login.UIApplicationCreate
-	canCreate       bool
-	memberState     bool
-	stateChanged    bool
+	// lastApplicationQuery 记录最近一次应用列表查询，供 262 搜索透传断言。
+	lastApplicationQuery login.UIAppQuery
+	createRequest        login.UIApplicationCreate
+	canCreate            bool
+	memberState          bool
+	stateChanged         bool
 	// 步骤 190：删除预览/逻辑删除。
 	deleteImpact login.UIApplicationDeleteImpact
 	deleteCalled bool
@@ -47,8 +49,9 @@ func (f *fakeAppsBackend) fail(method string) error {
 	return nil
 }
 
-func (f *fakeAppsBackend) ListApplications(context.Context, string,
-	login.UIAppQuery) (login.UIAppPage, error) {
+func (f *fakeAppsBackend) ListApplications(_ context.Context, _ string,
+	query login.UIAppQuery) (login.UIAppPage, error) {
+	f.lastApplicationQuery = query
 	if err := f.fail("list"); err != nil {
 		return login.UIAppPage{}, err
 	}

@@ -29,10 +29,28 @@ type UIPageAdminOptions struct {
 	Backend UIAdminBackend
 	// Diagnostics 是可选的运行诊断页面入口；nil 时不注册该页面（404）。
 	Diagnostics *UIPageAdminDiagnosticsOptions
+	// Tasks 是可选的通用后台任务页面入口（步骤 266）；nil 时不注册该页面（404）。
+	Tasks *UIPageAdminTasksOptions
 	// Settings 是可选的配置设置页面入口；nil 时不注册该页面（404）。
 	Settings *UIPageAdminSettingsOptions
 	// Validity 是可选的账户有效期页面后端；nil 时不显示有效期设置入口。
 	Validity UIAdminUserValidityBackend
+}
+
+// UIAdminGroupQuery 是用户组列表筛选/分页。
+type UIAdminGroupQuery struct {
+	ScopeID    string
+	Search     string
+	Sort       string
+	Descending bool
+	Limit      int
+	Offset     int
+}
+
+// UIAdminGroupPage 是用户组分页结果。
+type UIAdminGroupPage struct {
+	Groups  []UIAdminGroup
+	HasMore bool
 }
 
 // UIAdminBackend 是管理页面调用真实管理服务的最小契约；适配器负责可信 Caller、
@@ -52,7 +70,7 @@ type UIAdminBackend interface {
 	GetReview(ctx context.Context, adminID, userID string) (UIAdminReview, error)
 	DecideReview(ctx context.Context, adminID, userID string, approve bool, reason, appID string,
 		roles []string, requestID string) (UIAdminReviewDecision, error)
-	ListGroups(ctx context.Context, adminID, scopeID string, limit, offset int) (UIAdminGroupPage, error)
+	ListGroups(ctx context.Context, adminID string, query UIAdminGroupQuery) (UIAdminGroupPage, error)
 	CreateGroup(ctx context.Context, adminID, scopeID, groupKey, name, description,
 		requestID string) (UIAdminGroup, error)
 	GetGroup(ctx context.Context, adminID, groupID string) (UIAdminGroup, error)
@@ -186,12 +204,6 @@ type UIAdminGroup struct {
 	Description string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-}
-
-// UIAdminGroupPage 是组分页结果。
-type UIAdminGroupPage struct {
-	Groups  []UIAdminGroup
-	HasMore bool
 }
 
 // UIAdminMember 是组成员视图。
@@ -359,6 +371,12 @@ func newPageAdminPages(options UIPageAdminOptions) (*pageAdminPages, error) {
 			Access: UIAccessManagement, Layout: "layout/base",
 			Template: "page/admin/diagnostics"})
 	}
+	if options.Tasks != nil && !isNilUIValue(options.Tasks.Backend) {
+		routes = append(routes, UIRoute{Name: "admin.tasks",
+			Method: http.MethodGet, Path: "/admin/tasks",
+			Access: UIAccessManagement, Layout: "layout/base",
+			Template: "page/admin/tasks"})
+	}
 	if options.Settings != nil && !isNilUIValue(options.Settings.Backend) {
 		routes = append(routes,
 			UIRoute{Name: "admin.settings", Method: http.MethodGet,
@@ -435,6 +453,8 @@ func (h *adminPageHandlers) HandlePage(ctx context.Context, request *http.Reques
 		return h.userBatchReport(ctx, request, page)
 	case "admin.diagnostics":
 		return h.diagnostics(ctx, request, page)
+	case "admin.tasks":
+		return h.tasks(ctx, request, page)
 	case "admin.settings", "admin.settings_update":
 		return h.settings(ctx, request, page)
 	case "admin.user_validity":
@@ -752,7 +772,11 @@ func (h *adminPageHandlers) groups(ctx context.Context, request *http.Request,
 		offset = parsed
 	}
 	scopeID := strings.TrimSpace(request.URL.Query().Get("scope_id"))
-	result, err := h.pages.options.Backend.ListGroups(ctx, page.Session.UserID, scopeID, 20, offset)
+	groupQuery := UIAdminGroupQuery{ScopeID: scopeID,
+		Search: strings.TrimSpace(request.URL.Query().Get("search")),
+		Sort:   strings.TrimSpace(request.URL.Query().Get("sort")),
+		Limit:  20, Offset: offset}
+	result, err := h.pages.options.Backend.ListGroups(ctx, page.Session.UserID, groupQuery)
 	if err != nil {
 		return adminErrorOutcome(err, nil, "page.admin.groups.load_failed"), nil
 	}
@@ -763,6 +787,7 @@ func (h *adminPageHandlers) groups(ctx context.Context, request *http.Request,
 	return UIPageOutcome{Data: map[string]any{"groups": result.Groups,
 		"hasMore": result.HasMore, "scopeID": scopeID,
 		"nextOffset": offset + len(result.Groups), "offset": offset,
+		"search": groupQuery.Search, "sort": groupQuery.Sort,
 		"hasPrevious": offset > 0, "prevOffset": prevOffset}}, nil
 }
 
@@ -939,6 +964,11 @@ var builtinAdminMessages = map[string]string{
 	"page.admin.groups.members_load_failed":      "无法读取成员列表",
 	"page.admin.groups.delete_confirm_required":  "请先确认删除影响",
 	"page.admin.groups.delete_failed":            "删除用户组未完成",
+	"page.admin.tasks.unavailable":               "通用任务页未装配，无法显示任务列表",
+	"page.admin.tasks.load_failed":               "无法读取任务列表，请稍后重试",
+	"page.admin.tasks.filter.invalid_state":      "任务状态筛选值无效",
+	"page.admin.tasks.filter.invalid_kind":       "任务类型筛选值无效（仅支持 64 个字符以内的字面值）",
+	"page.admin.tasks.filter.invalid_limit":      "每页条数必须是 1～100 的整数",
 }
 
 func init() {

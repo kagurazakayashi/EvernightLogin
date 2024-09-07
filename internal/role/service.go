@@ -37,6 +37,10 @@ type ListQuery struct {
 	Builtin     *bool
 	Sort        SortField
 	Descending  bool
+	// Search 是已按用户名口径规范化（NFKC + 大小写折叠 + NFC）的字面搜索文本；
+	// 空表示不搜索。SearchFields 是已校验、去重的搜索字段白名单。
+	Search       string
+	SearchFields []RoleSearchField
 }
 
 // PermissionRecord 是组合角色前读取的权限状态；只接受同范围、启用、非 root_only。
@@ -327,9 +331,14 @@ func (s *Service) ListRoles(ctx context.Context, caller Caller, request ListRequ
 	if !sortField.Valid() {
 		return ListResult{}, fmt.Errorf("%w: 排序字段不在允许列表内", ErrInvalidRequest)
 	}
+	searchText, searchFields, err := normalizeRoleSearch(request.Search, request.SearchFields)
+	if err != nil {
+		return ListResult{}, err
+	}
 	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all,
 		Enabled: request.Enabled, Builtin: request.Builtin,
-		Sort: sortField, Descending: request.Descending}
+		Sort: sortField, Descending: request.Descending,
+		Search: searchText, SearchFields: searchFields}
 	filter := strings.TrimSpace(request.ScopeID)
 	if filter != "" {
 		if _, _, err := ParseScope(filter); err != nil {

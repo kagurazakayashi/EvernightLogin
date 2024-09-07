@@ -352,7 +352,8 @@ func (f *adminFacade) ListGroups(ctx context.Context,
 	}
 	result, err := managed.Group.ListGroups(ctx, caller, group.ListRequest{
 		ScopeID: strings.TrimSpace(req.ScopeID), Limit: page.Limit, Offset: page.Offset,
-		Sort: group.GroupSortField(strings.TrimSpace(req.Sort)), Descending: req.Descending})
+		Sort: group.GroupSortField(strings.TrimSpace(req.Sort)), Descending: req.Descending,
+		Search: req.Search, SearchFields: adminGroupSearchFields(req.SearchFields)})
 	if err != nil {
 		return AdminGroupList{}, call.domainError("查询用户组列表失败", string(group.CodeOf(err)))
 	}
@@ -432,7 +433,8 @@ func (f *adminFacade) ListRoles(ctx context.Context,
 	result, err := managed.Role.ListRoles(ctx, caller, role.ListRequest{
 		ScopeID: strings.TrimSpace(req.ScopeID), Limit: page.Limit, Offset: page.Offset,
 		Enabled: req.Enabled, Builtin: req.Builtin,
-		Sort: role.SortField(strings.TrimSpace(req.Sort)), Descending: req.Descending})
+		Sort: role.SortField(strings.TrimSpace(req.Sort)), Descending: req.Descending,
+		Search: req.Search, SearchFields: adminRoleSearchFields(req.SearchFields)})
 	if err != nil {
 		return AdminRoleList{}, call.domainError("查询角色列表失败", string(role.CodeOf(err)))
 	}
@@ -471,7 +473,8 @@ func (f *adminFacade) ListPermissions(ctx context.Context,
 	result, err := managed.Permission.ListPermissions(ctx, caller, permission.ListRequest{
 		ScopeID: strings.TrimSpace(req.ScopeID), Limit: page.Limit, Offset: page.Offset,
 		Enabled: req.Enabled, Sort: permission.SortField(strings.TrimSpace(req.Sort)),
-		Descending: req.Descending})
+		Descending: req.Descending,
+		Search:     req.Search, SearchFields: adminPermissionSearchFields(req.SearchFields)})
 	if err != nil {
 		return AdminPermissionList{}, call.domainError("查询权限目录失败",
 			string(permission.CodeOf(err)))
@@ -541,4 +544,41 @@ func (f *adminFacade) ListRoleAssignments(ctx context.Context,
 		UserPage: NewAdminPageInfo(userPage, len(users), result.UsersHasMore),
 		Groups:   groups, GroupsHasMore: result.GroupsHasMore,
 		GroupPage: NewAdminPageInfo(groupPage, len(groups), result.GroupsHasMore)}, nil
+}
+
+// adminRoleSearchFields 把公开门面的字符串搜索字段转换为角色领域白名单类型；
+// 空/未知值不在门面层猜测，交给领域服务统一校验并返回 REQ_INVALID。
+func adminRoleSearchFields(fields []string) []role.RoleSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]role.RoleSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, role.RoleSearchField(strings.TrimSpace(field)))
+	}
+	return converted
+}
+
+// adminGroupSearchFields 同上，用于用户组列表搜索字段。
+func adminGroupSearchFields(fields []string) []group.GroupSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]group.GroupSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, group.GroupSearchField(strings.TrimSpace(field)))
+	}
+	return converted
+}
+
+// adminPermissionSearchFields 同上，用于权限目录搜索字段。
+func adminPermissionSearchFields(fields []string) []permission.PermissionSearchField {
+	if len(fields) == 0 {
+		return nil
+	}
+	converted := make([]permission.PermissionSearchField, 0, len(fields))
+	for _, field := range fields {
+		converted = append(converted, permission.PermissionSearchField(strings.TrimSpace(field)))
+	}
+	return converted
 }

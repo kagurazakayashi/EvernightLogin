@@ -63,6 +63,9 @@ type UIAdminGroup = ui.UIAdminGroup
 // UIAdminGroupPage 是 ui.UIAdminGroupPage 的兼容别名。
 type UIAdminGroupPage = ui.UIAdminGroupPage
 
+// UIAdminGroupQuery 是 ui.UIAdminGroupQuery 的兼容别名。
+type UIAdminGroupQuery = ui.UIAdminGroupQuery
+
 // UIAdminMember 是 ui.UIAdminMember 的兼容别名。
 type UIAdminMember = ui.UIAdminMember
 
@@ -452,6 +455,24 @@ type UIPageAdminDiagnosticsOptions = ui.UIPageAdminDiagnosticsOptions
 
 // UIPageAdminOptions 是 ui.UIPageAdminOptions 的兼容别名。
 type UIPageAdminOptions = ui.UIPageAdminOptions
+
+// UIPageAdminTasksOptions 是 ui.UIPageAdminTasksOptions 的兼容别名。
+type UIPageAdminTasksOptions = ui.UIPageAdminTasksOptions
+
+// UIAdminTasksBackend 是 ui.UIAdminTasksBackend 的兼容别名。
+type UIAdminTasksBackend = ui.UIAdminTasksBackend
+
+// UIAdminTaskQuery 是 ui.UIAdminTaskQuery 的兼容别名。
+type UIAdminTaskQuery = ui.UIAdminTaskQuery
+
+// UIAdminTask 是 ui.UIAdminTask 的兼容别名。
+type UIAdminTask = ui.UIAdminTask
+
+// UIAdminTaskPage 是 ui.UIAdminTaskPage 的兼容别名。
+type UIAdminTaskPage = ui.UIAdminTaskPage
+
+// UIAdminTaskStates 是 ui.UIAdminTaskStates 的兼容别名。
+var UIAdminTaskStates = ui.UIAdminTaskStates
 
 // UIPageAdminSessionsOptions 是 ui.UIPageAdminSessionsOptions 的兼容别名。
 type UIPageAdminSessionsOptions = ui.UIPageAdminSessionsOptions

@@ -214,6 +214,8 @@ type UIAppQuery struct {
 	Descending bool
 	Limit      int
 	Offset     int
+	// Search 是可选的字面子串搜索（应用名称/描述；空不过滤）。
+	Search string
 }
 
 // UIAppPage 是应用列表分页结果（只有 HasMore，不伪造总数）。

@@ -144,7 +144,10 @@ type AdminListGroupsRequest struct {
 	Sort       string
 	Descending bool
 	Page       AdminPage
-	RequestID  string
+	// Search 是可选的字面子串搜索（名称/机器标识；空不过滤）。
+	Search       string
+	SearchFields []string
+	RequestID    string
 }
 
 // AdminGroupList 是用户组列表结果。
@@ -190,7 +193,10 @@ type AdminListRolesRequest struct {
 	Sort       string
 	Descending bool
 	Page       AdminPage
-	RequestID  string
+	// Search 是可选的字面子串搜索（角色名称/机器标识；空不过滤）。
+	Search       string
+	SearchFields []string
+	RequestID    string
 }
 
 // AdminRoleList 是角色列表结果。

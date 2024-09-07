@@ -234,7 +234,8 @@ func (a *RBACAdapter) ListRoles(ctx context.Context, adminUserID string,
 	}
 	result, err := a.opts.Roles.ListRoles(ctx, caller, role.ListRequest{
 		ScopeID: strings.TrimSpace(query.ScopeID), Limit: limit, Offset: query.Offset,
-		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending})
+		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending,
+		Search: query.Search})
 	if err != nil {
 		return ui.UIRBACRolePage{}, mapRBACError(err)
 	}
@@ -539,7 +540,8 @@ func (a *RBACAdapter) ListPermissions(ctx context.Context, adminUserID string,
 	}
 	result, err := a.opts.Permissions.ListPermissions(ctx, caller, permission.ListRequest{
 		ScopeID: strings.TrimSpace(query.ScopeID), Limit: limit, Offset: query.Offset,
-		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending})
+		Enabled: query.Enabled, Sort: sortField, Descending: query.Descending,
+		Search: query.Search})
 	if err != nil {
 		return ui.UIRBACPermissionPage{}, mapRBACError(err)
 	}

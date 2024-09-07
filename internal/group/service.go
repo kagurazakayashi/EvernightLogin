@@ -41,6 +41,10 @@ type ListQuery struct {
 	ScopeFilter string
 	Sort        GroupSortField
 	Descending  bool
+	// Search 是已按用户名口径规范化（NFKC + 大小写折叠 + NFC）的字面搜索文本；
+	// 空表示不搜索。SearchFields 是已校验、去重的搜索字段白名单。
+	Search       string
+	SearchFields []GroupSearchField
 }
 
 // Store 是用户组持久化契约，由 internal/group/sqlite 提供生产实现。
@@ -255,8 +259,13 @@ func (s *Service) ListGroups(ctx context.Context, caller Caller, request ListReq
 	if !sortField.Valid() {
 		return ListResult{}, fmt.Errorf("%w: 排序字段不在允许列表内", ErrInvalidRequest)
 	}
+	searchText, searchFields, err := normalizeGroupSearch(request.Search, request.SearchFields)
+	if err != nil {
+		return ListResult{}, err
+	}
 	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all,
-		Sort: sortField, Descending: request.Descending}
+		Sort: sortField, Descending: request.Descending,
+		Search: searchText, SearchFields: searchFields}
 	filter := strings.TrimSpace(request.ScopeID)
 	if filter != "" {
 		if _, _, err := ParseScope(filter); err != nil {

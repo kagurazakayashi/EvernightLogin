@@ -34,6 +34,10 @@ type ListQuery struct {
 	Enabled     *bool
 	Sort        SortField
 	Descending  bool
+	// Search 是已按用户名口径规范化（NFKC + 大小写折叠 + NFC）的字面搜索文本；
+	// 空表示不搜索。SearchFields 是已校验、去重的搜索字段白名单。
+	Search       string
+	SearchFields []PermissionSearchField
 }
 
 // Store 是权限目录持久化契约，由 internal/permission/sqlite 提供生产实现。
@@ -248,8 +252,13 @@ func (s *Service) ListPermissions(ctx context.Context, caller Caller, request Li
 	if !sortField.Valid() {
 		return ListResult{}, fmt.Errorf("%w: 排序字段不在允许列表内", ErrInvalidRequest)
 	}
+	searchText, searchFields, err := normalizePermissionSearch(request.Search, request.SearchFields)
+	if err != nil {
+		return ListResult{}, err
+	}
 	query := ListQuery{Limit: limit, Offset: request.Offset, AllScopes: all,
-		Enabled: request.Enabled, Sort: sortField, Descending: request.Descending}
+		Enabled: request.Enabled, Sort: sortField, Descending: request.Descending,
+		Search: searchText, SearchFields: searchFields}
 	filter := strings.TrimSpace(request.ScopeID)
 	if filter != "" {
 		if _, _, err := ParseScope(filter); err != nil {
