@@ -489,7 +489,7 @@ func catalogPermissionsV1() []PermissionDefinition {
 			Summary:        "为获准管理的其他用户直接设置新密码；需操作者本次完成两步验证，不需要目标旧密码、目标确认或独立审批。",
 			Scope:          "仅获准管理的普通用户范围；成功后使目标旧会话与找回入口失效，并要求目标下次登录改密。",
 			Limits:         "不能读取或回显旧密码、不能重置 root 或高权限管理账户、不能移除或重置 MFA、不能为无密码账户添加密码；不能替代人工恢复审批流程。",
-			RequiresReauth: true, Implemented: false, DefaultRoles: []string{"system_admin"},
+			RequiresReauth: true, Implemented: true, DefaultRoles: []string{"system_admin"},
 		},
 		// 账户恢复与客服。
 		{

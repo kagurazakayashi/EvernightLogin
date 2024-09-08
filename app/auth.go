@@ -30,7 +30,8 @@ type authFacade struct{ r *Runtime }
 
 // Login 完成密码第一步。装配了 MFA 时，任何密码结果都先经真实第二步启动：
 // 账户启用因素或被策略要求强认证时返回受限会话与挑战；没有可用因素时按既有
-// 密码流程签发普通会话；待改密等其它受限状态 fail-closed，不签发会话。
+// 密码流程签发普通会话。待改密（must_change）只签发受限改密会话，仅允许
+// RequiredPasswordChanges.Complete 完成本人改密；其它受限状态仍 fail-closed。
 func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
 	r := f.r
 	requestID, err := resolveRequestID(ctx, req.RequestID)
@@ -48,6 +49,22 @@ func (f *authFacade) Login(ctx context.Context, req LoginRequest) (LoginResult, 
 	})
 	if err != nil {
 		return LoginResult{}, mapAuthError(err, requestID)
+	}
+	// 步骤 257：must_change 账户用新口令登录时只差“本人改密”这一步。此时必须签发
+	// 受限会话（reason=pending_password_change, required_steps=[password_change]），
+	// 仅允许 RequiredPasswordChanges.Complete 完成改密；不得进入第二因素流程（不属于
+	// MFA 待补步骤，MFA 服务会 fail-closed），也不得签发完整会话。
+	if passwordChangeOnly(authResult) {
+		issued, issueErr := services.Sessions.Login(ctx, session.LoginRequest{
+			Result: authResult, AppID: req.AppID, RememberMe: req.RememberMe,
+			RequestID: requestID,
+			Client:    session.ClientInfo{UserAgent: req.UserAgent, Address: req.ClientIP},
+		})
+		if issueErr != nil {
+			return LoginResult{}, mapDomainError("签发受限改密会话失败",
+				string(session.CodeOf(issueErr)), requestID)
+		}
+		return loginResultFromIssued(issued, authResult), nil
 	}
 	if mfaService := r.mfaService(); mfaService != nil {
 		start, startErr := mfaService.BeginLogin(ctx, mfa.BeginLoginRequest{
@@ -500,6 +517,15 @@ func loginResultFromStart(base authn.AuthenticateResult,
 }
 
 // loginResultFromIssued 把完整会话签发结果转为公开登录结果。
+// passwordChangeOnly 判断认证结果是否“密码正确、只待本人强制改密”。
+func passwordChangeOnly(result authn.AuthenticateResult) bool {
+	if result.Outcome != authn.OutcomePendingPasswordChange || !result.Restricted ||
+		len(result.RequiredSteps) != 1 || result.RequiredSteps[0] != authn.StepPasswordChange {
+		return false
+	}
+	return result.StrongAuthCompletedAt.IsZero()
+}
+
 func loginResultFromIssued(issued session.IssuedSession,
 	base authn.AuthenticateResult) LoginResult {
 	result := LoginResult{UserID: issued.Session.UserID, Username: base.Username,

@@ -50,7 +50,7 @@ func TestDirectManagementPermissionsFreshInstall(t *testing.T) {
 		definition := findPermission(t, env.catalog.Permissions, key)
 		// 步骤 256 已落地直接改名 Go 入口 → username 权限已实现；直接重置密码入口
 		// 由步骤 257 落地，届时再改为 true。
-		wantImplemented := key == directUsernameKey
+		wantImplemented := key == directUsernameKey || key == directPasswordKey
 		if definition.Implemented != wantImplemented {
 			t.Fatalf("权限 %q Implemented = %v，期望 %v（入口落地状态决定实现标记）",
 				key, definition.Implemented, wantImplemented)
@@ -187,13 +187,13 @@ func TestUpgradeDoesNotSilentlyGrantDirectManagementPermissions(t *testing.T) {
 		}
 	}
 	// 升级后两项权限仍可被 root 逐项授予（此处验证目录登记与实现标记）：
-	// 直接改名入口已落地（Implemented=true），直接重置密码入口待步骤 257。
+	// 直接改名（步骤 256）与直接重置口令（步骤 257）入口均已落地（Implemented=true）。
 	usernameDefinition := findPermission(t, upgraded.catalog.Permissions, directUsernameKey)
 	if !usernameDefinition.Implemented {
 		t.Fatalf("直接改名入口已落地，权限 %q 应标记已实现", directUsernameKey)
 	}
 	passwordDefinition := findPermission(t, upgraded.catalog.Permissions, directPasswordKey)
-	if passwordDefinition.Implemented {
-		t.Fatalf("直接重置密码入口尚未落地，权限 %q 不能标记已实现", directPasswordKey)
+	if !passwordDefinition.Implemented {
+		t.Fatalf("直接重置口令入口已落地，权限 %q 应标记已实现", directPasswordKey)
 	}
 }
