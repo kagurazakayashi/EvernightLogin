@@ -54,7 +54,8 @@ func New(options Options) (http.Handler, error) {
 // newHandler 装配 Handler，并生成一次 OpenAPI 文档。options.extraRoutes 仅用于
 // 同包测试。
 func newHandler(options Options) (*handler, error) {
-	document, err := buildOpenAPIDocument(options.Prefix, options.ErrorCodes, options.Version)
+	document, err := buildOpenAPIDocument(options.Prefix, options.ErrorCodes,
+		options.Version, options.PageRoutes)
 	if err != nil {
 		return nil, err
 	}

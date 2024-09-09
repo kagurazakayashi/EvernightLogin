@@ -25,6 +25,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 		{fileErrorsJSON, "错误码：码/分类/HTTP/公开含义/原因/建议/重试"},
 		{filePermissionsJSON, "权限键 + 预设角色 + 用户组 + 应用模板"},
 		{fileHTTPRoutesJSON, "管理路由 + 协议路径/端点 + 页面命名路由"},
+		{fileHTTPOpenAPIJSON, "OpenAPI 3：JSON API + 页面/表单操作（字段/响应/状态转移）"},
 		{fileCLIJSON, "CLI 命令树 + flag + 退出码"},
 	}
 	countRows := [][]string{
@@ -35,6 +36,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 		{"管理 JSON API 路由", fmt.Sprintf("%d", len(m.AdminRoutes))},
 		{"协议路径 / 端点表", fmt.Sprintf("%d / %d", len(m.ProtocolPaths), len(m.ProtocolEndpoints))},
 		{"内置页面命名路由", fmt.Sprintf("%d", len(m.Pages))},
+		{"页面/表单 OpenAPI 操作", fmt.Sprintf("%d（未登记契约的页面路由 %d）", pageOperationCount(m), pageUnregisteredCount(m))},
 		{"CLI", fmt.Sprintf("%d 个程序 / %d 个子命令 / %d 个 flag",
 			len(m.CLIBinaries), countCLISubcommands(m.CLIBinaries), countCLIFlags(m.CLIBinaries))},
 		{"公开 Go API（app）", fmt.Sprintf("Runtime 方法 %d、服务接口 %d（方法 %d）、公开函数 %d、公开类型 %d",
@@ -78,7 +80,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 				"**独立部署/运维**：读 [HTTP 契约](http-api.md)、[CLI](cli.md)、[部署文档](../deployment/README.md)。",
 				"**业务接入**：读 [HTTP 契约](http-api.md) 与 [业务接入契约](../deployment/integration.md)。",
 				"**排障**：读 [错误码](errors.md) 与 [排障指南](../guide/troubleshooting.md)。",
-				"**AI/自动化**：直接读 [ai-index.md](ai-index.md) 与 4 个机器 JSON。",
+				"**AI/自动化**：直接读 [ai-index.md](ai-index.md) 与 5 个机器 JSON。",
 			}),
 		"## 2. 文件索引\n\n### 2.1 Markdown（稳定锚点，人类与 AI 均可读）\n\n"+
 			markdownTable([]string{"文件", "内容"}, fileRows),
@@ -108,7 +110,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 				"能力声明（catalog.json）中的声明若无法映射到实际符号，`-check` 会失败：先修声明或补实现，再生成文档。",
 				"214/215 重构会移动页面实现与 app 类型文件；届时只需更新 `scripts/internal/apidoc/sources.go` 的源码路径或扫描目录，再重新生成。",
 				"文档中的最小示例来自 [examples/reference-snippets](../../examples/reference-snippets/snippets.go)，由 `go build` 真实编译；新增示例必须被文档引用。",
-				"Phase A 不硬造 OpenAPI 全量业务 schema：OpenAPI 仍是最小健康/错误契约，业务路由以本目录机器 JSON 与源码为准（见 [http-api.md](http-api.md)）。",
+				"OpenAPI 现含两部分：JSON API（健康/文档端点）与页面/表单操作（账户/资料/会话/注册登录/MFA/三种恢复流程）；管理 JSON API 的请求/响应模式由后续管理组步骤统一定义，在此之前以本目录机器 JSON 与源码为准（见 [http-api.md](http-api.md)）。",
 			}),
 	)
 }
@@ -244,6 +246,7 @@ func (m *Model) renderChangeLog(used map[string]bool) []byte {
 				"`scripts/verify-docs` 接入 `-reference=auto|off|require`：`docs/reference` 存在时逐字节校验生成物；新增公开符号未登记映射、能力声明无法解析时 fail-closed。",
 				"新增 `examples/reference-snippets` 最小可编译示例，并被参考文档内嵌；文档内嵌代码与源码逐字一致由 `-check` 保证。",
 				"尚未包含**方法级** Go API 参考：Phase B 在 214/215 与 226–235 稳定后补齐，当前 [go-api.md](go-api.md) 提供生命周期/接口总览与稳定领域框架。",
+				"步骤 268 起 OpenAPI 增加**页面/表单操作段**（账户/资料/会话/注册登录/MFA/三种恢复流程，95 条），新增生成物 [http-openapi.json](http-openapi.json)；页面与 JSON API 用 `x-login-route-kind` 分开标识，秘密字段 writeOnly、示例为合成值，契约与 AST 扫描路由不一致时 `-check` 失败。",
 			}),
 		"## 3. 相关文档\n\n"+
 			"- 公开 API 稳定范围与破坏性变更策略：[../embedding/host_integration.md](../embedding/host_integration.md)\n"+

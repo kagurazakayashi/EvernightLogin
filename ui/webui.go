@@ -45,6 +45,7 @@ import (
 	"golang.org/x/text/language"
 
 	"github.com/kagurazakayashi/EvernightLogin/correlation"
+	"github.com/kagurazakayashi/EvernightLogin/httpapi"
 	"github.com/kagurazakayashi/EvernightLogin/httppolicy"
 )
 
@@ -223,6 +224,20 @@ func (ui *WebUI) ContractVersion() string { return UIContractVersion }
 
 // Routes 返回已注册路由副本（诊断/装配校验用）。
 func (ui *WebUI) Routes() []UIRoute { return append([]UIRoute(nil), ui.routes...) }
+
+// OpenAPIPageRoutes 实现 httpapi.UIPageRouteLister：返回实际注册页面路由的公开
+// 投影（名称/方法/路径/访问级别），供 HTTP 装配层生成 OpenAPI 页面/表单操作段。
+// 只暴露契约字段，不包含模板、处理器或会话秘密。
+func (ui *WebUI) OpenAPIPageRoutes() []httpapi.UIPageRouteInfo {
+	routes := make([]httpapi.UIPageRouteInfo, 0, len(ui.routes))
+	for _, route := range ui.routes {
+		routes = append(routes, httpapi.UIPageRouteInfo{
+			Name: route.Name, Method: route.Method, Path: route.Path,
+			Access: string(route.Access),
+		})
+	}
+	return routes
+}
 
 // loadCatalog 加载内置 zh-CN 与可选宿主目录。
 func (ui *WebUI) loadCatalog() error {

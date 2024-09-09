@@ -41,6 +41,7 @@ func NewHTTPHandler(options httpapi.HTTPOptions, version string) (http.Handler, 
 		Version:           version,
 		Protection:        protection,
 		UI:                uiConfig(options.UI),
+		PageRoutes:        pageRoutes(options.UI),
 	})
 	if err != nil {
 		return nil, errs.NewAppError(errs.CodeConfigInvalid, "HTTP 处理程序配置无效",
@@ -149,6 +150,35 @@ func uiConfig(options *httpapi.UIHTTPOptions) *transport.UIConfig {
 	}
 	return &transport.UIConfig{Handler: options.Handler,
 		PageContentSecurityPolicy: options.PageContentSecurityPolicy}
+}
+
+// pageRoutes 从页面处理器提取实际注册的命名路由投影，供 OpenAPI 使用。
+//
+// 只接受实现 httpapi.UIPageRouteLister 的处理器（内置 *ui.WebUI 实现它）；接口
+// 契约放在叶子包 httpapi，装配层不 import ui，避免 ui 同包测试
+// （import internal/httpassemble）形成导入环。未实现时返回 nil，文档只含 JSON API。
+func pageRoutes(options *httpapi.UIHTTPOptions) []transport.PageRoute {
+	if options == nil || options.Handler == nil {
+		return nil
+	}
+	lister, ok := options.Handler.(httpapi.UIPageRouteLister)
+	if !ok {
+		return nil
+	}
+	routes := lister.OpenAPIPageRoutes()
+	if len(routes) == 0 {
+		return nil
+	}
+	projected := make([]transport.PageRoute, 0, len(routes))
+	for _, route := range routes {
+		projected = append(projected, transport.PageRoute{
+			Name:   route.Name,
+			Method: route.Method,
+			Path:   route.Path,
+			Access: route.Access,
+		})
+	}
+	return projected
 }
 
 // resolveIdentity 把公开身份解析契约适配为内部函数，并保证失败时只使用稳定的

@@ -31,7 +31,7 @@ func (m *Model) renderHTTPAPI(used map[string]bool) []byte {
 		})
 	}
 	return joinBlocks(
-		"# HTTP 契约参考（管理 API / 协议路径 / 页面命名路由）\n\n"+
+		"# HTTP 契约参考（管理 API / 协议路径 / 页面命名路由 / 页面表单 OpenAPI）\n\n"+
 			"> 路由清单由 AST 扫描实际注册生成（`handler.go` 的 `add(...)`、领域 "+
 			"`DomainRoute{Method, Pattern}`、协议路径常量与 `UIRoute` 页面命名路由），"+
 			"不是手写端点表。鉴权/CSRF/开关与托管边界见 [../deployment/managed-api.md](../deployment/managed-api.md)、"+
@@ -59,17 +59,51 @@ func (m *Model) renderHTTPAPI(used map[string]bool) []byte {
 			"即实际定义文件。表中包含仅在 `EnableComponentPreview` 时注册的组件预览路由"+
 			"（默认不注册），不要把它们当作默认页面。",
 		markdownTable([]string{"命名路由", "方法", "路径", "访问级别", "关联能力", "定义位置"}, pageRows),
-		"## 5. OpenAPI 与 Discovery 边界（不造假完整契约）\n\n"+
+		"## 5. 页面/表单操作契约（OpenAPI 页面段，"+
+			fmt.Sprintf("%d", pageOperationCount(m))+" 条）\n\n"+
+			"账户/资料/会话/注册登录/MFA/三种恢复流程（邮件找回、恢复代码重绑、客服人工恢复）的页面路由"+
+			"已在机器可读 OpenAPI 中定义请求字段、响应、状态转移与限流说明；页面与 JSON API 用 "+
+			"`x-login-route-kind` 分开标识；页面处理器产生的错误以 HTML 错误页呈现，但传输层前置拒绝"+
+			"（路径规范化/CSRF/限流/并发/超时/内部 panic）在进入页面处理器之前返回 application/json 统一错误信封。"+
+			"\n\n"+bulletList([]string{
+			"**同源生成**：方法与路径来自 `ui/` 中 `UIRoute` 字面量的 AST 扫描；字段/响应/状态转移契约在 `internal/transport/pagecontracts_*.go`；二者不一致时 `scripts/reference -check` 直接失败。",
+			"**运行期文档**：`{prefix}/openapi.json` 由实际注册的页面路由生成（宿主未挂载的模块不会出现），`docs/reference/http-openapi.json` 是全部模块的离线投影。",
+			"**传输语义**：写操作为 `application/x-www-form-urlencoded`（头像上传为 `multipart/form-data`），要求 CSRF 隐藏令牌与精确同源；成功通常 303 跳转流程下一步。页面处理器产生的错误以 HTML 错误页返回（HTTP 状态码 + 页面错误摘要）；传输层前置拒绝（路径规范化/CSRF/限流/并发/超时/内部 panic）返回 `application/json` 统一业务错误信封（Error schema），不声明未实现的额外错误码头。",
+			"**秘密与示例**：密码/令牌/恢复码/WebAuthn 断言等字段标记 `writeOnly`，示例全部是明确合成值，不包含可用凭据。",
+			"**范围**：管理/审计/报告/备份/OAuth 等页面路由尚未登记本步契约，完整路由清单见 §4 与 [http-routes.json](http-routes.json)。",
+			"**启用条件**：对应 `ui.Page*` 模块由宿主装配；OAuth 2.0 / OIDC 协议端点由 `protocol.enabled`（默认 false）显式启用，关闭时保留前缀直接 404，不属于本表。",
+		})+"\n"+markdownTable(
+			[]string{"命名路由", "方法", "路径", "访问级别", "页面模块", "请求字段", "响应状态", "状态转移（摘要）"},
+			m.PageOpenAPI.pageOperationTableRows()),
+		"## 6. OpenAPI 与 Discovery 边界（不造假完整契约）\n\n"+
 			bulletList([]string{
-				"OpenAPI 当前只包含最小健康检查/错误契约（`/healthz`、`/openapi.json`），**不是**完整业务 API 文档；业务接口以本页路由清单、机器 JSON 与源码公开契约为准。",
+				"OpenAPI 由两部分组成：JSON API（`/healthz`、`/openapi.json`，错误用统一信封）与页面/表单操作（本页 §5，HTML 语义、错误以页面呈现）。**管理 JSON API 的请求/响应模式由后续管理组步骤统一定义**，在此之前 §2 的路由清单与 [http-routes.json](http-routes.json) 才是管理路由的权威对照；本步不为管理 API 编造占位 schema。",
+				"OAuth 2.0 / OIDC 协议端点默认关闭（`protocol.enabled=false`），关闭时保留前缀返回普通 404；协议端点使用标准协议响应，不写入本页 OpenAPI，也不被统一业务错误信封包装。",
 				"OIDC Discovery 只声明真实启用的能力；默认关闭时相关路径 404。真实第三方 OIDC 客户端、设备码/扫码真机互操作等未完成验收的边界见 [../guide/login-and-oauth.md](../guide/login-and-oauth.md)。",
 				"管理/托管/客服 API 的授权、对象/字段白名单与审计约束见对应部署文档；不要把管理 API 暴露给业务应用。",
-				"新增/删除路由必须同步更新能力声明（catalog.json）；未映射的公开符号或能力声明会让 `scripts/reference -check` 失败。",
+				"新增/删除路由必须同步更新能力声明（catalog.json）与 OpenAPI 页面契约；未映射的公开符号、能力声明或契约/路由不一致会让 `scripts/reference -check` 失败。",
 			}),
-		"## 6. 机器可读\n\n"+
+		"## 7. 机器可读\n\n"+
 			"- ["+fileHTTPRoutesJSON+"]("+fileHTTPRoutesJSON+")：方法/路径/来源/能力关联的完整机器表。\n"+
+			"- ["+fileHTTPOpenAPIJSON+"]("+fileHTTPOpenAPIJSON+")：与本页同源的 OpenAPI 3 文档（JSON API + 页面/表单操作；秘密字段 writeOnly、示例为合成值）。\n"+
 			"- 页面 `Access` 列来自 `UIRoute` 字面量；执行时仍由服务端重新判定，台账仅用于契约对照。",
 	)
+}
+
+// pageOperationCount 返回已登记页面操作数量（模型缺失时返回 0）。
+func pageOperationCount(model *Model) int {
+	if model.PageOpenAPI == nil {
+		return 0
+	}
+	return len(model.PageOpenAPI.Operations)
+}
+
+// pageUnregisteredCount 返回未登记契约的页面路由数量（模型缺失时返回 0）。
+func pageUnregisteredCount(model *Model) int {
+	if model.PageOpenAPI == nil {
+		return 0
+	}
+	return model.PageOpenAPI.Unregistered
 }
 
 // renderCLI 渲染 cli.md。

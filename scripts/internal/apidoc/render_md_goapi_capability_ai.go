@@ -193,6 +193,7 @@ func (m *Model) renderAIIndex(used map[string]bool) []byte {
 		{fileErrorsJSON, "error-codes", fmt.Sprintf("%d 个错误码", len(m.Errors))},
 		{filePermissionsJSON, "permission-keys", fmt.Sprintf("%d 权限 / %d 系统角色 / %d 用户组", len(m.Permissions), len(m.Roles), len(m.Groups))},
 		{fileHTTPRoutesJSON, "http-routes", fmt.Sprintf("%d 管理路由 / %d 协议路径 / %d 页面", len(m.AdminRoutes), len(m.ProtocolPaths), len(m.Pages))},
+		{fileHTTPOpenAPIJSON, "http-openapi", fmt.Sprintf("%d 页面/表单操作 + JSON API", pageOperationCount(m))},
 		{fileCLIJSON, "cli-commands", fmt.Sprintf("%d 程序 / %d 子命令", len(m.CLIBinaries), countCLISubcommands(m.CLIBinaries))},
 	}
 	taskRows := [][]string{
@@ -200,6 +201,7 @@ func (m *Model) renderAIIndex(used map[string]bool) []byte {
 		{"查权限键/谁能做什么", "[permissions.md](permissions.md) 或 [" + filePermissionsJSON + "](" + filePermissionsJSON + ")", "权限目录生成"},
 		{"查配置字段/环境变量/是否秘密", "[configuration.md](configuration.md)", "语义以 guide 为准"},
 		{"找 HTTP 管理路由/协议路径/页面路由", "[http-api.md](http-api.md) 或 [" + fileHTTPRoutesJSON + "](" + fileHTTPRoutesJSON + ")", "AST 扫描注册"},
+		{"查页面/表单的字段/响应/状态转移", "[http-api.md](http-api.md) §5 或 [" + fileHTTPOpenAPIJSON + "](" + fileHTTPOpenAPIJSON + ")", "OpenAPI 页面段 + 契约/路由一致性校验"},
 		{"查 CLI 命令/flag/退出码", "[cli.md](cli.md) 或 [" + fileCLIJSON + "](" + fileCLIJSON + ")", "双风格 CLI 扫描"},
 		{"查公开 Go 接口/方法是否存在", "[go-api.md](go-api.md) + `go doc ./app` / GoDoc", "Phase A 框架，Phase B 方法级"},
 		{"找最小可编译示例", "本页第 4 节 + 对应文档示例块", "源码 examples/reference-snippets"},
@@ -218,7 +220,7 @@ func (m *Model) renderAIIndex(used map[string]bool) []byte {
 			"不要把本文当“功能已实现”的证明（状态见能力矩阵）。",
 		"## 1. 使用约定\n\n"+
 			bulletList([]string{
-				"机器优先：需要枚举/匹配/生成调用时读 4 个机器 JSON；需要解释/边界/示例时读 Markdown。",
+				"机器优先：需要枚举/匹配/生成调用时读 5 个机器 JSON；需要解释/边界/示例时读 Markdown。",
 				"引用事实时带上错误码/权限键/路由/命令的稳定标识，不要引用会随重构变化的文件路径作为契约。",
 				"未知符号先运行 `go run ./scripts/reference -check` 与 `go doc ./app`；`-check` 失败表示文档与代码漂移，先修生成物。",
 				"不要把本目录之外的开发协作材料（`.ai/`、`AGENTS.md`、`MEMORY.md`）当作产品契约；产品交付文档只在 `docs/`。",
@@ -239,7 +241,7 @@ func (m *Model) renderAIIndex(used map[string]bool) []byte {
 					len(m.Errors), len(m.Permissions), len(m.ConfigFields), len(m.AdminRoutes), len(m.ProtocolPaths),
 					len(m.Pages), countCLISubcommands(m.CLIBinaries), len(m.Capabilities)),
 				"Go API：Phase A 提供 Runtime 生命周期/访问器与接口总览；方法级参考（身份/范围/分页/幂等/错误/示例）Phase B 补齐。",
-				"OpenAPI 仍是最小契约，不构造成完整业务 schema；业务路由以 http-routes.json 为准。",
+				"OpenAPI 含 JSON API（健康/文档端点）与页面/表单操作（账户/资料/会话/注册登录/MFA/三种恢复流程）；管理 JSON API 的请求/响应模式由后续管理组步骤统一定义，在此之前管理路由以 http-routes.json 为准。",
 			}),
 		"## 6. 生成与校验命令\n\n"+
 			codeBlock("powershell", "go run ./scripts/reference -write\n"+

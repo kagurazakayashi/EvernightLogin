@@ -141,6 +141,10 @@ type Options struct {
 	Protection *ProtectionOptions
 	// UI 是可选的内置页面处理器；nil 表示本 Handler 不服务 HTML 页面。
 	UI *UIConfig
+	// PageRoutes 是页面处理器实际注册的命名路由投影（方法/路径/访问级别）；
+	// 用于生成 OpenAPI 的页面/表单操作段。为空表示没有可文档化的页面路由。
+	// 与 pagecontracts_*.go 的方法/路径不一致时构造失败，避免文档漂移。
+	PageRoutes []PageRoute
 
 	// extraRoutes 仅由同包测试构造器注入；生产 New 不设置。
 	extraRoutes []route

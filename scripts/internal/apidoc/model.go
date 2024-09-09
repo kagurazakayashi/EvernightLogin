@@ -240,11 +240,13 @@ type Model struct {
 	Pages             []PageRoute
 	CLIBinaries       []CLIBinary
 	GoAPI             *GoAPI
-	Snippets          []Snippet
-	CrossCheck        CrossCheck
-	Warnings          []string
-	ClaimIssues       []string
-	PendingSections   []PendingSection
+	// PageOpenAPI 是本步生成的页面/表单 OpenAPI 文档与契约核对结果。
+	PageOpenAPI     *PageOpenAPIArtifact
+	Snippets        []Snippet
+	CrossCheck      CrossCheck
+	Warnings        []string
+	ClaimIssues     []string
+	PendingSections []PendingSection
 }
 
 // Markdown 生成的文件名（相对 docs/reference）。
@@ -263,6 +265,7 @@ const (
 	fileErrorsJSON      = "error-codes.json"
 	filePermissionsJSON = "permission-keys.json"
 	fileHTTPRoutesJSON  = "http-routes.json"
+	fileHTTPOpenAPIJSON = "http-openapi.json"
 	fileCLIJSON         = "cli-commands.json"
 )
 
@@ -277,6 +280,6 @@ func markdownFiles() []string {
 // jsonFiles 返回全部生成 JSON 文件的相对路径（顺序稳定）。
 func jsonFiles() []string {
 	return []string{
-		fileErrorsJSON, filePermissionsJSON, fileHTTPRoutesJSON, fileCLIJSON,
+		fileErrorsJSON, filePermissionsJSON, fileHTTPRoutesJSON, fileHTTPOpenAPIJSON, fileCLIJSON,
 	}
 }

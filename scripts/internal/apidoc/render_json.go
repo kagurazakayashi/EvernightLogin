@@ -54,6 +54,17 @@ type httpRoutesJSON struct {
 	Pages             []PageRoute        `json:"pages"`
 }
 
+// httpOpenAPIJSON 是 http-openapi.json 的顶层结构：内嵌确定性 OpenAPI 3 文档，
+// 另给文档生成数量与契约核对结果，便于机器消费。
+type httpOpenAPIJSON struct {
+	Schema         string          `json:"schema"`
+	GeneratedBy    string          `json:"generated_by"`
+	OperationCount int             `json:"operation_count"`
+	Documented     int             `json:"documented"`
+	Unregistered   int             `json:"unregistered"`
+	OpenAPI        json.RawMessage `json:"openapi"`
+}
+
 // cliCounts 是 CLI 数量汇总。
 type cliCounts struct {
 	Binaries    int `json:"binaries"`
@@ -102,6 +113,20 @@ func (m *Model) jsonFiles() map[string][]byte {
 		ProtocolEndpoints: m.ProtocolEndpoints, Pages: m.Pages,
 	}
 	files[fileHTTPRoutesJSON] = marshalJSON(routes)
+
+	pageOpenAPI := httpOpenAPIJSON{
+		Schema: schemaVersion + "/http-openapi", GeneratedBy: "scripts/reference",
+	}
+	if m.PageOpenAPI != nil {
+		pageOpenAPI.OperationCount = len(m.PageOpenAPI.Operations)
+		pageOpenAPI.Documented = m.PageOpenAPI.Documented
+		pageOpenAPI.Unregistered = m.PageOpenAPI.Unregistered
+		pageOpenAPI.OpenAPI = json.RawMessage(m.PageOpenAPI.JSON)
+	}
+	if pageOpenAPI.OpenAPI == nil {
+		pageOpenAPI.OpenAPI = json.RawMessage(`{"openapi":"3.0.3","paths":{}}`)
+	}
+	files[fileHTTPOpenAPIJSON] = marshalJSON(pageOpenAPI)
 
 	cli := cliCommandsJSON{
 		Schema: schemaVersion + "/cli-commands", GeneratedBy: "scripts/reference",

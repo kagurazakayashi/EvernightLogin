@@ -43,6 +43,9 @@ func Generate(root string) (*Model, error) {
 	if model.Pages, err = scanPages(root); err != nil {
 		return nil, err
 	}
+	if model.PageOpenAPI, err = buildPageOpenAPI(model.Pages); err != nil {
+		return nil, err
+	}
 	if model.CLIBinaries, err = scanCLI(root); err != nil {
 		return nil, err
 	}
@@ -136,6 +139,9 @@ const (
 	minCLISubcommands    = 20
 	minRuntimeMethods    = 20
 	minServiceInterfaces = 20
+	// minPageOperations 是本步已定义模式的页面/表单操作安全下限（当前 88 条，
+	// 覆盖账户/资料/会话/注册登录/MFA/三种恢复流程）。
+	minPageOperations = 70
 )
 
 // validateCounts 校验关键盘点数量不低于安全下限，返回可操作的失败信息。
@@ -159,5 +165,11 @@ func validateCounts(model *Model) []string {
 		"检查 goAPIDirs 与 app 公开门面文件（215 后按领域分文件）")
 	check("app 服务接口", len(model.GoAPI.Interfaces), minServiceInterfaces,
 		"检查 goAPIDirs 与 app 公开类型组织是否变化")
+	pageOperations := 0
+	if model.PageOpenAPI != nil {
+		pageOperations = len(model.PageOpenAPI.Operations)
+	}
+	check("页面/表单 OpenAPI 操作", pageOperations, minPageOperations,
+		"检查 internal/transport/pagecontracts_*.go 与 ui/ 页面路由是否被误删")
 	return issues
 }
