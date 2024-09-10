@@ -234,6 +234,11 @@ func (a *Adapter) BeginStrongSetupPasskey(ctx context.Context,
 	if !mfaStateAllowsMethod(state, authfact.MethodPasskey) {
 		return ui.UIPageStrongSetupStart{}, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
 	}
+	// 步骤 253：按当前账户/角色/策略复核 Passkey 仍是允许的初始化方法。
+	if methodErr := a.requireCurrentStrongSetupMethod(ctx, state.UserID,
+		authfact.MethodPasskey); methodErr != nil {
+		return ui.UIPageStrongSetupStart{}, methodErr
+	}
 	caller, callerErr := passkey.UserCaller(state.UserID)
 	if callerErr != nil {
 		return ui.UIPageStrongSetupStart{}, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
@@ -268,6 +273,12 @@ func (a *Adapter) FinishStrongSetupPasskey(ctx context.Context, request *http.Re
 	}
 	if !mfaStateAllowsMethod(state, authfact.MethodPasskey) {
 		return ui.UIPageStrongSetupResult{}, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
+	}
+	// 步骤 253：完成注册前复核 Passkey 仍是允许方法；CompleteStrongSetup 内再在
+	// 同一事务里复核方法与绑定，防止角色/策略在该窗口变化后仍完成初始化。
+	if methodErr := a.requireCurrentStrongSetupMethod(ctx, state.UserID,
+		authfact.MethodPasskey); methodErr != nil {
+		return ui.UIPageStrongSetupResult{}, methodErr
 	}
 	// ceremony ID 由页面 hidden 字段承载；这里取请求表单中的单一值。
 	ceremonyID := strings.TrimSpace(request.PostForm.Get("passkey_ceremony_id"))
@@ -326,6 +337,12 @@ func (a *Adapter) BeginStrongSetupTOTP(ctx context.Context,
 	if !mfaStateAllowsMethod(state, authfact.MethodTOTP) {
 		return ui.UIPageStrongSetupTOTPStart{}, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
 	}
+	// 步骤 253：按当前账户/角色/策略复核 TOTP 仍是允许的初始化方法，避免在角色
+	// 提升/撤销后继续生成可用的 TOTP 绑定（R10-19）。
+	if methodErr := a.requireCurrentStrongSetupMethod(ctx, state.UserID,
+		authfact.MethodTOTP); methodErr != nil {
+		return ui.UIPageStrongSetupTOTPStart{}, methodErr
+	}
 	caller, callerErr := totp.UserCaller(state.UserID)
 	if callerErr != nil {
 		return ui.UIPageStrongSetupTOTPStart{}, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
@@ -366,6 +383,12 @@ func (a *Adapter) FinishStrongSetupTOTP(ctx context.Context, request *http.Reque
 	if !mfaStateAllowsMethod(state, authfact.MethodTOTP) {
 		return ui.UIPageStrongSetupResult{}, &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
 	}
+	// 步骤 253：确认验证码前复核 TOTP 仍是允许方法（角色提升/撤销、恢复要求变化
+	// 时立即拒绝，不激活本次绑定）。
+	if methodErr := a.requireCurrentStrongSetupMethod(ctx, state.UserID,
+		authfact.MethodTOTP); methodErr != nil {
+		return ui.UIPageStrongSetupResult{}, methodErr
+	}
 	if bindingID == "" || len(bindingID) > 128 || code == "" || len(code) > 16 {
 		return ui.UIPageStrongSetupResult{}, &ui.UIPageAuthError{Code: "REQ_INVALID"}
 	}
@@ -382,9 +405,10 @@ func (a *Adapter) FinishStrongSetupTOTP(ctx context.Context, request *http.Reque
 	if approveErr != nil {
 		return ui.UIPageStrongSetupResult{}, approveErr
 	}
-	if _, confirmErr := a.opts.TOTP.ConfirmBinding(challengeCtx, caller,
+	binding, confirmErr := a.opts.TOTP.ConfirmBinding(challengeCtx, caller,
 		totp.BindConfirm{BindingID: bindingID, Code: code,
-			RequestID: requestIDFromRequest(request)}); confirmErr != nil {
+			RequestID: requestIDFromRequest(request)})
+	if confirmErr != nil {
 		return ui.UIPageStrongSetupResult{}, publicMFAError(confirmErr)
 	}
 	completed, completeErr := a.opts.MFA.CompleteStrongSetup(ctx,
@@ -392,6 +416,14 @@ func (a *Adapter) FinishStrongSetupTOTP(ctx context.Context, request *http.Reque
 			AttemptToken: state.AttemptToken, ExistingSession: secret,
 			Method: authfact.MethodTOTP, RequestID: requestIDFromRequest(request)})
 	if completeErr != nil {
+		// 步骤 253 / R10-19：TOTP 已激活但完成被拒（例如在确认与完成之间角色/
+		// 策略变化）。回滚本次刚激活的绑定，避免留下“暂存 TOTP 存在但重绑要求
+		// 未清除”的受限残留；回滚失败只记录，不改变原始拒绝结果（fail-closed）。
+		if rollbackErr := a.opts.TOTP.RollbackStrongSetupBinding(ctx, caller,
+			binding.ID, requestIDFromRequest(request)); rollbackErr != nil {
+			a.opts.Logger.Warn("强初始化完成后回滚 TOTP 绑定失败",
+				"error_category", "strong_setup_rollback_failed")
+		}
 		return ui.UIPageStrongSetupResult{}, publicMFAError(completeErr)
 	}
 	methods := make([]string, 0, len(completed.Methods))
@@ -401,6 +433,28 @@ func (a *Adapter) FinishStrongSetupTOTP(ctx context.Context, request *http.Reque
 	return ui.UIPageStrongSetupResult{UserID: completed.UserID, Methods: methods,
 		ReloginRequired: completed.MustReauthenticate,
 		SessionCookie:   a.opts.Sessions.ClearCookie()}, nil
+}
+
+// requireCurrentStrongSetupMethod 在开始/完成具体强因素绑定前，按当前账户、角色/
+// 高权限过渡态与策略重新确认该方法仍允许绑定（步骤 253 / R10-19）：不能只信任
+// 登录时签入页面的签名状态；角色在受限初始化期间被提升/撤销或恢复要求已更新时，
+// 应立即拒绝，不能继续产生可用因素或宣称完成。判定不可用一律 fail-closed。
+func (a *Adapter) requireCurrentStrongSetupMethod(ctx context.Context, userID string,
+	method authfact.Method) error {
+	if a.opts.MFA == nil {
+		return &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
+	}
+	if _, err := a.opts.MFA.CheckStrongSetupMethod(ctx, userID, method); err != nil {
+		switch {
+		case errors.Is(err, mfa.ErrStrongSetupIncomplete):
+			return &ui.UIPageAuthError{Code: "ACCESS_DENIED"}
+		case errors.Is(err, mfa.ErrPolicyUnavailable):
+			return &ui.UIPageAuthError{Code: "AUTHZ_UNAVAILABLE"}
+		default:
+			return &ui.UIPageAuthError{Code: "INTERNAL_ERROR"}
+		}
+	}
+	return nil
 }
 
 // publicReauthError 把再次认证领域错误映射为页面稳定公开错误码；密码错误返回

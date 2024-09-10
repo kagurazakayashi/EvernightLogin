@@ -102,6 +102,22 @@ func (s strongFactorSource) HasStrongFactor(ctx context.Context, userID string) 
 	return false, nil
 }
 
+// strongFactorBoundQuery 返回“since 之后真实新绑定”判定的 SQL 与是否受支持；
+// TOTP 只统计 active 绑定（pending 尚未验证码确认不构成新因素），Passkey 只统计
+// 用途允许第二步且未撤销的凭证。
+func strongFactorBoundQuery(method authfact.Method) (string, bool) {
+	switch method {
+	case authfact.MethodTOTP:
+		return `SELECT COUNT(*) FROM totp_bindings
+WHERE user_id=? AND status='active' AND activated_at_ms IS NOT NULL AND activated_at_ms>=?`, true
+	case authfact.MethodPasskey, authfact.MethodSecurityKey:
+		return `SELECT COUNT(*) FROM webauthn_credentials
+WHERE user_id=? AND revoked_at_ms IS NULL AND created_at_ms>=? AND usage IN('second_factor','both')`, true
+	default:
+		return "", false
+	}
+}
+
 // StrongFactorBoundAfter 实现 mfa.StrongSetupBindingVerifier：只有当指定类别的强
 // 因素在 since 之后被真实激活/创建时才返回 true。查询失败返回错误（调用方
 // fail-closed），绝不把“存在既有因素”当作本次绑定。
@@ -110,23 +126,41 @@ func (s strongFactorSource) StrongFactorBoundAfter(ctx context.Context, userID s
 	if s.store == nil || s.store.DB() == nil {
 		return false, errors.New("强因素绑定时间存储未装配")
 	}
-	sinceMS := since.UTC().UnixMilli()
-	var count int
-	var query string
-	switch method {
-	case authfact.MethodTOTP:
-		// 只统计 active 绑定：pending 的 TOTP 尚未完成验证码确认，不构成新因素。
-		query = `SELECT COUNT(*) FROM totp_bindings
-WHERE user_id=? AND status='active' AND activated_at_ms IS NOT NULL AND activated_at_ms>=?`
-	case authfact.MethodPasskey, authfact.MethodSecurityKey:
-		// 只统计用途允许第二步且未撤销的凭证；主登录专用凭证不满足强认证绑定。
-		query = `SELECT COUNT(*) FROM webauthn_credentials
-WHERE user_id=? AND revoked_at_ms IS NULL AND created_at_ms>=? AND usage IN('second_factor','both')`
-	default:
+	query, supported := strongFactorBoundQuery(method)
+	if !supported {
 		return false, nil
 	}
-	if err := s.store.DB().QueryRowContext(ctx, query, userID, sinceMS).Scan(&count); err != nil {
+	var count int
+	if err := s.store.DB().QueryRowContext(ctx, query, userID,
+		since.UTC().UnixMilli()).Scan(&count); err != nil {
 		return false, fmt.Errorf("查询强因素绑定时间失败: %w", err)
+	}
+	return count > 0, nil
+}
+
+// StrongFactorBoundAfterTx 实现 mfa.StrongSetupBindingVerifierTx：在完成初始化的
+// 同一审计事务内复核本次新绑定（步骤 253），防止因素在预检查后、提交前被移除/
+// 撤销。只使用 tx 读取，失败使完成事务整体回滚。
+func (s strongFactorSource) StrongFactorBoundAfterTx(ctx context.Context, tx audit.Tx,
+	userID string, method authfact.Method, since time.Time) (bool, error) {
+	if tx == nil {
+		return false, errors.New("强因素绑定事务复核缺少事务")
+	}
+	query, supported := strongFactorBoundQuery(method)
+	if !supported {
+		return false, nil
+	}
+	rows, err := tx.QueryContext(ctx, query, userID, since.UTC().UnixMilli())
+	if err != nil {
+		return false, fmt.Errorf("事务内复核强因素绑定失败: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	var count int
+	if err := rows.Scan(&count); err != nil {
+		return false, fmt.Errorf("事务内复核强因素绑定失败: %w", err)
 	}
 	return count > 0, nil
 }
@@ -336,11 +370,14 @@ func BuildSecurityDomains(deps Deps, services *Services, managed *ManagedService
 		StrongSetupAuthorizer:      strongSetupAuthorizer,
 		RootReady:                  rootReadyMarker{store: services.BootstrapStore},
 		RebindClearer:              rebindStore,
-		Revoker:                    services.Sessions,
-		AllowStrongAuthSetup:       true,
-		StrongSetupMethods:         strongSetupMethods,
-		AdminResetBackend:          adminResetBackend,
-		AdminResetTargetGuard:      adminResetBackend.CheckAdminResetTarget,
+		// 步骤 253：完成强认证初始化的同一审计事务内复核账户/安全版本并按代际
+		// 快照条件清除强制重绑需求，关闭“复算与清除分步”的 TOCTOU 窗口。
+		StrongSetupFinalizer:  rebindStore,
+		Revoker:               services.Sessions,
+		AllowStrongAuthSetup:  true,
+		StrongSetupMethods:    strongSetupMethods,
+		AdminResetBackend:     adminResetBackend,
+		AdminResetTargetGuard: adminResetBackend.CheckAdminResetTarget,
 		// 步骤 194：真实强制 MFA 策略，用于“邮件因素移除是最后一个可用因素”保护。
 		Policy: mfaPolicy,
 		Now:    now, Logger: deps.Logger,

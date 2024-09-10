@@ -296,6 +296,42 @@ type StrongSetupBindingVerifier interface {
 		method authfact.Method, since time.Time) (bool, error)
 }
 
+// RebindRequirementSnapshot 是“人工恢复 MFA 重置后强制重绑需求”的当前代际快照
+// （步骤 253）：Present=false 表示当前没有未清除的需求；Present=true 时
+// RequiredAtMS/SourceRequestID 唯一标识需求代际，用于完成初始化时条件清除，
+// 防止旧完成请求清掉更新的恢复要求。快照不含秘密。
+type RebindRequirementSnapshot struct {
+	Present         bool
+	RequiredAtMS    int64
+	SourceRequestID string
+}
+
+// StrongSetupFinalizer 可选：由宿主在强认证初始化完成的同一审计事务内完成最终
+// 一致性复核与条件清除（步骤 253）：
+//   - 最终复核当前账户仍为 active 且 security_version 与挑战创建时一致（身份/安全
+//     代际在完成期间未变化）；
+//   - 按 expected 快照条件清除未清除的重绑需求：需求代际被新的恢复申请替换时
+//     返回错误（fail-closed，不静默清掉新需求）。
+//
+// 实现必须只使用同一审计事务（tx）内的读写；返回错误必须让整个事务回滚。
+type StrongSetupFinalizer interface {
+	// RebindRequirementSnapshot 读取当前未清除需求快照（事务外只读；只用于审计
+	// 字段与条件清除的期望代际，最终以 FinalizeStrongSetupTx 的事务内校验为准）。
+	RebindRequirementSnapshot(ctx context.Context, userID string) (RebindRequirementSnapshot, error)
+	// FinalizeStrongSetupTx 在同一审计事务内复核账户状态/安全版本并按快照条件清除
+	// 需求；不匹配、已被替换或存储失败返回错误，调用方整体回滚。
+	FinalizeStrongSetupTx(ctx context.Context, tx audit.Tx, userID string,
+		expected RebindRequirementSnapshot, challengeSecurityVersion int64) error
+}
+
+// StrongSetupBindingVerifierTx 可选：StrongSetupBindingVerifier 的事务版本，供完成
+// 初始化时在同一审计事务内复核“本次新绑定”仍然有效（因素可能在预检查后、提交前
+// 被移除/撤销）。实现只能用 tx 读取；返回错误按策略不可用 fail-closed。
+type StrongSetupBindingVerifierTx interface {
+	StrongFactorBoundAfterTx(ctx context.Context, tx audit.Tx, userID string,
+		method authfact.Method, since time.Time) (bool, error)
+}
+
 // StrongSetupAuthorizer 授权强认证初始化（受控状态）：必须是可信来源确认该用户
 // 处于初始化/受邀状态（如 root pending_setup 状态）或已获管理员一次性凭证/审批；
 // 未注入或拒绝时不允许初始化。mfa 本身不验证审批，宿主必须提供可信实现。

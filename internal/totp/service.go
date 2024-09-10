@@ -469,6 +469,59 @@ func (s *Service) RemoveBinding(ctx context.Context, caller Caller, request Remo
 	return nil
 }
 
+// RollbackStrongSetupBinding 撤销刚在受限强认证初始化中激活的 TOTP 绑定（步骤 253 /
+// R10-19 的完成失败补偿）：当 TOTP 已完成验证码确认激活、但随后 mfa.CompleteStrongSetup
+// 因当前允许方法变化/账户代际变化而拒绝时，由受限初始化编排方调用本方法清掉本次
+// 残留绑定，避免“暂存 TOTP 已存在但重绑要求未清除”的受限状态只能用人工清库重试。
+//
+// 边界：只允许用户本人（受限会话已撤销后由服务端编排方以该用户身份调用）；bindingID
+// 必须是本次 ConfirmBinding 返回的 active 绑定，否则幂等返回 nil（不误删其他绑定）。
+// 不要求验证码/再次认证：该绑定尚未用于任何登录，调用场景本身已通过强初始化入口
+// 的密码复核；事务内停用绑定并递增 security_version 使任何残留会话失效，写关键审计。
+func (s *Service) RollbackStrongSetupBinding(ctx context.Context, caller Caller,
+	bindingID, requestID string) error {
+	ctx = normalizeContext(ctx)
+	if err := caller.actor.Validate(); err != nil || !caller.IsUser() {
+		return ErrAccessDenied
+	}
+	if !validBindingID(bindingID) || account.ValidateRequestID(requestID) != nil {
+		return fmt.Errorf("%w: 参数无效", ErrInvalidRequest)
+	}
+	active, found, err := s.opts.Store.GetActive(ctx, caller.actor.ID)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if !found || active.ID != bindingID {
+		// 已被替换/停用：幂等成功，不误删当前有效绑定。
+		return nil
+	}
+	now := s.now()
+	critical := s.critical("mfa.totp_strong_setup_rolled_back", caller.actor, bindingID,
+		requestID, []audit.FieldChange{
+			{Field: "status", Before: "active", After: "disabled"},
+			{Field: "reason", After: "strong_setup_incomplete"},
+		})
+	if err := s.opts.Audit.ExecuteCritical(ctx, critical, func(txCtx context.Context, tx audit.Tx) error {
+		disabled, disableErr := s.opts.Store.DisableActiveTx(txCtx, tx, caller.actor.ID, now)
+		if disableErr != nil {
+			return disableErr
+		}
+		if !disabled {
+			return ErrBindingNotFound
+		}
+		return s.opts.Store.IncrementUserSecurityVersionTx(txCtx, tx, caller.actor.ID, now)
+	}); err != nil {
+		return mapCriticalError(err)
+	}
+	if !isNil(s.opts.SessionInvalidator) {
+		if _, revokeErr := s.opts.SessionInvalidator.RevokeAllForUser(ctx,
+			caller.actor.ID, "strong_setup_rollback"); revokeErr != nil {
+			s.opts.Logger.Warn("强初始化回滚后撤销会话失败", "error", revokeErr)
+		}
+	}
+	return nil
+}
+
 // Bindings 返回调用者当前绑定元数据（不含种子/密文）。
 func (s *Service) Bindings(ctx context.Context, caller Caller) ([]BindingMetadata, error) {
 	ctx = normalizeContext(ctx)

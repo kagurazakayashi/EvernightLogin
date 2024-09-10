@@ -971,12 +971,16 @@ func (f *fakeStrongSetupMethodSource) AllowedStrongSetupMethods(ctx context.Cont
 	return f.methods[userID], nil
 }
 
-// fakeStrongSetupBindingVerifier 模拟“since 之后是否真实新绑定”的生产判定。
+// fakeStrongSetupBindingVerifier 模拟“since 之后是否真实新绑定”的生产判定；
+// txBound/txErr 用于模拟完成事务内复核与预检查结果不同（因素在窗口内被移除）。
 type fakeStrongSetupBindingVerifier struct {
-	bound map[authfact.Method]bool
-	err   error
-	since time.Time
-	calls int
+	bound   map[authfact.Method]bool
+	err     error
+	txBound map[authfact.Method]bool
+	txErr   error
+	since   time.Time
+	calls   int
+	txCalls int
 }
 
 func (f *fakeStrongSetupBindingVerifier) StrongFactorBoundAfter(ctx context.Context,
@@ -985,6 +989,19 @@ func (f *fakeStrongSetupBindingVerifier) StrongFactorBoundAfter(ctx context.Cont
 	f.since = since
 	if f.err != nil {
 		return false, f.err
+	}
+	return f.bound[method], nil
+}
+
+// StrongFactorBoundAfterTx 实现 mfa.StrongSetupBindingVerifierTx 的事务内复核替身。
+func (f *fakeStrongSetupBindingVerifier) StrongFactorBoundAfterTx(ctx context.Context,
+	tx audit.Tx, userID string, method authfact.Method, since time.Time) (bool, error) {
+	f.txCalls++
+	if f.txErr != nil {
+		return false, f.txErr
+	}
+	if f.txBound != nil {
+		return f.txBound[method], nil
 	}
 	return f.bound[method], nil
 }
@@ -1654,5 +1671,335 @@ func TestRecoveryAuthenticationHandoff(t *testing.T) {
 		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
 		ExistingSession: start.RestrictedSession.Secret.Reveal()}); !errors.Is(err, mfa.ErrChallengeInvalid) {
 		t.Fatalf("已消费挑战不应再交接，实际 %v", err)
+	}
+}
+
+// fakeStrongSetupFinalizer 模拟宿主在完成事务内的最终复核与条件清除（步骤 253）。
+type fakeStrongSetupFinalizer struct {
+	snapshot           mfa.RebindRequirementSnapshot
+	snapshotErr        error
+	finalizeErr        error
+	snapshotCalls      int
+	finalizeCalls      int
+	gotExpected        mfa.RebindRequirementSnapshot
+	gotSecurityVersion int64
+}
+
+func (f *fakeStrongSetupFinalizer) RebindRequirementSnapshot(ctx context.Context,
+	userID string) (mfa.RebindRequirementSnapshot, error) {
+	f.snapshotCalls++
+	return f.snapshot, f.snapshotErr
+}
+
+func (f *fakeStrongSetupFinalizer) FinalizeStrongSetupTx(ctx context.Context, tx audit.Tx,
+	userID string, expected mfa.RebindRequirementSnapshot, securityVersion int64) error {
+	f.finalizeCalls++
+	f.gotExpected = expected
+	f.gotSecurityVersion = securityVersion
+	return f.finalizeErr
+}
+
+// fakeSequenceMethodSource 按调用次序返回不同允许方法，模拟完成期间角色/策略变化。
+type fakeSequenceMethodSource struct {
+	mu       sync.Mutex
+	sequence [][]authfact.Method
+	calls    int
+	err      error
+}
+
+func (f *fakeSequenceMethodSource) AllowedStrongSetupMethods(ctx context.Context,
+	userID string) ([]authfact.Method, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.sequence) == 0 {
+		return nil, nil
+	}
+	index := f.calls - 1
+	if index >= len(f.sequence) {
+		index = len(f.sequence) - 1
+	}
+	return f.sequence[index], nil
+}
+
+// toggleFailAudit 是可切换失败的审计写入器，用于验证完成事务审计失败整体回滚。
+type toggleFailAudit struct {
+	inner mfa.AuditRecorder
+	fail  *bool
+}
+
+func (a *toggleFailAudit) Record(ctx context.Context, event audit.Event) error {
+	return a.inner.Record(ctx, event)
+}
+
+func (a *toggleFailAudit) RecordFailure(ctx context.Context, event audit.Event) error {
+	return a.inner.RecordFailure(ctx, event)
+}
+
+func (a *toggleFailAudit) ExecuteCritical(ctx context.Context, request audit.CriticalRequest,
+	change audit.Change) error {
+	if a.fail != nil && *a.fail {
+		return audit.ErrAuditUnavailable
+	}
+	return a.inner.ExecuteCritical(ctx, request, change)
+}
+
+// startStrongSetup 启动一次强认证初始化，返回 mfa.LoginStart。
+func startStrongSetup(t *testing.T, env *testEnv, requestID string) mfa.LoginStart {
+	t.Helper()
+	start, err := env.service.BeginLogin(env.ctx, mfa.BeginLoginRequest{
+		Result: env.pendingStrongAuth(), RequestID: requestID})
+	if err != nil {
+		t.Fatalf("启动强认证初始化: %v", err)
+	}
+	return start
+}
+
+// challengeState 读取挑战当前状态。
+func challengeState(t *testing.T, env *testEnv, challengeID string) string {
+	t.Helper()
+	return env.queryString(`SELECT state FROM mfa_challenges WHERE id=?`, challengeID)
+}
+
+// TestStrongSetupFinalizerTransactionGeneration 验证完成事务内使用同一代际快照做
+// 最终复核与条件清除：快照/最终校验各一次，不再走事务外 ClearRebindRequirement。
+func TestStrongSetupFinalizerTransactionGeneration(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{}}
+	revoker := &realSessionRevoker{}
+	clearer := &fakeRebindClearer{}
+	finalizer := &fakeStrongSetupFinalizer{snapshot: mfa.RebindRequirementSnapshot{
+		Present: true, RequiredAtMS: 424242, SourceRequestID: "req_recovery_42"}}
+	authResult := (*authn.AuthenticateResult)(nil)
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupBindingVerifier = bindings
+		options.RebindClearer = clearer
+		options.StrongSetupFinalizer = finalizer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+	})
+	revoker.session = env.session
+	authResult = &authn.AuthenticateResult{}
+	*authResult = env.pendingStrongAuth()
+	start := startStrongSetup(t, env, "req-finalize-tx-1")
+	bindings.bound[authfact.MethodPasskey] = true
+	result, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(),
+		Method:          authfact.MethodPasskey, RequestID: "req-finalize-tx-2"})
+	if err != nil {
+		t.Fatalf("带最终复核的完成应成功: %v", err)
+	}
+	if finalizer.snapshotCalls != 1 || finalizer.finalizeCalls != 1 {
+		t.Fatalf("最终复核/条件清除应各一次: snapshot=%d finalize=%d",
+			finalizer.snapshotCalls, finalizer.finalizeCalls)
+	}
+	if finalizer.gotExpected != finalizer.snapshot {
+		t.Fatalf("最终清除应使用同一代际快照: got=%+v", finalizer.gotExpected)
+	}
+	if finalizer.gotSecurityVersion != authResult.SecurityVersion {
+		t.Fatalf("最终复核安全版本 = %d，期望挑战创建时 %d",
+			finalizer.gotSecurityVersion, authResult.SecurityVersion)
+	}
+	if clearer.calls != 0 {
+		t.Fatalf("装配最终复核后不应再走事务外清除: %d", clearer.calls)
+	}
+	if revoker.calls != 1 || !result.MustReauthenticate {
+		t.Fatalf("完成结果异常: %+v revoker=%d", result, revoker.calls)
+	}
+	if state := challengeState(t, env, start.ChallengeID); state != "verified" {
+		t.Fatalf("挑战应已 verified: %q", state)
+	}
+}
+
+// TestStrongSetupFinalizerConflictRollsBack 验证最终复核发现需求被替换/安全代际变化
+// 时整体回滚：挑战保持 pending、不写成功完成、旧完成请求不清除新需求。
+func TestStrongSetupFinalizerConflictRollsBack(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{
+		authfact.MethodPasskey: true}}
+	revoker := &realSessionRevoker{}
+	finalizer := &fakeStrongSetupFinalizer{
+		snapshot:    mfa.RebindRequirementSnapshot{Present: true, RequiredAtMS: 7, SourceRequestID: "req_old"},
+		finalizeErr: errors.New("requirement replaced by newer recovery")}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupBindingVerifier = bindings
+		options.StrongSetupFinalizer = finalizer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+	})
+	revoker.session = env.session
+	start := startStrongSetup(t, env, "req-finalize-conflict-1")
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(),
+		Method:          authfact.MethodPasskey, RequestID: "req-finalize-conflict-2"}); !errors.Is(err, mfa.ErrSessionUnavailable) {
+		t.Fatalf("代际冲突应 fail-closed: %v", err)
+	}
+	if finalizer.finalizeCalls != 1 || finalizer.snapshotCalls != 1 {
+		t.Fatalf("应尝试一次事务内复核: %d/%d", finalizer.snapshotCalls, finalizer.finalizeCalls)
+	}
+	if state := challengeState(t, env, start.ChallengeID); state != "pending" {
+		t.Fatalf("失败必须回滚挑战状态（不得假完成）: %q", state)
+	}
+	if revoker.calls != 1 {
+		t.Fatalf("完成事务失败前仍应先撤销受限会话（fail-closed）: %d", revoker.calls)
+	}
+}
+
+// TestStrongSetupTransactionVerifierRejectsRemovedBinding 验证因素在预检查后、提交前
+// 被停用时，事务内复核拒绝完成并回滚。
+func TestStrongSetupTransactionVerifierRejectsRemovedBinding(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{
+		bound:   map[authfact.Method]bool{authfact.MethodPasskey: true},
+		txBound: map[authfact.Method]bool{authfact.MethodPasskey: false},
+	}
+	revoker := &realSessionRevoker{}
+	finalizer := &fakeStrongSetupFinalizer{}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupBindingVerifier = bindings
+		options.StrongSetupFinalizer = finalizer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+	})
+	revoker.session = env.session
+	start := startStrongSetup(t, env, "req-finalize-binding-1")
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(),
+		Method:          authfact.MethodPasskey, RequestID: "req-finalize-binding-2"}); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("因素被移除后应拒绝完成: %v", err)
+	}
+	if finalizer.finalizeCalls != 0 {
+		t.Fatalf("绑定复核失败时不得清除重绑需求: %d", finalizer.finalizeCalls)
+	}
+	if state := challengeState(t, env, start.ChallengeID); state != "pending" {
+		t.Fatalf("挑战应保持 pending: %q", state)
+	}
+}
+
+// TestStrongSetupMethodBarrierRejectsRoleUpgrade 验证角色/策略在完成期间变化时，
+// 临提交前（撤销受限会话前）的当前方法复核拒绝完成（初次预检查仍为旧结果）。
+func TestStrongSetupMethodBarrierRejectsRoleUpgrade(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{
+		authfact.MethodTOTP: true}}
+	revoker := &realSessionRevoker{}
+	finalizer := &fakeStrongSetupFinalizer{}
+	// 第 1 次：BeginLogin 下发 TOTP；第 2 次：Complete 预检查 TOTP；第 3 次：
+	// 事务屏障复核时角色已提升为高权限 → 只允许 Passkey。
+	source := &fakeSequenceMethodSource{sequence: [][]authfact.Method{
+		{authfact.MethodTOTP}, {authfact.MethodTOTP}, {authfact.MethodPasskey}}}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupMethods = []authfact.Method{authfact.MethodPasskey, authfact.MethodTOTP}
+		options.StrongSetupMethodSource = source
+		options.StrongSetupBindingVerifier = bindings
+		options.StrongSetupFinalizer = finalizer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+	})
+	revoker.session = env.session
+	start := startStrongSetup(t, env, "req-finalize-role-1")
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(),
+		Method:          authfact.MethodTOTP, RequestID: "req-finalize-role-2"}); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("角色升级后事务屏障应拒绝完成: %v", err)
+	}
+	if finalizer.finalizeCalls != 0 {
+		t.Fatalf("方法复核失败时不得清除需求: %d", finalizer.finalizeCalls)
+	}
+	if state := challengeState(t, env, start.ChallengeID); state != "pending" {
+		t.Fatalf("挑战应保持 pending: %q", state)
+	}
+	// CheckStrongSetupMethod 也必须在角色变化后拒绝旧方法（R10-19 页面开始/确认前复核）。
+	if _, err := env.service.CheckStrongSetupMethod(env.ctx, userID, authfact.MethodTOTP); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("角色提升后旧方法应不再允许: %v", err)
+	}
+}
+
+// TestStrongSetupAuditFailureRollsBackCompletion 验证审计写入失败时完成事务整体回滚：
+// 挑战保持 pending、不写成功事件、不清除重绑需求（可重新登录重试）。
+func TestStrongSetupAuditFailureRollsBackCompletion(t *testing.T) {
+	bindings := &fakeStrongSetupBindingVerifier{bound: map[authfact.Method]bool{
+		authfact.MethodPasskey: true}}
+	revoker := &realSessionRevoker{}
+	finalizer := &fakeStrongSetupFinalizer{}
+	failAudit := false
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.Passkeys = &fakeSecondFactorPasskey{has: false}
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupBindingVerifier = bindings
+		options.StrongSetupFinalizer = finalizer
+		options.Revoker = revoker
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+		options.Audit = &toggleFailAudit{inner: options.Audit, fail: &failAudit}
+	})
+	revoker.session = env.session
+	start := startStrongSetup(t, env, "req-finalize-audit-1")
+	failAudit = true
+	if _, err := env.service.CompleteStrongSetup(env.ctx, mfa.StrongSetupCompleteRequest{
+		ChallengeID: start.ChallengeID, AttemptToken: start.AttemptToken,
+		ExistingSession: start.RestrictedSession.Secret.Reveal(),
+		Method:          authfact.MethodPasskey, RequestID: "req-finalize-audit-2"}); !errors.Is(err, mfa.ErrAuditUnavailable) {
+		t.Fatalf("审计不可用时完成应 fail-closed: %v", err)
+	}
+	if finalizer.finalizeCalls != 0 {
+		t.Fatalf("审计失败事务不得执行成功路径的条件清除: %d", finalizer.finalizeCalls)
+	}
+	if state := challengeState(t, env, start.ChallengeID); state != "pending" {
+		t.Fatalf("审计失败必须回滚挑战状态（不得假完成）: %q", state)
+	}
+}
+
+// TestCheckStrongSetupMethodCurrentPolicy 验证页面开始/确认因素绑定前的当前方法复核
+// （步骤 253 / R10-19）：按当前来源下发列表判定、未知方法/非法用户拒绝、来源不可用
+// fail-closed，不能仅凭登录时页面状态继续绑定。
+func TestCheckStrongSetupMethodCurrentPolicy(t *testing.T) {
+	source := &fakeStrongSetupMethodSource{methods: map[string][]authfact.Method{
+		userID: {authfact.MethodTOTP},
+	}}
+	env := newTestEnv(t, func(options *mfa.Options) {
+		options.AllowStrongAuthSetup = true
+		options.StrongFactorSource = &fakeStrongFactorSource{has: false}
+		options.StrongSetupMethods = []authfact.Method{authfact.MethodPasskey, authfact.MethodTOTP}
+		options.StrongSetupMethodSource = source
+		options.StrongSetupAuthorizer = &fakeStrongSetupAuthorizer{allow: true}
+		// CheckStrongSetupMethod 不需要撤销会话，但构造期校验要求注入撤销器。
+		options.Revoker = &realSessionRevoker{}
+	})
+	methods, err := env.service.CheckStrongSetupMethod(env.ctx, userID, authfact.MethodTOTP)
+	if err != nil || len(methods) != 1 || methods[0] != authfact.MethodTOTP {
+		t.Fatalf("当前允许 TOTP 时应返回允许列表: %v err=%v", methods, err)
+	}
+	if _, err := env.service.CheckStrongSetupMethod(env.ctx, userID,
+		authfact.MethodPasskey); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("未下发的方法应拒绝: %v", err)
+	}
+	if _, err := env.service.CheckStrongSetupMethod(env.ctx, userID,
+		authfact.MethodEmailOTP); !errors.Is(err, mfa.ErrStrongSetupIncomplete) {
+		t.Fatalf("非强因素类别应拒绝: %v", err)
+	}
+	if _, err := env.service.CheckStrongSetupMethod(env.ctx, "bad-user",
+		authfact.MethodTOTP); !errors.Is(err, mfa.ErrInvalidRequest) {
+		t.Fatalf("非法用户应拒绝: %v", err)
+	}
+	source.err = errors.New("policy source down")
+	if _, err := env.service.CheckStrongSetupMethod(env.ctx, userID,
+		authfact.MethodTOTP); !errors.Is(err, mfa.ErrPolicyUnavailable) {
+		t.Fatalf("来源不可用应 fail-closed: %v", err)
 	}
 }

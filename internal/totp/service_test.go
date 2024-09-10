@@ -531,3 +531,70 @@ func TestRemoveBindingInvalidatesExistingSessions(t *testing.T) {
 		t.Fatalf("解除强因素后 security_version 应递增: %d", version)
 	}
 }
+
+// TestRollbackStrongSetupBinding 验证强初始化完成失败后的 TOTP 绑定回滚（步骤 253 /
+// R10-19）：停用刚激活的绑定、递增 security_version 使残留会话失效、写关键审计；
+// 已回滚/不匹配的 bindingID 幂等且不误删其他绑定。
+func TestRollbackStrongSetupBinding(t *testing.T) {
+	env := newTestEnv(t, nil)
+	env.now = time.Now().UTC()
+	caller := env.caller()
+	start, err := env.service.BeginBinding(env.ctx, caller, "req-rollback-begin")
+	if err != nil {
+		t.Fatalf("开始绑定: %v", err)
+	}
+	secret, err := totp.DecodeSecret(start.Secret)
+	if err != nil {
+		t.Fatalf("解码种子: %v", err)
+	}
+	confirmed, err := env.service.ConfirmBinding(env.ctx, caller, totp.BindConfirm{
+		BindingID: start.BindingID, Code: mustCode(t, secret, env.now),
+		RequestID: "req-rollback-confirm"})
+	if err != nil || confirmed.Status != "active" {
+		t.Fatalf("确认绑定 = %+v err=%v", confirmed, err)
+	}
+	versionBefore := env.count(`SELECT security_version FROM users WHERE id=?`, userID)
+	if err := env.service.RollbackStrongSetupBinding(env.ctx, caller, confirmed.ID,
+		"req-rollback-1"); err != nil {
+		t.Fatalf("回滚强初始化 TOTP 绑定: %v", err)
+	}
+	if active := env.count(`SELECT COUNT(*) FROM totp_bindings WHERE user_id=? AND status='active'`, userID); active != 0 {
+		t.Fatalf("回滚后不应有 active TOTP 绑定: %d", active)
+	}
+	versionAfter := env.count(`SELECT security_version FROM users WHERE id=?`, userID)
+	if versionAfter != versionBefore+1 {
+		t.Fatalf("回滚应递增 security_version（使残留会话失效）: %d -> %d",
+			versionBefore, versionAfter)
+	}
+	// 幂等：已回滚后再次调用不报错、不重复递增安全版本。
+	if err := env.service.RollbackStrongSetupBinding(env.ctx, caller, confirmed.ID,
+		"req-rollback-2"); err != nil {
+		t.Fatalf("重复回滚应幂等: %v", err)
+	}
+	if again := env.count(`SELECT security_version FROM users WHERE id=?`, userID); again != versionAfter {
+		t.Fatalf("重复回滚不得再次递增 security_version: %d -> %d", versionAfter, again)
+	}
+	// 不匹配的 bindingID 不得误删当前 active 绑定。
+	next, err := env.service.BeginBinding(env.ctx, caller, "req-rollback-begin-2")
+	if err != nil {
+		t.Fatalf("再次开始绑定: %v", err)
+	}
+	nextSecret, err := totp.DecodeSecret(next.Secret)
+	if err != nil {
+		t.Fatalf("解码新种子: %v", err)
+	}
+	env.now = env.now.Add(30 * time.Second)
+	nextConfirmed, err := env.service.ConfirmBinding(env.ctx, caller, totp.BindConfirm{
+		BindingID: next.BindingID, Code: mustCode(t, nextSecret, env.now),
+		RequestID: "req-rollback-confirm-2"})
+	if err != nil || nextConfirmed.Status != "active" {
+		t.Fatalf("确认新绑定 = %+v err=%v", nextConfirmed, err)
+	}
+	if err := env.service.RollbackStrongSetupBinding(env.ctx, caller,
+		"tfb_00000000000000000000000000000000", "req-rollback-3"); err != nil {
+		t.Fatalf("不匹配 bindingID 应幂等: %v", err)
+	}
+	if active := env.count(`SELECT COUNT(*) FROM totp_bindings WHERE user_id=? AND status='active'`, userID); active != 1 {
+		t.Fatalf("不匹配 bindingID 不得误删 active 绑定: %d", active)
+	}
+}

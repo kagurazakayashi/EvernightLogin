@@ -97,8 +97,13 @@ type Options struct {
 	// 强认证完成的同一审计事务内调用，失败整体回滚（fail-closed）。
 	RootReady RootReadyMarker
 	// RebindClearer 在强认证初始化成功后清除人工恢复产生的强制重绑需求（步骤 188）；
-	// nil 时不清除（该能力未启用的宿主保持原行为）。
+	// nil 时不清除（该能力未启用的宿主保持原行为）。装配 StrongSetupFinalizer 时，
+	// 清除在同一条完成事务内完成，本字段只作为未装配 finalizer 的兼容回退。
 	RebindClearer RebindRequirementClearer
+	// StrongSetupFinalizer 可选：在完成强认证初始化的同一审计事务内复核当前账户
+	// 状态/安全版本，并按代际快照条件清除人工恢复重绑需求（步骤 253）。生产装配
+	// 必须注入；未装配时退化为事务外 ClearRebindRequirement（存在跨事务窗口）。
+	StrongSetupFinalizer StrongSetupFinalizer
 	// AdminResetBackend / AdminResetTargetGuard 是步骤 152 人工恢复执行器的受控
 	// MFA 重置依赖；未装配时 AdminResetFactors 明确拒绝，不影响普通 MFA 流程。
 	AdminResetBackend     AdminFactorResetBackend
@@ -767,6 +772,23 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 			"mfa.strong_setup_denied", "strong_factor_missing", string(CodeMFARequired), request.RequestID)
 		return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
 	}
+	// 步骤 253：临提交前再按当前账户/角色/策略复核允许方法（角色升级/撤销、强认证
+	// 策略变化）。该复核必须在审计写事务之外：SQLite 单写连接下，持有写事务时再从
+	// 连接池做外部读取会与事务互相等待。事务内仍有本次新绑定复核与账户安全版本
+	// 复核（finalizer），覆盖因素移除与 MFA 重置代际变化。
+	if !isNil(s.opts.StrongSetupMethodSource) {
+		current, methodErr := s.effectiveStrongSetupMethods(ctx, challenge.UserID)
+		if methodErr != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.strong_setup_denied", "setup_methods_unavailable", string(CodeMFARequired), request.RequestID)
+			return StrongSetupCompleteResult{}, ErrPolicyUnavailable
+		}
+		if !containsMethod(current, method) {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.strong_setup_denied", "method_changed_before_finalize", string(CodeMFARequired), request.RequestID)
+			return StrongSetupCompleteResult{}, ErrStrongSetupIncomplete
+		}
+	}
 	// 先撤销受限会话，避免留下临时受限通道；撤销失败则 fail-closed 不标记完成。
 	if isNil(s.opts.Revoker) {
 		s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
@@ -778,26 +800,86 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 			"mfa.strong_setup_denied", "restricted_session_revoke_failed", string(CodeDBUnavailable), request.RequestID)
 		return StrongSetupCompleteResult{}, fmt.Errorf("%w: 撤销受限会话失败", ErrSessionUnavailable)
 	}
-	if err := s.markVerified(ctx, challenge, attemptDigest, now, request.RequestID); err != nil {
-		return StrongSetupCompleteResult{}, err
+	// 步骤 253：取重绑需求的当前代际快照（只读）。完成事务内按该快照条件清除：
+	// 新恢复申请在完成期间替换需求时整事务回滚，旧完成请求不能清掉更新的要求。
+	var rebindSnapshot RebindRequirementSnapshot
+	if !isNil(s.opts.StrongSetupFinalizer) {
+		snapshot, snapshotErr := s.opts.StrongSetupFinalizer.RebindRequirementSnapshot(ctx,
+			challenge.UserID)
+		if snapshotErr != nil {
+			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+				"mfa.strong_setup_denied", "rebind_state_unavailable", string(CodeDBUnavailable), request.RequestID)
+			return StrongSetupCompleteResult{}, fmt.Errorf("%w: %v", ErrSessionUnavailable, snapshotErr)
+		}
+		rebindSnapshot = snapshot
 	}
-	event := audit.Event{
-		Actor:   audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
-		Action:  "mfa.strong_setup_completed",
-		Target:  audit.Target{Type: "mfa_challenge", ID: challenge.ID},
-		Outcome: audit.OutcomeSuccess, RequestID: validRequestID(request.RequestID),
-		Changes: []audit.FieldChange{
-			{Field: "factor_type", After: string(factorTypeOf(method))},
-			{Field: "restricted_session", Before: challenge.RestrictedSessionID, After: "revoked"},
-			{Field: "must_reauthenticate", After: "true"},
+	changes := []audit.FieldChange{
+		{Field: "factor_type", After: string(factorTypeOf(method))},
+		{Field: "restricted_session", Before: challenge.RestrictedSessionID, After: "revoked"},
+		{Field: "must_reauthenticate", After: "true"},
+	}
+	if rebindSnapshot.Present {
+		changes = append(changes, audit.FieldChange{Field: "rebind_requirement",
+			Before: "pending", After: "cleared"})
+	}
+	// 单一审计事务内完成：挑战 pending→verified（单赢家）、root 状态标记、事务内
+	// 复核本次新绑定/账户安全版本/重绑需求代际，并按快照条件清除重绑需求。
+	// 审计写入失败或任一复核失败整体回滚，挑战保持 pending（可重新登录重试），
+	// 不产生“已标记完成但审计缺失”的半完成状态。
+	critical := audit.CriticalRequest{
+		Event: audit.Event{
+			Actor:   audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
+			Action:  "mfa.strong_setup_completed",
+			Target:  audit.Target{Type: "mfa_challenge", ID: challenge.ID},
+			Outcome: audit.OutcomeSuccess, RequestID: validRequestID(request.RequestID),
+			Changes: changes,
 		},
+		FailureReasonCode:   "mfa.strong_setup_denied",
+		FailureErrorCodeFor: func(err error) string { return string(CodeOf(mapCriticalError(err))) },
 	}
-	if err := s.opts.Audit.Record(ctx, event); err != nil {
-		return StrongSetupCompleteResult{}, fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
+	finalizeErr := s.opts.Audit.ExecuteCritical(ctx, critical,
+		func(txCtx context.Context, tx audit.Tx) error {
+			ok, updateErr := s.opts.Store.UpdateChallengeStateTx(txCtx, tx, challenge.ID,
+				attemptDigest, challenge.Generation, StatePending, StateVerified, now)
+			if updateErr != nil {
+				return updateErr
+			}
+			if !ok {
+				// 并发完成只有一方成功；失败方不得清除需求/写成功审计。
+				return ErrChallengeInvalid
+			}
+			if !isNil(s.opts.RootReady) {
+				if readyErr := s.opts.RootReady.MarkRootReady(txCtx, tx, challenge.UserID, now); readyErr != nil {
+					return readyErr
+				}
+			}
+			if !isNil(s.opts.StrongSetupBindingVerifier) {
+				if verifier, ok := s.opts.StrongSetupBindingVerifier.(StrongSetupBindingVerifierTx); ok {
+					stillBound, bindErr := verifier.StrongFactorBoundAfterTx(txCtx, tx,
+						challenge.UserID, method, challenge.CreatedAt)
+					if bindErr != nil {
+						return fmt.Errorf("%w: %v", ErrPolicyUnavailable, bindErr)
+					}
+					if !stillBound {
+						// 因素在预检查后、提交前被移除/撤销。
+						return ErrStrongSetupIncomplete
+					}
+				}
+			}
+			if !isNil(s.opts.StrongSetupFinalizer) {
+				if finalizeTxErr := s.opts.StrongSetupFinalizer.FinalizeStrongSetupTx(txCtx, tx,
+					challenge.UserID, rebindSnapshot, challenge.SecurityVersion); finalizeTxErr != nil {
+					return fmt.Errorf("%w: %v", ErrSessionUnavailable, finalizeTxErr)
+				}
+			}
+			return nil
+		})
+	if finalizeErr != nil {
+		return StrongSetupCompleteResult{}, mapCriticalError(finalizeErr)
 	}
-	// 步骤 188/209：强认证初始化成功即清除人工恢复产生的强制重绑需求；清除失败时
-	// 登录仍会被强制重绑（fail-closed），不能宣称完成。
-	if !isNil(s.opts.RebindClearer) {
+	// 兼容未装配 StrongSetupFinalizer 的宿主/测试：事务提交后再清除重绑需求（旧
+	// 路径；存在跨事务窗口，生产装配必须注入 StrongSetupFinalizer）。
+	if isNil(s.opts.StrongSetupFinalizer) && !isNil(s.opts.RebindClearer) {
 		if clearErr := s.opts.RebindClearer.ClearRebindRequirement(ctx, challenge.UserID, request.RequestID); clearErr != nil {
 			s.recordFailure(ctx, audit.Actor{Type: audit.ActorUser, ID: challenge.UserID},
 				"mfa.strong_setup_denied", "rebind_clear_failed", string(CodeDBUnavailable), request.RequestID)
@@ -806,6 +888,30 @@ func (s *Service) CompleteStrongSetup(ctx context.Context, request StrongSetupCo
 	}
 	return StrongSetupCompleteResult{UserID: challenge.UserID, Method: method,
 		Methods: methods, MustReauthenticate: true}, nil
+}
+
+// CheckStrongSetupMethod 由受限初始化页面在开始/确认具体强因素绑定前调用：按当前
+// 账户、角色/高权限过渡态与策略重新计算允许绑定的类别（步骤 253 / R10-19），不能只
+// 信任登录时签入页面的签名状态。返回当前允许列表供调用方记录（不含秘密）；方法
+// 已不再允许时返回 ErrStrongSetupIncomplete（调用方应拒绝并清理刚产生的 pending
+// 绑定）。判定依赖不可用 fail-closed。
+func (s *Service) CheckStrongSetupMethod(ctx context.Context, userID string,
+	method authfact.Method) ([]authfact.Method, error) {
+	ctx = normalizeContext(ctx)
+	if !account.ValidUserID(userID) {
+		return nil, ErrInvalidRequest
+	}
+	if method != authfact.MethodPasskey && method != authfact.MethodTOTP {
+		return nil, ErrStrongSetupIncomplete
+	}
+	methods, err := s.effectiveStrongSetupMethods(ctx, userID)
+	if err != nil {
+		return nil, ErrPolicyUnavailable
+	}
+	if !containsMethod(methods, method) {
+		return methods, ErrStrongSetupIncomplete
+	}
+	return methods, nil
 }
 
 // AvailableSecondFactorMethods 返回用户当前实际启用且满足策略的第二因素方法
@@ -1790,6 +1896,7 @@ func mapCriticalError(err error) error {
 		errors.Is(err, ErrFactorExists), errors.Is(err, ErrFactorNotFound),
 		errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrAccessDenied),
 		errors.Is(err, ErrFactorRequired), errors.Is(err, ErrStrongAuthRequired),
+		errors.Is(err, ErrStrongSetupIncomplete), errors.Is(err, ErrStrongSetupDenied),
 		errors.Is(err, ErrOptionsInvalid):
 		return err
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
