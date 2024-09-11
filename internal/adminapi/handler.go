@@ -134,6 +134,14 @@ func (s *Server) buildRoutes() []route {
 	// 明确区分“不可用”与“路径不存在”（绝不伪成功、绝不真实外发）。
 	add(http.MethodGet, "notifications", s.handleNotificationStatus)
 	add(http.MethodPost, "notifications/test", s.handleNotificationTest)
+	// 步骤 266：安全告知分页历史与邮件投递记录；宿主未注入读取实现时不挂载
+	// （fail-closed，不返回占位空列表）。
+	if s.securityNotifications != nil {
+		add(http.MethodGet, "notifications/history", s.handleSecurityNotificationHistory)
+	}
+	if s.mailDeliveries != nil {
+		add(http.MethodGet, "deliveries", s.handleMailDeliveryList)
+	}
 	return routes
 }
 

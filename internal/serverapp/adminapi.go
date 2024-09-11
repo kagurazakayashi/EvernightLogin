@@ -77,9 +77,17 @@ func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices
 		Backups:       managed.BackupAdmin,
 		Sensitive:     gate.Reauth,
 		Notifications: newMailNotificationService(deps.Mail, runtime),
-		DomainRoutes: append(append(buildAdminDomainRoutes(managed, pages, gate),
+		// 步骤 266：安全告知分页与邮件投递记录（只读、白名单字段、稳定游标）。
+		SecurityNotifications: securityNotificationHistoryReader{reauth: gate.Reauth,
+			checker: managed.Checker},
+		MailDeliveries: newMailDeliveryHistoryReader(deps, managed.Checker),
+		DomainRoutes: append(append(append(buildAdminDomainRoutes(managed, pages, gate),
 			buildAdminDiagnosticsRoutes(deps, managed)...),
 			buildAdminSettingsRoutes(deps, managed, gate)...),
+			buildAdminDirectUsernameRoutes(deps.DirectManagement,
+				func(request *http.Request) (string, bool) {
+					return services.Sessions.SessionSecretFromRequest(request)
+				})...),
 		AuditRecorder: deps.Audit,
 		Logger:        deps.Logger, Now: deps.Now,
 	})

@@ -22,7 +22,9 @@ const adminCommandUsage = `用法：
   loginctl admin permissions [--scope-id system] [--limit 20] [--offset 0] <在线公共参数>
   loginctl admin applications [--limit 20] [--offset 0] <在线公共参数>
   loginctl admin application <application_id> [members|managed-policy] <在线公共参数>
-  loginctl admin support-cases [--status <s>] [--limit 20] [--offset 0] <在线公共参数>
+  loginctl admin support-cases [--status <s>] [--search <关键字>] [--search-fields id,reason] [--limit 20] [--offset 0] <在线公共参数>
+  loginctl admin rename-user <user_id> --new-username <新用户名> --reason <原因> \
+      [--expected-row-version <n>] [--proof-file <受保护证明文件>] <在线公共参数>
   loginctl admin support-case <case_id> <在线公共参数>
   loginctl admin write <path> --body '<JSON对象>' [--method POST|PUT|DELETE] \
       --confirm ADMIN-WRITE <在线公共参数>
@@ -43,8 +45,12 @@ func (r *runner) runAdmin(args []string) int {
 	if subcommand == "write" {
 		return r.runAdminWrite(rest)
 	}
+	if subcommand == "rename-user" {
+		return r.runAdminRenameUser(rest)
+	}
 	extra := []flagDef{{name: "limit", value: true}, {name: "offset", value: true},
-		{name: "status", value: true}, {name: "scope-id", value: true}}
+		{name: "status", value: true}, {name: "scope-id", value: true},
+		{name: "search", value: true}, {name: "search-fields", value: true}}
 	values, positional, err := parseFlags(rest, onlineFlagDefs(extra...))
 	if err != nil {
 		return r.flagError(err)
@@ -103,10 +109,13 @@ func (r *runner) runAdmin(args []string) int {
 		return r.usage("未知的 admin 子命令 %q", subcommand)
 	}
 	query := url.Values{}
-	for _, key := range []string{"limit", "offset", "status"} {
+	for _, key := range []string{"limit", "offset", "status", "search"} {
 		if value := strings.TrimSpace(values[key]); value != "" {
 			query.Set(key, value)
 		}
+	}
+	if value := strings.TrimSpace(values["search-fields"]); value != "" {
+		query.Set("search_fields", value)
 	}
 	if value := strings.TrimSpace(values["scope-id"]); value != "" {
 		query.Set("scope_id", value)

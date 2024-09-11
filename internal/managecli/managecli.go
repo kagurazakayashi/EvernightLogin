@@ -25,6 +25,7 @@
 package managecli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -128,7 +129,7 @@ func RunWithOptions(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		return r.runUser(rest)
 	case "group", "role", "app", "permission", "notify":
 		return r.runDomain(group, rest)
-	case "audit", "reports", "backups", "notifications", "tasks":
+	case "audit", "reports", "backups", "notifications", "tasks", "deliveries":
 		return r.runOnline(group, rest)
 	case "admin":
 		return r.runAdmin(rest)
@@ -201,7 +202,8 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl admin users|user|groups|group|roles|role|permissions|applications|application|support-cases|support-case [...]")
 	fmt.Fprintln(out, "  loginctl admin write <path> --body ... [--approval-file <受保护文件>]")
 	fmt.Fprintln(out, "  loginctl confirm begin|verify|status|cancel ...（一次性 CLI 再次认证/确认）")
-	fmt.Fprintln(out, "  loginctl notifications status|test ...")
+	fmt.Fprintln(out, "  loginctl notifications status|history|test ...")
+	fmt.Fprintln(out, "  loginctl deliveries list [--state <s>] [--limit N] [--cursor <next_cursor>] ...")
 	fmt.Fprintln(out, "  loginctl tasks get <task_id> ...")
 	fmt.Fprintln(out, "  公共参数：--server <url>（默认 http://127.0.0.1:8080） --api-path </admin/v1> \\")
 	fmt.Fprintln(out, "    --session-file <受保护文件> [--ca-file <PEM>] [--timeout 30s] [--json]")
@@ -224,6 +226,9 @@ type runner struct {
 	json      bool
 	// allowDefaultDatabase 是操作者显式确认允许使用默认数据库路径。
 	allowDefaultDatabase bool
+	// secretInput 是跨多次秘密读取复用的 stdin 缓冲；避免 bufio 预读吞掉后续输入
+	// （交互式管道/自动化输入可能一次提供密码与动态码两行）。
+	secretInput *bufio.Reader
 }
 
 // jsonEnvelope 是 --json 的稳定输出结构。成功与失败都输出同一外壳，便于脚本解析。

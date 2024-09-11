@@ -323,6 +323,12 @@ type Options struct {
 	// Notifications 是宿主注入的通知读取/本地捕获测试实现；为空时通知读取返回
 	// MAIL_DIAGNOSTICS_UNAVAILABLE、测试返回 NOTIFICATION_TEST_DISABLED。
 	Notifications NotificationService
+	// SecurityNotifications 是安全告知分页读取实现（步骤 266）；为空时不挂载
+	// GET /notifications/history（fail-closed，不返回占位列表）。
+	SecurityNotifications SecurityNotificationReader
+	// MailDeliveries 是邮件投递记录分页读取实现（步骤 266）；为空时不挂载
+	// GET /deliveries（mail.enabled=false 等未装配场景不返回假数据）。
+	MailDeliveries MailDeliveryReader
 	// Logger 是运行日志器；nil 时不写日志。
 	Logger *slog.Logger
 	// Now 是可注入时钟；nil 使用 time.Now。
@@ -337,30 +343,32 @@ type Options struct {
 
 // Server 是管理 JSON API 处理器：构造后不可变、可并发使用。
 type Server struct {
-	basePath       string
-	version        string
-	session        ManagementSession
-	sessionRevoker SessionAdminRevoker
-	sessionLister  SessionAdminLister
-	audit          AuditService
-	reports        ReportService
-	plans          ReportPlanService
-	backups        BackupService
-	tasks          TaskReader
-	taskAuthorizer TaskAuthorizer
-	taskLister     TaskLister
-	taskListAuth   TaskListAuthorizer
-	sensitive      reauth.OperationRunner
-	auditRecorder  AuditRecorder
-	notifications  NotificationService
-	domainRoutes   []DomainRoute
-	logger         *slog.Logger
-	now            func() time.Time
-	maxBodyBytes   int64
-	requestTimeout time.Duration
-	newRequestID   func() string
-	codes          map[string]ErrorCodeInfo
-	routes         []route
+	basePath              string
+	version               string
+	session               ManagementSession
+	sessionRevoker        SessionAdminRevoker
+	sessionLister         SessionAdminLister
+	audit                 AuditService
+	reports               ReportService
+	plans                 ReportPlanService
+	backups               BackupService
+	tasks                 TaskReader
+	taskAuthorizer        TaskAuthorizer
+	taskLister            TaskLister
+	taskListAuth          TaskListAuthorizer
+	sensitive             reauth.OperationRunner
+	auditRecorder         AuditRecorder
+	notifications         NotificationService
+	securityNotifications SecurityNotificationReader
+	mailDeliveries        MailDeliveryReader
+	domainRoutes          []DomainRoute
+	logger                *slog.Logger
+	now                   func() time.Time
+	maxBodyBytes          int64
+	requestTimeout        time.Duration
+	newRequestID          func() string
+	codes                 map[string]ErrorCodeInfo
+	routes                []route
 }
 
 // New 校验依赖并构造管理 API。缺少会话或错误码投影、配置越界时拒绝构造，
@@ -430,27 +438,29 @@ func New(options Options) (*Server, error) {
 			&slog.HandlerOptions{Level: slog.LevelError + 1}))
 	}
 	server := &Server{
-		basePath:       basePath,
-		version:        version,
-		session:        options.Session,
-		audit:          options.Audit,
-		reports:        options.Reports,
-		plans:          options.Plans,
-		backups:        options.Backups,
-		tasks:          options.Tasks,
-		taskAuthorizer: options.TaskAuthorizer,
-		taskLister:     options.TaskLister,
-		taskListAuth:   options.TaskListAuthorizer,
-		sensitive:      options.Sensitive,
-		auditRecorder:  options.AuditRecorder,
-		notifications:  options.Notifications,
-		domainRoutes:   append([]DomainRoute(nil), options.DomainRoutes...),
-		logger:         logger,
-		now:            now,
-		maxBodyBytes:   maxBodyBytes,
-		requestTimeout: timeout,
-		newRequestID:   newRequestID,
-		codes:          codes,
+		basePath:              basePath,
+		version:               version,
+		session:               options.Session,
+		audit:                 options.Audit,
+		reports:               options.Reports,
+		plans:                 options.Plans,
+		backups:               options.Backups,
+		tasks:                 options.Tasks,
+		taskAuthorizer:        options.TaskAuthorizer,
+		taskLister:            options.TaskLister,
+		taskListAuth:          options.TaskListAuthorizer,
+		sensitive:             options.Sensitive,
+		auditRecorder:         options.AuditRecorder,
+		notifications:         options.Notifications,
+		securityNotifications: options.SecurityNotifications,
+		mailDeliveries:        options.MailDeliveries,
+		domainRoutes:          append([]DomainRoute(nil), options.DomainRoutes...),
+		logger:                logger,
+		now:                   now,
+		maxBodyBytes:          maxBodyBytes,
+		requestTimeout:        timeout,
+		newRequestID:          newRequestID,
+		codes:                 codes,
 	}
 	if revoker, ok := options.Session.(SessionAdminRevoker); ok {
 		server.sessionRevoker = revoker

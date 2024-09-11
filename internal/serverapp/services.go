@@ -51,6 +51,9 @@ type Deps struct {
 	// AllowLegacyWithoutSensitive 显式允许会话管理访问仅走旧强认证闸门而未经敏感
 	// 操作策略判定（步骤 39 未装配的过渡开关）。默认 false（fail-closed）。
 	AllowLegacyWithoutSensitive bool
+	// DirectManagement 是宿主注入的直接管理（他人用户名修改）桥接实现（步骤 258）；
+	// nil 时不挂载对应管理 API 路由（fail-closed 404），不返回占位成功。
+	DirectManagement DirectUsernameBridge
 }
 
 // OpenStore 按配置打开 SQLite 存储。

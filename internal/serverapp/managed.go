@@ -83,6 +83,9 @@ type ManagedServices struct {
 	ManagedPolicyApprovals *managedPolicyApprovals
 	// Support 是客服工单服务（步骤 153 页面 / 156 管理 API 只读复用）。
 	Support *support.Service
+	// Tasks 是通用后台任务页的只读列表来源（步骤 266，生产为 *task.Executor）；
+	// 页面只按当前管理会话可见范围读取任务元数据，不执行取消。
+	Tasks *task.Executor
 }
 
 // TaskHandlers 返回管理域提供的真实任务处理器（用户批量导入/导出）。
@@ -277,6 +280,10 @@ func BuildManagedServices(deps Deps, core *Services, runtime *TaskRuntime,
 		Group: groupService, Onboarding: onboardingService, Batch: batchService,
 		Role: roleService, Permission: permissionService, Authz: access,
 		Delegation: delegationService,
+	}
+	// 步骤 266：通用任务页读取真实任务状态（只读；取消仍走 task 服务/CLI）。
+	if executor := runtime.Executor(); executor != nil {
+		managed.Tasks = executor
 	}
 	auditService, err := buildAuditOps(deps, managed, runtime, gate)
 	if err != nil {

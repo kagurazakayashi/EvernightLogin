@@ -111,7 +111,12 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	var handler http.Handler
 	var httpPrefix string
 	var httpMounts []string
+	// 步骤 258：直接管理 HTTP 桥接需要请求期 Runtime；HTTP 装配先于 Runtime 最终
+	// 构造完成，因此用延迟引用在请求期解析（构造完成前不会处理请求）。
+	var runtimeRef *Runtime
 	if opts.HTTP != nil {
+		base.Deps.DirectManagement = directManagementHTTPBridge{
+			runtime: func() *Runtime { return runtimeRef }}
 		var overrides *serverapp.PageOverrides
 		if opts.HTTP.PageOverrides != nil {
 			overrides = &serverapp.PageOverrides{
@@ -162,10 +167,12 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		_ = base.Close(context.Background())
 		return nil, wrapInternal("构造实例失败", err)
 	}
-	return &Runtime{opts: opts, config: cfg, logger: logger, nowFn: now,
+	runtime := &Runtime{opts: opts, config: cfg, logger: logger, nowFn: now,
 		base: base, instance: instance, boot: boot, bootCaller: bootCaller,
 		resetLimiters: resetLimiters,
-		handler:       handler, httpPrefix: httpPrefix, httpMounts: httpMounts}, nil
+		handler:       handler, httpPrefix: httpPrefix, httpMounts: httpMounts}
+	runtimeRef = runtime
+	return runtime, nil
 }
 
 // loadConfig 加载/规范化配置。配置规则与独立服务共用 internal/appcore：只支持

@@ -160,6 +160,17 @@ func (s *Store) List(ctx context.Context, query mailer.ListQuery) ([]mailer.Reco
 		statement += ` AND owner_id=?`
 		args = append(args, query.OwnerID)
 	}
+	// 步骤 266：keyset 分页位置（游标由服务层校验并绑定筛选/数据范围）。
+	if !query.AfterCreatedAt.IsZero() {
+		if query.AfterID != "" {
+			statement += ` AND (created_at_ms<? OR (created_at_ms=? AND id<?))`
+			afterMS := query.AfterCreatedAt.UTC().UnixMilli()
+			args = append(args, afterMS, afterMS, query.AfterID)
+		} else {
+			statement += ` AND created_at_ms<?`
+			args = append(args, query.AfterCreatedAt.UTC().UnixMilli())
+		}
+	}
 	statement += ` ORDER BY created_at_ms DESC,id DESC LIMIT ?`
 	limit := query.Limit
 	if limit <= 0 || limit > mailer.MaxListLimit {

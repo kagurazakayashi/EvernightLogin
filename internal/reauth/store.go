@@ -178,6 +178,12 @@ type Store interface {
 	// ListNotifications 按用户读取最近的告知记录（最多 limit 条），并为每条记录
 	// 投影关联投递记录的当前状态（只读；不修改投递记录）。
 	ListNotifications(ctx context.Context, userID string, limit int) ([]NotificationRecord, error)
+	// ListNotificationsPage 按用户做 keyset 分页读取（步骤 266）：排序固定
+	// created_at_ms DESC, id DESC；afterCreatedAt/afterID 为上一页最后一条的位置
+	// （零值表示第一页）；返回最多 limit 条（服务层以 limit+1 探测 has_more），并
+	// 为每条记录投影关联投递记录的当前状态。只读，不修改投递状态。
+	ListNotificationsPage(ctx context.Context, userID string, afterCreatedAt time.Time,
+		afterID string, limit int) ([]NotificationRecord, error)
 	// VerifiedEmail 返回用户最近一个已验证邮箱；没有时返回 found=false。
 	VerifiedEmail(ctx context.Context, userID string) (string, bool, error)
 	// Username 返回用户显示用户名。

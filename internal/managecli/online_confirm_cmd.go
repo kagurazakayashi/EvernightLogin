@@ -367,8 +367,10 @@ func (r *runner) readSecret(prompt string) (string, int) {
 		}
 		return string(raw), ExitOK
 	}
-	reader := bufio.NewReader(r.stdin)
-	line, err := reader.ReadString('\n')
+	if r.secretInput == nil {
+		r.secretInput = bufio.NewReader(r.stdin)
+	}
+	line, err := r.secretInput.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", r.fail("SECRET_INPUT_FAILED", ExitError, "读取秘密输入失败", nil)
 	}

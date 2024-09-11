@@ -156,6 +156,10 @@ type ListQuery struct {
 	OwnerType audit.ActorKind
 	OwnerID   string
 	Limit     int
+	// AfterCreatedAt/AfterID 是 keyset 分页位置（步骤 266）：由 DeliveryService.ListPage
+	// 从校验过的游标解码后写入；直接调用 Store.List 时留空表示第一页。
+	AfterCreatedAt time.Time
+	AfterID        string
 }
 
 // Store 是投递记录持久化契约。实现必须在 idempotency_key 上保证唯一约束，
