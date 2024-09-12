@@ -22,6 +22,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 )
 
@@ -30,6 +31,23 @@ const (
 	historyDefaultLimit = 20
 	historyMaxLimit     = 100
 )
+
+// HistorySearchField 是历史报告列表模糊搜索允许的字段白名单（仅结果显示名；
+// 不开放请求正文、失败原因、邮箱等非展示敏感内容）。
+type HistorySearchField string
+
+const (
+	// HistorySearchName 匹配报告显示名（字面子串，按方言大小写规则折叠）。
+	HistorySearchName HistorySearchField = "name"
+)
+
+// Valid 报告搜索字段是否在白名单内。
+func (f HistorySearchField) Valid() bool { return f == HistorySearchName }
+
+// DefaultHistorySearchFields 返回不指定字段时的默认搜索字段（报告名称）。
+func DefaultHistorySearchFields() []HistorySearchField {
+	return []HistorySearchField{HistorySearchName}
+}
 
 // HistoryListRequest 是历史报告列表请求。Caller 必须来自可信调用上下文；
 // 筛选字段为空表示不筛选，排序固定为创建时间倒序。
@@ -41,8 +59,41 @@ type HistoryListRequest struct {
 	BeforeCreatedAt time.Time
 	BeforeID        string
 	// Cursor 是服务端上一页返回的不透明稳定游标；与 BeforeCreatedAt/BeforeID
-	// 互斥。游标绑定 plan_id/state 筛选，不匹配会被拒绝。
+	// 互斥。游标绑定 plan_id/state/search 筛选，不匹配会被拒绝。
 	Cursor string
+	// Search 是可选的字面子串搜索（报告显示名，空表示不过滤）；在调用者可见范围
+	// 过滤之后执行，非法字段/超长文本返回 REQ_INVALID。
+	Search       string
+	SearchFields []HistorySearchField
+}
+
+// normalizeHistorySearch 规范化历史报告搜索文本与字段白名单。
+func normalizeHistorySearch(raw string, fields []HistorySearchField) (string, []HistorySearchField, error) {
+	text, err := search.NormalizeQuery(raw)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	if text == "" {
+		return "", nil, nil
+	}
+	if len(fields) == 0 {
+		return text, DefaultHistorySearchFields(), nil
+	}
+	seen := make(map[HistorySearchField]struct{}, len(fields))
+	normalized := make([]HistorySearchField, 0, len(fields))
+	for _, field := range fields {
+		value := HistorySearchField(strings.TrimSpace(string(field)))
+		if !value.Valid() {
+			return "", nil, fmt.Errorf("%w: 搜索字段 %q 不在允许列表内（仅支持 name）",
+				ErrInvalidRequest, field)
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return text, normalized, nil
 }
 
 // ReportHistoryView 是历史报告公开视图（受控元数据 + 产物可用性，无宿主路径）。
@@ -128,6 +179,10 @@ func (s *Service) HistoryList(ctx context.Context,
 	if request.State != "" && !validHistoryState(request.State) {
 		return HistoryListView{}, fmt.Errorf("%w: 历史状态筛选无效", ErrInvalidRequest)
 	}
+	searchText, searchFields, err := normalizeHistorySearch(request.Search, request.SearchFields)
+	if err != nil {
+		return HistoryListView{}, err
+	}
 	beforeAt := request.BeforeCreatedAt
 	beforeID := request.BeforeID
 	if beforeAt.IsZero() != (beforeID == "") {
@@ -139,7 +194,7 @@ func (s *Service) HistoryList(ctx context.Context,
 				ErrInvalidRequest)
 		}
 		cursorAt, cursorID, cursorErr := decodeHistoryCursor(request.Cursor,
-			request.PlanID, request.State)
+			request.PlanID, request.State, searchText)
 		if cursorErr != nil {
 			return HistoryListView{}, cursorErr
 		}
@@ -190,6 +245,7 @@ func (s *Service) HistoryList(ctx context.Context,
 		page, err := s.history.ListHistory(ctx, HistoryQuery{
 			Access: plan.access, PlanID: request.PlanID, State: request.State,
 			Owner: plan.owner, Limit: limit, BeforeCreatedAt: beforeAt, BeforeID: beforeID,
+			Search: searchText, SearchFields: searchFields,
 		})
 		if err != nil {
 			return HistoryListView{}, ErrStoreUnavailable
@@ -226,7 +282,7 @@ func (s *Service) HistoryList(ctx context.Context,
 	view := HistoryListView{Records: views, HasMore: hasMore, ScopeTrimmed: true}
 	if hasMore && len(records) > 0 {
 		nextCursor, cursorErr := encodeHistoryCursor(request.PlanID, request.State,
-			records[len(records)-1])
+			searchText, records[len(records)-1])
 		if cursorErr != nil {
 			return HistoryListView{}, cursorErr
 		}

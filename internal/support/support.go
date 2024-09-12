@@ -270,6 +270,11 @@ type EventRecord struct {
 }
 
 // CaseQuery 是求助单列表查询；服务对普通工作人员强制 AssigneeUserID=本人。
+//
+// Search 是已按用户名口径规范化（NFKC + 大小写折叠 + NFC）的字面搜索文本；
+// 空表示不搜索。CaseSearchField 白名单只允许编号与原因（标题等价文本），**不搜索**
+// 脱敏邮箱/真实用户名等可能泄露匹配存在性的隐藏字段。搜索与状态筛选、分页组合，
+// 且始终在 staffScope/Assignee 授权范围过滤之后执行。
 type CaseQuery struct {
 	AssigneeUserID string
 	// ApplicationID 非空时只返回该应用的工单；空表示系统/全局查询。
@@ -277,6 +282,42 @@ type CaseQuery struct {
 	Statuses      []CaseStatus
 	Limit         int
 	Offset        int
+	Search        string
+	SearchFields  []CaseSearchField
+}
+
+// CaseSearchField 是客服工单列表模糊搜索允许的字段白名单。
+type CaseSearchField string
+
+const (
+	// CaseSearchID 匹配工单编号（字面子串）。
+	CaseSearchID CaseSearchField = "id"
+	// CaseSearchReason 匹配原因/标题等价文本（字面子串，按方言大小写规则折叠）。
+	CaseSearchReason CaseSearchField = "reason"
+)
+
+// Valid 报告搜索字段是否在白名单内。
+func (f CaseSearchField) Valid() bool {
+	switch f {
+	case CaseSearchID, CaseSearchReason:
+		return true
+	default:
+		return false
+	}
+}
+
+// DefaultCaseSearchFields 返回不指定字段时的默认搜索字段（编号、原因）。
+func DefaultCaseSearchFields() []CaseSearchField {
+	return []CaseSearchField{CaseSearchID, CaseSearchReason}
+}
+
+// CaseListRequest 是求助单列表查询（状态筛选 + 可选有界字面搜索 + 分页）。
+type CaseListRequest struct {
+	Statuses     []CaseStatus
+	Search       string
+	SearchFields []CaseSearchField
+	Offset       int
+	Limit        int
 }
 
 // CaseUpdate 是一次条件变更（行版本 + 非终态），与处理历史在同一事务内写入。

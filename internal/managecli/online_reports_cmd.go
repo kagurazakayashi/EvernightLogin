@@ -19,8 +19,10 @@ import (
 // reportsCommandUsage 是 reports 组帮助。
 const reportsCommandUsage = `用法：
   loginctl reports history list [--limit 20] [--plan-id <id>] [--state <s>] \
+[--search <关键字>] [--search-fields name] \
 [--before-created-at RFC3339] [--before-id <id>] [--cursor <next_cursor>] <在线公共参数>
-  loginctl reports plans list [--limit 20] [--offset 0] <在线公共参数>
+  loginctl reports plans list [--limit 20] [--offset 0] [--search <关键字>] \
+[--search-fields name] <在线公共参数>
   loginctl reports history detail <report_id> <在线公共参数>
   loginctl reports download-token <report_id> --format html|csv|json|pdf|markdown \
 --confirm ISSUE-DOWNLOAD [--out <path|->] [--overwrite] <在线公共参数>
@@ -86,6 +88,7 @@ func (r *runner) runReportsHistory(args []string) int {
 func (r *runner) runReportsHistoryList(args []string) int {
 	defs := onlineFlagDefs(flagDef{name: "limit", value: true},
 		flagDef{name: "plan-id", value: true}, flagDef{name: "state", value: true},
+		flagDef{name: "search", value: true}, flagDef{name: "search-fields", value: true},
 		flagDef{name: "before-created-at", value: true}, flagDef{name: "before-id", value: true},
 		flagDef{name: "cursor", value: true})
 	values, positional, err := parseFlags(args, defs)
@@ -104,6 +107,8 @@ func (r *runner) runReportsHistoryList(args []string) int {
 	query.Set("limit", fmt.Sprintf("%d", limit))
 	setQuery(values, query, "plan-id", "plan_id")
 	setQuery(values, query, "state", "state")
+	setQuery(values, query, "search", "search")
+	setQuery(values, query, "search-fields", "search_fields")
 	setQuery(values, query, "before-created-at", "before_created_at")
 	setQuery(values, query, "before-id", "before_id")
 	setQuery(values, query, "cursor", "cursor")
@@ -151,7 +156,8 @@ func (r *runner) runReportsPlans(args []string) int {
 // runReportsPlansList 分页列出报告计划。
 func (r *runner) runReportsPlansList(args []string) int {
 	defs := onlineFlagDefs(flagDef{name: "limit", value: true},
-		flagDef{name: "offset", value: true})
+		flagDef{name: "offset", value: true}, flagDef{name: "search", value: true},
+		flagDef{name: "search-fields", value: true})
 	values, positional, err := parseFlags(args, defs)
 	if err != nil {
 		return r.flagError(err)
@@ -164,6 +170,8 @@ func (r *runner) runReportsPlansList(args []string) int {
 	if err := addPageQuery(values, query); err != nil {
 		return r.usage("%v", err)
 	}
+	setQuery(values, query, "search", "search")
+	setQuery(values, query, "search-fields", "search_fields")
 	return r.withOnline(values, func(target *onlineTarget) int {
 		reply, failure := target.doJSON(r.ctx, "GET", "/report-plans", query, nil)
 		if failure != nil {

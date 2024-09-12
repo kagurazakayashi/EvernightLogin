@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/support"
 )
@@ -128,6 +129,30 @@ LEFT JOIN users u ON u.id=c.target_user_id WHERE 1=1`)
 			args = append(args, string(status))
 		}
 		builder.WriteString(` AND c.status IN(` + strings.Join(placeholders, ",") + `)`)
+	}
+	if query.Search != "" {
+		pattern := search.ContainsPattern(query.Search)
+		if pattern != "" {
+			clauses := make([]string, 0, len(query.SearchFields))
+			for _, field := range query.SearchFields {
+				switch field {
+				case support.CaseSearchID:
+					clauses = append(clauses, `c.id LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				case support.CaseSearchReason:
+					clauses = append(clauses, `LOWER(c.reason) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				default:
+					// 服务层已按白名单校验；仓储再次 fail-closed，不生成未知列。
+					return nil, false, fmt.Errorf("%w: 搜索字段不在允许列表内",
+						support.ErrInvalidRequest)
+				}
+			}
+			if len(clauses) == 0 {
+				return nil, false, fmt.Errorf("%w: 搜索字段为空", support.ErrInvalidRequest)
+			}
+			builder.WriteString(` AND (` + strings.Join(clauses, ` OR `) + `)`)
+		}
 	}
 	builder.WriteString(` ORDER BY c.updated_at_ms DESC,c.id DESC LIMIT ? OFFSET ?`)
 	args = append(args, query.Limit+1, query.Offset)

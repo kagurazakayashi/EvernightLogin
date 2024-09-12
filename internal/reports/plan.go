@@ -29,6 +29,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 )
@@ -727,10 +728,14 @@ func (p *PlanService) List(ctx context.Context, caller account.Caller) ([]PlanVi
 
 // PlanListRequest 是报告计划列表分页请求（步骤 218）。Limit=0 使用默认 20，
 // 最大 100；Offset 上限 1_000_000。可见性由服务端逐计划重新授权后过滤。
+// Search 是可选的字面子串搜索（计划显示名，空表示不过滤），在可见范围过滤后
+// 执行，不改变可见性判定本身。
 type PlanListRequest struct {
-	Caller account.Caller
-	Limit  int
-	Offset int
+	Caller       account.Caller
+	Limit        int
+	Offset       int
+	Search       string
+	SearchFields []string
 }
 
 // PlanListResult 是报告计划分页结果；不返回伪造总数。
@@ -760,6 +765,34 @@ func (p *PlanService) ListPage(ctx context.Context,
 	all, err := p.List(ctx, request.Caller)
 	if err != nil {
 		return PlanListResult{}, err
+	}
+	// 搜索在可见范围（p.List 已按当前授权过滤）之后执行；只匹配计划显示名，
+	// 不改变可见性判定、不因搜索暴露不可见计划。
+	foldedSearch, err := search.NormalizeQuery(request.Search)
+	if err != nil {
+		return PlanListResult{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	searchFields := request.SearchFields
+	if len(searchFields) > 0 {
+		for _, field := range searchFields {
+			if strings.TrimSpace(field) != "name" {
+				return PlanListResult{}, fmt.Errorf("%w: 搜索字段 %q 不在允许列表内（仅支持 name）",
+					ErrInvalidRequest, field)
+			}
+		}
+	}
+	if foldedSearch != "" {
+		filtered := make([]PlanView, 0, len(all))
+		for _, plan := range all {
+			foldedName, foldErr := search.NormalizeQuery(plan.Name)
+			if foldErr != nil {
+				continue
+			}
+			if strings.Contains(foldedName, foldedSearch) {
+				filtered = append(filtered, plan)
+			}
+		}
+		all = filtered
 	}
 	result := PlanListResult{Limit: limit, Offset: request.Offset,
 		NextOffset: request.Offset}

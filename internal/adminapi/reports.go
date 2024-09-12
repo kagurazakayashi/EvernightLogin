@@ -11,6 +11,22 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/internal/reports"
 )
 
+// parseSearchFieldList 解析逗号分隔的搜索字段白名单；空表示使用领域默认字段。
+// 具体字段合法性由领域层按白名单复核（未知字段 REQ_INVALID）。
+func parseSearchFieldList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	fields := make([]string, 0, 2)
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			fields = append(fields, value)
+		}
+	}
+	return fields
+}
+
 // reportHistoryDTO 是历史报告公开投影：受控元数据与产物可用性，不含宿主路径。
 type reportHistoryDTO struct {
 	ID            string        `json:"id"`
@@ -272,9 +288,23 @@ func (s *Server) handleReportHistoryList(c *callContext) error {
 	if err != nil {
 		return err
 	}
+	// 步骤 263：报告名称有界字面搜索；字段白名单与长度由领域层复核。
+	searchText, err := queryString(c.request, "search", 256)
+	if err != nil {
+		return err
+	}
+	rawSearchFields, err := queryString(c.request, "search_fields", 256)
+	if err != nil {
+		return err
+	}
+	searchFields := make([]reports.HistorySearchField, 0, 2)
+	for _, field := range parseSearchFieldList(rawSearchFields) {
+		searchFields = append(searchFields, reports.HistorySearchField(field))
+	}
 	result, err := s.reports.HistoryList(c.request.Context(), reports.HistoryListRequest{
 		Caller: c.caller, PlanID: planID, State: state, Limit: limit,
-		BeforeCreatedAt: beforeCreatedAt, BeforeID: beforeID, Cursor: cursor})
+		BeforeCreatedAt: beforeCreatedAt, BeforeID: beforeID, Cursor: cursor,
+		Search: searchText, SearchFields: searchFields})
 	if err != nil {
 		return s.reportProblem(err)
 	}
@@ -516,8 +546,18 @@ func (s *Server) handlePlanList(c *callContext) error {
 	if err != nil {
 		return err
 	}
+	// 步骤 263：计划显示名有界字面搜索（可见范围过滤后执行）。
+	searchText, err := queryString(c.request, "search", 256)
+	if err != nil {
+		return err
+	}
+	rawSearchFields, err := queryString(c.request, "search_fields", 256)
+	if err != nil {
+		return err
+	}
 	result, err := s.plans.ListPage(c.request.Context(), reports.PlanListRequest{
-		Caller: c.caller, Limit: limit, Offset: offset})
+		Caller: c.caller, Limit: limit, Offset: offset,
+		Search: searchText, SearchFields: parseSearchFieldList(rawSearchFields)})
 	if err != nil {
 		return s.reportProblem(err)
 	}

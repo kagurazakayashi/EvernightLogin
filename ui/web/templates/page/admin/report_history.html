@@ -9,6 +9,8 @@
 {{if .Data.loadFailed}}{{template "component.state" (dict "state" "error" "title" (t "page.admin.reports.common.load_failed") "description" (t "page.admin.reports.history.load_failed_help"))}}
 {{else}}
 <form method="get" action="{{route "admin.reports"}}">
+  <label class="ln-field__label" for="filter-search">{{t "common.search.label"}}</label>
+  <input class="ln-input" type="search" id="filter-search" name="search" value="{{.Data.search}}" maxlength="64" placeholder="{{t "page.admin.reports.history.search_placeholder"}}">
   <label class="ln-field__label" for="filter-state">{{t "common.label.status"}}</label>
   <select class="ln-input" id="filter-state" name="state"><option value="">{{t "common.state.all"}}</option>
   {{range .Data.stateOptions}}<option value="{{.}}"{{if eq $.Data.stateFilter .}} selected{{end}}>{{t (printf "page.admin.reports.state.%s" .)}}</option>{{end}}</select>

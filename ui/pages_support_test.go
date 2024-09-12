@@ -36,6 +36,7 @@ type fakeSupportBackend struct {
 	approval      login.UISupportApprovalView
 	execution     login.UISupportExecutionView
 	executeErr    error
+	hasMore       bool
 	lastReason    string
 	lastStatus    string
 	lastReference string
@@ -61,7 +62,7 @@ func (f *fakeSupportBackend) ListCases(_ context.Context, _ string,
 	if err := f.fail("list"); err != nil {
 		return login.UISupportCasePage{}, err
 	}
-	return login.UISupportCasePage{Cases: f.cases, NextOffset: 20}, nil
+	return login.UISupportCasePage{Cases: f.cases, HasMore: f.hasMore, NextOffset: 20}, nil
 }
 
 func (f *fakeSupportBackend) GetCase(context.Context, string,

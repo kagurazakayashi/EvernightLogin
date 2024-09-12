@@ -245,8 +245,18 @@ func (s *Service) GetCase(ctx context.Context, caller Caller, caseID string) (Ca
 
 // ListCases 分页列出分配给自己的求助单；普通工作人员不能列出他人求助单。
 // 系统调用者可按查询条件列出（供受控管理装配），但同样只返回脱敏视图。
+// 该入口保持既有签名；带搜索的调用方使用 ListCasesPage。
 func (s *Service) ListCases(ctx context.Context, caller Caller, statuses []CaseStatus, offset, limit int) (CasePage, error) {
+	return s.ListCasesPage(ctx, caller, CaseListRequest{Statuses: statuses, Offset: offset, Limit: limit})
+}
+
+// ListCasesPage 分页列出求助单，支持可选的有界字面搜索（编号/原因）。普通工作人员
+// 仍强制 AssigneeUserID=本人；搜索在授权范围过滤之后执行，不搜索脱敏邮箱/用户名，
+// 避免向无权调用者泄露隐藏字段的匹配存在性。搜索文本/字段非法返回 REQ_INVALID。
+func (s *Service) ListCasesPage(ctx context.Context, caller Caller, request CaseListRequest) (CasePage, error) {
 	ctx = normalizeContext(ctx)
+	statuses := request.Statuses
+	offset, limit := request.Offset, request.Limit
 	if !validStatusFilter(statuses) {
 		return CasePage{}, fmt.Errorf("%w: 状态筛选含未知状态", ErrInvalidRequest)
 	}
@@ -259,7 +269,12 @@ func (s *Service) ListCases(ctx context.Context, caller Caller, statuses []CaseS
 	if limit > MaxPageSize {
 		limit = MaxPageSize
 	}
-	query := CaseQuery{Statuses: statuses, Limit: limit, Offset: offset}
+	searchText, searchFields, err := normalizeCaseSearch(request.Search, request.SearchFields)
+	if err != nil {
+		return CasePage{}, err
+	}
+	query := CaseQuery{Statuses: statuses, Limit: limit, Offset: offset,
+		Search: searchText, SearchFields: searchFields}
 	if caller.IsUser() {
 		if _, err := s.staffScope(ctx, caller.actor.ID, PermissionCasesRead); err != nil {
 			s.recordFailure(ctx, caller.actor, ActionCaseDenied, "support_case", "", "list_denied", string(CodeOf(err)), "")

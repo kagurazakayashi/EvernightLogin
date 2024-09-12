@@ -108,7 +108,10 @@ func (h *HistoryRecorder) ListHistory(ctx context.Context,
 	storeQuery := HistoryQuery{
 		Access: toAccess(query.Access), PlanID: query.PlanID, State: query.State,
 		Limit: query.Limit, BeforeCreatedAt: query.BeforeCreatedAt,
-		BeforeID: query.BeforeID,
+		BeforeID: query.BeforeID, Search: query.Search,
+	}
+	for _, field := range query.SearchFields {
+		storeQuery.SearchFields = append(storeQuery.SearchFields, string(field))
 	}
 	if query.Owner != nil {
 		storeQuery.OwnerType = string(query.Owner.Type)

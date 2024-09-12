@@ -415,7 +415,19 @@ func buildAdminDomainRoutes(managed *ManagedServices, pages *Pages, gate *Securi
 			if status := strings.TrimSpace(request.URL.Query().Get("status")); status != "" {
 				statuses = append(statuses, support.CaseStatus(status))
 			}
-			page, err := managed.Support.ListCases(ctx, supportCaller, statuses, offset, limit)
+			// 步骤 263：工单编号/原因有界字面搜索；搜索字段白名单由 support 领域复核
+			// （只允许 id/reason，不搜索脱敏邮箱/用户名）。
+			searchText, searchFieldNames, searchErr := parseAdminDomainSearch(request)
+			if searchErr != nil {
+				return nil, searchErr
+			}
+			caseSearchFields := make([]support.CaseSearchField, 0, len(searchFieldNames))
+			for _, field := range searchFieldNames {
+				caseSearchFields = append(caseSearchFields, support.CaseSearchField(field))
+			}
+			page, err := managed.Support.ListCasesPage(ctx, supportCaller, support.CaseListRequest{
+				Statuses: statuses, Search: searchText, SearchFields: caseSearchFields,
+				Offset: offset, Limit: limit})
 			if err != nil {
 				return nil, adminDomainError(err, func(e error) string { return string(support.CodeOf(e)) })
 			}

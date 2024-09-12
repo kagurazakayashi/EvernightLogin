@@ -186,7 +186,8 @@ func (a *SupportAdapter) ListCases(ctx context.Context, staffUserID string,
 		}
 		statuses = append(statuses, status)
 	}
-	page, err := a.opts.Cases.ListCases(ctx, caller, statuses, query.Offset, limit)
+	page, err := a.opts.Cases.ListCasesPage(ctx, caller, support.CaseListRequest{
+		Statuses: statuses, Search: query.Search, Offset: query.Offset, Limit: limit})
 	if err != nil {
 		return ui.UISupportCasePage{}, supportMapError(err)
 	}

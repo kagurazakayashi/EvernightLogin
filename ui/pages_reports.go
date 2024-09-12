@@ -167,6 +167,8 @@ type UIReportHistoryQuery struct {
 	BeforeID        string
 	// Cursor 是服务端上一页返回的稳定游标；与 Before* 互斥。
 	Cursor string
+	// Search 是可选的字面子串搜索（报告显示名；空不过滤）。
+	Search string
 }
 
 // UIReportHistoryEntry 是历史列表条目。
@@ -670,6 +672,7 @@ func (h *reportsPageHandlers) historyList(ctx context.Context, request *http.Req
 	query := UIReportHistoryQuery{
 		PlanID: strings.TrimSpace(values.Get("plan_id")),
 		State:  strings.TrimSpace(values.Get("state")),
+		Search: strings.TrimSpace(values.Get("search")),
 		Limit:  20,
 	}
 	if rawLimit := strings.TrimSpace(values.Get("limit")); rawLimit != "" {
@@ -682,7 +685,9 @@ func (h *reportsPageHandlers) historyList(ctx context.Context, request *http.Req
 		return UIPageOutcome{StatusCode: http.StatusBadRequest, Data: data,
 			ErrorSummary: reportsText("page.admin.reports.history.filter_invalid")}, nil
 	}
-	data["filter"] = map[string]string{"plan_id": query.PlanID, "state": query.State}
+	data["filter"] = map[string]string{"plan_id": query.PlanID, "state": query.State,
+		"search": query.Search}
+	data["search"] = query.Search
 	cursor := strings.TrimSpace(values.Get("cursor"))
 	if cursor != "" {
 		if len(cursor) > 4096 || strings.TrimSpace(values.Get("before")) != "" {
@@ -716,6 +721,11 @@ func (h *reportsPageHandlers) historyList(ctx context.Context, request *http.Req
 		if query.PlanID != "" {
 			more.Set("plan_id", query.PlanID)
 		}
+		// 步骤 263 审计 LOW-1：翻页必须携带搜索条件，否则第二页退化为未过滤
+		// （游标指纹也会因 search 不同而拒绝）。
+		if query.Search != "" {
+			more.Set("search", query.Search)
+		}
 		data["moreURL"] = routeURL(page, "admin.reports") + "?" + more.Encode()
 	} else if result.HasMore && len(result.Records) > 0 {
 		last := result.Records[len(result.Records)-1]
@@ -727,6 +737,9 @@ func (h *reportsPageHandlers) historyList(ctx context.Context, request *http.Req
 		}
 		if query.PlanID != "" {
 			more.Set("plan_id", query.PlanID)
+		}
+		if query.Search != "" {
+			more.Set("search", query.Search)
 		}
 		data["moreURL"] = routeURL(page, "admin.reports") + "?" + more.Encode()
 	}

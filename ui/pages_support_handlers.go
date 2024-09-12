@@ -71,7 +71,8 @@ func (h *supportPageHandlers) supportCapabilities(ctx context.Context,
 // list 渲染当前工作人员被指派的求助单（状态筛选 + HasMore 分页）。
 func (h *supportPageHandlers) list(ctx context.Context, request *http.Request,
 	page UIPageContext) (UIPageOutcome, error) {
-	query := UISupportCaseQuery{Status: strings.TrimSpace(request.URL.Query().Get("status")), Limit: 20}
+	query := UISupportCaseQuery{Status: strings.TrimSpace(request.URL.Query().Get("status")),
+		Search: strings.TrimSpace(request.URL.Query().Get("search")), Limit: 20}
 	offset, ok := supportParseOffset(request.URL.Query().Get("offset"))
 	if !ok {
 		return UIPageOutcome{StatusCode: http.StatusBadRequest,
@@ -83,10 +84,10 @@ func (h *supportPageHandlers) list(ctx context.Context, request *http.Request,
 		return supportErrorOutcome(err, nil, "page.support.cases.load_failed"), nil
 	}
 	caps := h.supportCapabilities(ctx, page)
-	filtered := query.Status != ""
+	filtered := query.Status != "" || query.Search != ""
 	return UIPageOutcome{Data: map[string]any{
 		"cases": result.Cases, "hasMore": result.HasMore, "nextOffset": result.NextOffset,
-		"status": query.Status, "offset": offset, "filtered": filtered,
+		"status": query.Status, "search": query.Search, "offset": offset, "filtered": filtered,
 		"capabilities": caps,
 	}}, nil
 }

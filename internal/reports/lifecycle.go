@@ -101,7 +101,7 @@ type AccessScope struct {
 }
 
 // HistoryQuery 是报告历史列表查询。排序固定为创建时间倒序 + 编号倒序；分页用
-// 游标。State/PlanID/Owner 为空表示不筛选。
+// 游标。State/PlanID/Owner 为空表示不筛选；Search 是已规范化的显示名字面搜索。
 type HistoryQuery struct {
 	Access          AccessScope
 	PlanID          string
@@ -110,6 +110,8 @@ type HistoryQuery struct {
 	Limit           int
 	BeforeCreatedAt time.Time
 	BeforeID        string
+	Search          string
+	SearchFields    []HistorySearchField
 }
 
 // HistoryPage 是报告历史列表页；HasMore 表示还有下一页（不伪造总数）。

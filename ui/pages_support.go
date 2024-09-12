@@ -99,6 +99,9 @@ type UISupportCaseQuery struct {
 	Status string
 	Limit  int
 	Offset int
+	// Search 是可选的字面子串搜索（工单编号/原因；空不过滤）。服务端在授权范围
+	// 过滤后执行，不搜索脱敏邮箱/用户名。
+	Search string
 }
 
 // UISupportCaseView 是求助单公开脱敏视图（不含电话/完整邮箱/秘密）。

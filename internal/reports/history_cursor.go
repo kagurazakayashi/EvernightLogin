@@ -1,8 +1,8 @@
 package reports
 
 // 报告历史稳定游标（步骤 218）。历史列表排序为 created_at_ms DESC,id DESC；
-// 游标位置用最后一条记录的时间与编号，并把 plan_id/state 筛选摘要绑定进游标：
-// 换筛选继续翻页会被拒绝（REQ_INVALID），避免返回语义不一致的下一页。
+// 游标位置用最后一条记录的时间与编号，并把 plan_id/state/search 筛选摘要绑定进
+// 游标：换筛选继续翻页会被拒绝（REQ_INVALID），避免返回语义不一致的下一页。
 
 import (
 	"crypto/sha256"
@@ -26,12 +26,14 @@ type historyCursorEnvelope struct {
 	ReportID  string `json:"id"`
 }
 
-// historyFilterFingerprint 计算历史列表筛选摘要；只包含调用方可控筛选。
-func historyFilterFingerprint(planID, state string) string {
+// historyFilterFingerprint 计算历史列表筛选摘要；只包含调用方可控筛选
+// （plan_id/state/规范化后的搜索文本），搜索条件变化后旧游标必须失效。
+func historyFilterFingerprint(planID, state, searchText string) string {
 	normalized := struct {
 		PlanID string `json:"plan_id"`
 		State  string `json:"state"`
-	}{PlanID: planID, State: state}
+		Search string `json:"search"`
+	}{PlanID: planID, State: state, Search: searchText}
 	encoded, err := json.Marshal(normalized)
 	if err != nil {
 		return "invalid"
@@ -41,12 +43,13 @@ func historyFilterFingerprint(planID, state string) string {
 }
 
 // encodeHistoryCursor 生成下一页游标；只在 HasMore 时调用。
-func encodeHistoryCursor(planID, state string, record HistoryRecord) (string, error) {
+func encodeHistoryCursor(planID, state, searchText string,
+	record HistoryRecord) (string, error) {
 	if record.ReportID == "" {
 		return "", fmt.Errorf("%w: 游标位置缺少报告编号", ErrInvalidRequest)
 	}
 	envelope := historyCursorEnvelope{Version: historyCursorVersion,
-		Filter:    historyFilterFingerprint(planID, state),
+		Filter:    historyFilterFingerprint(planID, state, searchText),
 		CreatedMS: record.CreatedAt.UTC().UnixMilli(), ReportID: record.ReportID}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
@@ -56,7 +59,7 @@ func encodeHistoryCursor(planID, state string, record HistoryRecord) (string, er
 }
 
 // decodeHistoryCursor 校验并解析游标；格式/版本/筛选不匹配一律 ErrInvalidRequest。
-func decodeHistoryCursor(cursor, planID, state string) (time.Time, string, error) {
+func decodeHistoryCursor(cursor, planID, state, searchText string) (time.Time, string, error) {
 	if len(cursor) > maxHistoryCursorSize {
 		return time.Time{}, "", fmt.Errorf("%w: 游标过长", ErrInvalidRequest)
 	}
@@ -71,7 +74,7 @@ func decodeHistoryCursor(cursor, planID, state string) (time.Time, string, error
 	if envelope.Version != historyCursorVersion {
 		return time.Time{}, "", fmt.Errorf("%w: 游标版本不受支持", ErrInvalidRequest)
 	}
-	if envelope.Filter != historyFilterFingerprint(planID, state) {
+	if envelope.Filter != historyFilterFingerprint(planID, state, searchText) {
 		return time.Time{}, "", fmt.Errorf("%w: 游标与当前筛选条件不匹配", ErrInvalidRequest)
 	}
 	if envelope.ReportID == "" || envelope.CreatedMS <= 0 {

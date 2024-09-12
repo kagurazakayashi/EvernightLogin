@@ -25,6 +25,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reports"
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	storagesqlite "github.com/kagurazakayashi/EvernightLogin/internal/storage/sqlite"
 )
 
@@ -815,6 +816,10 @@ type HistoryQuery struct {
 	Limit           int
 	BeforeCreatedAt time.Time
 	BeforeID        string
+	// Search 是已规范化的报告显示名字面搜索；SearchFields 是其字段白名单
+	// （当前仅 "name"）。
+	Search       string
+	SearchFields []string
 }
 
 // HistoryPage 是历史列表页；HasMore 表示还有下一页（不伪造总数）。
@@ -854,6 +859,27 @@ func (s *Store) ListHistory(ctx context.Context, query HistoryQuery) (HistoryPag
 		parts = append(parts, "(created_at_ms < ? OR (created_at_ms = ? AND id < ?))")
 		moment := timeToMS(query.BeforeCreatedAt)
 		args = append(args, moment, moment, query.BeforeID)
+	}
+	if query.Search != "" {
+		pattern := search.ContainsPattern(query.Search)
+		if pattern != "" {
+			clauses := make([]string, 0, len(query.SearchFields))
+			for _, field := range query.SearchFields {
+				switch field {
+				case "name":
+					clauses = append(clauses, `LOWER(name) LIKE ? ESCAPE '!'`)
+					args = append(args, pattern)
+				default:
+					// 服务层已按白名单校验；仓储再次 fail-closed，不生成未知列。
+					return HistoryPage{}, fmt.Errorf("%w: 搜索字段不在允许列表内",
+						reports.ErrInvalidRequest)
+				}
+			}
+			if len(clauses) == 0 {
+				return HistoryPage{}, fmt.Errorf("%w: 搜索字段为空", reports.ErrInvalidRequest)
+			}
+			parts = append(parts, `(`+strings.Join(clauses, ` OR `)+`)`)
+		}
 	}
 	args = append(args, conditionArgs...)
 	limit := clampLimit(query.Limit)

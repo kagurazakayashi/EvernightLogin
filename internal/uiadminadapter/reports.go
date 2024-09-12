@@ -356,6 +356,7 @@ func (a *ReportsAdapter) ListHistory(ctx context.Context, userID string,
 		Caller: caller, PlanID: strings.TrimSpace(query.PlanID),
 		State: strings.TrimSpace(query.State), Limit: query.Limit,
 		BeforeCreatedAt: query.BeforeCreatedAt, BeforeID: query.BeforeID,
+		Search: strings.TrimSpace(query.Search),
 		Cursor: strings.TrimSpace(query.Cursor),
 	})
 	if err != nil {

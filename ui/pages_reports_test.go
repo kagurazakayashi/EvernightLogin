@@ -40,6 +40,8 @@ type fakeReportsBackend struct {
 	lastReason  string
 	lastFormat  string
 	lastVersion int64
+	// lastHistoryQuery 记录最近一次历史列表查询（步骤 263 搜索翻页断言）。
+	lastHistoryQuery login.UIReportHistoryQuery
 }
 
 // fail 按方法名返回配置的稳定错误。
@@ -126,8 +128,9 @@ func (f *fakeReportsBackend) DeletePlan(_ context.Context, _, _, reason,
 	return nil
 }
 
-func (f *fakeReportsBackend) ListHistory(context.Context, string,
-	login.UIReportHistoryQuery) (login.UIReportHistoryPage, error) {
+func (f *fakeReportsBackend) ListHistory(_ context.Context, _ string,
+	query login.UIReportHistoryQuery) (login.UIReportHistoryPage, error) {
+	f.lastHistoryQuery = query
 	if err := f.fail("ListHistory"); err != nil {
 		return login.UIReportHistoryPage{}, err
 	}

@@ -12,13 +12,28 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kagurazakayashi/EvernightLogin/internal/search"
 	"github.com/kagurazakayashi/EvernightLogin/internal/stats"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 )
+
+// fakeHistorySearchMatches 是历史替身对搜索条件的等价过滤：只匹配显示名，
+// 与生产 SQLite 仓储的名称 LIKE 语义一致（测试替身不得忽略新筛选条件）。
+func fakeHistorySearchMatches(record HistoryRecord, searchText string) bool {
+	if searchText == "" {
+		return true
+	}
+	folded, err := search.NormalizeQuery(record.Name)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(folded, searchText)
+}
 
 // fakeHistoryStore 是 reports.HistoryStore 的内存替身：验证服务层回源/授权/清理
 // 语义。真实 SQLite 行为由 internal/reports/sqlite 的适配器测试覆盖。
@@ -96,6 +111,9 @@ func (f *fakeHistoryStore) ListHistory(_ context.Context,
 			continue
 		}
 		if query.Owner != nil && record.Owner != *query.Owner {
+			continue
+		}
+		if !fakeHistorySearchMatches(record, query.Search) {
 			continue
 		}
 		if !query.BeforeCreatedAt.IsZero() {

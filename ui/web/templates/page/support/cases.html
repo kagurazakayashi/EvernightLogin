@@ -6,7 +6,12 @@
 </div>
 <h1 tabindex="-1">{{t "page.support.cases.title"}}</h1>
 <p class="ln-meta">{{t "page.support.cases.description"}}</p>
-<form method="get" action="{{route "support.cases"}}">
+<form method="get" action="{{route "support.cases"}}" data-ln-module="list-search"
+      data-ln-loading="{{t "common.search.loading"}}" data-ln-updated="{{t "common.search.updated"}}"
+      data-ln-cancelled="{{t "common.search.cancelled"}}" data-ln-ignored="{{t "common.search.ignored"}}"
+      data-ln-failed="{{t "common.search.failed"}}">
+  <label class="ln-field__label" for="cases-search">{{t "common.search.label"}}</label>
+  <input class="ln-input" type="search" id="cases-search" name="search" value="{{.Data.search}}" maxlength="64" placeholder="{{t "page.support.cases.search_placeholder"}}">
   <label class="ln-field__label" for="cases-status">{{t "page.support.cases.status_filter"}}</label>
   <select class="ln-input" id="cases-status" name="status">
     <option value="">{{t "common.state.all"}}</option>
@@ -18,6 +23,7 @@
   </select>
   {{template "component.button" (dict "label" (t "page.support.cases.apply_filter") "type" "submit" "variant" "secondary")}}
 </form>
+<p class="ln-meta" data-ln-list-status aria-live="polite">{{t "page.support.cases.search_hint"}}</p>
 <p class="ln-meta">{{t "page.support.cases.scope_hint"}}</p>
 <table class="ln-table">
   <caption>{{t "page.support.cases.table_caption"}}</caption>
@@ -38,7 +44,7 @@
     <td><a href="{{route "support.case_detail"}}?case_id={{.ID}}">{{t "page.support.cases.open"}}</a></td>
   </tr>{{else}}<tr><td colspan="6">{{if .Data.filtered}}{{t "page.support.cases.no_results"}}{{else}}{{t "page.support.cases.empty"}}{{end}}</td></tr>{{end}}</tbody>
 </table>
-{{if .Data.hasMore}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}"><a href="{{route "support.cases"}}?status={{.Data.status}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></nav>{{else}}<p class="ln-meta">{{t "common.pagination.end"}}</p>{{end}}
+{{if .Data.hasMore}}<nav class="ln-pagination" aria-label="{{t "common.label.pagination"}}"><a href="{{route "support.cases"}}?status={{.Data.status}}&search={{urlquery .Data.search}}&offset={{.Data.nextOffset}}">{{t "common.action.next"}}</a></nav>{{else}}<p class="ln-meta">{{t "common.pagination.end"}}</p>{{end}}
 {{if .Data.capabilities.CreateCase}}<p><a href="{{route "support.case_create"}}">{{t "page.support.cases.create"}}</a></p>{{else}}<p class="ln-meta">{{t "page.support.cases.create_denied"}}</p>{{end}}
 <p class="ln-meta">{{t "page.support.cases.history_note"}}</p>
 {{end}}
