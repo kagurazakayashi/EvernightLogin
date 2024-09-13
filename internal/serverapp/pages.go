@@ -330,16 +330,26 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		Batches:     managed.Batch,
 		Authorize:   managed.Checker.authorizePageAction,
 		Diagnostics: newDiagnosticsCollector(deps, func() string { return "running" }),
+		Tasks:       managed.Tasks,
 		Now:         deps.Now,
 		Audit:       deps.Audit,
 		Logger:      logger,
+		// 步骤 258：管理页直接改名能力（页面处理器取得会话秘密后经本桥接调用
+		// 宿主门面；未装配时为 nil，页面入口 fail-closed）。
+		DirectRename: newPageDirectRenameBridge(deps.DirectManagement, managed),
 	})
 	if adminErr != nil {
 		return nil, fmt.Errorf("构造用户管理页适配器失败: %w", adminErr)
 	}
 	webOptions.PageAdmin = &ui.UIPageAdminOptions{Backend: adminAdapter,
 		Diagnostics: &ui.UIPageAdminDiagnosticsOptions{Backend: adminAdapter},
+		Tasks:       &ui.UIPageAdminTasksOptions{Backend: adminAdapter},
 		Validity:    adminAdapter}
+	if deps.DirectManagement != nil && services != nil && services.Sessions != nil {
+		webOptions.PageAdmin.ManagementSession = func(request *http.Request) (string, bool) {
+			return services.Sessions.SessionSecretFromRequest(request)
+		}
+	}
 	if settingsBackend, settingsErr := newSettingsSettingsPageBackend(deps, managed); settingsErr != nil {
 		return nil, fmt.Errorf("构造配置设置页适配器失败: %w", settingsErr)
 	} else if settingsBackend != nil {

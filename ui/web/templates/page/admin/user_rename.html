@@ -1,0 +1,26 @@
+{{define "page-title"}}{{t "page.admin.users.rename_title"}}{{end}}
+{{define "content"}}
+{{if .ErrorSummary}}{{template "component.banner" (dict "tone" "error" "message" .ErrorSummary)}}{{end}}
+<dl>
+  <dt>{{t "page.account.profile.stable_id"}}</dt><dd><code>{{.Data.user.UserID}}</code></dd>
+  <dt>{{t "page.admin.users.rename_current"}}</dt><dd><code>{{.Data.user.Username}}</code></dd>
+  <dt>{{t "page.admin.users.rename_scope"}}</dt><dd>{{t "page.admin.users.rename_shared_account"}}</dd>
+</dl>
+{{if .Data.canRename}}
+<form method="post" action="{{route "admin.user_rename.submit"}}" data-ln-module="async-form" novalidate>
+  {{csrf_field}}
+  <input type="hidden" name="user_id" value="{{.Data.user.UserID}}">
+  <input type="hidden" name="expected_row_version" value="{{.Data.expectedVersion}}">
+  {{if .Data.challengeID}}<input type="hidden" name="challenge_id" value="{{.Data.challengeID}}">{{end}}
+  {{template "component.field" (dict "id" "rename-new-username" "name" "new_username" "label" (t "page.admin.users.rename_new_username") "value" .Data.newUsername "required" true "help" (t "page.admin.users.rename_new_username_help"))}}
+  {{template "component.field" (dict "id" "rename-reason" "name" "reason" "label" (t "page.admin.users.rename_reason") "value" .Data.reason "required" true "help" (t "page.admin.users.rename_reason_help"))}}
+  {{template "component.field" (dict "id" "rename-password" "name" "password" "label" (t "page.admin.users.rename_password") "type" "password" "value" "" "required" true "autocomplete" "current-password" "help" (t "page.admin.users.rename_secret_help"))}}
+  {{template "component.field" (dict "id" "rename-totp" "name" "totp_code" "label" (t "page.admin.users.rename_totp") "value" "" "autocomplete" "one-time-code" "help" (t "page.admin.users.rename_totp_help"))}}
+  <p class="ln-meta">{{t "page.admin.users.rename_proof_note"}}</p>
+  <div class="ln-actions">{{template "component.button" (dict "label" (t "page.admin.users.rename_submit") "variant" "primary" "type" "submit")}}</div>
+</form>
+{{else}}
+<p class="ln-meta">{{t "page.admin.users.rename_no_permission"}}</p>
+{{end}}
+<p><a href="{{route "admin.user_detail"}}?user_id={{.Data.user.UserID}}">{{t "common.action.back"}}</a></p>
+{{end}}

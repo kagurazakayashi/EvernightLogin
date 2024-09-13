@@ -15,6 +15,7 @@ import (
 	"time"
 
 	login "github.com/kagurazakayashi/EvernightLogin"
+	ui "github.com/kagurazakayashi/EvernightLogin/ui"
 )
 
 type fakeAdminBackend struct {
@@ -31,6 +32,22 @@ type fakeAdminBackend struct {
 	lastUserQuery login.UIAdminUserQuery
 	// lastGroupQuery 记录最近一次用户组列表查询。
 	lastGroupQuery login.UIAdminGroupQuery
+	// 步骤 258：直接改名页面后端替身状态（不回显秘密/证明）。
+	canChangeUsername      bool
+	directRenameCalls      []string
+	lastRenameSecret       string
+	lastRenameAdmin        string
+	lastRenameTarget       string
+	lastRenameNew          string
+	lastRenameChallenge    string
+	lastRenamePassword     string
+	lastRenameTOTP         string
+	lastRenameVersion      int64
+	lastRenameReason       string
+	lastRenameProof        string
+	directRenameBeginErr   error
+	directRenameConfirmErr error
+	directRenameApplyErr   error
 }
 
 func (f *fakeAdminBackend) fail() error {
@@ -143,6 +160,54 @@ func (f *fakeAdminBackend) ListGroups(_ context.Context, _ string,
 		return login.UIAdminGroupPage{}, err
 	}
 	return login.UIAdminGroupPage{Groups: f.groups}, nil
+}
+
+// ===== 步骤 258：直接改名页面后端替身 =====
+
+func (f *fakeAdminBackend) CanChangeUsername(context.Context, string) (bool, error) {
+	return f.canChangeUsername, nil
+}
+
+func (f *fakeAdminBackend) BeginDirectUsernameChange(_ context.Context, adminID, secret,
+	targetUserID, newUsername, _ string) (ui.UIDirectRenameChallenge, error) {
+	f.directRenameCalls = append(f.directRenameCalls, "begin")
+	f.lastRenameSecret, f.lastRenameAdmin = secret, adminID
+	f.lastRenameTarget, f.lastRenameNew = targetUserID, newUsername
+	if f.directRenameConfirmErr != nil && f.directRenameBeginErr == nil {
+		// 让 MFA 场景可经 begin 后 confirm 拒绝。
+	}
+	if f.directRenameBeginErr != nil {
+		return ui.UIDirectRenameChallenge{}, f.directRenameBeginErr
+	}
+	return ui.UIDirectRenameChallenge{ChallengeID: "chl_direct_1",
+		TargetUserID: targetUserID, RequiredStrength: "strong"}, nil
+}
+
+func (f *fakeAdminBackend) ConfirmDirectUsernameChange(_ context.Context, adminID, secret,
+	challengeID, password, totpCode, _ string) (ui.UIDirectRenameGrant, error) {
+	f.directRenameCalls = append(f.directRenameCalls, "confirm")
+	f.lastRenameSecret, f.lastRenameAdmin = secret, adminID
+	f.lastRenameChallenge, f.lastRenamePassword, f.lastRenameTOTP = challengeID, password, totpCode
+	if f.directRenameConfirmErr != nil {
+		return ui.UIDirectRenameGrant{}, f.directRenameConfirmErr
+	}
+	return ui.UIDirectRenameGrant{ProofToken: "proof-token-page-258",
+		ExpiresAt: time.Now().Add(time.Minute)}, nil
+}
+
+func (f *fakeAdminBackend) ApplyDirectUsernameChange(_ context.Context, adminID, secret,
+	targetUserID, newUsername string, expectedRowVersion int64, reason, proofToken,
+	_ string) (login.UIAdminUserView, error) {
+	f.directRenameCalls = append(f.directRenameCalls, "apply")
+	f.lastRenameSecret, f.lastRenameAdmin = secret, adminID
+	f.lastRenameTarget, f.lastRenameNew = targetUserID, newUsername
+	f.lastRenameVersion, f.lastRenameReason = expectedRowVersion, reason
+	f.lastRenameProof = proofToken
+	if f.directRenameApplyErr != nil {
+		return login.UIAdminUserView{}, f.directRenameApplyErr
+	}
+	return login.UIAdminUserView{UserID: targetUserID, Username: newUsername,
+		Status: "active", RowVersion: expectedRowVersion + 1}, nil
 }
 
 func (f *fakeAdminBackend) CreateGroup(_ context.Context, _ string, scopeID, groupKey, name,

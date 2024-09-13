@@ -47,6 +47,9 @@ type Options struct {
 	Now    func() time.Time
 	Audit  *audit.Recorder
 	Logger *slog.Logger
+	// DirectRename 是可选的直接改名（他人用户名）页面桥接（步骤 258）；nil 时
+	// 页面不显示改名入口且提交 fail-closed（不伪造成功）。
+	DirectRename DirectRenameBridge
 }
 
 // Adapter 实现 ui.UIAdminBackend。

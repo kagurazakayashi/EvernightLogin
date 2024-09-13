@@ -35,6 +35,10 @@ type UIPageAdminOptions struct {
 	Settings *UIPageAdminSettingsOptions
 	// Validity 是可选的账户有效期页面后端；nil 时不显示有效期设置入口。
 	Validity UIAdminUserValidityBackend
+	// ManagementSession 是请求级真实管理会话秘密读取回调（步骤 258）；由宿主注入
+	// （生产实现读取会话 Cookie 并只交给处理器代码）。nil 时直接改名页面 fail-closed
+	// （404），不静默降级、不把秘密写入页面数据/模板/日志。
+	ManagementSession func(*http.Request) (string, bool)
 }
 
 // UIAdminGroupQuery 是用户组列表筛选/分页。
@@ -320,6 +324,13 @@ func newPageAdminPages(options UIPageAdminOptions) (*pageAdminPages, error) {
 			Access: UIAccessManagement, Layout: "layout/base", Template: "page/admin/user_detail"},
 		{Name: "admin.user_state", Method: http.MethodPost, Path: "/admin/users/state",
 			Access: UIAccessManagement, Layout: "layout/base", Template: "page/admin/user_detail"},
+		// 步骤 258：管理员直接修改他人用户名（目标稳定 ID/旧新用户名展示、一次
+		// 两步验证后提交；秘密由宿主回调在处理器内提供）。
+		{Name: "admin.user_rename", Method: http.MethodGet, Path: "/admin/users/rename",
+			Access: UIAccessManagement, Layout: "layout/base", Template: "page/admin/user_rename"},
+		{Name: "admin.user_rename.submit", Method: http.MethodPost,
+			Path: "/admin/users/rename", Access: UIAccessManagement,
+			Layout: "layout/base", Template: "page/admin/user_rename"},
 		{Name: "admin.user_delete_preview", Method: http.MethodGet,
 			Path: "/admin/users/delete-preview", Access: UIAccessManagement,
 			Layout: "layout/base", Template: "page/admin/user_delete"},
@@ -425,6 +436,10 @@ func (h *adminPageHandlers) HandlePage(ctx context.Context, request *http.Reques
 		return h.userUpdate(ctx, request, page)
 	case "admin.user_state":
 		return h.userState(ctx, request, page)
+	case "admin.user_rename":
+		return h.userRename(ctx, request, page)
+	case "admin.user_rename.submit":
+		return h.userRenameSubmit(ctx, request, page)
 	case "admin.user_delete_preview":
 		return h.deletePreview(ctx, request, page)
 	case "admin.user_delete":
@@ -555,6 +570,13 @@ func (h *adminPageHandlers) userDetail(ctx context.Context, request *http.Reques
 		return adminErrorOutcome(err, nil, "page.admin.users.load_failed"), nil
 	}
 	data := map[string]any{"user": view, "status": request.URL.Query().Get("status")}
+	// 步骤 258：仅在宿主装配直接改名能力且当前管理员获授权时显示改名入口；
+	// 隐藏按钮不是授权，提交页与后端门面仍每次独立检查。
+	if backend, ok := h.directRenameBackend(); ok {
+		if allowed, canErr := backend.CanChangeUsername(ctx, page.Session.UserID); canErr == nil {
+			data["canDirectRename"] = allowed
+		}
+	}
 	if !isNilUIValue(h.pages.options.Validity) {
 		validity, validityErr := h.pages.options.Validity.GetUserValidity(ctx,
 			page.Session.UserID, userID)
