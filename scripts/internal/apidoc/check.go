@@ -70,6 +70,13 @@ func Write(root string) ([]string, []string, error) {
 	return paths, warnings, nil
 }
 
+// adminAPIDocFiles 是由 scripts/adminapi-doc（步骤 270）生成并校验的文件名；
+// 它们不在本生成器的文件清单里，但也不是“未登记的旧文档”。
+var adminAPIDocFiles = map[string]bool{
+	"http-openapi-admin.json": true,
+	"http-admin-api.md":       true,
+}
+
 // writeFileAtomic 先写同目录临时文件再重命名，避免中断留下半个生成物。
 func writeFileAtomic(path string, content []byte) error {
 	dir := filepath.Dir(path)
@@ -146,6 +153,8 @@ func Check(root string) (CheckResult, error) {
 		}
 	}
 	// 生成目录里不允许出现未登记的 .md/.json（避免旧文档被误当作权威参考）。
+	// 例外：管理 JSON API 参考由 scripts/adminapi-doc 生成并自行逐字节校验（步骤 270），
+	// 它们与本生成器的文件清单无关，不能因此判 reference 失败。
 	entries, readDirErr := os.ReadDir(dir)
 	if readDirErr != nil {
 		result.Issues = append(result.Issues, fmt.Sprintf("读取 %s 失败：%v", referenceDir, readDirErr))
@@ -156,6 +165,9 @@ func Check(root string) (CheckResult, error) {
 			}
 			rel := referenceDir + "/" + entry.Name()
 			if _, ok := files[rel]; ok {
+				continue
+			}
+			if adminAPIDocFiles[entry.Name()] {
 				continue
 			}
 			if strings.HasSuffix(entry.Name(), ".md") || strings.HasSuffix(entry.Name(), ".json") {
