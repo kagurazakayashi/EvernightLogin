@@ -54,18 +54,32 @@ type gapClaim struct {
 // capability 是一项能力声明，cross-layer 记录内部服务、公开 Go 接口、HTTP、
 // CLI、页面、权限、分页与定向测试路径。
 type capability struct {
-	ID               string   `json:"id"`
-	Title            string   `json:"title"`
-	Domain           string   `json:"domain"`
-	Expect           string   `json:"expect,omitempty"` // 空=已实现；unimplemented=已知未实现
-	InternalServices []string `json:"internal_services,omitempty"`
-	AppAPI           []string `json:"app_api,omitempty"`
-	RootAPI          []string `json:"root_api,omitempty"`
-	AdminRoutes      []string `json:"admin_routes,omitempty"`
-	ProtocolPaths    []string `json:"protocol_paths,omitempty"`
-	CLI              []string `json:"cli,omitempty"`
-	Pages            []string `json:"pages,omitempty"`
-	Permissions      []string `json:"permissions,omitempty"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Domain string `json:"domain"`
+	Expect string `json:"expect,omitempty"` // 空=已实现；unimplemented=已知未实现（兼容旧声明）
+	// Maturity 是能力成熟度（步骤 267）：空/implemented=已实现；partial=已实现但有
+	// 已登记的缺口/环境未测/子模块阻塞；unimplemented=已知未实现。partial 条目仍
+	// 必须通过声明面与测试核对，只是向读者显示“不能当作全部完成”。
+	Maturity string `json:"maturity,omitempty"`
+	// PositiveEvidence / RejectionEvidence 是“真实正向/拒绝证据”的可核验引用
+	// （文件:标记文本），与定向测试函数存在性相互独立：只有符号存在、没有正向/
+	// 拒绝证据的能力会在这里暴露，而不是伪装成 implemented。
+	PositiveEvidence  []string `json:"positive_evidence,omitempty"`
+	RejectionEvidence []string `json:"rejection_evidence,omitempty"`
+	// EnvironmentUntested 是环境/平台未测范围（真实硬件、非 SQLite、真实外部
+	// 服务、真实浏览器等）的证据引用；不是缺陷，但不得写成已测。
+	EnvironmentUntested []string `json:"environment_untested,omitempty"`
+	// SubmoduleUnavailable 是子模块或固定版本源码/远端不可获取的阻塞事实证据。
+	SubmoduleUnavailable []string `json:"submodule_unavailable,omitempty"`
+	InternalServices     []string `json:"internal_services,omitempty"`
+	AppAPI               []string `json:"app_api,omitempty"`
+	RootAPI              []string `json:"root_api,omitempty"`
+	AdminRoutes          []string `json:"admin_routes,omitempty"`
+	ProtocolPaths        []string `json:"protocol_paths,omitempty"`
+	CLI                  []string `json:"cli,omitempty"`
+	Pages                []string `json:"pages,omitempty"`
+	Permissions          []string `json:"permissions,omitempty"`
 	// UnimplementedPermissions 是"目录中存在但代码标记 Implemented=false"的权限键；
 	// 扫描器要求这些键真实存在且标记仍为 false，防止把未实现权限当可用能力。
 	UnimplementedPermissions []string         `json:"unimplemented_permissions,omitempty"`
@@ -92,6 +106,13 @@ type capabilityResult struct {
 	Missing        []string        `json:"missing,omitempty"`
 	GapEvidence    []gapEvidence   `json:"gap_evidence,omitempty"`
 	UnverifiedGaps []string        `json:"unverified_gaps,omitempty"`
+	// 步骤 267：证据分级与阻塞分类，避免“符号存在=完成”。
+	PositiveEvidenceMatched  []string      `json:"positive_evidence_matched,omitempty"`
+	RejectionEvidenceMatched []string      `json:"rejection_evidence_matched,omitempty"`
+	EnvironmentEvidence      []gapEvidence `json:"environment_evidence,omitempty"`
+	SubmoduleEvidence        []gapEvidence `json:"submodule_evidence,omitempty"`
+	UnverifiedEnvironment    []string      `json:"unverified_environment,omitempty"`
+	UnverifiedSubmodule      []string      `json:"unverified_submodule,omitempty"`
 }
 
 // gapEvidence 是一条缺口证据的核对结果。
@@ -133,6 +154,21 @@ func loadCatalog(path string) (*catalogFile, error) {
 		if capability.Expect != "" && capability.Expect != "unimplemented" {
 			return nil, fmt.Errorf("能力 %s 的 expect=%q 非法（只允许空或 unimplemented）",
 				capability.ID, capability.Expect)
+		}
+		if capability.Maturity != "" && capability.Maturity != "implemented" &&
+			capability.Maturity != "partial" && capability.Maturity != "unimplemented" {
+			return nil, fmt.Errorf("能力 %s 的 maturity=%q 非法（只允许空/implemented/partial/unimplemented）",
+				capability.ID, capability.Maturity)
+		}
+		if capability.Expect == "unimplemented" && capability.Maturity != "" &&
+			capability.Maturity != "unimplemented" {
+			return nil, fmt.Errorf("能力 %s 的 expect 与 maturity 冲突（unimplemented vs %s）",
+				capability.ID, capability.Maturity)
+		}
+		if capability.Maturity == "partial" && len(capability.Gaps) == 0 &&
+			len(capability.EnvironmentUntested) == 0 && len(capability.SubmoduleUnavailable) == 0 {
+			return nil, fmt.Errorf("能力 %s 声明 partial 但没有任何缺口/环境未测/子模块阻塞证据",
+				capability.ID)
 		}
 	}
 	return &catalog, nil
@@ -428,16 +464,63 @@ func validateCapability(root string, capability capability, inv *inventory) capa
 		}
 	}
 
+	// 12) 正向/拒绝证据（步骤 267）：只核对“证据文件里确有该标记”，不把测试函数
+	// 存在性冒充为行为证据。缺失属于未核实证据，-strict 失败。
+	for _, ref := range capability.PositiveEvidence {
+		file, token, found := checkTokenEvidence(root, ref)
+		if found {
+			result.PositiveEvidenceMatched = append(result.PositiveEvidenceMatched,
+				file+":"+token)
+			continue
+		}
+		missing = append(missing, "正向证据未核实: "+ref)
+	}
+	for _, ref := range capability.RejectionEvidence {
+		file, token, found := checkTokenEvidence(root, ref)
+		if found {
+			result.RejectionEvidenceMatched = append(result.RejectionEvidenceMatched,
+				file+":"+token)
+			continue
+		}
+		missing = append(missing, "拒绝证据未核实: "+ref)
+	}
+	// 13) 环境未测与子模块/远端阻塞：同样要求证据可核验；这两类是“未测/阻塞”
+	// 分类，不是通过，也不从 missing 里偷偷改成实现。
+	for _, ref := range capability.EnvironmentUntested {
+		file, token, found := checkTokenEvidence(root, ref)
+		result.EnvironmentEvidence = append(result.EnvironmentEvidence, gapEvidence{
+			Summary: "环境未测", File: file, Token: token, Found: found})
+		if !found {
+			result.UnverifiedEnvironment = append(result.UnverifiedEnvironment,
+				"环境未测证据未核实: "+ref)
+		}
+	}
+	for _, ref := range capability.SubmoduleUnavailable {
+		file, token, found := checkTokenEvidence(root, ref)
+		result.SubmoduleEvidence = append(result.SubmoduleEvidence, gapEvidence{
+			Summary: "子模块不可获取", File: file, Token: token, Found: found})
+		if !found {
+			result.UnverifiedSubmodule = append(result.UnverifiedSubmodule,
+				"子模块阻塞证据未核实: "+ref)
+		}
+	}
+
 	result.Missing = missing
+	unimplemented := capability.Expect == "unimplemented" || capability.Maturity == "unimplemented"
+	partial := capability.Maturity == "partial"
 	switch {
-	case capability.Expect == "unimplemented":
-		if len(result.UnverifiedGaps) > 0 {
+	case unimplemented:
+		if len(result.UnverifiedGaps) > 0 || len(result.UnverifiedEnvironment) > 0 ||
+			len(result.UnverifiedSubmodule) > 0 {
 			result.Status = "missing"
 		} else {
 			result.Status = "unimplemented"
 		}
-	case len(missing) > 0 || len(result.UnverifiedGaps) > 0:
+	case len(missing) > 0 || len(result.UnverifiedGaps) > 0 ||
+		len(result.UnverifiedEnvironment) > 0 || len(result.UnverifiedSubmodule) > 0:
 		result.Status = "missing"
+	case partial:
+		result.Status = "partial"
 	case len(matchedTests) == 0:
 		result.Status = "implemented_untested"
 	default:

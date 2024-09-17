@@ -2,12 +2,12 @@
   "schema": "evernight.capability-matrix/v1",
   "description": "EvernightLogin 本轮机器可读能力清单：由 scripts/capabilities 扫描源码生成，状态由声明面是否真实解析决定，禁止手写全绿。",
   "metadata": {
-    "generated_at": "2026-11-25T02:54:40Z",
+    "generated_at": "2026-11-26T03:05:37Z",
     "generator": "go run ./scripts/capabilities",
     "repo_root": ".",
-    "git_head": "",
-    "git_branch": "",
-    "git_dirty": false,
+    "git_head": "8ecdb2aae1eb8f6c6f0374c77156a4938c0ffc7e",
+    "git_branch": "HEAD",
+    "git_dirty": true,
     "go_version": "go1.27.4",
     "platform": "windows",
     "arch": "amd64",
@@ -21,20 +21,104 @@
       "internal/",
       "测试函数（根、app、internal、cmd 的 *_test.go）"
     ],
-    "files_scanned": 708
+    "files_scanned": 779
   },
   "summary": {
-    "total": 43,
-    "implemented": 43,
+    "total": 52,
+    "implemented": 48,
     "implemented_untested": 0,
+    "partial": 3,
     "missing": 0,
-    "unimplemented": 0,
+    "unimplemented": 1,
     "by_status": {
-      "implemented": 43
+      "implemented": 48,
+      "partial": 3,
+      "unimplemented": 1
     },
-    "matched_tests_total": 186
+    "matched_tests_total": 236,
+    "positive_evidence_total": 8,
+    "rejection_evidence_total": 8,
+    "environment_untested_capabilities": 2,
+    "submodule_blocked_capabilities": 1
   },
   "capabilities": [
+    {
+      "id": "preset.install_gap",
+      "title": "预设安装生产入口缺口（D-252-1）",
+      "domain": "授权",
+      "expect": "unimplemented",
+      "maturity": "unimplemented",
+      "gaps": [
+        {
+          "summary": "preset.Install 能力存在实现但生产装配无调用点（HIGH 产品缺口，不得当已完成，转 273/后续）",
+          "evidence": [
+            "docs/acceptance/capability-truth-matrix.md:D-252-1"
+          ]
+        }
+      ],
+      "notes": "仅登记缺口；本步不新增生产接线。",
+      "status": "unimplemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "app_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 0,
+          "found": 0
+        }
+      ],
+      "gap_evidence": [
+        {
+          "summary": "preset.Install 能力存在实现但生产装配无调用点（HIGH 产品缺口，不得当已完成，转 273/后续）",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "D-252-1",
+          "found": true
+        }
+      ]
+    },
     {
       "id": "access.joint_check",
       "title": "令牌与当前权限联合校验",
@@ -128,6 +212,82 @@
       "matched_tests": [
         "./internal/tokenauthz:TestIntegrationRealTokenAndPermission",
         "./internal/tokenauthz:TestStep92HTTPJointAuthorization"
+      ]
+    },
+    {
+      "id": "account.lifecycle_221_remaining",
+      "title": "221 范围的剩余入口（R10-22，部分完成）",
+      "domain": "账户",
+      "maturity": "partial",
+      "gaps": [
+        {
+          "summary": "221 独立 example/HTTP/CLI/页面入口未闭环；已交付 app 公开 Go 门面不等同完整范围",
+          "evidence": [
+            "docs/acceptance/capability-truth-matrix.md:R10-22"
+          ]
+        }
+      ],
+      "notes": "与 account.lifecycle_public（已实现门面）分开登记，避免“43 项全部 implemented”掩盖部分交付。",
+      "status": "partial",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "app_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 0,
+          "found": 0
+        }
+      ],
+      "gap_evidence": [
+        {
+          "summary": "221 独立 example/HTTP/CLI/页面入口未闭环；已交付 app 公开 Go 门面不等同完整范围",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "R10-22",
+          "found": true
+        }
       ]
     },
     {
@@ -2414,6 +2574,100 @@
       ]
     },
     {
+      "id": "docs.openapi_page_contract",
+      "title": "OpenAPI 页面操作契约（步骤 268）",
+      "domain": "文档与契约",
+      "positive_evidence": [
+        "internal/transport/pageopenapi_test.go:TestOpenAPIDocumentsPageOperations"
+      ],
+      "rejection_evidence": [
+        "internal/transport/pageopenapi_test.go:TestOpenAPIPageContractDriftFails"
+      ],
+      "internal_services": [
+        "internal/transport"
+      ],
+      "tests": [
+        {
+          "package": "./internal/transport",
+          "run": "TestOpenAPIDocumentsPageOperations",
+          "files": [
+            "internal/transport/pageopenapi_test.go"
+          ]
+        },
+        {
+          "package": "./internal/transport",
+          "run": "TestOpenAPIPageRoutesServedByHandler",
+          "files": [
+            "internal/transport/pageopenapi_test.go"
+          ]
+        }
+      ],
+      "notes": "页面操作文档与真实路由表一致性校验；1 MiB 响应缓冲回归见 TestOpenAPIPageDocumentFitsResponseBuffer。生成物漂移归 270/271。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "app_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 2,
+          "found": 2
+        }
+      ],
+      "matched_tests": [
+        "./internal/transport:TestOpenAPIDocumentsPageOperations",
+        "./internal/transport:TestOpenAPIPageRoutesServedByHandler"
+      ],
+      "positive_evidence_matched": [
+        "internal/transport/pageopenapi_test.go:TestOpenAPIDocumentsPageOperations"
+      ],
+      "rejection_evidence_matched": [
+        "internal/transport/pageopenapi_test.go:TestOpenAPIPageContractDriftFails"
+      ]
+    },
+    {
       "id": "mail.delivery",
       "title": "站内邮件投递队列与本地测试邮件服务",
       "domain": "通知",
@@ -2502,6 +2756,118 @@
         "./internal/mailer:TestDeliveryHandlerSuccessAndRestartRecovery",
         "./internal/mailer:TestSMTPStartTLSWithAuth",
         "./internal/mailtest:TestStartSendAndWaitMessage"
+      ]
+    },
+    {
+      "id": "mail.delivery_console",
+      "title": "邮件投递记录分页与取消语义（步骤 266）",
+      "domain": "通知",
+      "positive_evidence": [
+        "internal/mailer/delivery_page_test.go:TestDeliveryListPageStableKeyset"
+      ],
+      "rejection_evidence": [
+        "internal/mailer/delivery_page_test.go:ErrDeliveryCursorMismatch"
+      ],
+      "environment_untested": [
+        "docs/acceptance/capability-truth-matrix.md:真实外部 SMTP/Webhook 外发未测"
+      ],
+      "internal_services": [
+        "internal/mailer"
+      ],
+      "admin_routes": [
+        "GET deliveries"
+      ],
+      "cli": [
+        "loginctl:deliveries"
+      ],
+      "tests": [
+        {
+          "package": "./internal/mailer",
+          "run": "TestDeliveryListPage",
+          "files": [
+            "internal/mailer/delivery_page_test.go"
+          ]
+        },
+        {
+          "package": "./internal/serverapp",
+          "run": "TestStep266HistoryEndpointsE2E",
+          "files": [
+            "internal/serverapp/step266_history_e2e_test.go"
+          ]
+        }
+      ],
+      "notes": "DTO 白名单不含加密载荷/完整收件人/路径；取消投递与取消任务语义不同；单页 1..99，与 adminapi limit 上限对齐。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "app_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 2,
+          "found": 2
+        }
+      ],
+      "matched_tests": [
+        "./internal/mailer:TestDeliveryListPageStableKeyset",
+        "./internal/mailer:TestDeliveryListPageCursorBindsFilterAndScope",
+        "./internal/serverapp:TestStep266HistoryEndpointsE2E"
+      ],
+      "positive_evidence_matched": [
+        "internal/mailer/delivery_page_test.go:TestDeliveryListPageStableKeyset"
+      ],
+      "rejection_evidence_matched": [
+        "internal/mailer/delivery_page_test.go:ErrDeliveryCursorMismatch"
+      ],
+      "environment_evidence": [
+        {
+          "summary": "环境未测",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "真实外部 SMTP/Webhook 外发未测",
+          "found": true
+        }
       ]
     },
     {
@@ -2754,6 +3120,111 @@
       ]
     },
     {
+      "id": "notifications.security_history",
+      "title": "安全告知投递关联与分页历史（步骤 265/266）",
+      "domain": "通知",
+      "positive_evidence": [
+        "internal/reauth/notification_page_test.go:TestNotificationsPageStableKeyset"
+      ],
+      "rejection_evidence": [
+        "internal/reauth/notification_page_test.go:ErrNotificationCursorMismatch",
+        "internal/adminapi/console_lists_test.go:TestNotificationHistoryDenied"
+      ],
+      "internal_services": [
+        "internal/reauth",
+        "internal/mailer",
+        "internal/manualrecovery"
+      ],
+      "admin_routes": [
+        "GET notifications/history"
+      ],
+      "cli": [
+        "loginctl:notifications"
+      ],
+      "tests": [
+        {
+          "package": "./internal/reauth",
+          "run": "TestNotificationsPage",
+          "files": [
+            "internal/reauth/notification_page_test.go"
+          ]
+        },
+        {
+          "package": "./internal/serverapp",
+          "run": "TestStep266HistoryEndpointsE2E",
+          "files": [
+            "internal/serverapp/step266_history_e2e_test.go"
+          ]
+        }
+      ],
+      "notes": "本人或 diagnostics.read 系统范围；游标绑定用户；queued 只代表已受理，succeeded 只代表发送后端接受，不代表已读/最终送达。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 3,
+          "found": 3
+        },
+        {
+          "kind": "app_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 2,
+          "found": 2
+        }
+      ],
+      "matched_tests": [
+        "./internal/reauth:TestNotificationsPageStableKeyset",
+        "./internal/reauth:TestNotificationsPageQueryPlanUsesIndex",
+        "./internal/serverapp:TestStep266HistoryEndpointsE2E"
+      ],
+      "positive_evidence_matched": [
+        "internal/reauth/notification_page_test.go:TestNotificationsPageStableKeyset"
+      ],
+      "rejection_evidence_matched": [
+        "internal/reauth/notification_page_test.go:ErrNotificationCursorMismatch",
+        "internal/adminapi/console_lists_test.go:TestNotificationHistoryDenied"
+      ]
+    },
+    {
       "id": "oauth_oidc.protocol",
       "title": "OAuth2/OIDC 协议端点（授权码/刷新/撤销/内省/UserInfo）",
       "domain": "协议",
@@ -2975,6 +3446,139 @@
       "matched_tests": [
         "./internal/onboarding:TestInviteCreateAcceptNewUser",
         "./internal/onboarding:TestReviewApproveRejectAndConcurrency"
+      ]
+    },
+    {
+      "id": "operation.proof",
+      "title": "操作绑定的一次两步验证证明（步骤 255）",
+      "domain": "认证与会话",
+      "positive_evidence": [
+        "app/operation_proof_test.go:TestOperationProofPasswordTOTPFlow"
+      ],
+      "rejection_evidence": [
+        "app/operation_proof_test.go:TestOperationProofRequiresPermission",
+        "internal/reauth/proof_test.go:TestDirectProofBindingRejections"
+      ],
+      "internal_services": [
+        "internal/reauth"
+      ],
+      "app_api": [
+        "OperationProofService",
+        "OperationProofBeginRequest",
+        "OperationProofConfirmRequest",
+        "OperationProofCancelRequest",
+        "OperationProofChallenge",
+        "OperationProofGrant",
+        "OperationProofWebAuthnBeginRequest",
+        "OperationProofWebAuthnConfirmRequest",
+        "OperationProofWebAuthnStart"
+      ],
+      "cli": [
+        "loginctl:admin"
+      ],
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestOperationProof",
+          "files": [
+            "app/operation_proof_test.go"
+          ]
+        },
+        {
+          "package": "./internal/reauth",
+          "run": "TestDirectProof",
+          "files": [
+            "internal/reauth/proof_test.go"
+          ]
+        }
+      ],
+      "notes": "证明绑定操作者/操作/目标/本次修改意图；权限撤销、绑定不匹配、无合格第二因素均拒绝。真实硬件 WebAuthn 未测见 verification.environment_limits。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "app_api",
+          "total": 9,
+          "found": 9
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 2,
+          "found": 2
+        }
+      ],
+      "matched_tests": [
+        "./app:TestOperationProofRequiresRealAdminSession",
+        "./app:TestOperationProofRequiresPermission",
+        "./app:TestOperationProofPasswordTOTPFlow",
+        "./app:TestOperationProofBindingValidation",
+        "./app:TestOperationProofSessionBindingAndCancel",
+        "./app:TestOperationProofWebAuthnUnavailableWithoutPasskey",
+        "./app:TestOperationProofPermissionRevokedAfterPrepareRejected",
+        "./app:TestOperationProofRolePermissionRemovedAfterPrepareRejected",
+        "./internal/reauth:TestDirectProofHappyPathSingleUseAndNoSecretLeak",
+        "./internal/reauth:TestDirectProofBindingRejections",
+        "./internal/reauth:TestDirectProofWrongFactors",
+        "./internal/reauth:TestDirectProofSessionMismatchOnVerify",
+        "./internal/reauth:TestDirectProofPermissionRevokedAtBegin",
+        "./internal/reauth:TestDirectProofMissingDependenciesFailClosed",
+        "./internal/reauth:TestDirectProofLegacyPathsFailClosed",
+        "./internal/reauth:TestDirectProofCommitFailureKeepsProofRetryable",
+        "./internal/reauth:TestDirectProofConcurrentConsumeSingleWinner",
+        "./internal/reauth:TestDirectProofCancelChallenge",
+        "./internal/reauth:TestDirectProofPasswordIntentSealedAndMatched",
+        "./internal/reauth:TestDirectProofWebAuthnPath",
+        "./internal/reauth:TestDirectProofWebAuthnRejects",
+        "./internal/reauth:TestDirectProofOperationMappingMatchesPolicyCatalog",
+        "./internal/reauth:TestDirectProofPurgesExpiredIntent",
+        "./internal/reauth:TestDirectProofTxRevalidationClosesPrepareCommitWindow",
+        "./internal/reauth:TestDirectProofConsumeWithinMaxAge"
+      ],
+      "positive_evidence_matched": [
+        "app/operation_proof_test.go:TestOperationProofPasswordTOTPFlow"
+      ],
+      "rejection_evidence_matched": [
+        "app/operation_proof_test.go:TestOperationProofRequiresPermission",
+        "internal/reauth/proof_test.go:TestDirectProofBindingRejections"
       ]
     },
     {
@@ -3873,6 +4477,130 @@
         "./app:TestOpenEnsureRootUsersLoginAccessRevokeStartClose",
         "./app:TestOpenMigrateFalseFailsAndCleansUpResources",
         "./internal/serverapp:TestOpenBaseBuildsSharedAssemblyWithoutStarting"
+      ]
+    },
+    {
+      "id": "search.domain_lists",
+      "title": "有界模糊搜索（步骤 261/262/263）",
+      "domain": "分页与列表",
+      "maturity": "partial",
+      "positive_evidence": [
+        "app/admin_search_test.go:TestAdminListUsersSearch",
+        "app/admin_domain_search_262_test.go:TestAdminDomainListSearch"
+      ],
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestAdminListUsersSearch",
+          "files": [
+            "app/admin_search_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestAdminListApplicationMembersSearch",
+          "files": [
+            "app/admin_search_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestAdminDomainListSearch",
+          "files": [
+            "app/admin_domain_search_262_test.go"
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "summary": "D-261-5 浏览器前进/后退可能显示旧条件结果（服务端仍重新授权，无越权）",
+          "evidence": [
+            "docs/acceptance/capability-truth-matrix.md:D-261-5"
+          ]
+        },
+        {
+          "summary": "D-263-1 客服/报告列表空搜索+非法字段的静默忽略口径未统一",
+          "evidence": [
+            "docs/acceptance/capability-truth-matrix.md:D-263-1"
+          ]
+        }
+      ],
+      "notes": "字面子串/前缀匹配，不承诺拼音/正则；授权先于搜索；空搜索等价原列表；密码/令牌/恢复码/加密载荷永不参与搜索。",
+      "status": "partial",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "app_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 3,
+          "found": 3
+        }
+      ],
+      "matched_tests": [
+        "./app:TestAdminListUsersSearch",
+        "./app:TestAdminListApplicationMembersSearch",
+        "./app:TestAdminDomainListSearch"
+      ],
+      "gap_evidence": [
+        {
+          "summary": "D-261-5 浏览器前进/后退可能显示旧条件结果（服务端仍重新授权，无越权）",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "D-261-5",
+          "found": true
+        },
+        {
+          "summary": "D-263-1 客服/报告列表空搜索+非法字段的静默忽略口径未统一",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "D-263-1",
+          "found": true
+        }
+      ],
+      "positive_evidence_matched": [
+        "app/admin_search_test.go:TestAdminListUsersSearch",
+        "app/admin_domain_search_262_test.go:TestAdminDomainListSearch"
       ]
     },
     {
@@ -5113,6 +5841,258 @@
       ]
     },
     {
+      "id": "users.direct_management",
+      "title": "直接改用户名/直接重置密码（步骤 256/257）",
+      "domain": "账户",
+      "positive_evidence": [
+        "app/admin_user_reset_test.go:TestDirectPasswordResetSuccessAndMustChangeFlow",
+        "app/admin_user_rename_test.go:TestDirectUserUsernameChangeSuccess"
+      ],
+      "rejection_evidence": [
+        "app/admin_user_reset_test.go:TestDirectPasswordResetNoPasswordTargetRejected",
+        "app/admin_user_rename_test.go:TestDirectUserUsernameChangeAuthorization"
+      ],
+      "internal_services": [
+        "internal/reauth"
+      ],
+      "app_api": [
+        "DirectUserManagementService",
+        "DirectPasswordManagementService",
+        "AdminChangeUserUsernameRequest",
+        "AdminResetUserPasswordRequest",
+        "AdminPasswordResetResult",
+        "RequiredPasswordChangeService",
+        "RequiredPasswordChangeRequest"
+      ],
+      "cli": [
+        "loginctl:admin"
+      ],
+      "permissions": [
+        "users.username.change.other",
+        "users.password.reset.other"
+      ],
+      "tests": [
+        {
+          "package": "./app",
+          "run": "TestDirectUserUsernameChange",
+          "files": [
+            "app/admin_user_rename_test.go"
+          ]
+        },
+        {
+          "package": "./app",
+          "run": "TestDirectPasswordReset",
+          "files": [
+            "app/admin_user_reset_test.go"
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "summary": "must_change 受限改密会话的 reauth 强度语义与有 TOTP 目标边界已在 D-257-1 登记（文档/回归转 260/273/274）",
+          "evidence": [
+            "docs/acceptance/capability-truth-matrix.md:D-257-1"
+          ]
+        }
+      ],
+      "notes": "两项权限独立于普通客服审批；root 保护、目标范围、本次两步验证、并发单赢家与审计均有证据。真实 MFA 设备互操作未测见 verification.environment_limits。",
+      "status": "implemented",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "app_api",
+          "total": 7,
+          "found": 7
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 1,
+          "found": 1
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 2,
+          "found": 2
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 2,
+          "found": 2
+        }
+      ],
+      "matched_tests": [
+        "./app:TestDirectUserUsernameChangeSuccess",
+        "./app:TestDirectUserUsernameChangeProofBindingRejected",
+        "./app:TestDirectUserUsernameChangeAuthorization",
+        "./app:TestDirectUserUsernameChangeConflictKeepsProofUsable",
+        "./app:TestDirectUserUsernameChangeRateLimited",
+        "./app:TestDirectUserUsernameChangeReauthErrorsMapping",
+        "./app:TestDirectPasswordResetSuccessAndMustChangeFlow",
+        "./app:TestDirectPasswordResetProofBindingRejected",
+        "./app:TestDirectPasswordResetPolicyAndHistory",
+        "./app:TestDirectPasswordResetAuthorization",
+        "./app:TestDirectPasswordResetNoPasswordTargetRejected",
+        "./app:TestDirectPasswordResetConcurrentSingleWinner",
+        "./app:TestDirectPasswordResetRateLimited",
+        "./app:TestDirectPasswordResetErrorMapping"
+      ],
+      "gap_evidence": [
+        {
+          "summary": "must_change 受限改密会话的 reauth 强度语义与有 TOTP 目标边界已在 D-257-1 登记（文档/回归转 260/273/274）",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "D-257-1",
+          "found": true
+        }
+      ],
+      "positive_evidence_matched": [
+        "app/admin_user_reset_test.go:TestDirectPasswordResetSuccessAndMustChangeFlow",
+        "app/admin_user_rename_test.go:TestDirectUserUsernameChangeSuccess"
+      ],
+      "rejection_evidence_matched": [
+        "app/admin_user_reset_test.go:TestDirectPasswordResetNoPasswordTargetRejected",
+        "app/admin_user_rename_test.go:TestDirectUserUsernameChangeAuthorization"
+      ]
+    },
+    {
+      "id": "verification.environment_limits",
+      "title": "环境未测与子模块不可获取（分类登记）",
+      "domain": "验证边界",
+      "maturity": "partial",
+      "environment_untested": [
+        "docs/acceptance/capability-truth-matrix.md:非 SQLite 运行未测",
+        "docs/acceptance/capability-truth-matrix.md:真实硬件 Passkey/Windows Hello/YubiKey 未测",
+        "docs/acceptance/capability-truth-matrix.md:真实外部 SMTP/Webhook 外发未测",
+        "docs/acceptance/capability-truth-matrix.md:-race/govulncheck/gosec 未跑"
+      ],
+      "submodule_unavailable": [
+        "docs/acceptance/capability-truth-matrix.md:远端不可获取",
+        "docs/acceptance/capability-truth-matrix.md:子模块未纳入源码扫描"
+      ],
+      "notes": "这些是验证边界与阻塞事实，不是通过也不是缺陷；发布说明必须保留相同口径。",
+      "status": "partial",
+      "surfaces": [
+        {
+          "kind": "internal_service",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "app_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "root_api",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "admin_route",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "protocol_path",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "cli",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "page",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "unimplemented_permission",
+          "total": 0,
+          "found": 0
+        },
+        {
+          "kind": "test",
+          "total": 0,
+          "found": 0
+        }
+      ],
+      "environment_evidence": [
+        {
+          "summary": "环境未测",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "非 SQLite 运行未测",
+          "found": true
+        },
+        {
+          "summary": "环境未测",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "真实硬件 Passkey/Windows Hello/YubiKey 未测",
+          "found": true
+        },
+        {
+          "summary": "环境未测",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "真实外部 SMTP/Webhook 外发未测",
+          "found": true
+        },
+        {
+          "summary": "环境未测",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "-race/govulncheck/gosec 未跑",
+          "found": true
+        }
+      ],
+      "submodule_evidence": [
+        {
+          "summary": "子模块不可获取",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "远端不可获取",
+          "found": true
+        },
+        {
+          "summary": "子模块不可获取",
+          "file": "docs/acceptance/capability-truth-matrix.md",
+          "token": "子模块未纳入源码扫描",
+          "found": true
+        }
+      ]
+    },
+    {
       "id": "webhook.delivery",
       "title": "Webhook 端点、签名与投递重试",
       "domain": "通知",
@@ -5193,12 +6173,12 @@
     }
   ],
   "coverage": {
-    "app_types_total": 451,
-    "admin_routes_total": 123,
+    "app_types_total": 468,
+    "admin_routes_total": 131,
     "protocol_paths_total": 17,
-    "pages_total": 245,
-    "cli_commands_total": 40,
-    "permissions_total": 51
+    "pages_total": 248,
+    "cli_commands_total": 41,
+    "permissions_total": 53
   },
   "pagination_audit": {
     "growable_lists": [
@@ -5865,14 +6845,18 @@
           "Application",
           "Code",
           "Reason",
-          "RequestID"
+          "RequestID",
+          "ResourceChecked",
+          "ResourceID"
         ],
         "field_types": {
           "Allowed": "bool",
           "Application": "string",
           "Code": "string",
           "Reason": "string",
-          "RequestID": "string"
+          "RequestID": "string",
+          "ResourceChecked": "bool",
+          "ResourceID": "string"
         }
       },
       "AccessRequest": {
@@ -6968,6 +7952,28 @@
           "RequestID": "string"
         }
       },
+      "AdminChangeUserUsernameRequest": {
+        "name": "AdminChangeUserUsernameRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ExpectedRowVersion",
+          "NewUsername",
+          "ProofToken",
+          "Reason",
+          "RequestID",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ExpectedRowVersion": "int64",
+          "NewUsername": "string",
+          "ProofToken": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "TargetUserID": "string"
+        }
+      },
       "AdminClientCertificateInfo": {
         "name": "AdminClientCertificateInfo",
         "kind": "struct",
@@ -7689,6 +8695,8 @@
           "Descending",
           "Page",
           "RequestID",
+          "Search",
+          "SearchFields",
           "Sort",
           "Status"
         ],
@@ -7698,6 +8706,8 @@
           "Descending": "bool",
           "Page": "AdminPage",
           "RequestID": "string",
+          "Search": "string",
+          "SearchFields": "[]string",
           "Sort": "string",
           "Status": "string"
         }
@@ -7735,6 +8745,8 @@
           "IncludeDeleted",
           "Page",
           "RequestID",
+          "Search",
+          "SearchFields",
           "Sort",
           "Status"
         ],
@@ -7744,6 +8756,8 @@
           "IncludeDeleted": "bool",
           "Page": "AdminPage",
           "RequestID": "string",
+          "Search": "string",
+          "SearchFields": "[]string",
           "Sort": "string",
           "Status": "string"
         }
@@ -7891,6 +8905,8 @@
           "Page",
           "RequestID",
           "ScopeID",
+          "Search",
+          "SearchFields",
           "Sort"
         ],
         "field_types": {
@@ -7899,6 +8915,8 @@
           "Page": "AdminPage",
           "RequestID": "string",
           "ScopeID": "string",
+          "Search": "string",
+          "SearchFields": "[]string",
           "Sort": "string"
         }
       },
@@ -7928,6 +8946,8 @@
           "Page",
           "RequestID",
           "ScopeID",
+          "Search",
+          "SearchFields",
           "Sort"
         ],
         "field_types": {
@@ -7937,6 +8957,8 @@
           "Page": "AdminPage",
           "RequestID": "string",
           "ScopeID": "string",
+          "Search": "string",
+          "SearchFields": "[]string",
           "Sort": "string"
         }
       },
@@ -8021,6 +9043,8 @@
           "Page",
           "RequestID",
           "ScopeID",
+          "Search",
+          "SearchFields",
           "Sort"
         ],
         "field_types": {
@@ -8031,6 +9055,8 @@
           "Page": "AdminPage",
           "RequestID": "string",
           "ScopeID": "string",
+          "Search": "string",
+          "SearchFields": "[]string",
           "Sort": "string"
         }
       },
@@ -8087,6 +9113,8 @@
           "Limit",
           "Offset",
           "RequestID",
+          "Search",
+          "SearchFields",
           "Sort",
           "Status"
         ],
@@ -8096,6 +9124,8 @@
           "Limit": "int",
           "Offset": "int",
           "RequestID": "string",
+          "Search": "string",
+          "SearchFields": "[]string",
           "Sort": "string",
           "Status": "string"
         }
@@ -8248,6 +9278,30 @@
           "NextOffset": "int",
           "Offset": "int",
           "Returned": "int"
+        }
+      },
+      "AdminPasswordResetResult": {
+        "name": "AdminPasswordResetResult",
+        "kind": "struct",
+        "fields": [
+          "MustChange",
+          "OldResetCredentialsRevoked",
+          "OldResetRequestsCancelled",
+          "OutboxEventID",
+          "PasswordChangedAt",
+          "SecurityVersion",
+          "SessionsRevoked",
+          "UserID"
+        ],
+        "field_types": {
+          "MustChange": "bool",
+          "OldResetCredentialsRevoked": "int64",
+          "OldResetRequestsCancelled": "int64",
+          "OutboxEventID": "string",
+          "PasswordChangedAt": "time.Time",
+          "SecurityVersion": "int64",
+          "SessionsRevoked": "int64",
+          "UserID": "string"
         }
       },
       "AdminPermission": {
@@ -9016,6 +10070,26 @@
           "FailedTasks": "int64",
           "TotalRawEvents": "int64",
           "TrendPoints": "int"
+        }
+      },
+      "AdminResetUserPasswordRequest": {
+        "name": "AdminResetUserPasswordRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "NewPassword",
+          "ProofToken",
+          "Reason",
+          "RequestID",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "NewPassword": "string",
+          "ProofToken": "string",
+          "Reason": "string",
+          "RequestID": "string",
+          "TargetUserID": "string"
         }
       },
       "AdminRevealedClientSecret": {
@@ -11230,6 +12304,20 @@
           "Version": "string"
         }
       },
+      "DirectPasswordManagementService": {
+        "name": "DirectPasswordManagementService",
+        "kind": "interface",
+        "methods": [
+          "ResetUserPassword"
+        ]
+      },
+      "DirectUserManagementService": {
+        "name": "DirectUserManagementService",
+        "kind": "interface",
+        "methods": [
+          "ChangeUserUsername"
+        ]
+      },
       "EmailChangeService": {
         "name": "EmailChangeService",
         "kind": "interface",
@@ -12201,6 +13289,163 @@
           "UpdateClientSettings"
         ]
       },
+      "OperationProofBeginRequest": {
+        "name": "OperationProofBeginRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "NewPassword",
+          "NewUsername",
+          "Operation",
+          "RequestID",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "NewPassword": "string",
+          "NewUsername": "string",
+          "Operation": "OperationProofOperation",
+          "RequestID": "string",
+          "TargetUserID": "string"
+        }
+      },
+      "OperationProofCancelRequest": {
+        "name": "OperationProofCancelRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ChallengeID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ChallengeID": "string",
+          "RequestID": "string"
+        }
+      },
+      "OperationProofChallenge": {
+        "name": "OperationProofChallenge",
+        "kind": "struct",
+        "fields": [
+          "ChallengeID",
+          "ExpiresAt",
+          "MaxAttempts",
+          "Operation",
+          "RequiredStrength",
+          "TargetUserID",
+          "WebAuthnAvailable"
+        ],
+        "field_types": {
+          "ChallengeID": "string",
+          "ExpiresAt": "time.Time",
+          "MaxAttempts": "int",
+          "Operation": "OperationProofOperation",
+          "RequiredStrength": "string",
+          "TargetUserID": "string",
+          "WebAuthnAvailable": "bool"
+        }
+      },
+      "OperationProofConfirmRequest": {
+        "name": "OperationProofConfirmRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ChallengeID",
+          "Password",
+          "RequestID",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ChallengeID": "string",
+          "Password": "string",
+          "RequestID": "string",
+          "TOTPCode": "string"
+        }
+      },
+      "OperationProofGrant": {
+        "name": "OperationProofGrant",
+        "kind": "struct",
+        "fields": [
+          "ExpiresAt",
+          "GrantedStrength",
+          "Operation",
+          "ProofToken",
+          "TargetUserID"
+        ],
+        "field_types": {
+          "ExpiresAt": "time.Time",
+          "GrantedStrength": "string",
+          "Operation": "OperationProofOperation",
+          "ProofToken": "string",
+          "TargetUserID": "string"
+        }
+      },
+      "OperationProofOperation": {
+        "name": "OperationProofOperation",
+        "kind": "alias"
+      },
+      "OperationProofService": {
+        "name": "OperationProofService",
+        "kind": "interface",
+        "methods": [
+          "Begin",
+          "BeginWebAuthn",
+          "Cancel",
+          "Confirm",
+          "ConfirmWebAuthn"
+        ]
+      },
+      "OperationProofWebAuthnBeginRequest": {
+        "name": "OperationProofWebAuthnBeginRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "ChallengeID",
+          "RequestID"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "ChallengeID": "string",
+          "RequestID": "string"
+        }
+      },
+      "OperationProofWebAuthnConfirmRequest": {
+        "name": "OperationProofWebAuthnConfirmRequest",
+        "kind": "struct",
+        "fields": [
+          "Caller",
+          "CeremonyID",
+          "ChallengeID",
+          "RequestID",
+          "Response"
+        ],
+        "field_types": {
+          "Caller": "AdminCaller",
+          "CeremonyID": "string",
+          "ChallengeID": "string",
+          "RequestID": "string",
+          "Response": "[]byte"
+        }
+      },
+      "OperationProofWebAuthnStart": {
+        "name": "OperationProofWebAuthnStart",
+        "kind": "struct",
+        "fields": [
+          "CeremonyID",
+          "ChallengeID",
+          "ExpiresAt",
+          "PublicKey",
+          "RPID"
+        ],
+        "field_types": {
+          "CeremonyID": "string",
+          "ChallengeID": "string",
+          "ExpiresAt": "time.Time",
+          "PublicKey": "[]byte",
+          "RPID": "string"
+        }
+      },
       "Options": {
         "name": "Options",
         "kind": "struct",
@@ -12776,9 +14021,11 @@
         "fields": [
           "DataScope",
           "DataScopeMode",
+          "ExcludedReason",
           "GroupID",
           "GroupKey",
           "GroupName",
+          "Included",
           "Kind",
           "PermissionEnabled",
           "PermissionID",
@@ -12793,9 +14040,11 @@
         "field_types": {
           "DataScope": "[]string",
           "DataScopeMode": "string",
+          "ExcludedReason": "string",
           "GroupID": "string",
           "GroupKey": "string",
           "GroupName": "string",
+          "Included": "bool",
           "Kind": "string",
           "PermissionEnabled": "bool",
           "PermissionID": "string",
@@ -13697,6 +14946,33 @@
           "RequestID": "string"
         }
       },
+      "RequiredPasswordChangeRequest": {
+        "name": "RequiredPasswordChangeRequest",
+        "kind": "struct",
+        "fields": [
+          "ClientIP",
+          "CurrentPassword",
+          "NewPassword",
+          "RequestID",
+          "SessionSecret",
+          "TOTPCode"
+        ],
+        "field_types": {
+          "ClientIP": "string",
+          "CurrentPassword": "string",
+          "NewPassword": "string",
+          "RequestID": "string",
+          "SessionSecret": "[]byte",
+          "TOTPCode": "string"
+        }
+      },
+      "RequiredPasswordChangeService": {
+        "name": "RequiredPasswordChangeService",
+        "kind": "interface",
+        "methods": [
+          "Complete"
+        ]
+      },
       "ResendEmailVerificationRequest": {
         "name": "ResendEmailVerificationRequest",
         "kind": "struct",
@@ -13789,6 +15065,8 @@
           "Config",
           "Delegations",
           "Diagnostics",
+          "DirectPasswordManagement",
+          "DirectUserManagement",
           "EmailChange",
           "HTTPMounts",
           "HTTPPrefix",
@@ -13800,6 +15078,7 @@
           "ManualRecovery",
           "Mount",
           "OAuthClients",
+          "OperationProof",
           "PasswordReset",
           "Passwords",
           "Profile",
@@ -13809,6 +15088,7 @@
           "Ready",
           "Registration",
           "Reports",
+          "RequiredPasswordChanges",
           "Security",
           "Sessions",
           "Settings",
@@ -13911,6 +15191,8 @@
           "Code",
           "Reason",
           "RequestID",
+          "ResourceChecked",
+          "ResourceID",
           "SessionID",
           "UserID"
         ],
@@ -13920,6 +15202,8 @@
           "Code": "string",
           "Reason": "string",
           "RequestID": "string",
+          "ResourceChecked": "bool",
+          "ResourceID": "string",
           "SessionID": "string",
           "UserID": "string"
         }
@@ -13933,6 +15217,7 @@
           "Mode",
           "Permissions",
           "RequestID",
+          "ResourceID",
           "SessionSecret"
         ],
         "field_types": {
@@ -13941,6 +15226,7 @@
           "Mode": "string",
           "Permissions": "[]string",
           "RequestID": "string",
+          "ResourceID": "string",
           "SessionSecret": "[]byte"
         }
       },
@@ -14868,11 +16154,15 @@
       "AuthorizeScope",
       "Availability",
       "Backup",
+      "Begin",
       "BeginEmailEnrollment",
       "BeginPasskeyLogin",
       "BeginPasskeyRegistration",
       "BeginRecovery",
       "BeginTOTPBinding",
+      "BeginUsernameVerification",
+      "BeginUsernameWebAuthnVerification",
+      "BeginWebAuthn",
       "Bootstrap",
       "Cancel",
       "CancelExport",
@@ -14880,9 +16170,11 @@
       "CancelJob",
       "CancelPurge",
       "CancelTask",
+      "CancelUsernameVerification",
       "Capabilities",
       "Catalog",
       "ChangeOwnPassword",
+      "ChangeUserUsername",
       "ChangeUsername",
       "Check",
       "CheckPermission",
@@ -14895,8 +16187,12 @@
       "CompleteUserDeletion",
       "Config",
       "Configure",
+      "Confirm",
       "ConfirmEmailEnrollment",
       "ConfirmTOTPBinding",
+      "ConfirmUsernameVerification",
+      "ConfirmUsernameWebAuthnVerification",
+      "ConfirmWebAuthn",
       "Create",
       "CreateApplication",
       "CreateCase",
@@ -14909,6 +16205,8 @@
       "Delete",
       "DeleteApplication",
       "Diagnostics",
+      "DirectPasswordManagement",
+      "DirectUserManagement",
       "Disable",
       "DisableApplicationMember",
       "DisableUser",
@@ -15016,6 +16314,7 @@
       "Open",
       "OpenArtifact",
       "OpenExport",
+      "OperationProof",
       "PasswordReset",
       "Passwords",
       "PermissionSources",
@@ -15058,7 +16357,9 @@
       "Reports",
       "Request",
       "RequestUserDeletion",
+      "RequiredPasswordChanges",
       "ResendEmailVerification",
+      "ResetUserPassword",
       "Restore",
       "RestoreSensitiveDefaults",
       "Retention",
@@ -15228,6 +16529,7 @@
       "UIAdminExportOptions",
       "UIAdminGroup",
       "UIAdminGroupPage",
+      "UIAdminGroupQuery",
       "UIAdminMember",
       "UIAdminMemberPage",
       "UIAdminMemberResult",
@@ -15250,6 +16552,10 @@
       "UIAdminSettingsChange",
       "UIAdminSettingsField",
       "UIAdminSettingsView",
+      "UIAdminTask",
+      "UIAdminTaskPage",
+      "UIAdminTaskQuery",
+      "UIAdminTasksBackend",
       "UIAdminUserPage",
       "UIAdminUserQuery",
       "UIAdminUserValidityBackend",
@@ -15361,6 +16667,7 @@
       "UIPageAdminOptions",
       "UIPageAdminSessionsOptions",
       "UIPageAdminSettingsOptions",
+      "UIPageAdminTasksOptions",
       "UIPageAppsOptions",
       "UIPageAudienceInfo",
       "UIPageAuditBackend",
@@ -15739,6 +17046,11 @@
       },
       {
         "method": "GET",
+        "pattern": "deliveries",
+        "source": "internal/adminapi/handler.go"
+      },
+      {
+        "method": "GET",
         "pattern": "diagnostics",
         "source": "internal/serverapp/diagnostics.go"
       },
@@ -15780,6 +17092,11 @@
       {
         "method": "GET",
         "pattern": "notifications",
+        "source": "internal/adminapi/handler.go"
+      },
+      {
+        "method": "GET",
+        "pattern": "notifications/history",
         "source": "internal/adminapi/handler.go"
       },
       {
@@ -16156,6 +17473,36 @@
         "method": "POST",
         "pattern": "users/{user_id}/state",
         "source": "internal/serverapp/admin_domain_writes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/username",
+        "source": "internal/serverapp/admin_direct_username_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/username-verification",
+        "source": "internal/serverapp/admin_direct_username_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/username-verification/cancel",
+        "source": "internal/serverapp/admin_direct_username_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/username-verification/confirm",
+        "source": "internal/serverapp/admin_direct_username_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/username-verification/webauthn/begin",
+        "source": "internal/serverapp/admin_direct_username_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/username-verification/webauthn/confirm",
+        "source": "internal/serverapp/admin_direct_username_routes.go"
       },
       {
         "method": "POST",
@@ -17266,6 +18613,12 @@
         "file": "pages_stats.go"
       },
       {
+        "name": "admin.tasks",
+        "method": "GET",
+        "path": "/admin/tasks",
+        "file": "pages_admin.go"
+      },
+      {
         "name": "admin.user_batch",
         "method": "GET",
         "path": "/admin/users/batch",
@@ -17341,6 +18694,18 @@
         "name": "admin.user_import.submit",
         "method": "POST",
         "path": "/admin/users/import",
+        "file": "pages_admin.go"
+      },
+      {
+        "name": "admin.user_rename",
+        "method": "GET",
+        "path": "/admin/users/rename",
+        "file": "pages_admin.go"
+      },
+      {
+        "name": "admin.user_rename.submit",
+        "method": "POST",
+        "path": "/admin/users/rename",
         "file": "pages_admin.go"
       },
       {
@@ -17930,6 +19295,11 @@
       },
       {
         "binary": "loginctl",
+        "name": "deliveries",
+        "source": "cmd/loginctl/loginctl.go"
+      },
+      {
+        "binary": "loginctl",
         "name": "diag",
         "source": "cmd/loginctl/loginctl.go"
       },
@@ -18242,11 +19612,19 @@
         "implemented": true
       },
       {
+        "key": "users.password.reset.other",
+        "implemented": true
+      },
+      {
         "key": "users.read",
         "implemented": true
       },
       {
         "key": "users.update",
+        "implemented": true
+      },
+      {
+        "key": "users.username.change.other",
         "implemented": true
       }
     ],
@@ -18383,7 +19761,13 @@
         "TestPermissionAndAccessRequest"
       ],
       "./app": [
+        "TestPublicResourceScopeContractFromExternalModule",
+        "TestAccessCheckEnforcesResourceScopeThroughPublicFacade",
+        "TestAccessCheckRejectsSelfAuthorizationInputs",
+        "TestSessionAuthorizeEnforcesResourceScope",
+        "TestAccessCheckDependencyFailureDeniesByDefault",
         "TestAdminApplicationListsPagination",
+        "TestAdminDomainListSearch",
         "TestPublicNotFoundContractFromExternalModule",
         "TestAdminObservabilityListsPagination",
         "TestAdminPaginatedListFacades",
@@ -18396,7 +19780,23 @@
         "TestAdminQueryAuditFailureFailsClosed",
         "TestAdminWriteRequestIDCorrelation",
         "TestAdminRoleQueryHidesOtherApplicationExistence",
+        "TestAdminListUsersSearch",
+        "TestAdminListApplicationMembersSearch",
         "TestAdminFacadeBootstrapAndApplicationRoleAssignment",
+        "TestDirectUserUsernameChangeSuccess",
+        "TestDirectUserUsernameChangeProofBindingRejected",
+        "TestDirectUserUsernameChangeAuthorization",
+        "TestDirectUserUsernameChangeConflictKeepsProofUsable",
+        "TestDirectUserUsernameChangeRateLimited",
+        "TestDirectUserUsernameChangeReauthErrorsMapping",
+        "TestDirectPasswordResetSuccessAndMustChangeFlow",
+        "TestDirectPasswordResetProofBindingRejected",
+        "TestDirectPasswordResetPolicyAndHistory",
+        "TestDirectPasswordResetAuthorization",
+        "TestDirectPasswordResetNoPasswordTargetRejected",
+        "TestDirectPasswordResetConcurrentSingleWinner",
+        "TestDirectPasswordResetRateLimited",
+        "TestDirectPasswordResetErrorMapping",
         "TestPublicAPISurfacePaginationHelpers",
         "TestPublicAPISurfaceHasNoInternalTypes",
         "TestExampleOnlyImportsPublicPackages",
@@ -18455,6 +19855,14 @@
         "TestRecoveryCodesRequireStrongAuthAndRestrictedRecovery",
         "TestConfigVariantsKeepTOTPAndRejectRegistration",
         "TestOAuthClientCredentialsPublicFlow",
+        "TestOperationProofRequiresRealAdminSession",
+        "TestOperationProofRequiresPermission",
+        "TestOperationProofPasswordTOTPFlow",
+        "TestOperationProofBindingValidation",
+        "TestOperationProofSessionBindingAndCancel",
+        "TestOperationProofWebAuthnUnavailableWithoutPasskey",
+        "TestOperationProofPermissionRevokedAfterPrepareRejected",
+        "TestOperationProofRolePermissionRemovedAfterPrepareRejected",
         "TestPasswordResetValidateSourceLimit",
         "TestPasswordResetCompleteSourceLimit",
         "TestPasswordResetSourceKeyTrustBoundary",
@@ -18489,6 +19897,7 @@
         "TestRegistrationClosedConfigInvalid",
         "TestRegistrationResendAntiEnumeration",
         "TestReportsPublicCancelRetry",
+        "TestRootFacadeConsistencyOnFreshRuntime",
         "TestOpenEnsureRootUsersLoginAccessRevokeStartClose",
         "TestOpenMigrateFalseFailsAndCleansUpResources",
         "TestOpenMissingKeyWithoutCreateFails",
@@ -18698,6 +20107,8 @@
         "TestCSRFValidatorFunc"
       ],
       "./internal/account": [
+        "TestListUsersSearch",
+        "TestListUsersSearchInvalidFields",
         "TestCreateUserStoresWhitelistedFields",
         "TestLogsDoNotContainProfileData",
         "TestUsernameRulesAndNormalization",
@@ -18728,6 +20139,11 @@
         "TestAuditQueryPermissionsAndDataScope",
         "TestAuditExportSensitiveReauthAuditAndDownload",
         "TestAuditRetentionAndPurgeRequireRootReauthConfirm",
+        "TestNotificationHistoryEndpoint",
+        "TestNotificationHistoryDenied",
+        "TestMailDeliveryEndpoint",
+        "TestMailDeliveryEndpointInvalidCursor",
+        "TestHistoryEndpointsUnwired",
         "TestReportEndpointsWiring",
         "TestReportDownloadTicketOneTime",
         "TestPlanReadEndpoints",
@@ -18760,6 +20176,8 @@
       "./internal/app": [
         "TestApplicationDeletionLifecycle",
         "TestApplicationPurgeRetentionEnforced",
+        "TestApplicationListSearch",
+        "TestApplicationMemberSearch",
         "TestApplicationMemberProfileIsolationAcrossApps",
         "TestApplicationMemberAuthorizationByAppScope",
         "TestApplicationMemberControlledAssociation",
@@ -18914,6 +20332,11 @@
         "TestStrongAuthByPermissionSensitivity"
       ],
       "./internal/authz": [
+        "TestRootOwnsImplementedEnabledPermissions",
+        "TestRootEffectivePermissionsAndSources",
+        "TestRootResourceAccess",
+        "TestRootCallerQueryAuthorizationAndSpoof",
+        "TestRootFailClosedAndDirectoryScanLimit",
         "TestDirectAndGroupRoleMerge",
         "TestDisabledPriority",
         "TestSameNameCrossApplicationIsolation",
@@ -19096,6 +20519,7 @@
         "TestAllowedTargetsJSONRoundTrip",
         "TestGrantActiveAndIDs",
         "TestTargetValidation",
+        "TestDirectManagementPermissionsRoleAndDelegation",
         "TestRoleWritePathsRequireDelegation",
         "TestGroupMemberPathRequiresDelegation",
         "TestPermissionEnableRequiresDelegation",
@@ -19134,6 +20558,7 @@
         "TestScopeAndCancellation"
       ],
       "./internal/emailchange": [
+        "TestEmailIdentityVersionIncrementsOnRealWrites",
         "TestRequestChangeSensitivePolicy",
         "TestRequestChangeFailsClosedWithoutSensitiveRunner",
         "TestFirstAddEmail",
@@ -19161,6 +20586,7 @@
         "TestJitteredDelayBounds"
       ],
       "./internal/group": [
+        "TestGroupListSearch",
         "TestAddMembersRequiresSensitivePolicy",
         "TestAddMembersBindsMemberSetAndNotifies",
         "TestAddMembersFailsClosedWithoutRunner",
@@ -19186,7 +20612,8 @@
         "TestNewHTTPHandlerConfigErrors",
         "TestNormalizeProtectionMapping",
         "TestIdentityAdapterMapping",
-        "TestContextRoundtrip"
+        "TestContextRoundtrip",
+        "TestOpenAPIDocumentIncludesRegisteredPageRoutes"
       ],
       "./internal/httpsrv": [
         "TestNewValidationMessages",
@@ -19232,6 +20659,8 @@
         "TestValidateSecretValue"
       ],
       "./internal/mailer": [
+        "TestDeliveryListPageStableKeyset",
+        "TestDeliveryListPageCursorBindsFilterAndScope",
         "TestRealMailFaultsQueue",
         "TestDeliveryEnqueueIdempotentAndEncrypted",
         "TestDeliveryHandlerSuccessAndRestartRecovery",
@@ -19328,6 +20757,9 @@
         "TestOnlineBackupsContract",
         "TestOnlineNotificationsAndTasks",
         "TestOnlineHelpAndUsage",
+        "TestAdminRenameUserFlow",
+        "TestAdminRenameUserProofFile",
+        "TestAdminRenameUserMissingArgs",
         "TestOnlineDownloadOverwriteAtomic",
         "TestOnlineDownloadFailurePreservesExistingFile",
         "TestOnlineDownloadRejectsSymlinkTarget",
@@ -19351,6 +20783,12 @@
         "TestStep220AppListAll",
         "TestStep220IterationFlagValidation",
         "TestStep233DiagRuntimeAndErrors",
+        "TestUserListSearchCLI",
+        "TestAppMembersSearchCLI",
+        "TestDomainListSearchCLI",
+        "TestStep266HistoryCLIFlagValidation",
+        "TestStep266HistoryCLIHelp",
+        "TestStep266HistoryLimitBoundary",
         "TestTaskListAndGet",
         "TestTaskWaitSucceeds",
         "TestTaskWaitLocalTimeout",
@@ -19390,6 +20828,12 @@
         "TestSQLIdempotencyStoreExpiry"
       ],
       "./internal/manualrecovery": [
+        "TestExecutionNotificationReceiptAndProjection",
+        "TestNotificationProjectionAfterServiceRestart",
+        "TestNotificationStateWriteFailureRecoverableByDedupKey",
+        "TestFailedExecutionNotificationNotMarkedRecovered",
+        "TestExecutionNotificationQueryRejectsNonParticipant",
+        "TestNotificationDedupKeyStable",
         "TestPolicySummaryAndContentConsistent",
         "TestGetRequestForApprovalContract",
         "TestGetExecutionProjection",
@@ -19450,7 +20894,13 @@
         "TestStrongSetupMethodPolicyFailClosed",
         "TestAvailableSecondFactorMethodsOnlyReturnsEnabled",
         "TestTOTPStrongAuthGatedByPolicy",
-        "TestRecoveryAuthenticationHandoff"
+        "TestRecoveryAuthenticationHandoff",
+        "TestStrongSetupFinalizerTransactionGeneration",
+        "TestStrongSetupFinalizerConflictRollsBack",
+        "TestStrongSetupTransactionVerifierRejectsRemovedBinding",
+        "TestStrongSetupMethodBarrierRejectsRoleUpgrade",
+        "TestStrongSetupAuditFailureRollsBackCompletion",
+        "TestCheckStrongSetupMethodCurrentPolicy"
       ],
       "./internal/netguard": [
         "TestIPClassification",
@@ -19535,6 +20985,7 @@
         "TestExistingUserAlreadyHoldingRoleAccepts",
         "TestCreateInvitationGuardDenied",
         "TestReviewApprovalGuardAndScopedManagement",
+        "TestInvitationAcceptanceAdvancesEmailIdentityVersion",
         "TestInviteCreateAcceptNewUser",
         "TestEmailInviteIdentityBinding",
         "TestInviteRejectedWhenCancelledExpiredOrGuardDenied",
@@ -19596,6 +21047,13 @@
         "TestCompleteResetAuditFailureRollsBack",
         "TestCompleteResetConcurrentSingleWinnerAndResponseLossRetry",
         "TestCompleteResetConflictKeepsToken",
+        "TestResetRequestBindsEmailIdentityVersion",
+        "TestResetLinkNotRevivedByRoundTripEmailChange",
+        "TestResetFirstEmailBindingAdvancesIdentityVersion",
+        "TestResetLegacyBoundWithoutEmailIdentityRejected",
+        "TestCompleteResetEmailIdentityChangedAtCommitBoundaryRollsBack",
+        "TestResetThenEmailSwitchKeepsSingleApplyAndNoRevival",
+        "TestConcurrentEmailSwitchAndResetStaysConsistent",
         "TestQueueResetRealMail",
         "TestQueueResetMailAndNotice",
         "TestQueueResetMailEnqueueFailure",
@@ -19621,6 +21079,7 @@
         "TestValidateResetTokenFailsClosedOnCredentialStoreErrors"
       ],
       "./internal/permission": [
+        "TestPermissionListSearch",
         "TestCreatePermissionCategoriesAndDefinition",
         "TestCreateValidation",
         "TestBuiltinProtectionAndRootOnly",
@@ -19639,6 +21098,9 @@
         "TestServiceOperationAndAvailableStrengths",
         "TestValidatePolicyCombinations",
         "TestSelfServiceOperationsRegistered",
+        "TestDirectManagementOperationsRegistered",
+        "TestDirectManagementMinimumCannotBeLowered",
+        "TestDirectManagementMinimumReadFallback",
         "TestDefaultsAndPartialOverride",
         "TestRejectInvalidChangesAndAuthorization",
         "TestVersionConflictAndConcurrentSet",
@@ -19654,6 +21116,8 @@
         "TestCatalogOnboardingAndAuthnOperations"
       ],
       "./internal/preset": [
+        "TestDirectManagementPermissionsFreshInstall",
+        "TestUpgradeDoesNotSilentlyGrantDirectManagementPermissions",
         "TestCatalogIntegrity",
         "TestInstallInitialAndIdempotent",
         "TestInstallUpgradeDoesNotOverwriteUserAdjustments",
@@ -19670,6 +21134,9 @@
         "TestWholeRestoreSkipsInactiveApplication"
       ],
       "./internal/profile": [
+        "TestManagementRenameSuccessAndRules",
+        "TestManagementRenameProtectedTargets",
+        "TestManagementRenamePlanIntegrity",
         "TestChangeUsernameFailsClosedWithoutSensitiveRunner",
         "TestSelfUpdateProfileAndApplicationIsolation",
         "TestVersionConflictConcurrentUpdate",
@@ -19745,7 +21212,27 @@
         "TestNotificationDeliveryLinkWriteFailureRecoverable",
         "TestNotificationDeliveryFailureAndCancelledNotSuccess",
         "TestNotificationQueryScopeIsolation",
+        "TestNotificationsPageStableKeyset",
+        "TestNotificationsPageQueryPlanUsesIndex",
         "TestNotificationRealMailFaultsProjection",
+        "TestDirectProofHappyPathSingleUseAndNoSecretLeak",
+        "TestDirectProofBindingRejections",
+        "TestDirectProofWrongFactors",
+        "TestDirectProofSessionMismatchOnVerify",
+        "TestDirectProofPermissionRevokedAtBegin",
+        "TestDirectProofMissingDependenciesFailClosed",
+        "TestDirectProofLegacyPathsFailClosed",
+        "TestDirectProofCommitFailureKeepsProofRetryable",
+        "TestDirectProofConcurrentConsumeSingleWinner",
+        "TestDirectProofCancelChallenge",
+        "TestDirectProofPasswordIntentSealedAndMatched",
+        "TestDirectProofWebAuthnPath",
+        "TestDirectProofWebAuthnRejects",
+        "TestDirectProofOperationMappingMatchesPolicyCatalog",
+        "TestDirectProofPurgesExpiredIntent",
+        "TestDirectProofTxRevalidationClosesPrepareCommitWindow",
+        "TestDirectProofConsumeWithinMaxAge",
+        "TestProofMaxAgeHardCap",
         "TestNotifyOutcomeQueueRealMail",
         "TestNotifyOutcomeQueue",
         "TestAuthorizeFreshStaleWeakAndConfirmed",
@@ -19786,6 +21273,7 @@
         "TestCodeOfReusesRegisteredCodes"
       ],
       "./internal/registration": [
+        "TestEmailVerificationAdvancesEmailIdentityVersion",
         "TestParseRegisterJSONWhitelist",
         "TestRegisterDisabled",
         "TestRegisterWithoutEmailAndPasswordLogin",
@@ -19860,6 +21348,8 @@
         "TestRetryAuditFailureIsFailClosed",
         "TestRetryAuthorizationBeforeStateHidesExistence",
         "TestRetryFromPersistedHistoryAfterRestart",
+        "TestHistoryListSearchAndCursorBinding",
+        "TestPlanListPageSearch",
         "TestStep195FiveFormatsRealTaskExecutor",
         "TestStep195ScheduledFailureDoesNotPolluteAudit",
         "TestStep195PDFFailClosedWithoutFont",
@@ -19893,6 +21383,7 @@
         "TestRestoreDoesNotRevivePreBackupCredentials"
       ],
       "./internal/role": [
+        "TestRoleListSearch",
         "TestRoleChangesRequireSensitivePolicy",
         "TestAssignUserRoleNotifiesAfterSuccess",
         "TestRoleChangesFailClosedWithoutRunner",
@@ -19930,6 +21421,10 @@
         "TestAuditFailureRollsBack",
         "TestLockCoversSameFileDifferentPaths",
         "TestConcurrentRecoveryOnlyOneWins"
+      ],
+      "./internal/search": [
+        "TestNormalizeQuery",
+        "TestEscapeLikeLiteral"
       ],
       "./internal/secrets": [
         "TestHMACDigestDeterministicAndBound",
@@ -20009,8 +21504,13 @@
         "TestOtherStrongFactorAdapters"
       ],
       "./internal/serverapp": [
+        "TestDirectUsernameRoutesUseTrustedCallerAndProof",
+        "TestDirectUsernameRoutesFailClosed",
+        "TestParseAdminDomainSearch",
         "TestParseAdminListQueryDefaultsAndValid",
         "TestParseAdminListQueryRejectsInvalid",
+        "TestParseAdminListSearchDefaultsAndNormalization",
+        "TestParseAdminListSearchRejectsInvalid",
         "TestAdminSessionsPageIntegrationRealServices",
         "TestApplicationDeleteReauthFailClosed",
         "TestAppSupportCrossChainManualRecovery",
@@ -20030,6 +21530,7 @@
         "TestCLIReauthExpiryRejected",
         "TestCLIReauthTargetBindingRejected",
         "TestProductionDelegationGuardRootAndTrustedBypass",
+        "TestDirectManagementNotifier",
         "TestBuildMailRuntimeDisabled",
         "TestBuildMailRuntimeEnabledFailClosed",
         "TestBuildMailRuntimeEnabled",
@@ -20044,7 +21545,9 @@
         "TestManagedPolicyAuthorizerReaderIsSystemOnly",
         "TestManagedAPIDisabledByDefault",
         "TestManagedAPIEnabledRequiresAuthentication",
+        "TestManualRecoveryNotificationDeliveryLink",
         "TestManualRecoveryPasswordResetRealMail",
+        "TestManualRecoveryNotifierReceiptIdempotent",
         "TestManualRecoveryNotifierQueue",
         "TestManualRecoveryNotifierQueueRealMail",
         "TestStep188RebindForcesRestrictedLogin",
@@ -20084,10 +21587,15 @@
         "TestInspectTokenForResourceServiceFailClosed",
         "TestPublicFormPathsIncludeMFAAndPasswordReset",
         "TestRBACPageReauthFailClosed",
+        "TestReauthPermissionCheckerTxRevalidatesLinksAndClock",
         "TestResourceAuthorizeAndIntrospectE2E",
         "TestResourceRegistryResolve",
         "TestResourceInspectAuthorizer",
         "TestResourceInspectClientAuthorizerRejectsCrossClient",
+        "TestRootSemanticsAdapterConsistency",
+        "TestRootSemanticsProductionCatalogFreshDatabase",
+        "TestRootSemanticsProductionCatalogUnimplemented",
+        "TestRootSemanticsFailClosedOnStoreError",
         "TestSecurityDomainsPasskeySeesTOTPOtherStrongFactor",
         "TestInitCreatesRootAndServeLifecycle",
         "TestServeWritesAccessLogFile",
@@ -20107,6 +21615,9 @@
         "TestProtocolIssuanceAuthorizerAccountValidity",
         "TestUserValidityAdminRoutes",
         "TestAdminUserValidityPageRealServices",
+        "TestStep253FinalizeStrongSetupConditionalClear",
+        "TestStep253StrongFactorBoundInTransaction",
+        "TestStep266HistoryEndpointsE2E",
         "TestTaskRunPermissionKeyMappings",
         "TestCheckTaskPermissionFailClosed"
       ],
@@ -20308,6 +21819,7 @@
         "TestSendResetStaffRateLimited",
         "TestSendResetGlobalBudget",
         "TestBuildProtectedTargetPermissions",
+        "TestCaseListSearch",
         "TestCreateCaseScopeMaskingAndAudit",
         "TestGetCaseOtherStaffDenied",
         "TestHighPrivilegeTargetRejected",
@@ -20480,7 +21992,8 @@
         "TestBindFailureAuditNotSuccess",
         "TestBeginBindingInvalidRequestAudited",
         "TestBeginBindingWithRealReauthPolicy",
-        "TestRemoveBindingInvalidatesExistingSessions"
+        "TestRemoveBindingInvalidatesExistingSessions",
+        "TestRollbackStrongSetupBinding"
       ],
       "./internal/transport": [
         "TestAccessLogFormatAndRedaction",
@@ -20489,6 +22002,12 @@
         "TestAccessLogAlertPanicIsolated",
         "TestAccessLogDisabledWithoutWriter",
         "TestW3CTokenEscaping",
+        "TestAdminOperationContractsComplete",
+        "TestAdminContractsMatchRegisteredRoutes",
+        "TestAdminContractsExcludeOtherSteps",
+        "TestAdminComponentSchemasCoverSuccessReferences",
+        "TestAdminDownloadSemanticsAreAccurate",
+        "TestAdminOperationsNoServerPathExamples",
         "TestBoundaryLoopbackDefaultAndSpoofedHeaders",
         "TestBoundaryRejectsUntrustedHost",
         "TestBoundaryRejectsInvalidHost",
@@ -20506,6 +22025,14 @@
         "TestOpenAPIDocumentMatchesRegistry",
         "TestOpenAPIServedByHandler",
         "TestOpenAPIRejectsInvalidPrefix",
+        "TestOpenAPIDocumentsPageOperations",
+        "TestOpenAPIPageContractDriftFails",
+        "TestOpenAPISkipsUnregisteredPageRoutes",
+        "TestOpenAPIPageDocumentDeterministic",
+        "TestOpenAPIPageRoutesServedByHandler",
+        "TestPageOperationContractsComplete",
+        "TestOpenAPIPageDocumentFitsResponseBuffer",
+        "TestValidateOpenAPIDocumentRejectsBrokenDocument",
         "TestNormalizePrefix",
         "TestNormalizeTextParam",
         "TestNormalizeIdentifierParam",
@@ -20563,6 +22090,7 @@
         "TestAuditAdapterErrorCatalogAuthorization",
         "TestAuditAdapterRelatedTaskSummary",
         "TestReportsAdapterRealServices",
+        "TestRootSourceAndNotImplementedReasonText",
         "TestNotificationNoticeStateMapping",
         "TestNotificationNoticeErrorCodeMapping",
         "TestStatsDashboardCountsMatchAuditDetails",
@@ -20645,6 +22173,10 @@
         "TestAdminIntegrationGroupsAndMembers",
         "TestAdminIntegrationBatchPartialFailure",
         "TestAdminIntegrationAuthorizationFailClosed",
+        "TestAdminUserRenamePageShowsTargetWithoutSecrets",
+        "TestAdminUserRenamePageOneShotProof",
+        "TestAdminUserRenamePageMFAChallenge",
+        "TestAdminUserRenamePageFailClosed",
         "TestAdminSessionsPageRoutesAndValidation",
         "TestAdminSessionsPageRevokeFlow",
         "TestAdminSessionsPageCapabilities",
@@ -20708,6 +22240,9 @@
         "TestAdminDiagnosticsPageRendersRedactedView",
         "TestAdminDiagnosticsPageAbsentWithoutBackend",
         "TestAdminDiagnosticsPageErrorDenied",
+        "TestAdminRBACListSearchPages",
+        "TestAdminGroupsListSearchPage",
+        "TestAdminApplicationsListSearchPage",
         "TestUIPageManageRoutesContract",
         "TestUIPageManageRenderingAndStates",
         "TestMFAPasskeyPageRendering",
@@ -20759,6 +22294,13 @@
         "TestReportsCancelEntry",
         "TestReportsPreviewFailureVisible",
         "TestReportsCleanupRequiresCSRFAndShowsResult",
+        "TestSupportCasesListSearchPage",
+        "TestReportHistoryListSearchPage",
+        "TestSupportCasesSearchPaginationKeepsFilter",
+        "TestReportHistorySearchPaginationKeepsFilter",
+        "TestAdminUsersListSearchPage",
+        "TestAdminApplicationMembersSearchPage",
+        "TestListSearchEnhancementAssets",
         "TestSecurityPagesRendering",
         "TestSecurityBackendRealServices",
         "TestSecurityCenterCapabilityCombinations",
@@ -20807,6 +22349,9 @@
         "TestUIPageSupportInboxUnavailable",
         "TestUIPageSupportExecuteGatingAndFailedHint",
         "TestSupportRecoveryNotificationQueuedShown",
+        "TestAdminTasksPageRendersBoundedList",
+        "TestAdminTasksPageAbsentWithoutBackend",
+        "TestAdminTasksPageRejectsInvalidFilter",
         "TestAdminUsersListValidityDisplay",
         "TestAdminUserDetailValidityView",
         "TestAdminUserValiditySet",

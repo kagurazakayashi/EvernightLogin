@@ -64,11 +64,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, factory Promp
 		return runRestoreReenable(args[1:], stdout, stderr)
 	case "config", "diag", "migrate", "task", "session", "user",
 		"group", "role", "app", "permission", "notify",
-		"audit", "reports", "backups", "notifications", "tasks", "admin", "confirm":
+		"audit", "reports", "backups", "notifications", "tasks", "deliveries",
+		"admin", "confirm":
 		// 步骤 84 常规管理/诊断/设置命令与在线管理命令：本地运维边界不联网；
 		// group/role/app/permission/notify 是本地管理命令组（只读 + 受控建组，
 		// 需要委派/敏感策略的写动作返回 MANAGEMENT_WRITE_NOT_EXPOSED）；在线域
-		// （audit/reports/backups/notifications/tasks）只调用已运行服务的
+		// （audit/reports/backups/notifications/tasks/deliveries）只调用已运行服务的
 		// 管理 API，需要 --session-file 提供的受保护管理会话秘密。
 		return managecli.RunWithOptions(args, stdin, stdout, stderr, managecli.Options{
 			Build: login.CurrentBuildInfo(),
@@ -218,7 +219,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  loginctl group|role|app list|get|... |permission list |notify status|test")
 	fmt.Fprintln(out, "  loginctl admin users|user|groups|group|roles|role|permissions|applications|")
 	fmt.Fprintln(out, "      application|support-cases|support-case ...（在线只读管理，需 --session-file）")
-	fmt.Fprintln(out, "  loginctl audit|reports|backups|notifications|tasks ...（在线管理，需 --session-file）")
+	fmt.Fprintln(out, "  loginctl audit|reports|backups|notifications|tasks|deliveries ...（在线管理，需 --session-file）")
 	fmt.Fprintln(out, "  loginctl help | version")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "安全要求：")

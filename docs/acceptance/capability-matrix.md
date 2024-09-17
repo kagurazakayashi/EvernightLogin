@@ -6,13 +6,13 @@
 
 | 项 | 值 |
 |---|---|
-| 生成时间（UTC） | 2026-11-25T02:54:40Z |
+| 生成时间（UTC） | 2026-11-26T03:05:37Z |
 | 仓库 | . |
-| Git HEAD / 分支 | `` / ``（工作树干净） |
+| Git HEAD / 分支 | `8ecdb2aae1eb8f6c6f0374c77156a4938c0ffc7e` / `HEAD`（工作树含未提交修改） |
 | 工具链 / 平台 | go1.27.4 / windows/amd64 |
 | 逻辑处理器 / 并发预算 | 16 / 8 |
 | 能力声明 | `scripts/capabilities/catalog.json` |
-| 扫描文件数 | 708 |
+| 扫描文件数 | 779 |
 
 复跑命令（根目录，Windows PowerShell 示例）：
 
@@ -20,17 +20,28 @@
 $env:GOTOOLCHAIN='local'
 $env:GOMAXPROCS='2'
 go run ./scripts/capabilities -strict
+go run ./scripts/capabilities -check   # 只读校验（不写 tracked 文件，EXIT 4=不一致）
 ```
 
 ## 状态汇总
 
 | 状态 | 数量 | 含义 |
 |---|---|---|
-| `implemented` | 43 | 声明面全部在源码中解析到，且有定向测试证据 |
+| `implemented` | 48 | 声明面全部在源码中解析到，且有定向测试证据 |
 | `implemented_untested` | 0 | 声明面全部解析到，但缺少可核验的定向测试证据（未测，不是已完成） |
+| `partial` | 3 | 声明面与测试解析到，但有已登记的产品缺口/环境未测/子模块阻塞（不能当作全部完成） |
 | `missing` | 0 | 至少一个声明面/测试/缺口证据未解析到（未实现或文档超前） |
-| `unimplemented` | 0 | 已知未实现能力，缺口证据已核验（不得当作可用能力） |
-| 合计 | 43 | 定向测试证据 186 条 |
+| `unimplemented` | 1 | 已知未实现能力，缺口证据已核验（不得当作可用能力） |
+| 合计 | 52 | 定向测试证据 236 条 |
+
+证据分级（步骤 267，防止“符号存在=完成”）：
+
+| 分类 | 数量 |
+|---|---|
+| 正向证据（真实成功链证据文件标记） | 8 |
+| 拒绝证据（真实越权/失败链证据文件标记） | 8 |
+| 环境未测能力（真实硬件/非 SQLite/外部服务等） | 2 |
+| 子模块/远端不可获取能力 | 1 |
 
 ## 能力矩阵
 
@@ -38,7 +49,9 @@ go run ./scripts/capabilities -strict
 
 | 能力 | 领域 | 状态 | 内部服务 | 公开 Go | 根包 | 管理 API | 协议 | CLI | 页面 | 权限 | 分页 | 定向测试 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `preset.install_gap` 预设安装生产入口缺口（D-252-1） | 授权 | `unimplemented` | - | - | - | - | - | - | - | - | - | 无 |
 | `access.joint_check` 令牌与当前权限联合校验 | 授权 | `implemented` | 2 | 7 | - | - | 1 | - | - | 1 | none | 2 |
+| `account.lifecycle_221_remaining` 221 范围的剩余入口（R10-22，部分完成） | 账户 | `partial` | - | - | - | - | - | - | - | - | - | 无 |
 | `account.lifecycle_public` 注册、资料与邮箱生命周期公开 Go 门面（步骤 221） | 账户 | `implemented` | 4 | 25 | - | - | - | - | - | - | none | 3 |
 | `account.user_lifecycle_public` 用户生命周期、自有密码、邀请审批与批量导入公开门面（步骤 223） | 账户 | `implemented` | 5 | 49 | - | - | - | - | - | - | offset | 7 |
 | `account.users` 用户查询、生命周期与批量导出 | 账户 | `implemented` | 4 | 3 | - | 2 | - | - | - | 8 | offset | 6 |
@@ -56,11 +69,15 @@ go run ./scripts/capabilities -strict
 | `config.load` YAML 配置加载、默认值、覆盖与校验 | 配置 | `implemented` | - | - | 5 | - | - | 1 | - | - | none | 3 |
 | `device_code.login` 设备码登录（RFC 8628） | 协议 | `implemented` | 1 | - | - | - | 2 | - | - | - | none | 2 |
 | `diagnostics.operations` 运行诊断与关联错误查询 | 管理 | `implemented` | 3 | 17 | - | 3 | - | - | 1 | 1 | fixed | 4 |
+| `docs.openapi_page_contract` OpenAPI 页面操作契约（步骤 268） | 文档与契约 | `implemented` | 1 | - | - | - | - | - | - | - | - | 2 |
 | `mail.delivery` 站内邮件投递队列与本地测试邮件服务 | 通知 | `implemented` | 3 | - | - | - | - | - | - | - | offset | 3 |
+| `mail.delivery_console` 邮件投递记录分页与取消语义（步骤 266） | 通知 | `implemented` | 1 | - | - | 1 | - | 1 | - | - | - | 3 |
 | `mfa.public_facade` 认证因素与安全中心公开 Go 门面（步骤 222） | 认证与会话 | `implemented` | 5 | 24 | - | - | - | - | - | 1 | fixed | 4 |
 | `mfa.totp_recovery` 两步验证（TOTP/恢复代码）与受限恢复 | 认证与会话 | `implemented` | 3 | 13 | - | - | - | - | - | 1 | none | 5 |
+| `notifications.security_history` 安全告知投递关联与分页历史（步骤 265/266） | 通知 | `implemented` | 3 | - | - | 1 | - | 1 | - | - | - | 3 |
 | `oauth_oidc.protocol` OAuth2/OIDC 协议端点（授权码/刷新/撤销/内省/UserInfo） | 协议 | `implemented` | 5 | 14 | - | - | 7 | - | 1 | 1 | none | 6 |
 | `onboarding.invitations` 邀请与审核注册 | 账户 | `implemented` | 1 | - | - | - | - | - | - | - | offset | 2 |
+| `operation.proof` 操作绑定的一次两步验证证明（步骤 255） | 认证与会话 | `implemented` | 1 | 9 | - | - | - | 1 | - | - | - | 25 |
 | `pagination.iteration` 有界分页遍历辅助（宿主/CLI 可选） | 分页与列表 | `implemented` | - | 4 | - | - | - | - | - | - | none | 13 |
 | `passkey.webauthn` Passkey/WebAuthn 登录与凭证管理 | 认证与会话 | `implemented` | 1 | 2 | - | - | - | - | - | - | none | 2 |
 | `passwordreset.self_service` 自助密码找回 | 恢复 | `implemented` | 1 | 5 | - | - | - | - | - | 1 | none | 3 |
@@ -69,6 +86,7 @@ go run ./scripts/capabilities -strict
 | `rbac.roles_permissions` 用户组、角色、权限目录与委派 | 授权 | `implemented` | 4 | 14 | - | 11 | - | - | - | 8 | offset | 4 |
 | `reports.generate` 统计报告生成、导出、计划与清理 | 审计与报告 | `implemented` | 1 | - | - | 6 | - | - | - | 5 | offset | 3 |
 | `runtime.embedded` 嵌入式运行时装配（Open/Handler/Mount/生命周期） | 嵌入式与运行时 | `implemented` | 2 | 18 | 5 | - | - | 1 | - | - | none | 3 |
+| `search.domain_lists` 有界模糊搜索（步骤 261/262/263） | 分页与列表 | `partial` | - | - | - | - | - | - | - | - | - | 3 |
 | `security.policy_reauth` 敏感操作安全策略与再次认证 | 认证与会话 | `implemented` | 4 | - | - | - | - | - | - | 1 | none | 3 |
 | `session.admin` 管理员会话查询与强制下线 | 认证与会话 | `implemented` | 1 | 18 | - | 2 | - | - | - | 1 | offset | 6 |
 | `settings.managed` 常规设置读取、校验、更新与敏感默认恢复 | 配置 | `implemented` | 3 | 19 | - | 5 | - | - | 1 | 1 | none | 6 |
@@ -80,11 +98,15 @@ go run ./scripts/capabilities -strict
 | `transport.http_security` HTTP 传输安全链（限流/CSRF/CORS/边界/错误信封/OpenAPI） | 传输 | `implemented` | 5 | - | 7 | - | - | - | - | - | none | 4 |
 | `ui.admin_pages` 管理与客服页面框架（固定命名路由） | 页面 | `implemented` | 2 | - | - | - | - | - | 2 | - | fixed | 4 |
 | `ui.public_pages` 公开与自助页面（登录/注册/找回/账户/错误页） | 页面 | `implemented` | 4 | - | 11 | - | - | - | 5 | - | fixed | 3 |
+| `users.direct_management` 直接改用户名/直接重置密码（步骤 256/257） | 账户 | `implemented` | 1 | 7 | - | - | - | 1 | - | 2 | - | 14 |
+| `verification.environment_limits` 环境未测与子模块不可获取（分类登记） | 验证边界 | `partial` | - | - | - | - | - | - | - | - | - | 无 |
 | `webhook.delivery` Webhook 端点、签名与投递重试 | 通知 | `implemented` | 1 | - | - | - | - | - | - | - | none | 2 |
 
 ### 声明面明细（逐项 found/total）
 
+- `preset.install_gap`: matched_tests 无
 - `access.joint_check`: internal_service 2/2, app_api 7/7, protocol_path 1/1, permission 1/1, test 2/2, matched_tests 2
+- `account.lifecycle_221_remaining`: matched_tests 无
 - `account.lifecycle_public`: internal_service 4/4, app_api 25/25, test 3/3, matched_tests 3
 - `account.user_lifecycle_public`: internal_service 5/5, app_api 49/49, test 6/6, matched_tests 7
 - `account.users`: internal_service 4/4, app_api 3/3, admin_route 2/2, permission 8/8, test 6/6, matched_tests 6
@@ -102,11 +124,15 @@ go run ./scripts/capabilities -strict
 - `config.load`: root_api 5/5, cli 1/1, test 3/3, matched_tests 3
 - `device_code.login`: internal_service 1/1, protocol_path 2/2, test 2/2, matched_tests 2
 - `diagnostics.operations`: internal_service 3/3, app_api 17/17, admin_route 3/3, page 1/1, permission 1/1, test 4/4, matched_tests 4
+- `docs.openapi_page_contract`: internal_service 1/1, test 2/2, matched_tests 2
 - `mail.delivery`: internal_service 3/3, test 3/3, matched_tests 3
+- `mail.delivery_console`: internal_service 1/1, admin_route 1/1, cli 1/1, test 2/2, matched_tests 3
 - `mfa.public_facade`: internal_service 5/5, app_api 24/24, permission 1/1, test 4/4, matched_tests 4
 - `mfa.totp_recovery`: internal_service 3/3, app_api 13/13, permission 1/1, test 5/5, matched_tests 5
+- `notifications.security_history`: internal_service 3/3, admin_route 1/1, cli 1/1, test 2/2, matched_tests 3
 - `oauth_oidc.protocol`: internal_service 5/5, app_api 14/14, protocol_path 7/7, page 1/1, permission 1/1, test 6/6, matched_tests 6
 - `onboarding.invitations`: internal_service 1/1, test 2/2, matched_tests 2
+- `operation.proof`: internal_service 1/1, app_api 9/9, cli 1/1, test 2/2, matched_tests 25
 - `pagination.iteration`: app_api 4/4, test 2/2, matched_tests 13
 - `passkey.webauthn`: internal_service 1/1, app_api 2/2, test 2/2, matched_tests 2
 - `passwordreset.self_service`: internal_service 1/1, app_api 5/5, permission 1/1, test 3/3, matched_tests 3
@@ -115,6 +141,7 @@ go run ./scripts/capabilities -strict
 - `rbac.roles_permissions`: internal_service 4/4, app_api 14/14, admin_route 11/11, permission 8/8, test 4/4, matched_tests 4
 - `reports.generate`: internal_service 1/1, admin_route 6/6, permission 5/5, test 3/3, matched_tests 3
 - `runtime.embedded`: internal_service 2/2, app_api 18/18, root_api 5/5, cli 1/1, test 3/3, matched_tests 3
+- `search.domain_lists`: test 3/3, matched_tests 3
 - `security.policy_reauth`: internal_service 4/4, permission 1/1, test 3/3, matched_tests 3
 - `session.admin`: internal_service 1/1, app_api 18/18, admin_route 2/2, permission 1/1, test 6/6, matched_tests 6
 - `settings.managed`: internal_service 3/3, app_api 19/19, admin_route 5/5, page 1/1, permission 1/1, test 6/6, matched_tests 6
@@ -126,23 +153,64 @@ go run ./scripts/capabilities -strict
 - `transport.http_security`: internal_service 5/5, root_api 7/7, test 4/4, matched_tests 4
 - `ui.admin_pages`: internal_service 2/2, page 2/2, test 4/4, matched_tests 4
 - `ui.public_pages`: internal_service 4/4, root_api 11/11, page 5/5, test 3/3, matched_tests 3
+- `users.direct_management`: internal_service 1/1, app_api 7/7, cli 1/1, permission 2/2, test 2/2, matched_tests 14
+- `verification.environment_limits`: matched_tests 无
 - `webhook.delivery`: internal_service 1/1, test 2/2, matched_tests 2
 
 
 ### 未关闭项（missing / unimplemented）
 
-- 无
+- **preset.install_gap**（unimplemented）：预设安装生产入口缺口（D-252-1）
+  - 已知限制: preset.Install 能力存在实现但生产装配无调用点（HIGH 产品缺口，不得当已完成，转 273/后续）
+
+## 部分完成与已知缺口（不得当作全部完成）
+
+- **preset.install_gap**（`unimplemented`）：预设安装生产入口缺口（D-252-1）
+  - 已登记缺口: preset.Install 能力存在实现但生产装配无调用点（HIGH 产品缺口，不得当已完成，转 273/后续）
+- **account.lifecycle_221_remaining**（`partial`）：221 范围的剩余入口（R10-22，部分完成）
+  - 已登记缺口: 221 独立 example/HTTP/CLI/页面入口未闭环；已交付 app 公开 Go 门面不等同完整范围
+- **search.domain_lists**（`partial`）：有界模糊搜索（步骤 261/262/263）
+  - 已登记缺口: D-261-5 浏览器前进/后退可能显示旧条件结果（服务端仍重新授权，无越权）
+  - 已登记缺口: D-263-1 客服/报告列表空搜索+非法字段的静默忽略口径未统一
+- **verification.environment_limits**（`partial`）：环境未测与子模块不可获取（分类登记）
+
+## 环境未测（不是通过，也不是缺陷）
+
+- **mail.delivery_console**：邮件投递记录分页与取消语义（步骤 266）
+  - 环境未测（docs/acceptance/capability-truth-matrix.md:真实外部 SMTP/Webhook 外发未测，已核实）
+- **verification.environment_limits**：环境未测与子模块不可获取（分类登记）
+  - 环境未测（docs/acceptance/capability-truth-matrix.md:非 SQLite 运行未测，已核实）
+  - 环境未测（docs/acceptance/capability-truth-matrix.md:真实硬件 Passkey/Windows Hello/YubiKey 未测，已核实）
+  - 环境未测（docs/acceptance/capability-truth-matrix.md:真实外部 SMTP/Webhook 外发未测，已核实）
+  - 环境未测（docs/acceptance/capability-truth-matrix.md:-race/govulncheck/gosec 未跑，已核实）
+
+## 子模块/远端不可获取
+
+- **verification.environment_limits**：环境未测与子模块不可获取（分类登记）
+  - 子模块不可获取（docs/acceptance/capability-truth-matrix.md:远端不可获取，已核实）
+  - 子模块不可获取（docs/acceptance/capability-truth-matrix.md:子模块未纳入源码扫描，已核实）
+
+## 证据分级明细（正向/拒绝证据）
+
+| 能力 | 正向证据 | 拒绝证据 | 成熟度 |
+|---|---|---|---|
+| `docs.openapi_page_contract` | 1 | 1 | implemented |
+| `mail.delivery_console` | 1 | 1 | implemented |
+| `notifications.security_history` | 1 | 2 | implemented |
+| `operation.proof` | 1 | 2 | implemented |
+| `search.domain_lists` | 2 | 0 | partial |
+| `users.direct_management` | 2 | 2 | implemented |
 
 ## 反向覆盖（盘点到的生产面是否被能力声明覆盖）
 
 | 生产面 | 盘点总数 | 未被声明覆盖 |
 |---|---|---|
-| app 公开类型 | 451 | 0 |
-| 管理 API 路由 | 123 | 0 |
+| app 公开类型 | 468 | 0 |
+| 管理 API 路由 | 131 | 0 |
 | 协议端点点位 | 17 | 0 |
-| 页面命名路由 | 245 | 0 |
-| CLI 子命令 | 40 | 0 |
-| 内置权限键 | 51 | 0 |
+| 页面命名路由 | 248 | 0 |
+| CLI 子命令 | 41 | 0 |
+| 内置权限键 | 53 | 0 |
 
 ## 分页审计
 

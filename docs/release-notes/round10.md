@@ -77,6 +77,32 @@
 - `-race`、govulncheck/gosec 未跑（CGO/环境限制）。
 - 发布包其他五个目标的真实运行、真实业务数据迁移未测；12 zip 只做文件/类型/架构/摘要/许可校验与 Windows/amd64 冒烟。
 
+## 5.1 第 11 轮步骤 267 勘误与真值校正（2026-11-26）
+
+> 以下为**当前代码事实**的勘误；本文件正文（第 3/4/5 节等）保留第 10 轮发布时的历史表述，
+> 不删除失败/未实现证据。完整逐条核对见 `docs/acceptance/capability-truth-matrix.md`；
+> 自动矩阵见 `docs/acceptance/capability-matrix.{json,md}`（`go run ./scripts/capabilities -strict` 与
+> `-check` 的当前结果）。
+
+| 编号 | 第 10 轮发布说明表述 | 当前校正 |
+|---|---|---|
+| R10-03 | 个别错误缺 RequestID（`ValidateResetToken` 失败分支） | **已关闭**：`app/passwordreset.go` 的预检查失败统一携带 `login.WithRequestID`，`ValidateTokenWithSource` 全链一致；原表述保留为历史。 |
+| R10-05 | 受限角色存在性轻微信息面 | **仍开放**（LOW）：角色不存在/范围外仍分别映射；未在本轮扩大修改，转 274 或后续授权步骤复验。 |
+| R10-11 | 高权限升级过渡窗口未复算 | **部分/待复验**：252/253 已改 root 与强认证语义，但该过渡态是否完全复算未在本步确认，不宣称关闭。 |
+| R10-17 | Mail 证书导入上限 1 MiB 与文档 24 MiB 不一致 | **功能已修复**：`EvernightMail/internal/certimport` 请求体 24 MiB、单文件 8 MiB；`cli-reference.md` 已写 8/24 MiB。**残余文档问题**：`api-reference.md` 第 23 行仍写「上传 16 MiB」，与实际 24 MiB 不一致，转 276/文档步骤。 |
+| R10-20 | 批量导出视图暴露服务器绝对路径 | **仍开放**（LOW）：`app/userbatch_public.go` 仍保留 `ExportPath` 回填；未在本步改公共契约，转后续脱敏/契约步骤。 |
+| R10-22 | 221 仅 P0，example/HTTP/CLI/页面未做 | **仍为部分完成**：第 11 轮新增门面不改变 221 剩余入口缺口；自动矩阵用 `account.lifecycle_221_remaining`（partial）显式登记。 |
+| R10-23 | 安全通知分页/邮件投递端点/通用任务页/0052 索引未做 | **已关闭**：263/265/266 已交付通知分页、`/admin/v1/deliveries`、`/admin/tasks` 与 CLI；0052 复合索引经查询计划+小数据验证判定**不需要**。 |
+| R10-30 | `uiadminadapter` Audit==nil 时跳过 requested 审计 | **主路径已修复为 fail-closed**：`recordAudit` 在 Audit==nil 时返回 `AUDIT_WRITE_FAILED`；少量拒绝/失败审计仍为显式 best-effort（`_ =`），不能笼统说全部 nil 分支绕过。 |
+
+关于第 10 轮 §2.2「能力目录 43 项全部 `implemented`、`-strict` EXIT 0」：该结论是第 10 轮基线时点
+的事实，**不再代表当前真值**。当前矩阵为 **52 条**：48 implemented、3 partial（搜索边界/221 剩余/
+环境与子模块分类）、1 unimplemented（`preset.Install` 无生产调用点，D-252-1 HIGH 产品缺口）；
+`-strict` EXIT 0 只表示无未解析声明/未覆盖生产面/未核实证据，**不表示全部完成**；`-race`、
+真实硬件、非 SQLite 运行、真实外部 SMTP 等仍属未测（矩阵「环境未测」节与发布说明第 5 节保留）。
+第 11 轮新增事实（252 root 语义、255 操作证明、256/257 直接管理、261-263 搜索、264 Mail 子模块搜索、
+265/266 通知投递与任务页、268 OpenAPI 页面契约）在矩阵中有独立能力条目与正向/拒绝证据分级。
+
 ## 6. 包内容与安装
 
 - Login 包：`bin/{login-server,loginctl,login-backup}[.exe]`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.txt`、产品 `docs/`（README/guide/deployment/embedding/database/requirements/licenses/reference）、`README-PACKAGE.txt`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、包内 `SHA256SUMS.txt`。

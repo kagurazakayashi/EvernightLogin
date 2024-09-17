@@ -38,10 +38,16 @@ type summary struct {
 	Total               int            `json:"total"`
 	Implemented         int            `json:"implemented"`
 	ImplementedUntested int            `json:"implemented_untested"`
+	Partial             int            `json:"partial"`
 	Missing             int            `json:"missing"`
 	Unimplemented       int            `json:"unimplemented"`
 	ByStatus            map[string]int `json:"by_status"`
 	MatchedTestsTotal   int            `json:"matched_tests_total"`
+	// 步骤 267：证据分级与阻塞分类计数（不是“全部实现”）。
+	PositiveEvidenceTotal  int `json:"positive_evidence_total"`
+	RejectionEvidenceTotal int `json:"rejection_evidence_total"`
+	EnvironmentUntested    int `json:"environment_untested_capabilities"`
+	SubmoduleBlocked       int `json:"submodule_blocked_capabilities"`
 }
 
 // inventories 是盘点到的生产面原始清单（机器可直接消费）。
@@ -87,10 +93,20 @@ func buildSummary(results []capabilityResult) summary {
 			summary.Implemented++
 		case "implemented_untested":
 			summary.ImplementedUntested++
+		case "partial":
+			summary.Partial++
 		case "missing":
 			summary.Missing++
 		case "unimplemented":
 			summary.Unimplemented++
+		}
+		summary.PositiveEvidenceTotal += len(result.PositiveEvidenceMatched)
+		summary.RejectionEvidenceTotal += len(result.RejectionEvidenceMatched)
+		if len(result.EnvironmentEvidence) > 0 {
+			summary.EnvironmentUntested++
+		}
+		if len(result.SubmoduleEvidence) > 0 {
+			summary.SubmoduleBlocked++
 		}
 	}
 	return summary
@@ -153,18 +169,26 @@ func buildReport(root, catalogPath string, catalog *catalogFile, inv *inventory,
 	}
 }
 
+// renderJSON 渲染带缩进的机器可读清单（-check 与正常写出共用同一份字节）。
+func renderJSON(report matrixReport) ([]byte, error) {
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(raw, '\n'), nil
+}
+
 // writeJSON 写出带缩进的机器可读清单。
 func writeJSON(path string, report matrixReport) error {
-	raw, err := json.MarshalIndent(report, "", "  ")
+	raw, err := renderJSON(report)
 	if err != nil {
 		return err
 	}
-	raw = append(raw, '\n')
 	return writeFile(path, raw)
 }
 
-// writeMarkdown 由同一份数据生成人类可读清单。
-func writeMarkdown(path string, report matrixReport) error {
+// renderMarkdown 由同一份数据生成人类可读清单（-check 与正常写出共用同一份字节）。
+func renderMarkdown(report matrixReport) []byte {
 	var builder strings.Builder
 	builder.WriteString("# EvernightLogin 机器可读能力清单\n\n")
 	builder.WriteString("> 本文件由 `go run ./scripts/capabilities` 从源码与能力声明自动生成，")
@@ -184,22 +208,34 @@ func writeMarkdown(path string, report matrixReport) error {
 	fmt.Fprintf(&builder, "| 扫描文件数 | %d |\n\n", report.Metadata.FilesScanned)
 	builder.WriteString("复跑命令（根目录，Windows PowerShell 示例）：\n\n")
 	builder.WriteString("```powershell\n$env:GOTOOLCHAIN='local'\n$env:GOMAXPROCS='2'\n")
-	builder.WriteString("go run ./scripts/capabilities -strict\n```\n\n")
+	builder.WriteString("go run ./scripts/capabilities -strict\n")
+	builder.WriteString("go run ./scripts/capabilities -check   # 只读校验（不写 tracked 文件，EXIT 4=不一致）\n```\n\n")
 
 	builder.WriteString("## 状态汇总\n\n")
 	builder.WriteString("| 状态 | 数量 | 含义 |\n|---|---|---|\n")
 	statusMeaning := map[string]string{
 		"implemented":          "声明面全部在源码中解析到，且有定向测试证据",
 		"implemented_untested": "声明面全部解析到，但缺少可核验的定向测试证据（未测，不是已完成）",
+		"partial":              "声明面与测试解析到，但有已登记的产品缺口/环境未测/子模块阻塞（不能当作全部完成）",
 		"missing":              "至少一个声明面/测试/缺口证据未解析到（未实现或文档超前）",
 		"unimplemented":        "已知未实现能力，缺口证据已核验（不得当作可用能力）",
 	}
-	for _, status := range []string{"implemented", "implemented_untested", "missing", "unimplemented"} {
+	for _, status := range []string{"implemented", "implemented_untested", "partial", "missing", "unimplemented"} {
 		fmt.Fprintf(&builder, "| `%s` | %d | %s |\n",
 			status, report.Summary.ByStatus[status], statusMeaning[status])
 	}
 	fmt.Fprintf(&builder, "| 合计 | %d | 定向测试证据 %d 条 |\n\n",
 		report.Summary.Total, report.Summary.MatchedTestsTotal)
+	builder.WriteString("证据分级（步骤 267，防止“符号存在=完成”）：\n\n")
+	builder.WriteString("| 分类 | 数量 |\n|---|---|\n")
+	fmt.Fprintf(&builder, "| 正向证据（真实成功链证据文件标记） | %d |\n",
+		report.Summary.PositiveEvidenceTotal)
+	fmt.Fprintf(&builder, "| 拒绝证据（真实越权/失败链证据文件标记） | %d |\n",
+		report.Summary.RejectionEvidenceTotal)
+	fmt.Fprintf(&builder, "| 环境未测能力（真实硬件/非 SQLite/外部服务等） | %d |\n",
+		report.Summary.EnvironmentUntested)
+	fmt.Fprintf(&builder, "| 子模块/远端不可获取能力 | %d |\n\n",
+		report.Summary.SubmoduleBlocked)
 
 	builder.WriteString("## 能力矩阵\n\n")
 	builder.WriteString("列值为「已解析/声明总数」；`-` 表示该层未声明。\n\n")
@@ -257,6 +293,81 @@ func writeMarkdown(path string, report matrixReport) error {
 	}
 	if !anyOpen {
 		builder.WriteString("- 无\n")
+	}
+
+	builder.WriteString("\n## 部分完成与已知缺口（不得当作全部完成）\n\n")
+	anyPartial := false
+	for _, result := range report.Capabilities {
+		if result.Status != "partial" && result.Status != "unimplemented" {
+			continue
+		}
+		anyPartial = true
+		fmt.Fprintf(&builder, "- **%s**（`%s`）：%s\n", result.ID, result.Status, result.Title)
+		for _, gap := range result.Gaps {
+			fmt.Fprintf(&builder, "  - 已登记缺口: %s\n", gap.Summary)
+		}
+		for _, item := range result.UnverifiedGaps {
+			fmt.Fprintf(&builder, "  - 未核实缺口证据: %s\n", item)
+		}
+	}
+	if !anyPartial {
+		builder.WriteString("- 无（若发布说明/遗留清单声称有未实现项，此处必须同步说明）\n")
+	}
+
+	builder.WriteString("\n## 环境未测（不是通过，也不是缺陷）\n\n")
+	anyEnvironment := false
+	for _, result := range report.Capabilities {
+		if len(result.EnvironmentEvidence) == 0 {
+			continue
+		}
+		anyEnvironment = true
+		fmt.Fprintf(&builder, "- **%s**：%s\n", result.ID, result.Title)
+		for _, evidence := range result.EnvironmentEvidence {
+			state := "已核实"
+			if !evidence.Found {
+				state = "证据未核实"
+			}
+			fmt.Fprintf(&builder, "  - %s（%s:%s，%s）\n", evidence.Summary,
+				evidence.File, evidence.Token, state)
+		}
+	}
+	if !anyEnvironment {
+		builder.WriteString("- 无\n")
+	}
+
+	builder.WriteString("\n## 子模块/远端不可获取\n\n")
+	anySubmodule := false
+	for _, result := range report.Capabilities {
+		if len(result.SubmoduleEvidence) == 0 {
+			continue
+		}
+		anySubmodule = true
+		fmt.Fprintf(&builder, "- **%s**：%s\n", result.ID, result.Title)
+		for _, evidence := range result.SubmoduleEvidence {
+			state := "已核实"
+			if !evidence.Found {
+				state = "证据未核实"
+			}
+			fmt.Fprintf(&builder, "  - %s（%s:%s，%s）\n", evidence.Summary,
+				evidence.File, evidence.Token, state)
+		}
+	}
+	if !anySubmodule {
+		builder.WriteString("- 无\n")
+	}
+
+	builder.WriteString("\n## 证据分级明细（正向/拒绝证据）\n\n")
+	builder.WriteString("| 能力 | 正向证据 | 拒绝证据 | 成熟度 |\n|---|---|---|---|\n")
+	for _, result := range report.Capabilities {
+		if len(result.PositiveEvidenceMatched) == 0 && len(result.RejectionEvidenceMatched) == 0 {
+			continue
+		}
+		maturity := result.Maturity
+		if maturity == "" {
+			maturity = "implemented"
+		}
+		fmt.Fprintf(&builder, "| `%s` | %d | %d | %s |\n", result.ID,
+			len(result.PositiveEvidenceMatched), len(result.RejectionEvidenceMatched), maturity)
 	}
 
 	builder.WriteString("\n## 反向覆盖（盘点到的生产面是否被能力声明覆盖）\n\n")
@@ -363,7 +474,12 @@ func writeMarkdown(path string, report matrixReport) error {
 	builder.WriteString("\n## 原始清单\n\n")
 	builder.WriteString("机器可读原始盘点（app 公开面、管理路由、协议点位、页面路由、CLI、权限、测试）")
 	builder.WriteString("见同目录 `capability-matrix.json` 的 `inventories` 字段。\n")
-	return writeFile(path, []byte(builder.String()))
+	return []byte(builder.String())
+}
+
+// writeMarkdown 写出由同一份数据生成的人类可读清单。
+func writeMarkdown(path string, report matrixReport) error {
+	return writeFile(path, renderMarkdown(report))
 }
 
 // layerCounts 汇总某类声明面的 found/total。

@@ -1,6 +1,6 @@
 {
   "schema": "evernight.capability-catalog/v1",
-  "description": "EvernightLogin 第 10 轮能力声明。每项声明面（内部服务目录、公开 Go 符号、管理 API 路由、协议端点点位、CLI 子命令、页面命名路由、内置权限键、分页字段、定向测试函数）都由 scripts/capabilities 在源码中解析核对；解析不到即 missing。expect=unimplemented 的条目表示已知未实现能力，其缺口证据必须能在代码/注释中找到。",
+  "description": "EvernightLogin 第 11 轮能力声明（步骤 267 校正）。每项声明面（内部服务目录、公开 Go 符号、管理 API 路由、协议端点点位、CLI 子命令、页面命名路由、内置权限键、分页字段、定向测试函数、正向/拒绝证据、环境未测与子模块阻塞证据）都由 scripts/capabilities 在源码中解析核对；解析不到即 missing。maturity=partial 必须有已登记缺口/环境未测/子模块阻塞证据，expect 或 maturity=unimplemented 的条目表示已知未实现能力，其缺口证据必须能在代码/文档中找到。严格模式通过不等于全部完成。",
   "capabilities": [
 {
       "id": "runtime.embedded",
@@ -654,6 +654,133 @@
       ],
       "pagination": {"mode": "offset", "continuation": "has_more", "evidence": ["AdminAuditExportListRequest.Page", "AdminAuditExportList.HasMore", "AdminAuditPurgeRunListRequest.Page", "AdminAuditPurgeRunList.HasMore", "AdminErrorStatsRequest.Limit", "AdminErrorStatsResult.HasMore"]},
       "notes": "审计事件查询延续 218 的游标分页；导出任务/清理运行/错误统计使用 Page 或 Limit+HasMore offset 分页。报告生成/取消/重试/清理为单任务操作；导出下载与清理需再次认证，权限由领域与审计共同判定。"
+    },
+{
+      "id": "operation.proof",
+      "title": "操作绑定的一次两步验证证明（步骤 255）",
+      "domain": "认证与会话",
+      "internal_services": ["internal/reauth"],
+      "app_api": ["OperationProofService", "OperationProofBeginRequest", "OperationProofConfirmRequest", "OperationProofCancelRequest", "OperationProofChallenge", "OperationProofGrant", "OperationProofWebAuthnBeginRequest", "OperationProofWebAuthnConfirmRequest", "OperationProofWebAuthnStart"],
+      "cli": ["loginctl:admin"],
+      "tests": [
+        {"package": "./app", "run": "TestOperationProof", "files": ["app/operation_proof_test.go"]},
+        {"package": "./internal/reauth", "run": "TestDirectProof", "files": ["internal/reauth/proof_test.go"]}
+      ],
+      "positive_evidence": ["app/operation_proof_test.go:TestOperationProofPasswordTOTPFlow"],
+      "rejection_evidence": ["app/operation_proof_test.go:TestOperationProofRequiresPermission", "internal/reauth/proof_test.go:TestDirectProofBindingRejections"],
+      "notes": "证明绑定操作者/操作/目标/本次修改意图；权限撤销、绑定不匹配、无合格第二因素均拒绝。真实硬件 WebAuthn 未测见 verification.environment_limits。"
+    },
+{
+      "id": "users.direct_management",
+      "title": "直接改用户名/直接重置密码（步骤 256/257）",
+      "domain": "账户",
+      "internal_services": ["internal/reauth"],
+      "app_api": ["DirectUserManagementService", "DirectPasswordManagementService", "AdminChangeUserUsernameRequest", "AdminResetUserPasswordRequest", "AdminPasswordResetResult", "RequiredPasswordChangeService", "RequiredPasswordChangeRequest"],
+      "permissions": ["users.username.change.other", "users.password.reset.other"],
+      "cli": ["loginctl:admin"],
+      "tests": [
+        {"package": "./app", "run": "TestDirectUserUsernameChange", "files": ["app/admin_user_rename_test.go"]},
+        {"package": "./app", "run": "TestDirectPasswordReset", "files": ["app/admin_user_reset_test.go"]}
+      ],
+      "positive_evidence": ["app/admin_user_reset_test.go:TestDirectPasswordResetSuccessAndMustChangeFlow", "app/admin_user_rename_test.go:TestDirectUserUsernameChangeSuccess"],
+      "rejection_evidence": ["app/admin_user_reset_test.go:TestDirectPasswordResetNoPasswordTargetRejected", "app/admin_user_rename_test.go:TestDirectUserUsernameChangeAuthorization"],
+      "gaps": [{"summary": "must_change 受限改密会话的 reauth 强度语义与有 TOTP 目标边界已在 D-257-1 登记（文档/回归转 260/273/274）", "evidence": ["docs/acceptance/capability-truth-matrix.md:D-257-1"]}],
+      "notes": "两项权限独立于普通客服审批；root 保护、目标范围、本次两步验证、并发单赢家与审计均有证据。真实 MFA 设备互操作未测见 verification.environment_limits。"
+    },
+{
+      "id": "notifications.security_history",
+      "title": "安全告知投递关联与分页历史（步骤 265/266）",
+      "domain": "通知",
+      "internal_services": ["internal/reauth", "internal/mailer", "internal/manualrecovery"],
+      "admin_routes": ["GET notifications/history"],
+      "cli": ["loginctl:notifications"],
+      "tests": [
+        {"package": "./internal/reauth", "run": "TestNotificationsPage", "files": ["internal/reauth/notification_page_test.go"]},
+        {"package": "./internal/serverapp", "run": "TestStep266HistoryEndpointsE2E", "files": ["internal/serverapp/step266_history_e2e_test.go"]}
+      ],
+      "positive_evidence": ["internal/reauth/notification_page_test.go:TestNotificationsPageStableKeyset"],
+      "rejection_evidence": ["internal/reauth/notification_page_test.go:ErrNotificationCursorMismatch", "internal/adminapi/console_lists_test.go:TestNotificationHistoryDenied"],
+      "notes": "本人或 diagnostics.read 系统范围；游标绑定用户；queued 只代表已受理，succeeded 只代表发送后端接受，不代表已读/最终送达。"
+    },
+{
+      "id": "mail.delivery_console",
+      "title": "邮件投递记录分页与取消语义（步骤 266）",
+      "domain": "通知",
+      "internal_services": ["internal/mailer"],
+      "admin_routes": ["GET deliveries"],
+      "cli": ["loginctl:deliveries"],
+      "tests": [
+        {"package": "./internal/mailer", "run": "TestDeliveryListPage", "files": ["internal/mailer/delivery_page_test.go"]},
+        {"package": "./internal/serverapp", "run": "TestStep266HistoryEndpointsE2E", "files": ["internal/serverapp/step266_history_e2e_test.go"]}
+      ],
+      "positive_evidence": ["internal/mailer/delivery_page_test.go:TestDeliveryListPageStableKeyset"],
+      "rejection_evidence": ["internal/mailer/delivery_page_test.go:ErrDeliveryCursorMismatch"],
+      "environment_untested": ["docs/acceptance/capability-truth-matrix.md:真实外部 SMTP/Webhook 外发未测"],
+      "notes": "DTO 白名单不含加密载荷/完整收件人/路径；取消投递与取消任务语义不同；单页 1..99，与 adminapi limit 上限对齐。"
+    },
+{
+      "id": "search.domain_lists",
+      "title": "有界模糊搜索（步骤 261/262/263）",
+      "domain": "分页与列表",
+      "tests": [
+        {"package": "./app", "run": "TestAdminListUsersSearch", "files": ["app/admin_search_test.go"]},
+        {"package": "./app", "run": "TestAdminListApplicationMembersSearch", "files": ["app/admin_search_test.go"]},
+        {"package": "./app", "run": "TestAdminDomainListSearch", "files": ["app/admin_domain_search_262_test.go"]}
+      ],
+      "positive_evidence": ["app/admin_search_test.go:TestAdminListUsersSearch", "app/admin_domain_search_262_test.go:TestAdminDomainListSearch"],
+      "gaps": [
+        {"summary": "D-261-5 浏览器前进/后退可能显示旧条件结果（服务端仍重新授权，无越权）", "evidence": ["docs/acceptance/capability-truth-matrix.md:D-261-5"]},
+        {"summary": "D-263-1 客服/报告列表空搜索+非法字段的静默忽略口径未统一", "evidence": ["docs/acceptance/capability-truth-matrix.md:D-263-1"]}
+      ],
+      "maturity": "partial",
+      "notes": "字面子串/前缀匹配，不承诺拼音/正则；授权先于搜索；空搜索等价原列表；密码/令牌/恢复码/加密载荷永不参与搜索。"
+    },
+{
+      "id": "docs.openapi_page_contract",
+      "title": "OpenAPI 页面操作契约（步骤 268）",
+      "domain": "文档与契约",
+      "internal_services": ["internal/transport"],
+      "tests": [
+        {"package": "./internal/transport", "run": "TestOpenAPIDocumentsPageOperations", "files": ["internal/transport/pageopenapi_test.go"]},
+        {"package": "./internal/transport", "run": "TestOpenAPIPageRoutesServedByHandler", "files": ["internal/transport/pageopenapi_test.go"]}
+      ],
+      "positive_evidence": ["internal/transport/pageopenapi_test.go:TestOpenAPIDocumentsPageOperations"],
+      "rejection_evidence": ["internal/transport/pageopenapi_test.go:TestOpenAPIPageContractDriftFails"],
+      "notes": "页面操作文档与真实路由表一致性校验；1 MiB 响应缓冲回归见 TestOpenAPIPageDocumentFitsResponseBuffer。生成物漂移归 270/271。"
+    },
+{
+      "id": "preset.install_gap",
+      "title": "预设安装生产入口缺口（D-252-1）",
+      "domain": "授权",
+      "expect": "unimplemented",
+      "maturity": "unimplemented",
+      "gaps": [{"summary": "preset.Install 能力存在实现但生产装配无调用点（HIGH 产品缺口，不得当已完成，转 273/后续）", "evidence": ["docs/acceptance/capability-truth-matrix.md:D-252-1"]}],
+      "notes": "仅登记缺口；本步不新增生产接线。"
+    },
+{
+      "id": "account.lifecycle_221_remaining",
+      "title": "221 范围的剩余入口（R10-22，部分完成）",
+      "domain": "账户",
+      "maturity": "partial",
+      "gaps": [{"summary": "221 独立 example/HTTP/CLI/页面入口未闭环；已交付 app 公开 Go 门面不等同完整范围", "evidence": ["docs/acceptance/capability-truth-matrix.md:R10-22"]}],
+      "notes": "与 account.lifecycle_public（已实现门面）分开登记，避免“43 项全部 implemented”掩盖部分交付。"
+    },
+{
+      "id": "verification.environment_limits",
+      "title": "环境未测与子模块不可获取（分类登记）",
+      "domain": "验证边界",
+      "maturity": "partial",
+      "environment_untested": [
+        "docs/acceptance/capability-truth-matrix.md:非 SQLite 运行未测",
+        "docs/acceptance/capability-truth-matrix.md:真实硬件 Passkey/Windows Hello/YubiKey 未测",
+        "docs/acceptance/capability-truth-matrix.md:真实外部 SMTP/Webhook 外发未测",
+        "docs/acceptance/capability-truth-matrix.md:-race/govulncheck/gosec 未跑"
+      ],
+      "submodule_unavailable": [
+        "docs/acceptance/capability-truth-matrix.md:远端不可获取",
+        "docs/acceptance/capability-truth-matrix.md:子模块未纳入源码扫描"
+      ],
+      "notes": "这些是验证边界与阻塞事实，不是通过也不是缺陷；发布说明必须保留相同口径。"
     }
   ]
 }

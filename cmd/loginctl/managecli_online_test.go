@@ -59,6 +59,7 @@ func TestOnlineManageCLIDispatch(t *testing.T) {
 		{[]string{"backups", "help"}, "backups schedules"},
 		{[]string{"notifications", "help"}, "notifications status"},
 		{[]string{"tasks", "help"}, "tasks get"},
+		{[]string{"deliveries", "help"}, "deliveries list"},
 	}
 	for _, testCase := range cases {
 		var stdout, stderr bytes.Buffer
