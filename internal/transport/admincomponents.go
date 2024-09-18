@@ -349,97 +349,6 @@ func AdminComponentSchemas() map[string]any {
 		"AdminDeletedArtifact": adminObject("删除结果。", map[string]string{
 			"deleted": "boolean", "plan_id": "string", "schedule_id": "string",
 		}),
-		// ===== 步骤 269：用户/角色/组/权限/应用/会话（管理组）=====
-		"AdminUserSummary": adminObject("用户列表/创建结果公开摘要（不含密码、邮箱等秘密）。", map[string]string{
-			"id": "string", "username": "string", "nickname": "string", "status": "string",
-			"row_version": "integer", "security_version": "integer",
-			"created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminUserDetail": adminObject("用户详情公开视图（不含密码/邮箱等秘密）。", map[string]string{
-			"id": "string", "username": "string", "nickname": "string", "biography": "string",
-			"language": "string", "timezone": "string", "status": "string",
-			"row_version": "integer", "security_version": "integer",
-			"created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminUserValidity": adminObject("账户有效期公开视图（UTC；valid_from/valid_until 可为 null 表示不限制该端）。", map[string]string{
-			"user_id": "string", "status": "string", "is_root": "boolean",
-			"valid_from": "date-time", "valid_until": "date-time",
-			"row_version": "integer", "available": "boolean", "reason": "string",
-			"checked_at": "date-time",
-		}),
-		"AdminUserDeletionPreview": adminObject("删除用户影响预览（计数为真实关联数量，预览不是删除授权）。", map[string]string{
-			"user_id": "string", "username": "string", "is_root": "boolean",
-			"app_memberships": "integer", "user_roles": "integer",
-			"group_memberships": "integer", "one_time_credentials": "integer",
-			"owned_applications": "integer", "row_version": "integer",
-		}),
-		"AdminRoleSummary": adminObject("角色列表/创建结果公开摘要。", map[string]string{
-			"id": "string", "scope_id": "string", "key": "string", "name": "string",
-			"description": "string", "is_builtin": "boolean", "enabled": "boolean",
-			"created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminRoleDetail": adminObject("角色详情（limits 为使用边界说明）。", map[string]string{
-			"id": "string", "scope_id": "string", "key": "string", "name": "string",
-			"description": "string", "limits": "string", "is_builtin": "boolean",
-			"enabled": "boolean", "created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminRoleAssignmentUser": adminObject("角色分配给用户的条目（数据范围为稳定 ID/时间，不含跨域资料）。", map[string]string{
-			"user_id": "string", "scope_id": "string", "data_scope": "object",
-			"assigned_by": "string", "assigned_at": "date-time",
-		}),
-		"AdminRoleAssignmentGroup": adminObject("角色分配给用户组的条目。", map[string]string{
-			"group_id": "string", "scope_id": "string", "data_scope": "object",
-			"assigned_at": "date-time",
-		}),
-		"AdminGroupSummary": adminObject("用户组列表/创建结果公开摘要。", map[string]string{
-			"id": "string", "scope_id": "string", "group_key": "string", "name": "string",
-			"description": "string", "created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminGroupMember": adminObject("用户组成员条目（只返回稳定 ID 与加入时间）。", map[string]string{
-			"group_id": "string", "user_id": "string", "joined_at": "date-time",
-		}),
-		"AdminPermissionSummary": adminObject("权限定义公开摘要。", map[string]string{
-			"id": "string", "key": "string", "name": "string", "scope_id": "string",
-			"enabled": "boolean", "root_only": "boolean",
-		}),
-		"AdminApplicationSummary": adminObject("应用列表公开摘要。", map[string]string{
-			"id": "string", "name": "string", "description": "string", "owner_user_id": "string",
-			"status": "string", "client_type": "string", "scope_id": "string",
-			"row_version": "integer", "created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminApplicationDetail": adminObject("应用详情公开视图（不含客户端秘密）。", map[string]string{
-			"id": "string", "name": "string", "description": "string", "homepage": "string",
-			"owner_user_id": "string", "status": "string", "client_type": "string",
-			"scope_id": "string", "row_version": "integer",
-			"created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminAppMember": adminObject("应用成员条目（应用内资料；不含全局秘密）。", map[string]string{
-			"user_id": "string", "status": "string", "row_version": "integer",
-			"created_at": "date-time", "updated_at": "date-time",
-		}),
-		"AdminAppManagedPolicy": adminObject("应用托管 API 委托策略公开视图（allowed/service_allowed 为操作 ID 列表，limits 为分页/批量上限）。", map[string]string{
-			"state": "string", "application_id": "string", "row_version": "integer",
-			"can_write": "boolean", "allowed": "array<string>",
-			"service_allowed": "array<string>", "limits": "object",
-		}),
-		"AdminAppOAuthResult": adminObject("OAuth 客户端登记/更新结果：client_id 可公开；秘密只在登记时返回一次且不进入日志/审计。", map[string]string{
-			"client_id": "string", "has_secret": "boolean",
-		}),
-		"AdminAppSecret": adminObject("应用客户端秘密轮换结果：secret 只在本次响应出现一次（shown_once=true），之后不可再读。", map[string]string{
-			"secret_id": "string", "secret": "string", "shown_once": "boolean",
-		}),
-		"AdminAppCertificate": adminObject("应用证书登记结果（指纹公开，私钥永不返回）。", map[string]string{
-			"id": "string", "fingerprint": "string",
-		}),
-		"AdminSessionSummary": adminObject("管理员会话查询摘要（不含会话秘密、CSRF 令牌或验证摘要；client 仅为展示参考）。", map[string]string{
-			"id": "string", "app_id": "string", "kind": "string", "reason": "string",
-			"created_at": "date-time", "last_seen_at": "date-time",
-			"idle_expires_at": "date-time", "absolute_expires_at": "date-time",
-			"remember_me": "boolean", "current": "boolean", "client": "object",
-		}),
-		"AdminSessionRevokeResult": adminObject("强制下线结果（revoked=实际撤销数量；确认不是授权，权限/强认证/root 保护由会话服务判定）。", map[string]string{
-			"revoked": "integer", "scope_app_id": "string", "request_id": "string",
-		}),
 	}
 }
 
@@ -479,31 +388,6 @@ func AdminSuccessDataSchema(success string, extraKeys []string) (map[string]any,
 			return nil, fmt.Errorf("列表成功声明 %q 格式应为 list:<key>:<itemComponent>", success)
 		}
 		return adminListSchema(parts[0], parts[1], "分页列表结果；授权与数据范围先于分页/计数。", extraKeys)
-	case strings.HasPrefix(success, "page:"):
-		// 管理列表统一页结构：items 数组 + has_more/limit/offset/next_offset/sort/desc。
-		parts := strings.Split(strings.TrimPrefix(success, "page:"), ":")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("页列表成功声明 %q 格式应为 page:<key>:<itemComponent>", success)
-		}
-		key, component := parts[0], parts[1]
-		if _, ok := AdminComponentSchemas()[component]; !ok {
-			return nil, fmt.Errorf("页列表项组件 %q 未登记", component)
-		}
-		return map[string]any{
-			"type":        "object",
-			"description": "管理列表页结果；授权与数据范围先于分页/计数。",
-			"required":    []string{key, "has_more", "limit", "offset", "next_offset"},
-			"properties": map[string]any{
-				key: map[string]any{"type": "array", "items": map[string]any{
-					"$ref": "#/components/schemas/" + component}},
-				"has_more":    map[string]any{"type": "boolean", "description": "是否还有更多数据。"},
-				"limit":       map[string]any{"type": "integer", "description": "本次生效的每页条数。"},
-				"offset":      map[string]any{"type": "integer", "description": "本次生效的偏移。"},
-				"next_offset": map[string]any{"type": "integer", "description": "下一页 offset。"},
-				"sort":        map[string]any{"type": "string", "description": "本次生效的排序字段（空表示领域默认）。"},
-				"desc":        map[string]any{"type": "boolean", "description": "是否降序。"},
-			},
-		}, nil
 	default:
 		if _, ok := AdminComponentSchemas()[success]; !ok {
 			return nil, fmt.Errorf("成功响应组件 %q 未登记", success)

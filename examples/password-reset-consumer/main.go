@@ -18,6 +18,14 @@ package main
 //  5. 覆盖步骤 204/205/206 的公开门面行为（预检查不消费、弱密码失败不烧链接、旧链接
 //     在改密后失效）。
 //
+// 步骤 272 追加（同一独立模块、同一命令）：在独立临时运行时上用公开门面演示合成
+// root/管理员/两名各只持一项直接管理权限的客服/普通用户；真实用户会话 + 目标绑定
+// 一次性两步验证证明（密码 + 程序化 TOTP）完成直接改名与直接重置，覆盖换目标/换
+// 新值/重放/无权限/LocalAdmin/root 目标拒绝；展示改名后按稳定 UserID 关联的业务
+// 投影与用户/应用成员模糊搜索；直接操作不解除目标 MFA。生成脱敏 HTML 权限范围页面
+// （direct272-summary.html），页面与日志不含密码、种子或证明令牌。LocalAdmin 只用于
+// 宿主自举（账户/角色/权限/应用），不用于任何直接管理操作或普通页面请求。
+//
 // 安全与资源：只使用临时目录、随机回环端口、合成账户与合成密码；秘密不打印、不写
 // 报告；结束时有界终止 Mail/HTTP 与运行时并删除临时目录；不访问公网、不发送真实邮件。
 //
@@ -99,6 +107,16 @@ func run(args []string) int {
 		MailBin: mailBin, WorkRoot: workRoot, Verbose: opts.verbose,
 	})
 	if opts.outPath != "" {
+		if report.DirectDemo != nil && report.DirectDemo.SummaryPagePath != "" {
+			if pageBytes, readErr := os.ReadFile(report.DirectDemo.SummaryPagePath); readErr == nil {
+				summaryOut := opts.outPath + ".summary.html"
+				if writeErr := os.WriteFile(summaryOut, pageBytes, 0o644); writeErr != nil {
+					fmt.Fprintln(os.Stderr, "写示例页面副本失败:", writeErr)
+				} else {
+					fmt.Fprintln(os.Stderr, "示例权限范围页面:", summaryOut)
+				}
+			}
+		}
 		if raw, marshalErr := json.MarshalIndent(report, "", "  "); marshalErr == nil {
 			raw = append(raw, '\n')
 			if writeErr := os.WriteFile(opts.outPath, raw, 0o644); writeErr != nil {
@@ -212,5 +230,7 @@ type scenarioReport struct {
 	Checks       []checkResult   `json:"checks"`
 	Counts       scenarioCounts  `json:"counts"`
 	AuditSummary []auditEvidence `json:"audit_diagnostics,omitempty"`
-	Error        string          `json:"error,omitempty"`
+	// DirectDemo 是步骤272 直接管理与模糊搜索演示的脱敏结果（权限范围/页面路径）。
+	DirectDemo *directDemoReport `json:"direct_management_demo,omitempty"`
+	Error      string            `json:"error,omitempty"`
 }

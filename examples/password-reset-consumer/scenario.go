@@ -51,6 +51,8 @@ type scenario struct {
 	totpSecret      string
 	currentPassword string
 	newEmail        string
+	// nowOverride 让步骤272 的独立演示运行时使用确定性时钟；nil 时使用真实时间。
+	nowOverride func() time.Time
 }
 
 // testRuntime 是一个公开 app.Runtime + 宿主 HTTP 站点。
@@ -110,6 +112,8 @@ func runScenario(ctx context.Context, opts scenarioOptions) *scenarioReport {
 	run.checkRateLimitAndRequestID(primary)
 	// 9) 管理诊断分离（只读审计行）。
 	run.checkAuditDiagnostics(primary)
+	// 10) 步骤272：直接管理（改名/重置）+ 模糊搜索示例与拒绝矩阵。
+	run.checkDirectManagementAndSearch()
 
 	return run.finalize(startedAt)
 }
@@ -179,6 +183,7 @@ func (s *scenario) openRuntime(name string, mutate func(*login.Config)) (*testRu
 		OperatorID:      "password-reset-consumer",
 		Logger:          logger,
 		HTTP:            &app.HTTPOptions{Prefix: sitePrefix},
+		Now:             s.nowOverride,
 	})
 	if err != nil {
 		_ = listener.Close()
@@ -481,8 +486,8 @@ func (s *scenario) checkPasswordResetFlow(instance *testRuntime) {
 	})
 	if err != nil || !restricted.Restricted || restricted.SecondFactor == nil ||
 		restricted.SecondFactor.FactorType != "totp" {
-		s.fail("reset.mfa_preserved", fmt.Errorf("改密后新密码登录未要求 TOTP: %+v err=%v",
-			restricted, err))
+		s.fail("reset.mfa_preserved", fmt.Errorf(
+			"改密后新密码登录未要求 TOTP（%s）err=%v", demoLoginSummary(restricted), err))
 		return
 	}
 	verifyCode, err := totpCodeNextStep(s.totpSecret)
