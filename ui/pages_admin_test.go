@@ -48,6 +48,20 @@ type fakeAdminBackend struct {
 	directRenameBeginErr   error
 	directRenameConfirmErr error
 	directRenameApplyErr   error
+	// 步骤 259：直接重置密码页面后端替身状态（不保存密码/证明明文以外的输出）。
+	canResetPassword       bool
+	directPasswordCalls    []string
+	lastResetSecret        string
+	lastResetTarget        string
+	lastResetNewPassword   string
+	lastResetChallenge     string
+	lastResetAdminPassword string
+	lastResetTOTP          string
+	lastResetReason        string
+	lastResetProof         string
+	resetBeginErr          error
+	resetConfirmErr        error
+	resetApplyErr          error
 }
 
 func (f *fakeAdminBackend) fail() error {
@@ -193,6 +207,45 @@ func (f *fakeAdminBackend) ConfirmDirectUsernameChange(_ context.Context, adminI
 	}
 	return ui.UIDirectRenameGrant{ProofToken: "proof-token-page-258",
 		ExpiresAt: time.Now().Add(time.Minute)}, nil
+}
+
+func (f *fakeAdminBackend) CanResetPassword(context.Context, string) (bool, error) {
+	return f.canResetPassword, nil
+}
+
+func (f *fakeAdminBackend) BeginDirectPasswordReset(_ context.Context, adminID, secret,
+	targetUserID, newPassword, _ string) (ui.UIDirectPasswordResetChallenge, error) {
+	f.directPasswordCalls = append(f.directPasswordCalls, "begin")
+	f.lastResetSecret, f.lastResetTarget, f.lastResetNewPassword = secret, targetUserID, newPassword
+	if f.resetBeginErr != nil {
+		return ui.UIDirectPasswordResetChallenge{}, f.resetBeginErr
+	}
+	return ui.UIDirectPasswordResetChallenge{ChallengeID: "chl_reset_1",
+		TargetUserID: targetUserID, RequiredStrength: "strong"}, nil
+}
+
+func (f *fakeAdminBackend) ConfirmDirectPasswordReset(_ context.Context, adminID, secret,
+	challengeID, password, totpCode, _ string) (ui.UIDirectPasswordResetGrant, error) {
+	f.directPasswordCalls = append(f.directPasswordCalls, "confirm")
+	f.lastResetSecret, f.lastResetChallenge = secret, challengeID
+	f.lastResetAdminPassword, f.lastResetTOTP = password, totpCode
+	if f.resetConfirmErr != nil {
+		return ui.UIDirectPasswordResetGrant{}, f.resetConfirmErr
+	}
+	return ui.UIDirectPasswordResetGrant{ProofToken: "proof-reset-page-259"}, nil
+}
+
+func (f *fakeAdminBackend) ApplyDirectPasswordReset(_ context.Context, adminID, secret,
+	targetUserID, newPassword, reason, proofToken, _ string) (ui.UIDirectPasswordResetResult, error) {
+	f.directPasswordCalls = append(f.directPasswordCalls, "apply")
+	f.lastResetSecret, f.lastResetTarget, f.lastResetNewPassword = secret, targetUserID, newPassword
+	f.lastResetReason, f.lastResetProof = reason, proofToken
+	if f.resetApplyErr != nil {
+		return ui.UIDirectPasswordResetResult{}, f.resetApplyErr
+	}
+	return ui.UIDirectPasswordResetResult{UserID: targetUserID, SecurityVersion: 8,
+		MustChange: true, SessionsRevoked: 3, OldResetRequestsCancelled: 2,
+		OldResetCredentialsRevoked: 2}, nil
 }
 
 func (f *fakeAdminBackend) ApplyDirectUsernameChange(_ context.Context, adminID, secret,

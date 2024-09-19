@@ -54,6 +54,9 @@ type Deps struct {
 	// DirectManagement 是宿主注入的直接管理（他人用户名修改）桥接实现（步骤 258）；
 	// nil 时不挂载对应管理 API 路由（fail-closed 404），不返回占位成功。
 	DirectManagement DirectUsernameBridge
+	// DirectPasswordReset 是宿主注入的直接重置他人密码桥接实现（步骤 259）；
+	// nil 时不挂载对应管理 API 路由（fail-closed 404），不返回占位成功。
+	DirectPasswordReset DirectPasswordResetBridge
 }
 
 // OpenStore 按配置打开 SQLite 存储。

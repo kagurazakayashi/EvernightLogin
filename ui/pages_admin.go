@@ -36,9 +36,12 @@ type UIPageAdminOptions struct {
 	// Validity 是可选的账户有效期页面后端；nil 时不显示有效期设置入口。
 	Validity UIAdminUserValidityBackend
 	// ManagementSession 是请求级真实管理会话秘密读取回调（步骤 258）；由宿主注入
-	// （生产实现读取会话 Cookie 并只交给处理器代码）。nil 时直接改名页面 fail-closed
-	// （404），不静默降级、不把秘密写入页面数据/模板/日志。
+	// （生产实现读取会话 Cookie 并只交给处理器代码）。nil 时直接改名/重置页面
+	// fail-closed（404），不静默降级、不把秘密写入页面数据/模板/日志。
 	ManagementSession func(*http.Request) (string, bool)
+	// DirectPasswordReset 是可选的直接重置他人密码页面后端（步骤 259）；nil 时
+	// 不显示重置入口且提交 fail-closed（不伪造成功）。
+	DirectPasswordReset UIDirectPasswordResetBackend
 }
 
 // UIAdminGroupQuery 是用户组列表筛选/分页。
@@ -331,6 +334,14 @@ func newPageAdminPages(options UIPageAdminOptions) (*pageAdminPages, error) {
 		{Name: "admin.user_rename.submit", Method: http.MethodPost,
 			Path: "/admin/users/rename", Access: UIAccessManagement,
 			Layout: "layout/base", Template: "page/admin/user_rename"},
+		// 步骤 259：管理员直接重置他人密码（一次两步验证后提交；明确告知会话失效、
+		// MFA 保留与下次登录改密）。
+		{Name: "admin.user_password_reset", Method: http.MethodGet,
+			Path: "/admin/users/password-reset", Access: UIAccessManagement,
+			Layout: "layout/base", Template: "page/admin/user_password_reset"},
+		{Name: "admin.user_password_reset.submit", Method: http.MethodPost,
+			Path: "/admin/users/password-reset", Access: UIAccessManagement,
+			Layout: "layout/base", Template: "page/admin/user_password_reset"},
 		{Name: "admin.user_delete_preview", Method: http.MethodGet,
 			Path: "/admin/users/delete-preview", Access: UIAccessManagement,
 			Layout: "layout/base", Template: "page/admin/user_delete"},
@@ -440,6 +451,10 @@ func (h *adminPageHandlers) HandlePage(ctx context.Context, request *http.Reques
 		return h.userRename(ctx, request, page)
 	case "admin.user_rename.submit":
 		return h.userRenameSubmit(ctx, request, page)
+	case "admin.user_password_reset":
+		return h.userPasswordReset(ctx, request, page)
+	case "admin.user_password_reset.submit":
+		return h.userPasswordResetSubmit(ctx, request, page)
 	case "admin.user_delete_preview":
 		return h.deletePreview(ctx, request, page)
 	case "admin.user_delete":
@@ -575,6 +590,13 @@ func (h *adminPageHandlers) userDetail(ctx context.Context, request *http.Reques
 	if backend, ok := h.directRenameBackend(); ok {
 		if allowed, canErr := backend.CanChangeUsername(ctx, page.Session.UserID); canErr == nil {
 			data["canDirectRename"] = allowed
+		}
+	}
+	// 步骤 259：仅在宿主装配直接重置密码能力且当前管理员获授权时显示重置入口。
+	if h.pages.options.DirectPasswordReset != nil {
+		if allowed, canErr := h.pages.options.DirectPasswordReset.CanResetPassword(ctx,
+			page.Session.UserID); canErr == nil {
+			data["canDirectResetPassword"] = allowed
 		}
 	}
 	if !isNilUIValue(h.pages.options.Validity) {

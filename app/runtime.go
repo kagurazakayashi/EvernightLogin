@@ -117,6 +117,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.HTTP != nil {
 		base.Deps.DirectManagement = directManagementHTTPBridge{
 			runtime: func() *Runtime { return runtimeRef }}
+		base.Deps.DirectPasswordReset = directPasswordResetHTTPBridge{
+			runtime: func() *Runtime { return runtimeRef }}
 		var overrides *serverapp.PageOverrides
 		if opts.HTTP.PageOverrides != nil {
 			overrides = &serverapp.PageOverrides{

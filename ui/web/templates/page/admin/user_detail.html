@@ -12,6 +12,7 @@
   <dt>{{t "common.label.status"}}</dt><dd>{{.Data.user.Status}}</dd>
 </dl>
 {{if .Data.canDirectRename}}<p class="ln-actions"><a class="ln-button ln-button--secondary" href="{{route "admin.user_rename"}}?user_id={{.Data.user.UserID}}">{{t "page.admin.users.rename_entry"}}</a></p>{{end}}
+{{if .Data.canDirectResetPassword}}<p class="ln-actions"><a class="ln-button ln-button--secondary" href="{{route "admin.user_password_reset"}}?user_id={{.Data.user.UserID}}">{{t "page.admin.users.password_reset_entry"}}</a></p>{{end}}
 {{with .Data.validity}}
 <h2>{{t "page.admin.users.validity_title"}}</h2>
 <p class="ln-meta">{{t "page.admin.users.validity_scope_hint"}}</p>

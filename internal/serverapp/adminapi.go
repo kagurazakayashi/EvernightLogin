@@ -81,10 +81,15 @@ func BuildAdminAPIServer(deps Deps, services *Services, managed *ManagedServices
 		SecurityNotifications: securityNotificationHistoryReader{reauth: gate.Reauth,
 			checker: managed.Checker},
 		MailDeliveries: newMailDeliveryHistoryReader(deps, managed.Checker),
-		DomainRoutes: append(append(append(buildAdminDomainRoutes(managed, pages, gate),
+		DomainRoutes: append(append(append(append(
+			buildAdminDomainRoutes(managed, pages, gate),
 			buildAdminDiagnosticsRoutes(deps, managed)...),
 			buildAdminSettingsRoutes(deps, managed, gate)...),
 			buildAdminDirectUsernameRoutes(deps.DirectManagement,
+				func(request *http.Request) (string, bool) {
+					return services.Sessions.SessionSecretFromRequest(request)
+				})...),
+			buildAdminDirectPasswordResetRoutes(deps.DirectPasswordReset,
 				func(request *http.Request) (string, bool) {
 					return services.Sessions.SessionSecretFromRequest(request)
 				})...),

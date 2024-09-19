@@ -25,6 +25,8 @@ const adminCommandUsage = `用法：
   loginctl admin support-cases [--status <s>] [--search <关键字>] [--search-fields id,reason] [--limit 20] [--offset 0] <在线公共参数>
   loginctl admin rename-user <user_id> --new-username <新用户名> --reason <原因> \
       [--expected-row-version <n>] [--proof-file <受保护证明文件>] <在线公共参数>
+  loginctl admin reset-password <user_id> --reason <原因> --confirm RESET-PASSWORD \
+      [--new-password-file <受保护文件>] [--proof-file <受保护证明文件>] <在线公共参数>
   loginctl admin support-case <case_id> <在线公共参数>
   loginctl admin write <path> --body '<JSON对象>' [--method POST|PUT|DELETE] \
       --confirm ADMIN-WRITE <在线公共参数>
@@ -47,6 +49,9 @@ func (r *runner) runAdmin(args []string) int {
 	}
 	if subcommand == "rename-user" {
 		return r.runAdminRenameUser(rest)
+	}
+	if subcommand == "reset-password" {
+		return r.runAdminResetPassword(rest)
 	}
 	extra := []flagDef{{name: "limit", value: true}, {name: "offset", value: true},
 		{name: "status", value: true}, {name: "scope-id", value: true},

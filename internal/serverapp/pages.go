@@ -344,8 +344,13 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 	webOptions.PageAdmin = &ui.UIPageAdminOptions{Backend: adminAdapter,
 		Diagnostics: &ui.UIPageAdminDiagnosticsOptions{Backend: adminAdapter},
 		Tasks:       &ui.UIPageAdminTasksOptions{Backend: adminAdapter},
-		Validity:    adminAdapter}
-	if deps.DirectManagement != nil && services != nil && services.Sessions != nil {
+		Validity:    adminAdapter,
+		// 步骤 259：直接重置他人密码页面后端（独立适配器；未装配时页面入口
+		// fail-closed，不伪造成功）。
+		DirectPasswordReset: uiadminadapter.NewDirectPasswordResetAdapter(
+			newPageDirectPasswordResetBridge(deps.DirectPasswordReset, managed))}
+	if (deps.DirectManagement != nil || deps.DirectPasswordReset != nil) &&
+		services != nil && services.Sessions != nil {
 		webOptions.PageAdmin.ManagementSession = func(request *http.Request) (string, bool) {
 			return services.Sessions.SessionSecretFromRequest(request)
 		}
