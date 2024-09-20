@@ -129,13 +129,21 @@ type NamedAdminOperation struct {
 
 // AdminDomainOrder 是文档与校验使用的稳定域顺序。
 var AdminDomainOrder = []string{
-	"core", "audit", "reports", "plans", "backups", "tasks", "diagnostics",
+	"core", "users", "direct", "roles", "groups", "permissions", "applications", "sessions",
+	"audit", "reports", "plans", "backups", "tasks", "diagnostics",
 	"settings", "notifications", "deliveries", "support",
 }
 
 // AdminDomainTitles 是域的中文标题。
 var AdminDomainTitles = map[string]string{
 	"core":          "基础（元信息/错误码）",
+	"users":         "用户管理（用户/状态/有效期/删除）",
+	"direct":        "直接管理（一次操作两步验证证明：改名/重置密码）",
+	"roles":         "角色管理（角色/分配/权限组合）",
+	"groups":        "用户组管理（组/成员）",
+	"permissions":   "权限目录（查看/修改/启停）",
+	"applications":  "应用与授权（应用/成员/客户端凭证/托管策略）",
+	"sessions":      "会话强制下线（管理员视角）",
 	"audit":         "审计（事件/保留策略/导出/清理）",
 	"reports":       "报告（历史/快照/下载票据/清理）",
 	"plans":         "报告计划与备份计划",
@@ -430,13 +438,10 @@ func adminPathPlaceholders(pattern string) []string {
 
 // AdminScopeExclusions 返回本步明确**不登记**的管理 API 域与原因（生成器断言不出现
 // 对应前缀的契约，防止把未实现/未开始的端点写成占位 schema）。
+// 步骤 269 起用户/角色/组/权限/应用/会话与直接改名/改密均已在 admincontracts*.go
+// 登记；当前只剩不属于管理 API 的 /mail。
 func AdminScopeExclusions() map[string]string {
 	return map[string]string{
-		"users":        "管理组（用户）OpenAPI 属步骤 269，不重复造",
-		"applications": "管理组（应用）OpenAPI 属步骤 269，不重复造",
-		"roles":        "管理组（角色）OpenAPI 属步骤 269，不重复造",
-		"groups":       "管理组（用户组）OpenAPI 属步骤 269，不重复造",
-		"permissions":  "管理组（权限）OpenAPI 属步骤 269，不重复造",
-		"sessions":     "管理组（会话）OpenAPI 属步骤 269，不重复造",
+		"mail": "邮件投递记录由 /deliveries 覆盖；/mail 不是管理 API 端点",
 	}
 }

@@ -1,6 +1,6 @@
-# 管理 JSON API 参考（运维 / 报告 / 客服域）
+# 管理 JSON API 参考（管理组与直接管理 + 运维/报告/客服）
 
-> 本文件由 `go run ./scripts/adminapi-doc -write` 从**AST 扫描的真实注册路由**（与 `docs/reference/http-routes.json` 同一扫描器）与 `internal/transport/admincontracts_*.go` 契约生成，**不要手工编辑**；`-check` 逐字节校验且失败非零退出。管理组（用户/角色/应用/会话）OpenAPI 属步骤 269、直接改名/改密属 258/259，本文件不包含其占位 schema。
+> 本文件由 `go run ./scripts/adminapi-doc -write` 从**AST 扫描的真实注册路由**（与 `docs/reference/http-routes.json` 同一扫描器）与 `internal/transport/admincontracts_*.go` 契约生成，**不要手工编辑**；`-check` 逐字节校验且失败非零退出。管理组（用户/角色/用户组/权限/应用/会话）与直接改名/直接重置密码（步骤 258/259）均在本文件；直接操作的一次性证明与新口令不回显。
 
 ## 1. 基础约定
 
@@ -11,17 +11,25 @@
 - **权限**：端点声明所需权限键（任一满足）；root 按内核语义拥有全部已实现权限，但仍校验认证、两步验证、目标/输入、业务一致性与审计。表内 `root-only` 表示仅真实 root/受信本地主体可调用。
 - **敏感操作**：`敏感=是` 表示领域服务会按 `internal/policy` 复核再次认证/强认证新鲜度与策略下限；前端确认不能替代。
 - **确认与原因**：所有写操作必须 `confirm=true`（确认不是授权）；取消/清理/保留策略/启停等还要求非空 `reason`，原因进入真实审计。
+- **直接管理（改名/重置密码）**：操作者只能来自可信管理会话，并持独立权限 `users.username.change.other` / `users.password.reset.other`；目标用稳定 UserID，不得为 root 或超出可管理范围。每个逻辑操作要求操作者本次合格两步验证（TOTP 或 Passkey/WebAuthn；证明绑定操作者/会话/操作/目标/本次意图，提交即消费）；新口令只写不回显，成功只返回脱敏事实（`must_change`、撤销会话数、旧找回请求/凭证失效数）；root 执行同样需要两步验证与审计，应用内权限不等于全局权限。
 - **分页与筛选**：列表 `limit` 默认 20、最大 100；`offset` 最大 1000000；部分列表提供稳定 `cursor`（与 offset 互斥，条件变化后旧游标失效）。时间参数使用 RFC3339；有界搜索最多 64 字符，通配符按字面。
 - **异步语义**：提交/受理 ≠ 完成/取消。异步操作返回真实任务/状态，必须按任务编号查询终态；取消只表示“已受理取消”，终态以任务/状态为准。
 - **下载与票据**：响应不暴露宿主路径，也不把服务器路径当下载地址。报告/备份使用**一次性短期下载票据**（签发只返回一次 token → 兑换时再次授权并重查产物状态 → 流式返回受控字节，重复兑换/撤权后拒绝）；审计导出每次下载重新授权。
 - **错误码**：来自根包 `errs` 注册表（HTTP 状态与默认消息同源）；排障见 [errors.md](errors.md)。
-- **范围**：本文件覆盖 core/audit/reports/plans/backups/tasks/diagnostics/settings/notifications/deliveries/support；用户/角色/应用/会话属 269，直接改名/改密属 258/259（不写占位）。
+- **范围**：本文件覆盖步骤 269：管理组（users/roles/groups/permissions/applications/sessions）与直接改名/直接重置密码（direct，一次操作两步验证证明）；以及 270 域（core/audit/reports/plans/backups/tasks/diagnostics/settings/notifications/deliveries/support）。
 
 ## 2. 操作总览
 
 | 域 | 操作数 |
 |---|---|
 | 基础（元信息/错误码） | 2 |
+| 用户管理（用户/状态/有效期/删除） | 8 |
+| 直接管理（一次操作两步验证证明：改名/重置密码） | 12 |
+| 角色管理（角色/分配/权限组合） | 9 |
+| 用户组管理（组/成员） | 7 |
+| 权限目录（查看/修改/启停） | 3 |
+| 应用与授权（应用/成员/客户端凭证/托管策略） | 18 |
+| 会话强制下线（管理员视角） | 2 |
 | 审计（事件/保留策略/导出/清理） | 14 |
 | 报告（历史/快照/下载票据/清理） | 9 |
 | 报告计划与备份计划 | 13 |
@@ -61,7 +69,1498 @@
 - 响应不含任何凭据、数据库连接、配置秘密或宿主路径。
 - services 反映当前部署实际装配的领域；未装配领域对应路由返回 404。
 
-## 4. 审计（事件/保留策略/导出/清理）（14 条）
+## 4. 用户管理（用户/状态/有效期/删除）（8 条）
+
+| 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
+|---|---|---|---|---|---|---|---|
+| GET | `/users` | 分页查询用户 | `users.read` | 否 | - | - | `page:items:AdminUserSummary` |
+| POST | `/users` | 创建普通用户 | `users.create` | 否 | 确认 | - | `AdminUserSummary` |
+| GET | `/users/{user_id}` | 读取用户详情 | `users.read` | 否 | - | - | `AdminUserDetail` |
+| POST | `/users/{user_id}/delete` | 删除用户 | `users.delete` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/users/{user_id}/delete-preview` | 删除用户影响预览 | `users.delete` | 否 | 确认 | - | `AdminUserDeletionPreview` |
+| POST | `/users/{user_id}/state` | 变更用户状态 | `users.update` / `users.disable` / `users.delete` | 否 | 确认 | - | `对象（见字段/说明）` |
+| GET | `/users/{user_id}/validity` | 读取账户有效期 | `users.read` | 否 | - | - | `AdminUserValidity` |
+| POST | `/users/{user_id}/validity` | 设置账户有效期 | `users.update` | 否 | 确认 | - | `对象（见字段/说明）` |
+
+### `GET /users`
+
+按 users.read 与数据范围分页查询用户摘要（状态筛选 + 用户名/昵称有界字面搜索）；不可导出隐藏邮箱/电话。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `status`（string，可选）：账户状态筛选；空表示全部。
+- `sort`（string，可选）：排序字段（服务端白名单）；默认由领域决定。
+- `desc`（boolean，可选）：是否降序（true/false/1/0）。
+- `search`（string，可选）：有界字面搜索（NFKC + 大小写折叠，最多 64 字符）；空表示不过滤。
+- `search_fields`（string，可选）：逗号分隔的搜索字段白名单：username/nickname（服务端白名单）；未知字段返回 400。
+
+边界与语义：
+
+- 结果与计数不越权；不返回密码、完整邮箱或安全秘密。
+
+### `POST /users`
+
+创建普通用户并登记基本资料（users.create + 确认 + 审计）；用户名唯一、大小写不敏感、按既有 Unicode 规范化。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `username` | string | 是 | 登录用户名；全局唯一、大小写不敏感，按既有规范化校验。 |
+| `nickname` | string | 否 | 昵称（用户文本，不拼接 HTML）。 |
+| `biography` | string | 否 | 个人简介。 |
+| `language` | string | 否 | 界面语言。 |
+| `timezone` | string | 否 | 时区。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "biography": "example-biography",
+    "confirm": true,
+    "language": "example-language",
+    "nickname": "example-nickname",
+    "request_id": "example-request_id",
+    "timezone": "example-timezone",
+    "username": "example-username"
+}
+```
+
+边界与语义：
+
+- 创建不设置密码；密码由本人流程或后续受控重置流程处理。
+
+### `GET /users/{user_id}`
+
+按目标稳定 UserID 读取用户公开资料（资料字段白名单，不含密码/邮箱等秘密）；越权按不存在处理。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+### `POST /users/{user_id}/delete`
+
+按行版本删除普通用户（users.delete + 确认 + 审计）；root 等受保护目标拒绝，删除后关联清理由领域事务保证。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `expected_row_version` | integer | 是 | 期望行版本；冲突返回 409。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "expected_row_version": 1,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /users/{user_id}/delete-preview`
+
+只读预览删除该用户的影响（关联成员/角色/组/一次性凭证/名下应用数量与行版本）；预览不是删除授权。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true
+}
+```
+
+### `POST /users/{user_id}/state`
+
+禁用/启用/请求删除普通用户（确认+行版本+审计）。实际权限是组合要求、不是任一满足：适配器先要求 users.update（对 disable/enable/request_delete 全部动作），账户领域终检再按动作要求 disable/enable→users.disable、request_delete→users.delete；不能修改 root 等受保护目标。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `action` | string | 是 | 状态动作：disable / enable / request_delete（服务端白名单）。 |
+| `expected_row_version` | integer | 是 | 期望行版本；冲突返回 409。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "action": "example-action",
+    "confirm": true,
+    "expected_row_version": 1,
+    "request_id": "example-request_id"
+}
+```
+
+边界与语义：
+
+- 权限组合（不是任一满足）：users.update 为前置（适配器对所有动作先校验）；动作键按 action 决定——disable/enable 需 users.disable，request_delete 需 users.delete。
+- root 也须通过同样的权限组合、认证/强认证、行版本与审计；不能以全权限绕过。
+
+### `GET /users/{user_id}/validity`
+
+读取账户可用时间窗口与当前可用性判定（UTC；根账户不受普通期限管理锁死）。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+### `POST /users/{user_id}/validity`
+
+设置全局账户可用时间窗口（users.update + 确认 + 行版本 + 审计）；UTC 半开区间，null/空表示不限制该端；root 不受普通期限锁死，续期不解除手动禁用。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `valid_from` | string | 否 | 可选生效时间（RFC3339 UTC）；空/null 表示不限制起始。 |
+| `valid_until` | string | 否 | 可选到期时间（RFC3339 UTC，半开区间）；空/null 表示不限期。 |
+| `expected_row_version` | integer | 是 | 期望行版本；冲突返回 409。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "expected_row_version": 1,
+    "request_id": "example-request_id",
+    "valid_from": "example-valid_from",
+    "valid_until": "example-valid_until"
+}
+```
+
+## 5. 直接管理（一次操作两步验证证明：改名/重置密码）（12 条）
+
+| 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
+|---|---|---|---|---|---|---|---|
+| POST | `/users/{user_id}/password` | 提交直接重置密码（消费一次性证明） | `users.password.reset.other` | 是 | 确认+原因 | - | `AdminDirectPasswordResetResult` |
+| POST | `/users/{user_id}/password-verification` | 发起直接重置密码的一次性两步验证挑战 | `users.password.reset.other` | 是 | 确认 | - | `AdminDirectProofChallenge` |
+| POST | `/users/{user_id}/password-verification/cancel` | 取消直接重置密码挑战 | `users.password.reset.other` | 是 | 确认 | - | `AdminDirectCancelResult` |
+| POST | `/users/{user_id}/password-verification/confirm` | 直接重置密码两步验证（密码 + TOTP） | `users.password.reset.other` | 是 | 确认 | - | `AdminDirectProofGrant` |
+| POST | `/users/{user_id}/password-verification/webauthn/begin` | 直接重置密码第二步改用 Passkey/安全密钥（开始） | `users.password.reset.other` | 是 | 确认 | - | `AdminDirectWebAuthnStart` |
+| POST | `/users/{user_id}/password-verification/webauthn/confirm` | 直接重置密码第二步改用 Passkey/安全密钥（完成） | `users.password.reset.other` | 是 | 确认 | - | `AdminDirectProofGrant` |
+| POST | `/users/{user_id}/username` | 提交直接改名（消费一次性证明） | `users.username.change.other` | 是 | 确认+原因 | - | `AdminDirectUsernameChangeResult` |
+| POST | `/users/{user_id}/username-verification` | 发起直接改名的一次性两步验证挑战 | `users.username.change.other` | 是 | 确认 | - | `AdminDirectProofChallenge` |
+| POST | `/users/{user_id}/username-verification/cancel` | 取消直接改名挑战 | `users.username.change.other` | 是 | 确认 | - | `AdminDirectCancelResult` |
+| POST | `/users/{user_id}/username-verification/confirm` | 直接改名两步验证（密码 + TOTP） | `users.username.change.other` | 是 | 确认 | - | `AdminDirectProofGrant` |
+| POST | `/users/{user_id}/username-verification/webauthn/begin` | 直接改名第二步改用 Passkey/安全密钥（开始） | `users.username.change.other` | 是 | 确认 | - | `AdminDirectWebAuthnStart` |
+| POST | `/users/{user_id}/username-verification/webauthn/confirm` | 直接改名第二步改用 Passkey/安全密钥（完成） | `users.username.change.other` | 是 | 确认 | - | `AdminDirectProofGrant` |
+
+### `POST /users/{user_id}/password`
+
+用一次性两步验证证明直接为目标用户设置新口令（users.password.reset.other + 确认 + 原因 + 审计）；成功只返回脱敏结果，默认要求目标下次登录改密，并使目标旧会话/刷新凭证与旧找回授权失效。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `new_password` | string | 是 | 目标新口令（只写；按密码策略/历史校验，应用哈希后落库，不回显）。 |
+| `reason` | string | 是 | 操作原因；进入真实审计，不能为空，最多 256 字节。 |
+| `proof_token` | string | 是 | 一次性操作证明（只写；提交即消费，绑定操作/目标/意图）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "new_password": "example-new_password-synthetic-not-real",
+    "proof_token": "example-proof_token-synthetic-not-real",
+    "reason": "example-reason",
+    "request_id": "example-request_id"
+}
+```
+
+边界与语义：
+
+- 不返回旧/新口令、哈希、种子或证明；成功结果含 must_change（默认 true）、会话撤销数、旧找回请求/凭证失效数与审计 outbox 事件编号。
+- 不自动清除目标 MFA；不处理 root；不能为无密码账户未经独立授权悄悄添加密码。
+- root 执行同样需要本次两步验证与审计；应用内权限不等于全局权限（需要系统级独立权限键）。
+
+### `POST /users/{user_id}/password-verification`
+
+为目标用户重置密码发起操作者本次操作绑定的两步验证挑战（users.password.reset.other + 管理强认证 + 确认 + 审计）；新口令仅用于服务端密封意图，不在响应/日志出现。
+
+路径参数：`user_id`（string）：目标用户稳定 ID（不得为 root，须在可管理范围内）。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `new_password` | string | 是 | 拟设置的新口令（只用于密封挑战意图；提交时以最终请求为准复核策略/历史）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "new_password": "example-new_password-synthetic-not-real",
+    "request_id": "example-request_id"
+}
+```
+
+边界与语义：
+
+- 请求体不得包含操作者字段；挑战绑定操作者/目标/本次新口令意图，短期有效、有尝试次数上限。
+- 挑战不改变密码；无密码 Passkey 账户不会被本接口悄悄加密码（由领域策略拒绝）。
+
+### `POST /users/{user_id}/password-verification/cancel`
+
+取消未完成的两步验证挑战（确认 + 审计）；取消不改变密码、不产生授权。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 待取消的挑战编号。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /users/{user_id}/password-verification/confirm`
+
+用操作者密码 + TOTP（或强认证策略允许的组合）确认挑战，成功后返回一次性操作证明。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 发起挑战返回的编号。 |
+| `password` | string | 是 | 操作者当前密码（第一步因素；只写）。 |
+| `totp_code` | string | 否 | 操作者 TOTP 验证码（无密码 Passkey 账户可改用 WebAuthn 第二步；只写）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "password": "example-password-synthetic-not-real",
+    "request_id": "example-request_id",
+    "totp_code": "000000"
+}
+```
+
+### `POST /users/{user_id}/password-verification/webauthn/begin`
+
+为挑战生成 WebAuthn 断言选项，绑定当前操作者与本次重置意图。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 发起挑战返回的编号。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /users/{user_id}/password-verification/webauthn/confirm`
+
+提交 WebAuthn 断言（base64）完成第二步；服务端校验通过后返回一次性操作证明。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 发起挑战返回的编号。 |
+| `ceremony_id` | string | 是 | WebAuthn 仪式编号（服务端签发）。 |
+| `response_b64` | string | 是 | WebAuthn 断言 base64（只写，示例为合成值）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "ceremony_id": "example-ceremony_id",
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "request_id": "example-request_id",
+    "response_b64": "example-response_b64-synthetic-not-real"
+}
+```
+
+### `POST /users/{user_id}/username`
+
+用一次性两步验证证明直接修改目标用户用户名（users.username.change.other + 确认 + 行版本 + 原因 + 审计）；证明、操作者、目标与本次新用户名必须一致，提交即消费。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `new_username` | string | 是 | 新用户名（最终提交时复核唯一性/保留名/Unicode 与大小写规范化）。 |
+| `expected_row_version` | integer | 是 | 期望行版本；并发/版本冲突返回 409。 |
+| `reason` | string | 是 | 操作原因（进入真实审计；不包含口令或证明）。 |
+| `proof_token` | string | 是 | 一次性操作证明（只写；提交即消费）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "expected_row_version": 1,
+    "new_username": "example-new_username",
+    "proof_token": "example-proof_token-synthetic-not-real",
+    "reason": "example-reason",
+    "request_id": "example-request_id"
+}
+```
+
+边界与语义：
+
+- 目标用户 ID、角色与历史关联不变；不能以 root 为目标，不能越过可管理范围。
+- 证明失效/换目标/换新用户名/换操作者一律拒绝；成功只返回脱敏结果，不回显证明或旧资料。
+- root 执行同样需要本次两步验证与审计；全权限不等于免验证。
+
+### `POST /users/{user_id}/username-verification`
+
+为目标用户改名发起操作者本次操作绑定的两步验证挑战（users.username.change.other + 管理强认证 + 确认 + 审计）；挑战密封「新用户名」意图，响应不回显意图。
+
+路径参数：`user_id`（string）：目标用户稳定 ID（不得为 root，须在可管理范围内）。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `new_username` | string | 是 | 拟设置的新用户名（仅用于密封挑战意图；唯一性/保留名/规范化在最终提交时复核）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "new_username": "example-new_username",
+    "request_id": "example-request_id"
+}
+```
+
+边界与语义：
+
+- 请求体不得包含 operator_id/operator_user_id/user_id/operator 等操作者字段（400，防冒充）。
+- 挑战短期有效、有尝试次数上限；不能跨目标/跨操作/跨新用户名复用。
+- 挑战本身不产生改名效果，只是两步验证第一步。
+
+### `POST /users/{user_id}/username-verification/cancel`
+
+取消未完成的两步验证挑战（确认 + 审计）；取消不产生任何改名效果与授权。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 待取消的挑战编号。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /users/{user_id}/username-verification/confirm`
+
+用操作者密码 + TOTP（或账户强认证策略允许的组合）确认挑战，成功后返回一次性操作证明；不返回口令/验证码。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 发起挑战返回的编号。 |
+| `password` | string | 是 | 操作者当前密码（第一步因素；只写，不回声、不写日志）。 |
+| `totp_code` | string | 否 | 操作者 TOTP 验证码（无密码 Passkey 账户可改用 WebAuthn 第二步；只写）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "password": "example-password-synthetic-not-real",
+    "request_id": "example-request_id",
+    "totp_code": "000000"
+}
+```
+
+边界与语义：
+
+- 证明只返回一次，绑定操作者会话/操作/目标/新用户名意图；不得写入日志或长期保存。
+- 失败/过期挑战由领域服务拒绝，不自动降级为只密码或免验证。
+
+### `POST /users/{user_id}/username-verification/webauthn/begin`
+
+为挑战生成 WebAuthn 断言选项（RP ID/origin/挑战由服务端生成），绑定当前操作者与本次意图。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 发起挑战返回的编号。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /users/{user_id}/username-verification/webauthn/confirm`
+
+提交 WebAuthn 断言（base64）完成第二步；服务端校验 RP ID/origin/挑战/签名/用户验证后返回一次性操作证明。
+
+路径参数：`user_id`（string）：目标用户稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `challenge_id` | string | 是 | 发起挑战返回的编号。 |
+| `ceremony_id` | string | 是 | WebAuthn 仪式编号（服务端签发）。 |
+| `response_b64` | string | 是 | WebAuthn 断言 base64（只写，示例为合成值）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "ceremony_id": "example-ceremony_id",
+    "challenge_id": "example-challenge_id",
+    "confirm": true,
+    "request_id": "example-request_id",
+    "response_b64": "example-response_b64-synthetic-not-real"
+}
+```
+
+## 6. 角色管理（角色/分配/权限组合）（9 条）
+
+| 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
+|---|---|---|---|---|---|---|---|
+| GET | `/roles` | 分页查询角色 | `roles.read` | 否 | - | - | `page:items:AdminRoleSummary` |
+| POST | `/roles` | 创建角色 | `roles.manage` | 否 | 确认 | - | `AdminRoleSummary` |
+| DELETE | `/roles/{role_id}` | 删除角色 | `roles.manage` | 否 | 确认 | - | `AdminDeletedArtifact` |
+| GET | `/roles/{role_id}` | 读取角色详情 | `roles.read` | 否 | - | - | `AdminRoleDetail` |
+| PUT | `/roles/{role_id}` | 修改角色资料 | `roles.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+| GET | `/roles/{role_id}/assignments` | 查询角色分配 | `roles.read` | 否 | - | - | `对象（见字段/说明）` |
+| POST | `/roles/{role_id}/assignments` | 分配/撤销角色给用户或组 | `roles.assign` | 否 | 确认 | - | `对象（见字段/说明）` |
+| PUT | `/roles/{role_id}/permissions` | 组合/移除角色权限 | `roles.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/roles/{role_id}/state` | 启停角色 | `roles.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+
+### `GET /roles`
+
+按 roles.read 与数据范围分页查询角色（系统/应用范围，含内置标记与启停状态）；名称/键有界字面搜索。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `scope_id`（string，可选）：范围筛选：system 或应用编号（受数据范围约束）。
+- `sort`（string，可选）：排序字段（服务端白名单）。
+- `desc`（boolean，可选）：是否降序。
+- `search`（string，可选）：有界字面搜索（NFKC + 大小写折叠，最多 64 字符）；空表示不过滤。
+- `search_fields`（string，可选）：逗号分隔的搜索字段白名单：name/key（服务端白名单）；未知字段返回 400。
+
+### `POST /roles`
+
+创建普通/应用范围角色（roles.manage + 确认 + 审计）；不能创建内置权限角色，不能借此提权。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `scope_id` | string | 是 | 作用范围：system 或应用编号（受数据范围约束）。 |
+| `key` | string | 是 | 角色键：范围内唯一。 |
+| `name` | string | 是 | 角色名称。 |
+| `description` | string | 否 | 角色说明。 |
+| `limits` | string | 否 | 使用边界说明。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "description": "example-description",
+    "key": "example-key",
+    "limits": "example-limits",
+    "name": "example-name",
+    "request_id": "example-request_id",
+    "scope_id": "example-scope_id"
+}
+```
+
+### `DELETE /roles/{role_id}`
+
+删除非内置角色（roles.manage + 确认 + 审计）；内置权限/角色受保护，删除不静默撤销系统资格。
+
+路径参数：`role_id`（string）：角色 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `GET /roles/{role_id}`
+
+按角色 ID 读取角色详情与使用边界（limits）；越权/跨应用按不存在处理。
+
+路径参数：`role_id`（string）：角色 ID。
+
+### `PUT /roles/{role_id}`
+
+修改角色名称/说明/边界（roles.manage + 确认 + 审计）；键与内置属性不可借此改写。
+
+路径参数：`role_id`（string）：角色 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 否 | 新名称（缺省不修改）。 |
+| `description` | string | 否 | 新说明。 |
+| `limits` | string | 否 | 新使用边界。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "description": "example-description",
+    "limits": "example-limits",
+    "name": "example-name",
+    "request_id": "example-request_id"
+}
+```
+
+### `GET /roles/{role_id}/assignments`
+
+分页查询角色的用户与用户组分配（含数据范围与分配人/时间）；只返回稳定 ID，不返回跨域资料。
+
+路径参数：`role_id`（string）：角色 ID。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100。
+- `offset`（integer，可选）：偏移，默认 0。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+
+### `POST /roles/{role_id}/assignments`
+
+把允许转授的角色分配给用户或用户组，或撤销（roles.assign + 确认 + 审计）；不能自我提权、不能超范围转授、不能分配给 root。
+
+路径参数：`role_id`（string）：角色 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `target_kind` | string | 是 | 目标类型：user / group。 |
+| `target_id` | string | 是 | 目标稳定 ID（用户 ID 或用户组 ID）。 |
+| `assign` | boolean | 是 | true 分配 / false 撤销。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "assign": true,
+    "confirm": true,
+    "request_id": "example-request_id",
+    "target_id": "example-target_id",
+    "target_kind": "example-target_kind"
+}
+```
+
+### `PUT /roles/{role_id}/permissions`
+
+向角色添加或移除单个权限（roles.manage + 确认 + 审计）；受可转授范围限制，不能给应用角色挂系统权限。
+
+路径参数：`role_id`（string）：角色 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `permission_id` | string | 是 | 权限定义 ID（作用域必须与角色范围可组合）。 |
+| `add` | boolean | 是 | true 添加 / false 移除。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "add": true,
+    "confirm": true,
+    "permission_id": "example-permission_id",
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /roles/{role_id}/state`
+
+启用/停用角色（roles.manage + 确认 + 审计）；内置系统角色不可删除但停用语义由领域复核。
+
+路径参数：`role_id`（string）：角色 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `enable` | boolean | 是 | true 启用 / false 停用。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "enable": true,
+    "request_id": "example-request_id"
+}
+```
+
+## 7. 用户组管理（组/成员）（7 条）
+
+| 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
+|---|---|---|---|---|---|---|---|
+| GET | `/groups` | 分页查询用户组 | `groups.read` | 否 | - | - | `page:items:AdminGroupSummary` |
+| POST | `/groups` | 创建用户组 | `groups.manage` | 否 | 确认 | - | `AdminGroupSummary` |
+| DELETE | `/groups/{group_id}` | 删除用户组 | `groups.manage` | 否 | 确认 | - | `AdminDeletedArtifact` |
+| GET | `/groups/{group_id}` | 读取用户组详情 | `groups.read` | 否 | - | - | `AdminGroupSummary` |
+| PUT | `/groups/{group_id}` | 修改用户组 | `groups.manage` | 否 | 确认 | - | `AdminGroupSummary` |
+| GET | `/groups/{group_id}/members` | 分页查询用户组成员 | `groups.read` | 否 | - | - | `page:items:AdminGroupMember` |
+| POST | `/groups/{group_id}/members` | 批量增删组成员 | `groups.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+
+### `GET /groups`
+
+按 groups.read 与数据范围分页查询用户组；名称/键有界字面搜索。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `scope_id`（string，可选）：范围筛选：system 或应用编号（受数据范围约束）。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+- `search`（string，可选）：有界字面搜索（NFKC + 大小写折叠，最多 64 字符）；空表示不过滤。
+- `search_fields`（string，可选）：逗号分隔的搜索字段白名单：name/key（服务端白名单）；未知字段返回 400。
+
+### `POST /groups`
+
+创建用户组（groups.manage + 确认 + 审计）；组键在范围内唯一。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `scope_id` | string | 是 | 作用范围：system 或应用编号（受数据范围约束）。 |
+| `group_key` | string | 是 | 组键：范围内唯一。 |
+| `name` | string | 是 | 组名称。 |
+| `description` | string | 否 | 组说明。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "description": "example-description",
+    "group_key": "example-group_key",
+    "name": "example-name",
+    "request_id": "example-request_id",
+    "scope_id": "example-scope_id"
+}
+```
+
+### `DELETE /groups/{group_id}`
+
+删除用户组（groups.manage + 确认 + 审计）；内置组受保护，删除不静默移除系统资格。
+
+路径参数：`group_id`（string）：用户组 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `GET /groups/{group_id}`
+
+按组 ID 读取用户组详情；越权/跨应用按不存在处理。
+
+路径参数：`group_id`（string）：用户组 ID。
+
+### `PUT /groups/{group_id}`
+
+修改用户组名称/说明（groups.manage + 确认 + 审计）。
+
+路径参数：`group_id`（string）：用户组 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 否 | 新名称（缺省不修改）。 |
+| `description` | string | 否 | 新说明。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "description": "example-description",
+    "name": "example-name",
+    "request_id": "example-request_id"
+}
+```
+
+### `GET /groups/{group_id}/members`
+
+分页查询组成员（只返回用户稳定 ID 与加入时间，不返回跨域资料）。
+
+路径参数：`group_id`（string）：用户组 ID。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100。
+- `offset`（integer，可选）：偏移，默认 0。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+
+### `POST /groups/{group_id}/members`
+
+按 user_ids 批量添加或移除组成员（groups.manage + 确认 + 审计）；action=remove 移除，其它/缺省按添加处理。
+
+路径参数：`group_id`（string）：用户组 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `action` | string | 否 | add（默认）或 remove。 |
+| `user_ids` | array | 是 | 用户稳定 ID 列表（批量；非法/不存在 ID 按领域规则跳过并计数）。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "action": "example-action",
+    "confirm": true,
+    "request_id": "example-request_id",
+    "user_ids": [
+        "example-value"
+    ]
+}
+```
+
+## 8. 权限目录（查看/修改/启停）（3 条）
+
+| 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
+|---|---|---|---|---|---|---|---|
+| GET | `/permissions` | 分页查询权限目录 | `permissions.read` | 否 | - | - | `page:items:AdminPermissionSummary` |
+| PUT | `/permissions/{permission_id}` | 修改自定义权限说明 | `permissions.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/permissions/{permission_id}/state` | 启停权限 | `permissions.state.update` | 否 | 确认 | - | `对象（见字段/说明）` |
+
+### `GET /permissions`
+
+按 permissions.read 分页查询权限定义（系统/应用范围，内置/root_only/启停状态）；名称/键有界字面搜索。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `scope_id`（string，可选）：范围筛选：system 或应用编号（受数据范围约束）。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+- `search`（string，可选）：有界字面搜索（NFKC + 大小写折叠，最多 64 字符）；空表示不过滤。
+- `search_fields`（string，可选）：逗号分隔的搜索字段白名单：name/key（服务端白名单）；未知字段返回 400。
+
+### `PUT /permissions/{permission_id}`
+
+修改自定义权限名称/说明/边界（permissions.manage + 确认 + 审计）；内置权限键与核心语义不可改写。
+
+路径参数：`permission_id`（string）：权限定义 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 否 | 新名称。 |
+| `description` | string | 否 | 新说明。 |
+| `limits` | string | 否 | 新使用边界。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "description": "example-description",
+    "limits": "example-limits",
+    "name": "example-name",
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /permissions/{permission_id}/state`
+
+启用/停用权限定义（permissions.state.update + 确认 + 审计）；内置权限不可删除、停用语义由领域复核。
+
+路径参数：`permission_id`（string）：权限定义 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `enable` | boolean | 是 | true 启用 / false 停用。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "enable": true,
+    "request_id": "example-request_id"
+}
+```
+
+## 9. 应用与授权（应用/成员/客户端凭证/托管策略）（18 条）
+
+| 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
+|---|---|---|---|---|---|---|---|
+| GET | `/applications` | 分页查询应用 | `applications.read` | 否 | - | - | `page:items:AdminApplicationSummary` |
+| POST | `/applications` | 创建应用 | `applications.create` | 否 | 确认 | - | `对象（见字段/说明）` |
+| GET | `/applications/{application_id}` | 读取应用详情 | `applications.read` | 否 | - | - | `AdminApplicationDetail` |
+| PUT | `/applications/{application_id}` | 修改应用资料 | `applications.update` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/applications/{application_id}/certificates` | 登记应用客户端证书 | `applications.credentials.manage` | 否 | 确认 | - | `AdminAppCertificate` |
+| POST | `/applications/{application_id}/certificates/{certificate_id}/revoke` | 撤销应用客户端证书 | `applications.credentials.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/applications/{application_id}/delete` | 逻辑删除应用 | `applications.update` | 是 | 确认 | - | `对象（见字段/说明）` |
+| GET | `/applications/{application_id}/groups` | 分页查询应用内用户组 | `groups.read` | 否 | - | - | `page:items:AdminGroupSummary` |
+| GET | `/applications/{application_id}/managed-policy` | 读取应用托管策略 | `applications.read` | 否 | - | - | `AdminAppManagedPolicy` |
+| PUT | `/applications/{application_id}/managed-policy` | 更新应用托管策略 | `applications.update` | 是 | 确认 | - | `对象（见字段/说明）` |
+| GET | `/applications/{application_id}/members` | 分页查询应用成员 | `applications.read` | 否 | - | - | `page:items:AdminAppMember` |
+| POST | `/applications/{application_id}/members` | 添加/移除应用成员 | `applications.members.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/applications/{application_id}/members/state` | 启停应用成员 | `applications.members.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/applications/{application_id}/oauth-settings` | 登记/更新 OAuth 客户端设置 | `applications.update` | 否 | 确认 | - | `AdminAppOAuthResult` |
+| GET | `/applications/{application_id}/roles` | 分页查询应用内角色 | `roles.read` | 否 | - | - | `page:items:AdminRoleSummary` |
+| POST | `/applications/{application_id}/secrets/rotate` | 轮换应用客户端秘密 | `applications.credentials.manage` | 否 | 确认 | - | `AdminAppSecret` |
+| POST | `/applications/{application_id}/secrets/{secret_id}/revoke` | 撤销应用客户端秘密 | `applications.credentials.manage` | 否 | 确认 | - | `对象（见字段/说明）` |
+| POST | `/applications/{application_id}/state` | 启停应用 | `applications.update` | 否 | 确认 | - | `对象（见字段/说明）` |
+
+### `GET /applications`
+
+按 applications.read 与数据范围分页查询应用摘要；可按状态/包含已删除筛选中，名称/描述有界字面搜索。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `status`（string，可选）：应用状态筛选（服务端枚举）。
+- `include_deleted`（boolean，可选）：是否包含已逻辑删除的应用（true/false）。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+- `search`（string，可选）：有界字面搜索（NFKC + 大小写折叠，最多 64 字符）；空表示不过滤。
+- `search_fields`（string，可选）：逗号分隔的搜索字段白名单：name/description（服务端白名单）；未知字段返回 400。
+
+### `POST /applications`
+
+创建应用登记（applications.create + 确认 + 审计）；client_type 决定客户端类型，秘密另行签发且只显示一次。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 是 | 应用名称。 |
+| `description` | string | 否 | 应用说明。 |
+| `icon_ref` | string | 否 | 图标引用（受控资源，不接收任意路径）。 |
+| `homepage` | string | 否 | 主页（绝对 URL）。 |
+| `owner_user_id` | string | 否 | 负责人用户稳定 ID。 |
+| `contact_info` | string | 否 | 联系方式（用户文本）。 |
+| `client_type` | string | 是 | 客户端类型：public / confidential。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "client_type": "example-client_type",
+    "confirm": true,
+    "contact_info": "example-contact_info",
+    "description": "example-description",
+    "homepage": "example-homepage",
+    "icon_ref": "example-icon_ref",
+    "name": "example-name",
+    "owner_user_id": "example-owner_user_id",
+    "request_id": "example-request_id"
+}
+```
+
+### `GET /applications/{application_id}`
+
+按应用 ID 读取应用详情（公开资料、所有者、状态、客户端类型、行版本）；越权按不存在处理。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+### `PUT /applications/{application_id}`
+
+按行版本修改应用公开资料（applications.update + 确认 + 审计）；不能借资料更新改客户端秘密或权限。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 否 | 新名称。 |
+| `description` | string | 否 | 新说明。 |
+| `homepage` | string | 否 | 新主页。 |
+| `owner_user_id` | string | 否 | 新负责人用户 ID。 |
+| `contact_info` | string | 否 | 新联系方式。 |
+| `expected_row_version` | integer | 是 | 期望行版本；冲突返回 409。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "contact_info": "example-contact_info",
+    "description": "example-description",
+    "expected_row_version": 1,
+    "homepage": "example-homepage",
+    "name": "example-name",
+    "owner_user_id": "example-owner_user_id",
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /applications/{application_id}/certificates`
+
+登记客户端证书（applications.credentials.manage + 确认 + 审计）；只返回公开指纹，私钥永不返回或落到服务端明文存储之外的日志。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `certificate_pem` | string | 是 | 客户端证书 PEM（只写；示例为合成值，不是真实证书）。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "certificate_pem": "example-certificate_pem",
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /applications/{application_id}/certificates/{certificate_id}/revoke`
+
+撤销指定客户端证书（applications.credentials.manage + 确认 + 审计）。
+
+路径参数：`application_id`（string）：应用稳定 ID。；`certificate_id`（string）：客户端证书 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /applications/{application_id}/delete`
+
+对已停用应用执行逻辑删除（applications.update + 敏感操作再次认证 + 显式确认 + 行版本绑定 + 审计）；物理清理不在在线 API 暴露。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认删除（确认不是授权）。 |
+| `row_version` | integer | 是 | 期望行版本（正整数）；冲突返回 409。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "request_id": "example-request_id",
+    "row_version": 1
+}
+```
+
+边界与语义：
+
+- Changed=false 表示此前已删除（幂等成功）；不得引入物理删除入口。
+
+### `GET /applications/{application_id}/groups`
+
+按 groups.read 分页查询该应用范围的用户组（受应用数据范围约束）。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+- `search`（string，可选）：有界字面搜索（NFKC + 大小写折叠，最多 64 字符）；空表示不过滤。
+- `search_fields`（string，可选）：逗号分隔的搜索字段白名单：name/key（服务端白名单）；未知字段返回 400。
+
+### `GET /applications/{application_id}/managed-policy`
+
+读取该应用的托管 API 委托策略（允许/服务允许操作 ID、对象/字段白名单、分页批量上限、可写性）；只读视图不含秘密。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+### `PUT /applications/{application_id}/managed-policy`
+
+更新托管 API 委托策略（applications.update + 敏感策略再次认证 + 确认 + 行版本 + 策略摘要绑定 + 审计）；只能收紧/明确委托范围，不能把系统权限委托给应用。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `allowed` | array | 否 | 允许的托管操作 ID 列表（取自托管操作目录，如 application.get、members.list）。 |
+| `service_allowed` | array | 否 | 服务身份允许的只读操作 ID 列表（仅目录标记 ServiceAllowed 的操作）。 |
+| `objects` | array | 否 | 允许的对象类型白名单。 |
+| `fields` | array | 否 | 字段级读/写白名单规则。 |
+| `max_limit` | integer | 是 | 托管列表单页最大 limit（不得放大超硬上限）。 |
+| `max_offset` | integer | 是 | 托管列表最大 offset。 |
+| `max_batch` | integer | 是 | 托管批量操作最大条数。 |
+| `expected_row_version` | integer | 是 | 期望策略行版本；冲突返回 409。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "allowed": [
+        "example-value"
+    ],
+    "confirm": true,
+    "expected_row_version": 1,
+    "fields": [
+        "example-value"
+    ],
+    "max_batch": 1,
+    "max_limit": 1,
+    "max_offset": 1,
+    "objects": [
+        "example-value"
+    ],
+    "request_id": "example-request_id",
+    "service_allowed": [
+        "example-value"
+    ]
+}
+```
+
+### `GET /applications/{application_id}/members`
+
+按 applications.read 分页查询应用成员与应用内状态（只返回稳定 ID/时间，不返回全局秘密）。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `status`（string，可选）：成员状态筛选。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+
+### `POST /applications/{application_id}/members`
+
+添加应用成员或移除（applications.members.manage + 确认 + 审计）；action=remove 移除，否则添加并写应用内资料。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `action` | string | 否 | add（默认）或 remove。 |
+| `user_id` | string | 是 | 目标用户稳定 ID。 |
+| `expected_row_version` | integer | 否 | 移除时的期望行版本；冲突返回 409。 |
+| `display_name` | string | 否 | 应用内显示名（添加时）。 |
+| `title` | string | 否 | 应用内职位（添加时）。 |
+| `note` | string | 否 | 应用内备注（添加时）。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "action": "example-action",
+    "confirm": true,
+    "display_name": "example-display_name",
+    "expected_row_version": 1,
+    "note": "example-note",
+    "request_id": "example-request_id",
+    "title": "example-title",
+    "user_id": "example-user_id"
+}
+```
+
+### `POST /applications/{application_id}/members/state`
+
+启用/停用应用内成员（applications.members.manage + 确认 + 行版本 + 审计）。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `user_id` | string | 是 | 目标用户稳定 ID。 |
+| `enable` | boolean | 是 | true 启用 / false 停用。 |
+| `expected_row_version` | integer | 是 | 期望行版本；冲突返回 409。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "enable": true,
+    "expected_row_version": 1,
+    "request_id": "example-request_id",
+    "user_id": "example-user_id"
+}
+```
+
+### `POST /applications/{application_id}/oauth-settings`
+
+登记（action=register）或更新（其它/缺省）应用 OAuth 客户端设置（applications.update + 确认 + 审计）；秘密/私钥永不回显。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `action` | string | 否 | register（首次登记）或 update（更新设置）。 |
+| `grant_types` | array | 否 | 允许的授权类型（OAuth 标准值，服务端白名单）。 |
+| `redirect_uris` | array | 否 | 精确回调地址白名单（禁止通配符）。 |
+| `post_logout_redirect_uris` | array | 否 | 注销后跳转白名单。 |
+| `scopes` | array | 否 | 允许的 scope。 |
+| `audiences` | array | 否 | 允许的资源受众。 |
+| `auth_methods` | array | 否 | 客户端认证方式白名单。 |
+| `require_pkce` | boolean | 否 | 是否强制 PKCE。 |
+| `certificate_pem` | string | 否 | 可选的客户端证书 PEM（只写，示例为合成值）；不返回私钥。 |
+| `expected_row_version` | integer | 否 | 更新设置时的期望行版本。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "action": "example-action",
+    "audiences": [
+        "example-value"
+    ],
+    "auth_methods": [
+        "example-value"
+    ],
+    "certificate_pem": "example-certificate_pem-synthetic-not-real",
+    "confirm": true,
+    "expected_row_version": 1,
+    "grant_types": [
+        "example-value"
+    ],
+    "post_logout_redirect_uris": [
+        "example-value"
+    ],
+    "redirect_uris": [
+        "example-value"
+    ],
+    "request_id": "example-request_id",
+    "require_pkce": true,
+    "scopes": [
+        "example-value"
+    ]
+}
+```
+
+### `GET /applications/{application_id}/roles`
+
+按 roles.read 分页查询该应用范围的角色（受应用数据范围约束，不跨应用枚举）。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+查询参数：
+
+- `limit`（integer，可选）：每页条数，默认 20，最大 100；显式非法值返回 400，不静默截断。
+- `offset`（integer，可选）：偏移分页，默认 0，最大 1000000；与游标分页互斥。
+- `sort`（string，可选）：排序字段。
+- `desc`（boolean，可选）：是否降序。
+- `search`（string，可选）：有界字面搜索（NFKC + 大小写折叠，最多 64 字符）；空表示不过滤。
+- `search_fields`（string，可选）：逗号分隔的搜索字段白名单：name/key（服务端白名单）；未知字段返回 400。
+
+### `POST /applications/{application_id}/secrets/rotate`
+
+轮换客户端秘密（applications.credentials.manage + 确认 + 审计）；新秘密只在本次响应出现一次（shown_once=true），之后不可再读。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+边界与语义：
+
+- 响应中的 secret 只显示一次，不写入日志/审计；轮换后旧秘密由领域失效策略处理。
+
+### `POST /applications/{application_id}/secrets/{secret_id}/revoke`
+
+撤销指定客户端秘密（applications.credentials.manage + 确认 + 审计）。
+
+路径参数：`application_id`（string）：应用稳定 ID。；`secret_id`（string）：客户端秘密 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "request_id": "example-request_id"
+}
+```
+
+### `POST /applications/{application_id}/state`
+
+启用/停用应用（applications.update + 确认 + 行版本 + 审计）；停用不删除数据。
+
+路径参数：`application_id`（string）：应用稳定 ID。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `enable` | boolean | 是 | true 启用 / false 停用。 |
+| `expected_row_version` | integer | 是 | 期望行版本；冲突返回 409。 |
+| `confirm` | boolean | 是 | 必须为 true 显式确认目标与后果；确认不是授权，权限/敏感策略/审计仍由服务端重新判定。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "enable": true,
+    "expected_row_version": 1,
+    "request_id": "example-request_id"
+}
+```
+
+## 10. 会话强制下线（管理员视角）（2 条）
+
+| 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
+|---|---|---|---|---|---|---|---|
+| GET | `/sessions` | 查询目标用户活动会话（管理员） | `sessions.revoke` | 否 | - | - | `对象（见字段/说明）` |
+| POST | `/sessions/revoke` | 强制目标用户下线（管理员） | `sessions.revoke` | 是 | 确认+原因 | - | `AdminSessionRevokeResult` |
+
+### `GET /sessions`
+
+按强认证管理会话 + sessions.revoke 范围授权查询目标用户活动会话摘要；root/受保护目标拒绝，读取写真实审计；不返回会话秘密/CSRF 令牌。
+
+查询参数：
+
+- `page`（integer，可选）：页码，从 1 开始，默认 1。
+- `page_size`（integer，可选）：每页条数，默认 20，最大 100。
+- `scope_app_id`（string，可选）：可选应用范围：空表示系统范围；应用范围管理员不得跨应用。
+- `target_user_id`（string，可选）：目标用户稳定 ID（与 target 范围一起受授权约束）。
+- `request_id`（string，可选）：可选请求编号（进入审计，不参与授权）。
+
+### `POST /sessions/revoke`
+
+强制目标用户相关会话失效（session.revoke.other 敏感策略 + sessions.revoke 范围授权 + 确认 + 理由 + 原子撤销 + 真实操作者审计）；目标用户与目标会话必须且只能给出一个。
+
+请求体（application/json，严格解码）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `confirm` | boolean | 是 | 必须为 true 显式确认（确认不是授权）。 |
+| `scope_app_id` | string | 否 | 应用范围：空表示系统范围。 |
+| `target_user_id` | string | 否 | 目标用户稳定 ID（与 target_session_id 二选一）。 |
+| `target_session_id` | string | 否 | 目标会话 ID（与 target_user_id 二选一）。 |
+| `reason` | string | 是 | 操作理由（必填，进入真实审计，≤256 字符）。 |
+| `request_id` | string | 否 | 可选请求编号：优先复用并进入审计，仅用于关联排障与幂等，不参与授权。 |
+
+请求体示例（合成值，不可用于真实操作）：
+
+```json
+{
+    "confirm": true,
+    "reason": "example-reason",
+    "request_id": "example-request_id",
+    "scope_app_id": "example-scope_app_id",
+    "target_session_id": "example-target_session_id",
+    "target_user_id": "example-target_user_id"
+}
+```
+
+边界与语义：
+
+- 不能撤销 root/受保护目标的会话；应用范围管理员不得跨应用。
+- 响应 revoked 为实际撤销数量；无匹配会话不等于伪造成功。
+
+## 11. 审计（事件/保留策略/导出/清理）（14 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -335,7 +1834,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 
 - root-only 属于身份能力，不能由普通权限获得；策略变更进入真实审计。
 
-## 5. 报告（历史/快照/下载票据/清理）（9 条）
+## 12. 报告（历史/快照/下载票据/清理）（9 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -510,7 +2009,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 
 路径参数：`report_id`（string）：报告编号。
 
-## 6. 报告计划与备份计划（13 条）
+## 13. 报告计划与备份计划（13 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -880,7 +2379,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 }
 ```
 
-## 7. 备份（产物/任务/下载票据/保留/清理）（13 条）
+## 14. 备份（产物/任务/下载票据/保留/清理）（13 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -1084,7 +2583,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 - 兑换路径：POST /backups/download-tickets/redeem；兑换时再次授权并重新检查产物状态与保留保护。
 - 响应不含服务器路径；不要把它当可分享的下载地址。
 
-## 8. 任务（详情/尝试历史）（2 条）
+## 15. 任务（详情/尝试历史）（2 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -1115,7 +2614,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 
 路径参数：`task_id`（string）：任务编号。
 
-## 9. 配置诊断（脱敏运行诊断）（3 条）
+## 16. 配置诊断（脱敏运行诊断）（3 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -1151,7 +2650,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 - `request_id`（string，可选）：可选：附带该请求编号的关联错误。
 - `limit`（integer，可选）：关联错误条数上限（1～50）。
 
-## 10. 配置管理（脱敏字段/校验/更新/恢复）（5 条）
+## 17. 配置管理（脱敏字段/校验/更新/恢复）（5 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -1246,7 +2745,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 }
 ```
 
-## 11. 安全通知与本地捕获测试（3 条）
+## 18. 安全通知与本地捕获测试（3 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -1300,7 +2799,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 - 绝不真实外发：真实投递模式或状态读取失败一律 503 NOTIFICATION_TEST_DISABLED 并写拒绝审计，测试器零调用。
 - 捕获成功不代表任何真实通道可达；响应 real_delivery 恒为 false。
 
-## 12. 邮件投递记录（脱敏只读）（1 条）
+## 19. 邮件投递记录（脱敏只读）（1 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|
@@ -1322,7 +2821,7 @@ root 专属 + audit.retention.update 敏感策略 + 确认 + 原因 + 版本乐�
 - queued/accepted 不等于最终送达；状态以投递记录真实终态为准。
 - 列表使用稳定游标，不接受非零 offset。
 
-## 13. 客服工单与人工恢复（13 条）
+## 20. 客服工单与人工恢复（13 条）
 
 | 方法 | 路径 | 摘要 | 权限 | 敏感 | 确认/原因 | 异步/取消 | 成功 data |
 |---|---|---|---|---|---|---|---|

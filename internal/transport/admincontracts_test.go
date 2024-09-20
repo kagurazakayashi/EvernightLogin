@@ -140,10 +140,12 @@ func TestAdminContractsExcludeOtherSteps(t *testing.T) {
 			t.Fatalf("契约 %s 落在排除域 %q（%s）", operation.Key, first, reason)
 		}
 	}
-	// 直接改名/改密的 HTTP 端点（258/259）也未实现，不得出现在契约里。
+	// 直接改名/改密（258/259）已随步骤 269 定稿登记，不再属于排除域。
 	for _, operation := range AdminOperations() {
-		if strings.Contains(operation.Pattern, "password") || strings.Contains(operation.Pattern, "username") {
-			t.Fatalf("契约 %s 疑似直接改名/改密端点（属 258/259，未实现不得写占位）", operation.Key)
+		if operation.Domain == "direct" &&
+			!strings.Contains(operation.Pattern, "username") &&
+			!strings.Contains(operation.Pattern, "password") {
+			t.Fatalf("direct 域契约 %s 路径不含 username/password，疑似域标错", operation.Key)
 		}
 	}
 }
@@ -172,6 +174,96 @@ func TestAdminComponentSchemasCoverSuccessReferences(t *testing.T) {
 		if _, ok := schemas[name]; !ok {
 			t.Fatalf("缺少关键组件 %s", name)
 		}
+	}
+}
+
+// TestAdminManagementDomainsPresent 验证步骤 269 管理组与直接管理域契约覆盖完整、
+// 直接操作声明了两步验证证明/独立权限/敏感语义，且新口令与证明字段为只写。
+func TestAdminManagementDomainsPresent(t *testing.T) {
+	expectedMinimum := map[string]int{
+		"users": 8, "roles": 9, "groups": 7, "permissions": 3,
+		"applications": 18, "sessions": 2, "direct": 12,
+	}
+	counts := map[string]int{}
+	for _, operation := range AdminOperations() {
+		counts[operation.Domain]++
+	}
+	for domain, minimum := range expectedMinimum {
+		if counts[domain] < minimum {
+			t.Fatalf("管理组域 %s 契约仅 %d 条，期望 >=%d", domain, counts[domain], minimum)
+		}
+		if AdminDomainTitles[domain] == "" {
+			t.Fatalf("管理组域 %s 缺少标题", domain)
+		}
+	}
+	// 直接操作：独立权限键 + 敏感 + 确认；口令/证明只写；成功结果不回显秘密。
+	directSeen := map[string]bool{}
+	for _, operation := range AdminOperations() {
+		if operation.Domain != "direct" {
+			continue
+		}
+		if !operation.Sensitive || !operation.Confirm {
+			t.Fatalf("直接操作 %s 必须声明 Sensitive+Confirm", operation.Key)
+		}
+		hasPermission := false
+		for _, permission := range operation.Permissions {
+			if permission == "users.username.change.other" ||
+				permission == "users.password.reset.other" {
+				hasPermission = true
+			}
+		}
+		if !hasPermission {
+			t.Fatalf("直接操作 %s 缺少独立权限键", operation.Key)
+		}
+		for _, field := range operation.Body {
+			if (field.Name == "new_password" || field.Name == "proof_token" ||
+				strings.HasSuffix(field.Name, "_b64") ||
+				field.Name == "password" || field.Name == "totp_code") && !field.Secret {
+				t.Fatalf("直接操作 %s 的字段 %s 必须标记 Secret（只写不回显）", operation.Key, field.Name)
+			}
+		}
+		if strings.HasSuffix(operation.Pattern, "/username") {
+			directSeen["username-submit"] = operation.Success == "AdminDirectUsernameChangeResult"
+		}
+		if strings.HasSuffix(operation.Pattern, "/password") {
+			directSeen["password-submit"] = operation.Success == "AdminDirectPasswordResetResult"
+		}
+	}
+	if !directSeen["username-submit"] || !directSeen["password-submit"] {
+		t.Fatalf("直接改名/改密提交契约或成功结果组件缺失：%v", directSeen)
+	}
+}
+
+// TestAdminUserStatePermissionCombination 验证用户状态契约与实际组合权限一致：
+// 适配器前置 users.update，领域终检按动作再要 users.disable（disable/enable）或
+// users.delete（request_delete）；不能用"任一满足"误解。
+func TestAdminUserStatePermissionCombination(t *testing.T) {
+	operation, ok := AdminOperationContract("POST", "users/{user_id}/state")
+	if !ok {
+		t.Fatal("缺少用户状态变更契约")
+	}
+	required := map[string]bool{"users.update": false, "users.disable": false, "users.delete": false}
+	for _, permission := range operation.Permissions {
+		if _, exists := required[permission]; exists {
+			required[permission] = true
+		}
+	}
+	for permission, present := range required {
+		if !present {
+			t.Fatalf("用户状态契约缺少组合权限 %s（实际要求：users.update + 动作键）", permission)
+		}
+	}
+	if !strings.Contains(operation.Description, "不是任一满足") {
+		t.Fatalf("用户状态契约描述未说明组合权限：%s", operation.Description)
+	}
+	hasCombinationNote := false
+	for _, note := range operation.Notes {
+		if strings.Contains(note, "users.update") && strings.Contains(note, "不是任一满足") {
+			hasCombinationNote = true
+		}
+	}
+	if !hasCombinationNote {
+		t.Fatal("用户状态契约缺少权限组合说明（notes）")
 	}
 }
 

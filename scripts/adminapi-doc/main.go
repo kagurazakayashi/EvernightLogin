@@ -11,7 +11,7 @@
 //     adminapi/serverapp 真实注册得到）；本工具不手写第二份端点清单；
 //   - 契约来源：internal/transport 的 AdminOperations（与运行期 HTTP 契约层同包）；
 //   - 本工具只读源码/生成物，不访问网络、数据库或运行中的服务；
-//   - 管理组（用户/角色/应用/会话）属步骤 269、直接改名/改密属 258/259、邮件投递
+//   - 管理组与直接改名/改密（258/259）属步骤 269、邮件投递
 //     记录属后续步骤（266）：这些前缀既不允许出现契约，也不生成占位 schema；
 //   - 步骤 268 已登记的 docs/reference/http-api.md 与 http-openapi.json 本工具不改写，
 //     避免与页面契约生成器和 268 审计冻结冲突。
@@ -47,7 +47,8 @@ const schemaVersion = "evernight.reference/v1/http-openapi-admin"
 
 // adminScopePrefixes 是本步登记契约的管理路由一级前缀（相对管理 API 前缀）。
 var adminScopePrefixes = []string{
-	"meta", "error-codes", "audit", "reports", "report-plans", "backups",
+	"meta", "error-codes", "users", "roles", "groups", "permissions",
+	"applications", "sessions", "audit", "reports", "report-plans", "backups",
 	"tasks", "diagnostics", "settings", "notifications", "deliveries", "support",
 }
 
@@ -362,14 +363,15 @@ func buildOpenAPIDocument(operations []transport.NamedAdminOperation) ([]byte, e
 	document := map[string]any{
 		"openapi": "3.0.3",
 		"info": map[string]any{
-			"title":   "login 管理 JSON API（运维/报告/客服域）",
+			"title":   "login 管理 JSON API（管理组与直接管理 + 运维/报告/客服）",
 			"version": "admin.v1",
 			"description": "管理 JSON API 的机器契约：审计、通知、邮件投递、报告与报告计划、任务、备份恢复、" +
 				"配置诊断、配置管理与客服人工恢复。成功/失败使用统一 JSON 信封（ok/request_id/data 或 " +
 				"ok/code/message/request_id），错误码来自根包 errs 注册表；接口按装配条件注册，未装配领域 404。\n" +
 				"认证：文档级 security 声明管理会话 Cookie 或 Bearer 会话秘密二选一；Cookie 会话的非安全方法还须 " +
-				"X-CSRF-Token。管理组（用户/角色/应用/会话）OpenAPI 属步骤 269；直接改名/改密 HTTP 端点属 258/259。" +
-				"本文件不包含这些域的占位 schema。",
+				"X-CSRF-Token。管理组（用户/角色/用户组/权限/应用/成员/会话）与直接改名/直接重置密码" +
+				"（一次操作两步验证证明、目标绑定、新口令只写不回显、must_change、旧会话与找回失效）均已覆盖；" +
+				"口令/证明不进入响应与日志，root 执行同样需要两步验证与审计。",
 		},
 		"servers": []any{
 			map[string]any{
@@ -649,11 +651,11 @@ func adminErrorResponse(description string) map[string]any {
 // renderMarkdown 渲染人类可读的管理 API 参考。
 func renderMarkdown(operations []transport.NamedAdminOperation) []byte {
 	var builder strings.Builder
-	builder.WriteString("# 管理 JSON API 参考（运维 / 报告 / 客服域）\n\n")
+	builder.WriteString("# 管理 JSON API 参考（管理组与直接管理 + 运维/报告/客服）\n\n")
 	builder.WriteString("> 本文件由 `go run ./scripts/adminapi-doc -write` 从**AST 扫描的真实注册路由**" +
 		"（与 `docs/reference/http-routes.json` 同一扫描器）与 `internal/transport/admincontracts_*.go` 契约生成，" +
-		"**不要手工编辑**；`-check` 逐字节校验且失败非零退出。管理组（用户/角色/应用/会话）OpenAPI " +
-		"属步骤 269、直接改名/改密属 258/259，本文件不包含其占位 schema。\n\n")
+		"**不要手工编辑**；`-check` 逐字节校验且失败非零退出。管理组（用户/角色/用户组/权限/应用/会话）" +
+		"与直接改名/直接重置密码（步骤 258/259）均在本文件；直接操作的一次性证明与新口令不回显。\n\n")
 
 	builder.WriteString("## 1. 基础约定\n\n")
 	builder.WriteString(bulletLines([]string{
@@ -664,11 +666,12 @@ func renderMarkdown(operations []transport.NamedAdminOperation) []byte {
 		"**权限**：端点声明所需权限键（任一满足）；root 按内核语义拥有全部已实现权限，但仍校验认证、两步验证、目标/输入、业务一致性与审计。表内 `root-only` 表示仅真实 root/受信本地主体可调用。",
 		"**敏感操作**：`敏感=是` 表示领域服务会按 `internal/policy` 复核再次认证/强认证新鲜度与策略下限；前端确认不能替代。",
 		"**确认与原因**：所有写操作必须 `confirm=true`（确认不是授权）；取消/清理/保留策略/启停等还要求非空 `reason`，原因进入真实审计。",
+		"**直接管理（改名/重置密码）**：操作者只能来自可信管理会话，并持独立权限 `users.username.change.other` / `users.password.reset.other`；目标用稳定 UserID，不得为 root 或超出可管理范围。每个逻辑操作要求操作者本次合格两步验证（TOTP 或 Passkey/WebAuthn；证明绑定操作者/会话/操作/目标/本次意图，提交即消费）；新口令只写不回显，成功只返回脱敏事实（`must_change`、撤销会话数、旧找回请求/凭证失效数）；root 执行同样需要两步验证与审计，应用内权限不等于全局权限。",
 		"**分页与筛选**：列表 `limit` 默认 20、最大 100；`offset` 最大 1000000；部分列表提供稳定 `cursor`（与 offset 互斥，条件变化后旧游标失效）。时间参数使用 RFC3339；有界搜索最多 64 字符，通配符按字面。",
 		"**异步语义**：提交/受理 ≠ 完成/取消。异步操作返回真实任务/状态，必须按任务编号查询终态；取消只表示“已受理取消”，终态以任务/状态为准。",
 		"**下载与票据**：响应不暴露宿主路径，也不把服务器路径当下载地址。报告/备份使用**一次性短期下载票据**（签发只返回一次 token → 兑换时再次授权并重查产物状态 → 流式返回受控字节，重复兑换/撤权后拒绝）；审计导出每次下载重新授权。",
 		"**错误码**：来自根包 `errs` 注册表（HTTP 状态与默认消息同源）；排障见 [errors.md](errors.md)。",
-		"**范围**：本文件覆盖 core/audit/reports/plans/backups/tasks/diagnostics/settings/notifications/deliveries/support；用户/角色/应用/会话属 269，直接改名/改密属 258/259（不写占位）。",
+		"**范围**：本文件覆盖步骤 269：管理组（users/roles/groups/permissions/applications/sessions）与直接改名/直接重置密码（direct，一次操作两步验证证明）；以及 270 域（core/audit/reports/plans/backups/tasks/diagnostics/settings/notifications/deliveries/support）。",
 	}))
 
 	builder.WriteString("## 2. 操作总览\n\n")
@@ -910,8 +913,7 @@ func validateGenerated(document, markdown []byte) []string {
 		}
 	}
 	// 排除域不得出现路径（防止占位 schema）。
-	for _, excluded := range []string{"/users", "/applications", "/roles", "/groups",
-		"/permissions", "/sessions", "/mail"} {
+	for _, excluded := range []string{"/mail"} {
 		if strings.Contains(text, "\"/"+strings.TrimPrefix(excluded, "/")) {
 			issues = append(issues, "生成物出现排除域路径片段："+excluded)
 		}
