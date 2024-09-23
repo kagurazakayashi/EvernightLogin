@@ -2,6 +2,7 @@
 {{define "content"}}
 <p>{{t "page.auth.login.description"}}</p>
 {{if .Data.registrationEnabled}}<p><a href="{{route "auth.register"}}">{{t "page.auth.login.no_account"}} {{t "page.auth.login.register_link"}}</a></p>{{end}}
+{{if .Data.passwordResetPath}}<p><a href="{{.Data.passwordResetPath}}">{{t "page.auth.login.forgot_link"}}</a></p>{{end}}
 <form method="post" action="{{route "auth.login.submit"}}" data-ln-module="async-form" novalidate>
   {{csrf_field}}
   <div class="ln-field">

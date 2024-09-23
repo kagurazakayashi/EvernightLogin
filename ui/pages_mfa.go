@@ -24,6 +24,10 @@ import (
 // UIPageMFAOptions 是步骤 64 页面配置。
 type UIPageMFAOptions struct {
 	Backend UIPageMFABackend
+	// PasswordResetAvailable 表示邮件找回能力真实可用（步骤 260：宿主按
+	// mail.enabled/找回服务装配注入）；false 时找回页不渲染表单，返回稳定不可用
+	// 提示与实际可用的下一路径，不伪造“已受理”。
+	PasswordResetAvailable bool
 	// LoginPath 是未登录/流程失效时的站内登录路径；空使用 "/login"。
 	LoginPath string
 	// PostLoginPath 是第二因素成功后的站内落地路径；空使用 "/home"。
@@ -718,7 +722,13 @@ func (h *mfaPageHandlers) recoveryRebind(ctx context.Context, request *http.Requ
 func (h *mfaPageHandlers) passwordForgot(ctx context.Context, request *http.Request,
 	page UIPageContext, backend UIPageMFABackend) (UIPageOutcome, error) {
 	if request.Method == http.MethodGet {
-		return UIPageOutcome{Data: map[string]any{}}, nil
+		return UIPageOutcome{Data: map[string]any{
+			"PasswordResetAvailable": h.pages.options.PasswordResetAvailable}}, nil
+	}
+	if !h.pages.options.PasswordResetAvailable {
+		return UIPageOutcome{StatusCode: http.StatusServiceUnavailable,
+			ErrorCode:    "MAIL_DIAGNOSTICS_UNAVAILABLE",
+			ErrorSummary: textMFA("page.auth.password_forgot.unavailable")}, nil
 	}
 	form, ok := pageForm(request, page, "identifier")
 	if !ok {

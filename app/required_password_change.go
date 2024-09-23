@@ -2,6 +2,14 @@ package app
 
 // 步骤 257：MustChange 受限会话完成本人改密。
 //
+// D-257-1（安全审计 INFO-1，Lead 裁决为产品语义，第 11 轮 260 登记）：直接重置口令后
+// 目标凭据带 must_change=true，用新口令登录只得到“仅能改密、无业务访问”的受限会话
+// （kind=restricted / reason=pending_password_change / required_steps=[password_change]）；
+// 该入口仍执行真实密码策略与再次认证（reauth 强度策略），**不会因“仅改密”自动跳过第二
+// 因素**；MFA/Passkey 保留、改密不解除 MFA，完成后必须用新口令重新登录，完整登录仍需
+// 第二因素（目标已绑定 MFA 时改密是否额外要求 TOTP 取决于 reauth 策略；目标绑定 MFA 的
+// 独立闭环用例计划在 274 补测）。
+//
 // 管理员直接重置口令后目标凭证带 must_change=true：目标用新口令登录时认证只走到
 // “密码已通过、必须先改密”，得到受限会话（kind=restricted,
 // reason=pending_password_change, required_steps=[password_change]），不能直接访问

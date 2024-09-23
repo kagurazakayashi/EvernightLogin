@@ -29,6 +29,9 @@ import (
 // UIPageAuthOptions 是步骤 63 账户入口页配置。Backend 缺失时 NewWebUI 拒绝构造。
 type UIPageAuthOptions struct {
 	Backend UIPageAuthBackend
+	// PasswordResetPath 非空时登录页显示“忘记密码”入口（步骤 260：仅在邮件找回
+	// 能力真实可用时由宿主注入；空表示不显示，避免指向不可用入口）。
+	PasswordResetPath string
 	// PostLoginPath 是登录成功默认落地站内相对路径；空使用 "/"。必须是站内相对路径。
 	PostLoginPath string
 	// PasskeyLoginPath 非空时登录页显示 Passkey 入口并跳转到该站内相对路径
@@ -330,6 +333,7 @@ func (h *authPageHandlers) login(ctx context.Context, request *http.Request,
 	data := map[string]any{
 		"registrationEnabled": availability.Enabled,
 		"passkeyPath":         h.pages.options.PasskeyLoginPath,
+		"passwordResetPath":   h.pages.options.PasswordResetPath,
 		"returnPath":          safeRelativePath(request.URL.Query().Get("return")),
 	}
 	if request.Method != http.MethodPost {

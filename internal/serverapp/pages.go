@@ -275,6 +275,14 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 		PageAuth: &ui.UIPageAuthOptions{
 			Backend:       authAdapter,
 			PostLoginPath: "/",
+			// 步骤 260：仅邮件找回真实可用时在登录页显示入口；未启用邮件不展示
+			// 指向不可用功能的链接（找回页本身也会明确提示不可用）。
+			PasswordResetPath: func() string {
+				if deps.Config.Mail.Enabled && securityDomains.PasswordReset != nil {
+					return prefix + "/login/forgot-password"
+				}
+				return ""
+			}(),
 			PasskeyLoginPath: func() string {
 				if securityDomains.Passkey != nil {
 					return "/login/passkey"
@@ -287,6 +295,10 @@ func BuildPagesWithOptions(deps Deps, services *Services, managed *ManagedServic
 			Backend:       authAdapter,
 			LoginPath:     "/login",
 			PostLoginPath: "/home",
+			// 步骤 260：按真实装配呈现找回可用性；未配置邮件时页面给出稳定
+			// 不可用提示与下一路径，不伪造“已受理”。
+			PasswordResetAvailable: deps.Config.Mail.Enabled &&
+				securityDomains.PasswordReset != nil,
 		},
 		Now:    now,
 		Logger: logger,

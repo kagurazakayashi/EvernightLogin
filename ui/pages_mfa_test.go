@@ -335,8 +335,9 @@ created_at_ms,updated_at_ms) VALUES('mfa_factor_email_1',?,'email','active',?,?)
 	ui, err := login.NewWebUI(login.WebUIOptions{
 		Session: pageSessions{service: sessionService}, FormTokens: csrfProvider,
 		PageAuth: &login.UIPageAuthOptions{Backend: adapter, PostLoginPath: "/home"},
-		PageMFA:  &login.UIPageMFAOptions{Backend: adapter},
-		Now:      nowFunc, Logger: logger})
+		// 步骤 260：真实找回服务可用时页面显示表单并渲染匿名 CSRF 令牌。
+		PageMFA: &login.UIPageMFAOptions{Backend: adapter, PasswordResetAvailable: true},
+		Now:     nowFunc, Logger: logger})
 	if err != nil {
 		t.Fatalf("页面框架: %v", err)
 	}

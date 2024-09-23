@@ -2,6 +2,14 @@ package app
 
 // 找回密码公开门面（嵌入宿主用）。
 //
+// 第 11 轮（260）口径：账户口令相关入口分为三条用户路径——①已登录本人改密
+// （Profile.ChangePassword / account.password 页）、②自助邮件找回（本文件，
+// /login/forgot-password + /login/reset-password 内置页）、③ManualRecovery 人工核验
+// 恢复（申请/独立审批/执行三权分离，保持可信渠道），三者共用同一密码/会话/找回核心，
+// 不新增重复密码存储。另有**独立管理操作**：根包 DirectUserManagement（直接改名）与
+// DirectPasswordManagement（直接重置他人密码），要求操作者独立权限 + 本人一次两步
+// 验证，不经目标确认或另一管理员审批，**不是第四种匿名找回**，也不替换或删除人工恢复。
+//
 // 目标：让宿主在自己的“忘记密码”页面发起 Evernight 的邮件找回流程，并用邮件
 // 中的一次性 token 完成密码重置；不暴露 internal/ 类型，也不返回重置 token。
 //

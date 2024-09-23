@@ -319,8 +319,14 @@ _ = result.UserID
 - 必须配置 `mail.enabled`、SMTP、发件人和 `server.public_base_url`；否则 `Request`
   返回配置错误，不会假装发送成功。
 - 邮件链接由 Evernight 生成，默认指向
-  `PUBLIC_BASE_URL + PATH_PREFIX + /login/reset-password?token=...`；宿主需要在该
-  路径提供重置页（可以使用插件模式自带页面，或挂载自己的表单）。
+  `PUBLIC_BASE_URL + PATH_PREFIX + /login/reset-password?token=...`；内置页面已提供
+  `/login/forgot-password`（发起找回）与 `/login/reset-password`（令牌校验 + 新密码），
+  宿主可直接使用、通过页面替换机制覆盖，或挂载自己的表单。
+- 内置登录页仅在 `mail.enabled=true` 且找回服务装配时显示“忘记密码”入口；未启用邮件时
+  找回页显示稳定不可用提示与恢复代码/客服等下一路径，不伪造“已受理”。
+- 管理员直接重置他人密码/直接改名是**独立管理操作**（`users.password.reset.other` /
+  `users.username.change.other`，需操作者本人一次两步验证），不是匿名找回入口，也不替换
+  上述自助/人工恢复流程。
 - 同一 token 只能使用一次；过期、已使用、账户禁用、无密码账户都会失败。
 - `Complete` 只改密码并撤销旧会话，不签发业务会话；完成后必须重新登录。
 - 所有响应不得区分“邮箱不存在”和“邮件已发送”。
