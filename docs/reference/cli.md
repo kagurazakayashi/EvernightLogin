@@ -52,7 +52,7 @@
 | `--master-key-file` | string | `` | 主密钥环文件路径（配置未设置 secrets.master_key 时必需，必须为受保护文件） |
 | `--migrate` | string | `` | 执行数据库迁移后再启动：--migrate 或 --migrate=apply（省略值等同于 apply） |
 
-## 程序：loginctl（30 个子命令）
+## 程序：loginctl（31 个子命令）
 
 | 子命令 | flag 数 | 定义位置 |
 |---|---|---|
@@ -63,6 +63,7 @@
 | `case` | 0 | `internal/managecli/online_support_cmd.go` |
 | `config` | 0 | `cmd/loginctl/loginctl.go` |
 | `confirm` | 0 | `cmd/loginctl/loginctl.go` |
+| `deliveries` | 0 | `cmd/loginctl/loginctl.go` |
 | `diag` | 0 | `cmd/loginctl/loginctl.go` |
 | `group` | 0 | `cmd/loginctl/loginctl.go` |
 | `maintenance-enter` | 1 | `cmd/loginctl/restore.go` |

@@ -14,7 +14,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 		{fileErrors, fmt.Sprintf("公开错误码表（%d 个注册码 + 公开说明 + 防泄露边界）", len(m.Errors))},
 		{filePermissions, "内置权限目录（权限键/角色/用户组 + 谁能在什么范围做什么）"},
 		{fileConfiguration, "配置字段元数据（字段/环境变量/生效分类/秘密标记；语义以 guide 为准）"},
-		{fileHTTPAPI, "HTTP 契约：管理 JSON API 路由、协议路径、页面命名路由"},
+		{fileHTTPAPI, "HTTP 契约：管理 JSON API 路由、协议端点契约/例外、页面命名路由、页面与协议 OpenAPI"},
 		{fileCLI, "CLI 参考：三个程序的命令树、flag 与稳定退出码"},
 		{fileGoAPI, "公开 Go API 参考：运行时生命周期与服务接口总览（Phase A 框架，Phase B 方法级补齐）"},
 		{fileCapability, fmt.Sprintf("能力映射：catalog.json 的 %d 项能力 → 参考文档与机器 JSON 锚点", len(m.Capabilities))},
@@ -25,7 +25,8 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 		{fileErrorsJSON, "错误码：码/分类/HTTP/公开含义/原因/建议/重试"},
 		{filePermissionsJSON, "权限键 + 预设角色 + 用户组 + 应用模板"},
 		{fileHTTPRoutesJSON, "管理路由 + 协议路径/端点 + 页面命名路由"},
-		{fileHTTPOpenAPIJSON, "OpenAPI 3：JSON API + 页面/表单操作（字段/响应/状态转移）"},
+		{fileHTTPOpenAPIJSON, "OpenAPI 3：页面/表单操作（字段/响应/状态转移）"},
+		{fileProtocolOpenAPIJSON, "OpenAPI 3：OAuth 2.0 / OIDC 协议端点（标准错误/项目信封/浏览器重定向区分）"},
 		{fileCLIJSON, "CLI 命令树 + flag + 退出码"},
 	}
 	countRows := [][]string{
@@ -34,7 +35,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 			len(m.Permissions), len(m.Roles), len(m.Groups), len(m.ApplicationRoles), len(m.ApplicationGroups))},
 		{"配置字段", fmt.Sprintf("%d", len(m.ConfigFields))},
 		{"管理 JSON API 路由", fmt.Sprintf("%d", len(m.AdminRoutes))},
-		{"协议路径 / 端点表", fmt.Sprintf("%d / %d", len(m.ProtocolPaths), len(m.ProtocolEndpoints))},
+		{"协议路径 / 端点表 / HTTP 契约", fmt.Sprintf("%d / %d / %d", len(m.ProtocolPaths), len(m.ProtocolEndpoints), protocolContractCount(m))},
 		{"内置页面命名路由", fmt.Sprintf("%d", len(m.Pages))},
 		{"页面/表单 OpenAPI 操作", fmt.Sprintf("%d（未登记契约的页面路由 %d）", pageOperationCount(m), pageUnregisteredCount(m))},
 		{"CLI", fmt.Sprintf("%d 个程序 / %d 个子命令 / %d 个 flag",
@@ -48,7 +49,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 	crossRows := [][]string{
 		{"管理路由", fmt.Sprintf("%d", m.CrossCheck.MatrixAdminRoutes), fmt.Sprintf("%d", len(m.AdminRoutes))},
 		{"页面路由", fmt.Sprintf("%d", m.CrossCheck.MatrixPages), fmt.Sprintf("%d", len(m.Pages))},
-		{"协议路径", fmt.Sprintf("%d", m.CrossCheck.MatrixProtocol), fmt.Sprintf("%d", len(m.ProtocolPaths))},
+		{"协议路径", fmt.Sprintf("%d", m.CrossCheck.MatrixProtocol), fmt.Sprintf("%d", len(m.ProtocolPaths))}, {"协议端点 HTTP 契约", fmt.Sprintf("%d", m.CrossCheck.MatrixProtocolEndpoints), fmt.Sprintf("%d", protocolContractCount(m))},
 		{"CLI 子命令", fmt.Sprintf("%d", m.CrossCheck.MatrixCLI), fmt.Sprintf("%d", countCLISubcommands(m.CLIBinaries))},
 		{"权限键", fmt.Sprintf("%d", m.CrossCheck.MatrixPermissions), fmt.Sprintf("%d", len(m.Permissions))},
 		{"app 函数（含导出方法）", fmt.Sprintf("%d", m.CrossCheck.MatrixAppFuncs), fmt.Sprintf("%d", len(m.GoAPI.AppFuncs)+m.GoAPI.ExportedMethodCount)},
@@ -80,7 +81,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 				"**独立部署/运维**：读 [HTTP 契约](http-api.md)、[CLI](cli.md)、[部署文档](../deployment/README.md)。",
 				"**业务接入**：读 [HTTP 契约](http-api.md) 与 [业务接入契约](../deployment/integration.md)。",
 				"**排障**：读 [错误码](errors.md) 与 [排障指南](../guide/troubleshooting.md)。",
-				"**AI/自动化**：直接读 [ai-index.md](ai-index.md) 与 5 个机器 JSON。",
+				"**AI/自动化**：直接读 [ai-index.md](ai-index.md) 与全部机器 JSON（生成器当前输出见 ai-index §2）。",
 			}),
 		"## 2. 文件索引\n\n### 2.1 Markdown（稳定锚点，人类与 AI 均可读）\n\n"+
 			markdownTable([]string{"文件", "内容"}, fileRows),
@@ -110,7 +111,7 @@ func (m *Model) renderIndex(used map[string]bool) []byte {
 				"能力声明（catalog.json）中的声明若无法映射到实际符号，`-check` 会失败：先修声明或补实现，再生成文档。",
 				"214/215 重构会移动页面实现与 app 类型文件；届时只需更新 `scripts/internal/apidoc/sources.go` 的源码路径或扫描目录，再重新生成。",
 				"文档中的最小示例来自 [examples/reference-snippets](../../examples/reference-snippets/snippets.go)，由 `go build` 真实编译；新增示例必须被文档引用。",
-				"OpenAPI 现含两部分：JSON API（健康/文档端点）与页面/表单操作（账户/资料/会话/注册登录/MFA/三种恢复流程）；管理 JSON API 的请求/响应模式由后续管理组步骤统一定义，在此之前以本目录机器 JSON 与源码为准（见 [http-api.md](http-api.md)）。",
+				"OpenAPI 现含三部分：运行期最小 JSON API（健康/文档端点）、页面/表单操作（账户/资料/会话/注册登录/MFA/三种恢复流程）与协议端点离线段（OAuth/OIDC/设备码/扫码；[protocol-openapi.json](protocol-openapi.json)）。管理 JSON API 契约见 [http-openapi-admin.json](http-openapi-admin.json)；协议端点默认关闭、标准错误与项目信封按 http-api.md §3.4 登记。",
 			}),
 	)
 }
@@ -247,6 +248,8 @@ func (m *Model) renderChangeLog(used map[string]bool) []byte {
 				"新增 `examples/reference-snippets` 最小可编译示例，并被参考文档内嵌；文档内嵌代码与源码逐字一致由 `-check` 保证。",
 				"尚未包含**方法级** Go API 参考：Phase B 在 214/215 与 226–235 稳定后补齐，当前 [go-api.md](go-api.md) 提供生命周期/接口总览与稳定领域框架。",
 				"步骤 268 起 OpenAPI 增加**页面/表单操作段**（账户/资料/会话/注册登录/MFA/三种恢复流程，95 条），新增生成物 [http-openapi.json](http-openapi.json)；页面与 JSON API 用 `x-login-route-kind` 分开标识，秘密字段 writeOnly、示例为合成值，契约与 AST 扫描路由不一致时 `-check` 失败。",
+				"步骤 270 起新增**管理 JSON API 契约生成物** [http-openapi-admin.json](http-openapi-admin.json) 与 [http-admin-api.md](http-admin-api.md)，由 `scripts/adminapi-doc` 生成/校验；管理路由以它和 [http-routes.json](http-routes.json) 为权威对照。",
+				"步骤 271 起新增**协议端点 HTTP 契约与离线 OpenAPI**：`http-routes.json` 增加 `protocol_contracts`（方法/开关/传输/认证/标准错误或项目信封/Discovery 声明），新增 [protocol-openapi.json](protocol-openapi.json)；协议例外（条件注册、自定义扫码信封、标准错误格式、默认关闭 404、宿主中间件）显式登记并与 `protocolapi` 端点表/`routes.go` 条件注册双向核对；不一致、例外未登记、$ref 失效或示例疑似真实凭据时 `-check` 失败。",
 			}),
 		"## 3. 相关文档\n\n"+
 			"- 公开 API 稳定范围与破坏性变更策略：[../embedding/host_integration.md](../embedding/host_integration.md)\n"+

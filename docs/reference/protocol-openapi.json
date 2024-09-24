@@ -1,0 +1,2199 @@
+{
+  "schema": "evernight.reference/v1/protocol-openapi",
+  "generated_by": "scripts/reference",
+  "operation_count": 19,
+  "documented": 19,
+  "exception_count": 12,
+  "openapi": {
+    "components": {
+      "schemas": {
+        "OAuthError": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "description": "RFC 6749/6750/7009/7662/8628 标准错误码",
+              "type": "string"
+            },
+            "error_description": {
+              "description": "人类可读说明；不回显内部错误文本",
+              "type": "string"
+            },
+            "error_uri": {
+              "description": "错误说明地址（如提供）",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "type": "object"
+        },
+        "ProjectError": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "ok": {
+              "enum": [
+                false
+              ],
+              "type": "boolean"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok",
+            "code",
+            "message",
+            "request_id"
+          ],
+          "type": "object"
+        }
+      },
+      "securitySchemes": {
+        "bearerAuth": {
+          "bearerFormat": "JWT",
+          "scheme": "bearer",
+          "type": "http"
+        }
+      }
+    },
+    "info": {
+      "description": "由 scripts/reference 从 protocolapi 端点表与协议契约生成；描述默认关闭默认、标准错误格式、浏览器重定向与 JSON 响应区别。运行期 /openapi.json 仍是宿主最小文档，不含本段。",
+      "title": "EvernightLogin OAuth 2.0 / OIDC 协议端点（离线参考）",
+      "version": "devel"
+    },
+    "openapi": "3.0.3",
+    "paths": {
+      "/.well-known/openid-configuration": {
+        "get": {
+          "description": "注册条件：protocol.enabled=true（默认 false，关闭时协议命名空间 404）\n传输：json-standard；请求 Content-Type：；成功响应 Content-Type：application/json\n客户端认证：无（公开只读）\n会话：无\naudience/绑定：issuer（部署公开基址）\n标准协议错误（不是项目错误信封）：404（协议未启用）、405（非 GET）\n只声明已启用端点与能力；不声明 end_session/PAR/动态注册/CIBA/token exchange 等未实现项。\n缓存由宿主中间件决定；本包不设置 CORS。",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {},
+                  "schema": {
+                    "description": "OAuth/OIDC 标准 JSON 响应",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "404（协议未启用）": {
+                      "value": {
+                        "error": "404",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "405（非 GET）": {
+                      "value": {
+                        "error": "405",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "OIDC Discovery：只声明真实启用的能力",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/jwks": {
+        "get": {
+          "description": "注册条件：protocol.enabled=true\n传输：json-standard；请求 Content-Type：；成功响应 Content-Type：application/json\n客户端认证：无（公开只读）\n会话：无\naudience/绑定：issuer\n标准协议错误（不是项目错误信封）：404（协议未启用）、405（非 GET）\n只含公钥与 kid/alg（ES256）；不含私钥材料。",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {},
+                  "schema": {
+                    "description": "OAuth/OIDC 标准 JSON 响应",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "404（协议未启用）": {
+                      "value": {
+                        "error": "404",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "405（非 GET）": {
+                      "value": {
+                        "error": "405",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "JWT 签名公钥（JWKS）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/oauth/authorize": {
+        "get": {
+          "description": "注册条件：protocol.enabled=true\n传输：browser-redirect；请求 Content-Type：；成功响应 Content-Type：text/html（同意页）或 303 Location\n客户端认证：公开/保密客户端均可（PKCE 必填；不支持 implicit/password）\n会话：真实浏览器会话 Cookie（或 Bearer 会话）；未登录 303 到宿主登录页/受控错误\naudience/绑定：token 响应中的 audience 由授权请求/应用配置决定\n标准协议错误（不是项目错误信封）：invalid_request、unauthorized_client、unsupported_response_type、invalid_scope、server_error、temporarily_unavailable、access_denied\n无效 client_id/redirect_uri 不重定向，返回 JSON 错误（不得开放重定向）；其余错误只在已登记回调上用 error 参数 303 重定向。\n同意页是内置窄 HTML；GET 只创建待确认请求，绝不自动批准。",
+          "parameters": [
+            {
+              "description": "固定 code（仅授权码流程）",
+              "in": "query",
+              "name": "response_type",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "",
+              "in": "query",
+              "name": "client_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "必须已登记且逐字节匹配",
+              "in": "query",
+              "name": "redirect_uri",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "",
+              "in": "query",
+              "name": "scope",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "",
+              "in": "query",
+              "name": "state",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "S256 PKCE；plain 被拒绝",
+              "in": "query",
+              "name": "code_challenge",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "S256",
+              "in": "query",
+              "name": "code_challenge_method",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "未登录时宿主登录页（只能站内相对路径）",
+              "in": "query",
+              "name": "login_path",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "内置最小同意页（HTML；不含脚本/主题/多语言）"
+            },
+            "303": {
+              "description": "浏览器重定向（授权码/错误参数在 Location 中）",
+              "headers": {
+                "Location": {
+                  "description": "已登记回调地址；不得使用未登记/可开放重定向的地址",
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "access_denied": {
+                      "value": {
+                        "error": "access_denied",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_scope": {
+                      "value": {
+                        "error": "invalid_scope",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "server_error": {
+                      "value": {
+                        "error": "server_error",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "temporarily_unavailable": {
+                      "value": {
+                        "error": "temporarily_unavailable",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "unauthorized_client": {
+                      "value": {
+                        "error": "unauthorized_client",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "unsupported_response_type": {
+                      "value": {
+                        "error": "unsupported_response_type",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "授权端点：Cookie 会话 → 最小同意页（浏览器流程）",
+          "tags": [
+            "protocol",
+            "protocol-browser"
+          ]
+        },
+        "post": {
+          "description": "注册条件：protocol.enabled=true\n传输：browser-redirect；请求 Content-Type：application/x-www-form-urlencoded；成功响应 Content-Type：303 Location 或 application/json（错误）\n客户端认证：沿用授权请求的客户端登记\n会话：同一浏览器会话 + 会话绑定 CSRF 令牌 +（携带时）同源 Origin\naudience/绑定：同授权请求\n标准协议错误（不是项目错误信封）：invalid_request、access_denied、server_error\n批准/拒绝是显式决定；CSRF 与 Origin 两类校验不可互相替代。",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "properties": {
+                    "csrf_token": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "decision": {
+                      "description": "approve|deny",
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "description": "授权请求确认编号",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "csrf_token",
+                    "decision",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "303": {
+              "description": "浏览器重定向（授权码/错误参数在 Location 中）",
+              "headers": {
+                "Location": {
+                  "description": "已登记回调地址；不得使用未登记/可开放重定向的地址",
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "access_denied": {
+                      "value": {
+                        "error": "access_denied",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "server_error": {
+                      "value": {
+                        "error": "server_error",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "同意/拒绝决定（浏览器表单 + 会话 + CSRF）",
+          "tags": [
+            "protocol",
+            "protocol-browser"
+          ]
+        }
+      },
+      "/oauth/device/cancel": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且 EnableDeviceFlow=true\n传输：json-standard；请求 Content-Type：application/x-www-form-urlencoded；成功响应 Content-Type：无（204 No Content）\n客户端认证：必须绑定申请时的同一 client_id；保密客户端还需客户端认证\n会话：无\naudience/绑定：不改变用户已授予的授权\n标准协议错误（不是项目错误信封）：invalid_request、invalid_client、access_denied\n扩展端点只在 Discovery 说明或部署文档中出现，不伪造标准字段。",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "properties": {
+                    "device_code": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    }
+                  },
+                  "required": [
+                    "device_code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "204": {
+              "description": "成功（无响应体）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "access_denied": {
+                      "value": {
+                        "error": "access_denied",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_client": {
+                      "value": {
+                        "error": "invalid_client",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "设备授权取消（本包扩展，显式启用）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/oauth/device_authorization": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且 EnableDeviceFlow=true（需 DeviceVerificationURI）\n传输：json-standard；请求 Content-Type：application/x-www-form-urlencoded；成功响应 Content-Type：application/json\n客户端认证：客户端认证（设备为公开客户端时可仅 client_id）\n会话：无\naudience/绑定：设备码最终签发令牌的 audience 由授权请求决定\n标准协议错误（不是项目错误信封）：invalid_request、invalid_client、unsupported_grant_type、temporarily_unavailable\ndevice_code/短码只在申请响应出现一次；短码只存 keyed HMAC 摘要。\n轮询由 /oauth/token 的 device_code grant 完成，服务端强制 interval/slow_down。",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "properties": {
+                    "client_id": {
+                      "description": "",
+                      "type": "string"
+                    },
+                    "scope": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "device_code": "example-device_code",
+                    "expires_in": 600,
+                    "interval": "example-interval",
+                    "user_code": "example-user_code",
+                    "verification_uri": "example-verification_uri"
+                  },
+                  "schema": {
+                    "properties": {
+                      "device_code": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "expires_in": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "interval": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "user_code": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "verification_uri": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "invalid_client": {
+                      "value": {
+                        "error": "invalid_client",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "temporarily_unavailable": {
+                      "value": {
+                        "error": "temporarily_unavailable",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "unsupported_grant_type": {
+                      "value": {
+                        "error": "unsupported_grant_type",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "设备授权申请（RFC 8628，显式启用）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/oauth/introspect": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且 EnableIntrospection=true（依赖 InspectAuthorizer/InspectClientAuthorizer）\n传输：json-standard；请求 Content-Type：application/x-www-form-urlencoded；成功响应 Content-Type：application/json\n客户端认证：资源服务器客户端认证（client_secret_basic/post 或已验证 TLS 证书）\n会话：无\naudience/绑定：由请求 audience/resource 声明，披露裁剪由注入 Authorizer 判定\n标准协议错误（不是项目错误信封）：invalid_request、invalid_client、invalid_token、temporarily_unavailable\nResourceServerClientID 只来自真实客户端认证结果，不来自请求自报。\n未启用时端点不注册（404），Discovery 不声明。",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "properties": {
+                    "audience": {
+                      "description": "",
+                      "type": "string"
+                    },
+                    "resource": {
+                      "description": "",
+                      "type": "string"
+                    },
+                    "token": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "token_type_hint": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "token"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "active": true,
+                    "aud": "example-aud",
+                    "client_id": "example-client_id",
+                    "exp": "example-exp",
+                    "scope": "example-scope",
+                    "sub": "example-sub"
+                  },
+                  "schema": {
+                    "properties": {
+                      "active": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "aud": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "client_id": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "exp": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "scope": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "sub": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "invalid_client": {
+                      "value": {
+                        "error": "invalid_client",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_token": {
+                      "value": {
+                        "error": "invalid_token",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "temporarily_unavailable": {
+                      "value": {
+                        "error": "temporarily_unavailable",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "令牌状态查询（RFC 7662，显式启用）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/oauth/qr/cancel": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且注入 QRLogin 服务\n传输：json-project-envelope；请求 Content-Type：application/json；成功响应 Content-Type：application/json（成功 data；错误项目统一信封）\n客户端认证：持有一次性领取绑定的原发起端\n会话：无\naudience/绑定：只取消该请求，不影响已领取会话\n项目错误码（统一信封）：REQ_INVALID、ACCESS_DENIED、CONFLICT、INTERNAL_ERROR",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "claim_secret": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "request_id": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "claim_secret",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "expires_at": "example-expires_at",
+                    "status": "example-status"
+                  },
+                  "schema": {
+                    "properties": {
+                      "expires_at": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "ACCESS_DENIED": {
+                      "value": {
+                        "code": "ACCESS_DENIED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "CONFLICT": {
+                      "value": {
+                        "code": "CONFLICT",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "INTERNAL_ERROR": {
+                      "value": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REQ_INVALID": {
+                      "value": {
+                        "code": "REQ_INVALID",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/ProjectError"
+                  }
+                }
+              },
+              "description": "项目统一错误信封（自定义扫码端点例外；与业务 API 一致）"
+            }
+          },
+          "summary": "扫码登录：原发起端取消",
+          "tags": [
+            "protocol",
+            "protocol-project-envelope"
+          ]
+        }
+      },
+      "/oauth/qr/claim": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且注入 QRLogin 服务\n传输：json-project-envelope；请求 Content-Type：application/json；成功响应 Content-Type：application/json（成功 data；错误项目统一信封；会话 Cookie）\n客户端认证：持有正确领取绑定且请求已批准/未过期的原发起端\n会话：无（领取后写入目标应用会话 Cookie）\naudience/绑定：只签发目标应用会话，不是发起者长期 Token\n项目错误码（统一信封）：REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、CONFLICT、GONE、INTERNAL_ERROR\n领取只能成功一次；跨用户/无绑定 410；正文绝不返回会话秘密或 Token。",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "claim_secret": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "request_id": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "claim_secret",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "app_id": "example-app_id",
+                    "expires_at": "example-expires_at",
+                    "session_id": "example-session_id",
+                    "status": "example-status",
+                    "user_id": "example-user_id"
+                  },
+                  "schema": {
+                    "properties": {
+                      "app_id": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "expires_at": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "session_id": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "status": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "user_id": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "ACCESS_DENIED": {
+                      "value": {
+                        "code": "ACCESS_DENIED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "CONFLICT": {
+                      "value": {
+                        "code": "CONFLICT",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "GONE": {
+                      "value": {
+                        "code": "GONE",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "INTERNAL_ERROR": {
+                      "value": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REQ_INVALID": {
+                      "value": {
+                        "code": "REQ_INVALID",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "RESOURCE_FORBIDDEN": {
+                      "value": {
+                        "code": "RESOURCE_FORBIDDEN",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/ProjectError"
+                  }
+                }
+              },
+              "description": "项目统一错误信封（自定义扫码端点例外；与业务 API 一致）"
+            }
+          },
+          "summary": "扫码登录：原发起端领取目标应用会话",
+          "tags": [
+            "protocol",
+            "protocol-project-envelope"
+          ]
+        }
+      },
+      "/oauth/qr/decision": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且注入 QRLogin 服务\n传输：json-project-envelope；请求 Content-Type：application/json；成功响应 Content-Type：application/json（成功 data；错误项目统一信封）\n客户端认证：无\n会话：真实完整会话 + 会话绑定 CSRF（Cookie 会话）；Origin/Referer 至少一个存在并与 issuer 同源\naudience/绑定：批准绑定用户+会话+安全版本快照；批准前按敏感策略要求近期认证\n项目错误码（统一信封）：AUTH_FAILED、REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、REAUTH_REQUIRED、INTERNAL_ERROR\n缺少 Origin/Referer 直接 403（纵深防御）；批准页由宿主页面层实现，本端点不提供页面。",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "csrf_token": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "decision": {
+                      "description": "approve|deny",
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "csrf_token",
+                    "decision",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "request_id": "example-request_id",
+                    "status": "example-status"
+                  },
+                  "schema": {
+                    "properties": {
+                      "request_id": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "ACCESS_DENIED": {
+                      "value": {
+                        "code": "ACCESS_DENIED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "AUTH_FAILED": {
+                      "value": {
+                        "code": "AUTH_FAILED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "INTERNAL_ERROR": {
+                      "value": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REAUTH_REQUIRED": {
+                      "value": {
+                        "code": "REAUTH_REQUIRED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REQ_INVALID": {
+                      "value": {
+                        "code": "REQ_INVALID",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "RESOURCE_FORBIDDEN": {
+                      "value": {
+                        "code": "RESOURCE_FORBIDDEN",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/ProjectError"
+                  }
+                }
+              },
+              "description": "项目统一错误信封（自定义扫码端点例外；与业务 API 一致）"
+            }
+          },
+          "summary": "扫码登录：确认端批准/拒绝（会话 + CSRF + Origin）",
+          "tags": [
+            "protocol",
+            "protocol-project-envelope"
+          ]
+        }
+      },
+      "/oauth/qr/prompt": {
+        "get": {
+          "description": "注册条件：protocol.enabled=true 且注入 QRLogin 服务\n传输：json-project-envelope；请求 Content-Type：；成功响应 Content-Type：application/json（成功 data；错误项目统一信封）\n客户端认证：无\n会话：真实完整会话（Cookie/Bearer）\naudience/绑定：只读受控上下文，不返回秘密、不构成批准\n项目错误码（统一信封）：AUTH_FAILED、REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、INTERNAL_ERROR\n不存在/无权限统一错误，避免探测他人请求；不返回 claim_secret。",
+          "parameters": [
+            {
+              "description": "",
+              "in": "query",
+              "name": "request_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "application_name": "example-application_name",
+                    "client_id": "example-client_id",
+                    "request_id": "example-request_id",
+                    "scopes": "example-scopes",
+                    "status": "example-status",
+                    "warning": "example-warning"
+                  },
+                  "schema": {
+                    "properties": {
+                      "application_name": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "client_id": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "request_id": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "scopes": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "warning": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "ACCESS_DENIED": {
+                      "value": {
+                        "code": "ACCESS_DENIED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "AUTH_FAILED": {
+                      "value": {
+                        "code": "AUTH_FAILED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "INTERNAL_ERROR": {
+                      "value": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REQ_INVALID": {
+                      "value": {
+                        "code": "REQ_INVALID",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "RESOURCE_FORBIDDEN": {
+                      "value": {
+                        "code": "RESOURCE_FORBIDDEN",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/ProjectError"
+                  }
+                }
+              },
+              "description": "项目统一错误信封（自定义扫码端点例外；与业务 API 一致）"
+            }
+          },
+          "summary": "扫码登录：确认端读取受控上下文（会话）",
+          "tags": [
+            "protocol",
+            "protocol-project-envelope"
+          ]
+        }
+      },
+      "/oauth/qr/regenerate": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且注入 QRLogin 服务\n传输：json-project-envelope；请求 Content-Type：application/json；成功响应 Content-Type：application/json（成功 data；错误项目统一信封）\n客户端认证：持有一次性领取绑定的原发起端\n会话：无\naudience/绑定：同一事务内取消旧请求并创建新请求\n项目错误码（统一信封）：REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、CONFLICT、INTERNAL_ERROR",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "claim_secret": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "request_id": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "claim_secret",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "claim_secret": "example-claim_secret",
+                    "expires_at": "example-expires_at",
+                    "qr_payload": "example-qr_payload",
+                    "request_id": "example-request_id"
+                  },
+                  "schema": {
+                    "properties": {
+                      "claim_secret": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "expires_at": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "qr_payload": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "request_id": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "ACCESS_DENIED": {
+                      "value": {
+                        "code": "ACCESS_DENIED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "CONFLICT": {
+                      "value": {
+                        "code": "CONFLICT",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "INTERNAL_ERROR": {
+                      "value": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REQ_INVALID": {
+                      "value": {
+                        "code": "REQ_INVALID",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "RESOURCE_FORBIDDEN": {
+                      "value": {
+                        "code": "RESOURCE_FORBIDDEN",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/ProjectError"
+                  }
+                }
+              },
+              "description": "项目统一错误信封（自定义扫码端点例外；与业务 API 一致）"
+            }
+          },
+          "summary": "扫码登录：重新生成二维码（旧绑定立即失效）",
+          "tags": [
+            "protocol",
+            "protocol-project-envelope"
+          ]
+        }
+      },
+      "/oauth/qr/request": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且注入 QRLogin 服务\n传输：json-project-envelope；请求 Content-Type：application/json；成功响应 Content-Type：application/json（成功 data；错误项目统一信封）\n客户端认证：仅允许登记/允许的 QRClientID（可请求体声明，服务端复核）\n会话：无（匿名）\naudience/绑定：扫码成功后签发目标应用会话 Cookie，不签发 OAuth Token\n项目错误码（统一信封）：REQ_INVALID、ACCESS_DENIED、RATE_LIMITED、INTERNAL_ERROR\n二维码载荷只含 request_id，不含令牌/会话秘密/领取绑定。\nclaim_secret 只出现一次；共享缓存/日志不得记录响应正文。",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "client_id": {
+                      "description": "",
+                      "type": "string"
+                    },
+                    "scopes": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "claim_secret": "example-claim_secret",
+                    "expires_at": "example-expires_at",
+                    "poll_interval_seconds": 600,
+                    "qr_payload": "example-qr_payload",
+                    "request_id": "example-request_id"
+                  },
+                  "schema": {
+                    "properties": {
+                      "claim_secret": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "expires_at": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "poll_interval_seconds": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "qr_payload": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "request_id": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "ACCESS_DENIED": {
+                      "value": {
+                        "code": "ACCESS_DENIED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "INTERNAL_ERROR": {
+                      "value": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "RATE_LIMITED": {
+                      "value": {
+                        "code": "RATE_LIMITED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REQ_INVALID": {
+                      "value": {
+                        "code": "REQ_INVALID",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/ProjectError"
+                  }
+                }
+              },
+              "description": "项目统一错误信封（自定义扫码端点例外；与业务 API 一致）"
+            }
+          },
+          "summary": "扫码登录：匿名发起端创建请求（一次性领取绑定）",
+          "tags": [
+            "protocol",
+            "protocol-project-envelope"
+          ]
+        }
+      },
+      "/oauth/qr/status": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且注入 QRLogin 服务\n传输：json-project-envelope；请求 Content-Type：application/json；成功响应 Content-Type：application/json（成功 data；错误项目统一信封）\n客户端认证：持有一次性领取绑定的原发起端（无客户端密钥）\n会话：无\naudience/绑定：状态含 retry_after_seconds；服务端强制最小查询间隔\n项目错误码（统一信封）：REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、CONFLICT、INTERNAL_ERROR\n不存在的请求与无绑定请求使用同一受控错误，避免探测他人请求。",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "claim_secret": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "request_id": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "claim_secret",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "expires_at": "example-expires_at",
+                    "request_id": "example-request_id",
+                    "retry_after_seconds": 600,
+                    "status": "example-status"
+                  },
+                  "schema": {
+                    "properties": {
+                      "expires_at": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "request_id": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "retry_after_seconds": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "ACCESS_DENIED": {
+                      "value": {
+                        "code": "ACCESS_DENIED",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "CONFLICT": {
+                      "value": {
+                        "code": "CONFLICT",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "INTERNAL_ERROR": {
+                      "value": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "REQ_INVALID": {
+                      "value": {
+                        "code": "REQ_INVALID",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    },
+                    "RESOURCE_FORBIDDEN": {
+                      "value": {
+                        "code": "RESOURCE_FORBIDDEN",
+                        "message": "示例说明（合成值）",
+                        "ok": false,
+                        "request_id": "req_example_000000"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/ProjectError"
+                  }
+                }
+              },
+              "description": "项目统一错误信封（自定义扫码端点例外；与业务 API 一致）"
+            }
+          },
+          "summary": "扫码登录：原发起端轮询状态（需 request_id + claim_secret）",
+          "tags": [
+            "protocol",
+            "protocol-project-envelope"
+          ]
+        }
+      },
+      "/oauth/revoke": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true\n传输：json-standard；请求 Content-Type：application/x-www-form-urlencoded；成功响应 Content-Type：application/json（通常 200 空体）\n客户端认证：与令牌端点相同的客户端认证\n会话：无\naudience/绑定：遍历 access/refresh token 的撤销状态由 oauthflow 判定\n标准协议错误（不是项目错误信封）：invalid_request、invalid_client、unsupported_token_type\n撤销是幂等语义；未知 token 不披露存在性（200）。",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "properties": {
+                    "token": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "token_type_hint": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "token"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {},
+                  "schema": {
+                    "description": "OAuth/OIDC 标准 JSON 响应",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "invalid_client": {
+                      "value": {
+                        "error": "invalid_client",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "unsupported_token_type": {
+                      "value": {
+                        "error": "unsupported_token_type",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "令牌撤销（RFC 7009）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/oauth/token": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true\n传输：json-standard；请求 Content-Type：application/x-www-form-urlencoded；成功响应 Content-Type：application/json\n客户端认证：保密客户端：client_secret_basic / client_secret_post / 已验证 TLS 客户端证书（三选一）；公开客户端 PKCE\n会话：无\naudience/绑定：由 grant/授权请求与 resource/audience 参数决定；不发无 audience 的万能令牌\n标准协议错误（不是项目错误信封）：invalid_request、invalid_client、invalid_grant、unauthorized_client、unsupported_grant_type、invalid_scope、authorization_pending、slow_down、access_denied、expired_token、temporarily_unavailable\n一次请求只能使用一种客户端认证方式；重复参数/未知参数按 invalid_request 拒绝。\n响应 no-store；成功=签发事实，审计不可用时返回 temporarily_unavailable。",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "properties": {
+                    "code": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "code_verifier": {
+                      "description": "PKCE S256",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "device_code": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "grant_type": {
+                      "description": "authorization_code|refresh_token|client_credentials|urn:ietf:params:oauth:grant-type:device_code",
+                      "type": "string"
+                    },
+                    "redirect_uri": {
+                      "description": "",
+                      "type": "string"
+                    },
+                    "refresh_token": {
+                      "description": "",
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "scope": {
+                      "description": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "grant_type"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "access_token": "example-access_token",
+                    "expires_in": 600,
+                    "id_token": "example-id_token",
+                    "refresh_token": "example-refresh_token",
+                    "scope": "example-scope",
+                    "token_type": "example-token_type"
+                  },
+                  "schema": {
+                    "properties": {
+                      "access_token": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "expires_in": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "id_token": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "refresh_token": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "scope": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "token_type": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "access_denied": {
+                      "value": {
+                        "error": "access_denied",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "authorization_pending": {
+                      "value": {
+                        "error": "authorization_pending",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "expired_token": {
+                      "value": {
+                        "error": "expired_token",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_client": {
+                      "value": {
+                        "error": "invalid_client",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_grant": {
+                      "value": {
+                        "error": "invalid_grant",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_scope": {
+                      "value": {
+                        "error": "invalid_scope",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "slow_down": {
+                      "value": {
+                        "error": "slow_down",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "temporarily_unavailable": {
+                      "value": {
+                        "error": "temporarily_unavailable",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "unauthorized_client": {
+                      "value": {
+                        "error": "unauthorized_client",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "unsupported_grant_type": {
+                      "value": {
+                        "error": "unsupported_grant_type",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "令牌端点：授权码/刷新令牌/客户端凭证/设备码（标准 JSON，表单请求）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/oauth/token/authorize": {
+        "post": {
+          "description": "注册条件：protocol.enabled=true 且宿主注入 TokenAuthorize 处理器（本包不内置实现）\n传输：json-standard；请求 Content-Type：application/x-www-form-urlencoded；成功响应 Content-Type：application/json 或宿主定义（取决于注入处理器）\n客户端认证：由注入处理器与真实服务判定（不得自行信任请求参数）\n会话：由注入处理器判定\naudience/绑定：本包只负责路由与请求边界；授权/audience/审计由宿主处理器负责\n该端点只登记路径常量与条件注册：没有注入处理器时不会挂载（404），不能按“存在路径常量”认为可用。\n处理器由宿主装配，契约字段/响应以宿主实现为准；本包不伪造成功。",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {},
+                  "schema": {
+                    "description": "OAuth/OIDC 标准 JSON 响应",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            }
+          },
+          "summary": "宿主注入的一次性授权处理器（仅 TokenAuthorize 非空时挂载）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      },
+      "/oauth/userinfo": {
+        "get": {
+          "description": "注册条件：protocol.enabled=true\n传输：json-standard；请求 Content-Type：；成功响应 Content-Type：application/json\n客户端认证：Access Token 的客户端/audience 校验由令牌与授权服务判定\n会话：无；只接受 Authorization: Bearer\naudience/绑定：access token 的 aud 必须覆盖 UserInfo 资源服务\n标准协议错误（不是项目错误信封）：invalid_request、invalid_token、insufficient_scope\n查询串/请求体里的令牌被拒绝（避免进 URL/日志）；ID Token 不能冒充 Access Token。\n错误响应带 RFC 6750 WWW-Authenticate 挑战。",
+          "parameters": [
+            {
+              "description": "Bearer \u003caccess_token\u003e",
+              "in": "header",
+              "name": "Authorization",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "x-login-secret": true
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "email": "example-email",
+                    "email_verified": true,
+                    "name": "example-name",
+                    "preferred_username": "example-preferred_username",
+                    "sub": "example-sub"
+                  },
+                  "schema": {
+                    "properties": {
+                      "email": {
+                        "description": "",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "email_verified": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "name": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "preferred_username": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "sub": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "insufficient_scope": {
+                      "value": {
+                        "error": "insufficient_scope",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_token": {
+                      "value": {
+                        "error": "invalid_token",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "OIDC UserInfo（Authorization: Bearer）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        },
+        "post": {
+          "description": "注册条件：protocol.enabled=true\n传输：json-standard；请求 Content-Type：；成功响应 Content-Type：application/json\n客户端认证：同 GET /oauth/userinfo\n会话：无；只接受 Authorization: Bearer\naudience/绑定：同 GET /oauth/userinfo\n标准协议错误（不是项目错误信封）：invalid_request、invalid_token、insufficient_scope\nPOST 不把令牌放进请求体；请求体参数被忽略/拒绝。",
+          "parameters": [
+            {
+              "description": "",
+              "in": "header",
+              "name": "Authorization",
+              "required": true,
+              "schema": {
+                "type": "string"
+              },
+              "x-login-secret": true
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "example": {
+                    "sub": "example-sub"
+                  },
+                  "schema": {
+                    "properties": {
+                      "sub": {
+                        "description": "",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "成功（JSON）"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "examples": {
+                    "insufficient_scope": {
+                      "value": {
+                        "error": "insufficient_scope",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_request": {
+                      "value": {
+                        "error": "invalid_request",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    },
+                    "invalid_token": {
+                      "value": {
+                        "error": "invalid_token",
+                        "error_description": "示例说明（合成值）"
+                      }
+                    }
+                  },
+                  "schema": {
+                    "$ref": "#/components/schemas/OAuthError"
+                  }
+                }
+              },
+              "description": "协议标准错误（RFC 6749/6750/7009/7662/8628；UserInfo 同时带 WWW-Authenticate 挑战）"
+            }
+          },
+          "summary": "OIDC UserInfo（POST 兼容）",
+          "tags": [
+            "protocol",
+            "protocol-json"
+          ]
+        }
+      }
+    },
+    "tags": [
+      {
+        "description": "OAuth 2.0 / OIDC 协议端点",
+        "name": "protocol"
+      },
+      {
+        "description": "JSON 响应协议端点",
+        "name": "protocol-json"
+      },
+      {
+        "description": "浏览器重定向授权流程",
+        "name": "protocol-browser"
+      },
+      {
+        "description": "项目统一错误信封的扩展端点",
+        "name": "protocol-project-envelope"
+      }
+    ],
+    "x-login-examples-policy": "所有示例均为明确合成值（example-*、000000 等），不包含可用密码、令牌、恢复码、私钥或真实用户数据。",
+    "x-login-protocol-exceptions": [
+      {
+        "code": "STD-OAUTH-ERROR",
+        "endpoints": [
+          "POST /oauth/token",
+          "GET /oauth/userinfo",
+          "POST /oauth/userinfo",
+          "POST /oauth/revoke",
+          "POST /oauth/introspect",
+          "POST /oauth/device_authorization",
+          "POST /oauth/device/cancel",
+          "GET /oauth/authorize"
+        ],
+        "kind": "standard-error-envelope",
+        "reason": "标准协议端点错误使用 RFC 6749/6750/7009/7662/8628 的 error/error_description（UserInfo 带 WWW-Authenticate），不得改写为项目 {code,message,request_id} 信封"
+      },
+      {
+        "code": "QR-PROJECT-ENVELOPE",
+        "endpoints": [
+          "POST /oauth/qr/request",
+          "POST /oauth/qr/status",
+          "POST /oauth/qr/claim",
+          "POST /oauth/qr/cancel",
+          "POST /oauth/qr/regenerate",
+          "GET /oauth/qr/prompt",
+          "POST /oauth/qr/decision"
+        ],
+        "kind": "project-envelope",
+        "reason": "自定义扫码端点使用项目统一错误信封 {code,message,request_id}（与业务 API 一致），成功响应为 data"
+      },
+      {
+        "code": "CONDITIONAL-INTROSPECTION",
+        "endpoints": [
+          "POST /oauth/introspect"
+        ],
+        "kind": "conditional-registration",
+        "reason": "只有宿主显式 EnableIntrospection 且注入真实 Authorizer 才注册；未启用时 404，Discovery 不声明"
+      },
+      {
+        "code": "CONDITIONAL-DEVICE",
+        "endpoints": [
+          "POST /oauth/device_authorization",
+          "POST /oauth/device/cancel"
+        ],
+        "kind": "conditional-registration",
+        "reason": "只有 EnableDeviceFlow=true（且配置设备确认页）才注册；未启用时 404，Discovery 不声明"
+      },
+      {
+        "code": "CONDITIONAL-QR",
+        "endpoints": [
+          "POST /oauth/qr/request",
+          "POST /oauth/qr/status",
+          "POST /oauth/qr/claim",
+          "POST /oauth/qr/cancel",
+          "POST /oauth/qr/regenerate",
+          "GET /oauth/qr/prompt",
+          "POST /oauth/qr/decision"
+        ],
+        "kind": "conditional-registration",
+        "reason": "只有注入 QRLogin 服务才注册；未注入时 404。Discovery 不声明扫码扩展端点"
+      },
+      {
+        "code": "CONDITIONAL-TOKEN-AUTHORIZE",
+        "endpoints": [
+          "POST /oauth/token/authorize"
+        ],
+        "kind": "conditional-registration",
+        "reason": "POST /oauth/token/authorize 只有在宿主注入 TokenAuthorize 处理器时才存在；本包不内置该端点实现，契约索引只登记路径常量"
+      },
+      {
+        "code": "BROWSER-REDIRECT",
+        "endpoints": [
+          "GET /oauth/authorize",
+          "POST /oauth/authorize"
+        ],
+        "kind": "browser-redirect",
+        "reason": "授权端点是浏览器流程：成功/协议错误可能是 303 重定向到已登记回调，而不是 JSON 响应；无效 client_id/redirect_uri 仍是 JSON 错误（防开放重定向）"
+      },
+      {
+        "code": "DISABLED-404",
+        "endpoints": [],
+        "kind": "disabled-404",
+        "reason": "protocol.enabled=false（默认）时整个协议命名空间不挂载，所有协议路径 404；不要把它当作“端点存在但未授权”"
+      },
+      {
+        "code": "DISCOVERY-LIMIT",
+        "endpoints": [
+          "GET /.well-known/openid-configuration"
+        ],
+        "kind": "discovery-limit",
+        "reason": "Discovery 只声明真实启用的能力；end_session/PAR/动态注册/request_uri/CIBA/token exchange 未实现且不声明"
+      },
+      {
+        "code": "HOST-MIDDLEWARE",
+        "endpoints": [],
+        "kind": "host-middleware",
+        "reason": "TLS/HSTS、请求体总量、限流、访问日志、可信客户端地址与反向代理前缀由宿主负责；协议包只做单请求上限与协议语义"
+      },
+      {
+        "code": "ROOT-ROUTER-ENVELOPE",
+        "endpoints": [],
+        "kind": "root-router",
+        "reason": "协议命名空间未匹配路径/panic 恢复返回项目统一 404/500 信封（不是 OAuth 标准错误）；这是路由边界而不是协议端点契约"
+      },
+      {
+        "code": "HOST-CONFIRM-PAGES",
+        "endpoints": [],
+        "kind": "host-middleware",
+        "reason": "设备码/扫码“用户确认页”由宿主页面层实现，本包只提供协议端点；确认页接线未验收，不得宣传为已交付"
+      }
+    ],
+    "x-login-protocol-mode": "协议端点由 protocol.enabled 显式启用（默认 false）；关闭时协议命名空间 404。"
+  }
+}

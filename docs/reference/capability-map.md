@@ -2,11 +2,12 @@
 
 > 能力声明来自 `scripts/capabilities/catalog.json`（机器可读能力映射的唯一来源），**实现状态不在这里重复**：请以 [能力矩阵](../acceptance/capability-matrix.md) 为准。本页提供“能力 → 公开面（Go/HTTP/页面/CLI/权限）→ 参考位置”的导航索引。
 
-## 1. 能力参考索引（43 项）
+## 1. 能力参考索引（52 项）
 
 | 能力 id | 领域 | 标题 | 分页 | 权限数 | 管理路由声明 | 页面声明 | CLI 声明 | 主要公开 Go API |
 |---|---|---|---|---|---|---|---|---|
 | `access.joint_check` | 授权 | 令牌与当前权限联合校验 | none | 1 | 0 | 0 | 0 | `AccessService`、`AccessRequest`、`AccessDecision`、`SessionAccessRequest`、`SessionAccessDecision`、`SessionService` |
+| `account.lifecycle_221_remaining` | 账户 | 221 范围的剩余入口（R10-22，部分完成） |  | 0 | 0 | 0 | 0 | - |
 | `account.lifecycle_public` | 账户 | 注册、资料与邮箱生命周期公开 Go 门面（步骤 221） | none | 0 | 0 | 0 | 0 | `CancelEmailChangeRequest`、`ChangeOwnUsernameRequest`、`EmailChangeService`、`EmailChangeState`、`EmailChangeStateRequest`、`EmailChangeVerified` |
 | `account.user_lifecycle_public` | 账户 | 用户生命周期、自有密码、邀请审批与批量导入公开门面（步骤 223） | offset | 0 | 0 | 0 | 0 | `AdminCancelInvitationRequest`、`AdminCreateInvitationRequest`、`AdminDeletionPreview`、`AdminDeletionResult`、`AdminInvitation`、`AdminInvitationCancelResult` |
 | `account.users` | 账户 | 用户查询、生命周期与批量导出 | offset | 8 | 2 | 0 | 0 | `UserService`、`CreateUserRequest`、`User` |
@@ -24,19 +25,25 @@
 | `config.load` | 配置 | YAML 配置加载、默认值、覆盖与校验 | none | 0 | 0 | 0 | 1 | - |
 | `device_code.login` | 协议 | 设备码登录（RFC 8628） | none | 0 | 0 | 0 | 0 | - |
 | `diagnostics.operations` | 管理 | 运行诊断与关联错误查询 | fixed | 1 | 3 | 1 | 0 | `DiagnosticsConfigSummary`、`DiagnosticsErrorEntry`、`DiagnosticsErrorList`、`DiagnosticsErrorsRequest`、`DiagnosticsExport`、`DiagnosticsQueueCount` |
+| `docs.openapi_page_contract` | 文档与契约 | OpenAPI 页面操作契约（步骤 268） |  | 0 | 0 | 0 | 0 | - |
 | `mail.delivery` | 通知 | 站内邮件投递队列与本地测试邮件服务 | offset | 0 | 0 | 0 | 0 | - |
+| `mail.delivery_console` | 通知 | 邮件投递记录分页与取消语义（步骤 266） |  | 0 | 1 | 0 | 1 | - |
 | `mfa.public_facade` | 认证与会话 | 认证因素与安全中心公开 Go 门面（步骤 222） | fixed | 1 | 0 | 0 | 0 | `MFAService`、`Runtime.MFA`、`MFAFactorListRequest`、`MFATOTPFactor`、`MFAEmailFactor`、`MFAPasskeyCredential` |
 | `mfa.totp_recovery` | 认证与会话 | 两步验证（TOTP/恢复代码）与受限恢复 | none | 1 | 0 | 0 | 0 | `SecurityService`、`SecurityStatus`、`SecurityStatusRequest`、`BeginRecoveryRequest`、`RecoverySession`、`RecoveryStatus` |
+| `notifications.security_history` | 通知 | 安全告知投递关联与分页历史（步骤 265/266） |  | 0 | 1 | 0 | 1 | - |
 | `oauth_oidc.protocol` | 协议 | OAuth2/OIDC 协议端点（授权码/刷新/撤销/内省/UserInfo） | none | 1 | 0 | 1 | 0 | `ProtocolService`、`ProtocolIntrospectRequest`、`ProtocolTokenInspection`、`ProtocolRevocationService`、`ProtocolRevokeTokenRequest`、`ProtocolRevokeResult` |
 | `onboarding.invitations` | 账户 | 邀请与审核注册 | offset | 0 | 0 | 0 | 0 | - |
+| `operation.proof` | 认证与会话 | 操作绑定的一次两步验证证明（步骤 255） |  | 0 | 0 | 0 | 1 | `OperationProofService`、`OperationProofBeginRequest`、`OperationProofConfirmRequest`、`OperationProofCancelRequest`、`OperationProofChallenge`、`OperationProofGrant` |
 | `pagination.iteration` | 分页与列表 | 有界分页遍历辅助（宿主/CLI 可选） | none | 0 | 0 | 0 | 0 | `IterationOptions`、`IterationResult`、`IterateAdminPages`、`ErrPageNotAdvancing` |
 | `passkey.webauthn` | 认证与会话 | Passkey/WebAuthn 登录与凭证管理 | none | 0 | 0 | 0 | 0 | `VerifySecondFactorRequest`、`SecondFactorChallenge` |
 | `passwordreset.self_service` | 恢复 | 自助密码找回 | none | 1 | 0 | 0 | 0 | `PasswordResetService`、`RequestPasswordResetRequest`、`CompletePasswordResetRequest`、`PasswordResetResult`、`ValidatePasswordResetTokenRequest` |
+| `preset.install_gap` | 授权 | 预设安装生产入口缺口（D-252-1） |  | 0 | 0 | 0 | 0 | - |
 | `qr_login.confirm` | 协议 | 已登录 APP 扫码登录与网页领取 | none | 0 | 0 | 0 | 0 | - |
 | `rbac.public_facade` | 授权 | 角色/用户组/权限/预设/委派/授权查询公开门面（步骤 224） | offset | 0 | 0 | 0 | 0 | `RBACAuthorizationService`、`RBACCatalogRequest`、`RBACCheckRequest`、`RBACCheckResult`、`RBACCreateGroupRequest`、`RBACDelegatablePermission` |
 | `rbac.roles_permissions` | 授权 | 用户组、角色、权限目录与委派 | offset | 8 | 11 | 0 | 0 | `AdminRole`、`AdminCreateRoleRequest`、`AdminRoleRequest`、`AdminRolePermissionRequest`、`AdminPermission`、`AdminCreatePermissionRequest` |
 | `reports.generate` | 审计与报告 | 统计报告生成、导出、计划与清理 | offset | 5 | 6 | 0 | 0 | - |
 | `runtime.embedded` | 嵌入式与运行时 | 嵌入式运行时装配（Open/Handler/Mount/生命周期） | none | 0 | 0 | 0 | 1 | `Runtime`、`Options`、`Open`、`Runtime.Handler`、`Runtime.Mount`、`Runtime.Start` |
+| `search.domain_lists` | 分页与列表 | 有界模糊搜索（步骤 261/262/263） |  | 0 | 0 | 0 | 0 | - |
 | `security.policy_reauth` | 认证与会话 | 敏感操作安全策略与再次认证 | none | 1 | 0 | 0 | 0 | - |
 | `session.admin` | 认证与会话 | 管理员会话查询与强制下线 | offset | 1 | 2 | 0 | 0 | `SessionService`、`SessionService.ListDevices`、`SessionDeviceRequest`、`SessionDevice`、`SessionDeviceList`、`AdminListUserSessionsRequest` |
 | `settings.managed` | 配置 | 常规设置读取、校验、更新与敏感默认恢复 | none | 1 | 5 | 1 | 0 | `SettingField`、`SettingValidationError`、`SettingsFieldsRequest`、`SettingsRestoreSensitiveRequest`、`SettingsRestoreSensitiveResult`、`SettingsService` |
@@ -48,22 +55,25 @@
 | `transport.http_security` | 传输 | HTTP 传输安全链（限流/CSRF/CORS/边界/错误信封/OpenAPI） | none | 0 | 0 | 0 | 0 | - |
 | `ui.admin_pages` | 页面 | 管理与客服页面框架（固定命名路由） | fixed | 0 | 0 | 2 | 0 | - |
 | `ui.public_pages` | 页面 | 公开与自助页面（登录/注册/找回/账户/错误页） | fixed | 0 | 0 | 5 | 0 | - |
+| `users.direct_management` | 账户 | 直接改用户名/直接重置密码（步骤 256/257） |  | 2 | 0 | 0 | 1 | `DirectUserManagementService`、`DirectPasswordManagementService`、`AdminChangeUserUsernameRequest`、`AdminResetUserPasswordRequest`、`AdminPasswordResetResult`、`RequiredPasswordChangeService` |
+| `verification.environment_limits` | 验证边界 | 环境未测与子模块不可获取（分类登记） |  | 0 | 0 | 0 | 0 | - |
 | `webhook.delivery` | 通知 | Webhook 端点、签名与投递重试 | none | 0 | 0 | 0 | 0 | - |
 
 ## 2. 与能力矩阵只读交叉核对
 
 | 对象 | 能力矩阵盘点 | reference 扫描 |
 |---|---|---|
-| 能力总数 | 43 | 43 |
-| 管理路由 | 123 | 123 |
-| 页面路由 | 245 | 245 |
+| 能力总数 | 52 | 52 |
+| 管理路由 | 131 | 137 |
+| 页面路由 | 248 | 250 |
 | 协议路径 | 17 | 17 |
-| CLI 子命令 | 40 | 40 |
-| 权限键 | 51 | 53 |
+| CLI 子命令 | 41 | 41 |
+| 权限键 | 53 | 53 |
 
-- app 函数（含导出方法）：能力矩阵盘点=266，reference 扫描=315（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
-- 协议端点表：能力矩阵盘点=20，reference 扫描=18（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
-- 权限键：能力矩阵盘点=51，reference 扫描=53（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
+- app 函数（含导出方法）：能力矩阵盘点=281，reference 扫描=340（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
+- 协议端点表：能力矩阵盘点=20，reference 扫描=19（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
+- 管理路由：能力矩阵盘点=131，reference 扫描=137（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
+- 页面路由：能力矩阵盘点=248，reference 扫描=250（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
 
 ## 3. 使用方式
 

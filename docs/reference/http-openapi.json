@@ -3,7 +3,7 @@
   "generated_by": "scripts/reference",
   "operation_count": 95,
   "documented": 95,
-  "unregistered": 151,
+  "unregistered": 155,
   "openapi": {
     "components": {
       "responses": {
@@ -9377,7 +9377,7 @@
       },
       "note": "未登记契约的页面路由（管理/审计/报告/备份/OAuth 页面等）不在本步范围，路由清单见 docs/reference/http-api.md 与 http-routes.json；后续步骤补管理组模式。",
       "scope": "账户/资料/会话/注册登录/MFA/三种恢复流程（邮件找回、恢复代码重绑、人工恢复）",
-      "unregistered": 151,
+      "unregistered": 155,
       "version": "ui.v1"
     },
     "x-login-page-transport": {

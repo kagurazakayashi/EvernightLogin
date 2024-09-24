@@ -13,7 +13,7 @@
 - **分页/取消/幂等**：可增长列表在数据源处分页（默认/最大/排序白名单/稳定次序/HasMore 或游标）；长任务返回受理与任务 ID，受理不等于完成；敏感写操作需再次认证，重试不得绕过。
 - **安全默认**：认证/授权/审计依赖失败时 fail-closed；来源地址必须来自可信边界；邮件测试只连本地捕获器；真实平台/客户端未实测的边界不写成已支持。
 
-## 2. Runtime 公开方法（41 个）
+## 2. Runtime 公开方法（45 个）
 
 | 方法 | 签名（不含接收者） | 说明 | 源码 |
 |---|---|---|---|
@@ -29,6 +29,8 @@
 | `Config` | `() login.Config` | Config 返回运行配置快照 | `app/runtime.go` |
 | `Delegations` | `() DelegationAdminService` | Delegations 返回委派资格公开门面 | `app/delegations_public.go` |
 | `Diagnostics` | `() DiagnosticsService` | Diagnostics 返回脱敏运行诊断门面（只读 | `app/diagnostics_public.go` |
+| `DirectPasswordManagement` | `() DirectPasswordManagementService` | DirectPasswordManagement 返回直接重置口令门面 | `app/admin_user_reset.go` |
+| `DirectUserManagement` | `() DirectUserManagementService` | DirectUserManagement 返回管理员直接管理门面 | `app/admin_user_rename.go` |
 | `EmailChange` | `() EmailChangeService` | EmailChange 返回邮箱变更公开门面 | `app/emailchange_public.go` |
 | `HTTPMounts` | `() []string` | HTTPMounts 返回已挂载的协议/管理 API 站内路径（含前缀，供诊断/测试） | `app/runtime.go` |
 | `HTTPPrefix` | `() string` | HTTPPrefix 返回 HTTP 处理器的规范化站内前缀（根路径为空字符串） | `app/runtime.go` |
@@ -40,6 +42,7 @@
 | `ManualRecovery` | `() ManualRecoveryAdminService` | ManualRecovery 返回人工核验恢复公开门面 | `app/manualrecovery_public.go` |
 | `Mount` | `(mux *http.ServeMux) (error)` | Mount 把已装配的 HTTP 处理器挂到宿主 *http.ServeMux 上：按固定前缀注册子树 | `app/runtime.go` |
 | `OAuthClients` | `() OAuthClientAdminService` | OAuthClients 返回 OAuth 客户端公开门面 | `app/oauthclients_public.go` |
+| `OperationProof` | `() OperationProofService` | OperationProof 返回目标绑定操作证明门面 | `app/operation_proof.go` |
 | `PasswordReset` | `() PasswordResetService` | PasswordReset 返回找回密码门面（邮件 token 发起/校验/完成） | `app/runtime.go` |
 | `Passwords` | `() PasswordChangeService` | Passwords 返回本人受控改密门面 | `app/passwords_public.go` |
 | `Profile` | `() ProfileService` | Profile 返回个人资料公开门面 | `app/profile_public.go` |
@@ -49,6 +52,7 @@
 | `Ready` | `(ctx context.Context) error` | Ready 检查运行时是否可以对外服务：必须已成功 Start | `app/runtime.go` |
 | `Registration` | `() RegistrationService` | Registration 返回注册与邮箱验证公开门面 | `app/registration_public.go` |
 | `Reports` | `() ReportsService` | Reports 返回报告公开门面 | `app/reports_public.go` |
+| `RequiredPasswordChanges` | `() RequiredPasswordChangeService` | RequiredPasswordChanges 返回强制改密门面（与本人受控改密门面区分：后者要求完整会话） | `app/required_password_change.go` |
 | `Security` | `() SecurityService` | Security 返回认证/安全设置门面（TOTP 绑定、恢复代码、能力状态） | `app/runtime.go` |
 | `Sessions` | `() SessionService` | Sessions 返回会话撤销门面 | `app/runtime.go` |
 | `Settings` | `() SettingsService` | Settings 返回受控配置管理服务 | `app/settings_public.go` |
@@ -59,7 +63,7 @@
 | `UserLifecycle` | `() UserLifecycleService` | UserLifecycle 返回用户生命周期管理门面 | `app/users_public.go` |
 | `Users` | `() UserService` | Users 返回用户门面 | `app/runtime.go` |
 
-## 3. 公开服务接口总览（39 个接口 / 262 个方法）
+## 3. 公开服务接口总览（43 个接口 / 270 个方法）
 
 | 接口 | 方法数 | 方法名 | 说明 | 源码 |
 |---|---|---|---|---|
@@ -76,11 +80,14 @@
 | `BootstrapService` | 1 | `EnsureRoot` | BootstrapService 是首次初始化门面 | `app/public_auth.go` |
 | `DelegationAdminService` | 4 | `DelegatablePermissions`、`GetDelegation`、`ListDelegations`、`RevokeDelegation` | DelegationAdminService 是委派资格读取/撤回/可转授权限查询门面 | `app/delegations_public.go` |
 | `DiagnosticsService` | 3 | `Export`、`Read`、`RelatedErrors` | DiagnosticsService 是脱敏运行诊断公开门面 | `app/diagnostics_public.go` |
+| `DirectPasswordManagementService` | 1 | `ResetUserPassword` | DirectPasswordManagementService 是管理员直接重置他人密码的公开门面 | `app/admin_user_reset.go` |
+| `DirectUserManagementService` | 1 | `ChangeUserUsername` | DirectUserManagementService 是管理员直接管理他人账户的公开门面（当前提供直接改名 | `app/admin_user_rename.go` |
 | `EmailChangeService` | 4 | `Cancel`、`Request`、`State`、`Verify` | EmailChangeService 是邮箱变更公开门面 | `app/emailchange_public.go` |
 | `InvitationAdminService` | 8 | `ApproveRegistration`、`CancelInvitation`、`CreateInvitation`、`GetInvitation`、`GetRegistration`、`ListInvitations`、`ListPendingRegistrations`、`RejectRegistration` | InvitationAdminService 是邀请与注册审核管理门面 | `app/invitations_public.go` |
 | `MFAService` | 13 | `BeginEmailEnrollment`、`BeginPasskeyLogin`、`BeginPasskeyRegistration`、`ConfirmEmailEnrollment`、`FinishPasskeyLogin`、`FinishPasskeyRegistration`、`List`、`ListPasskeys`、`RecoveryCodes`、`RemoveEmail`、`RemovePasskey`、`RemoveTOTP`、`RenamePasskey` | MFAService 是认证因素管理门面（步骤 222） | `app/mfa_public.go` |
 | `ManualRecoveryAdminService` | 10 | `Approve`、`Cancel`、`Create`、`Execute`、`GetApproval`、`GetExecution`、`GetRequest`、`List`、`Policy`、`Reject` | ManualRecoveryAdminService 是人工核验恢复公开门面 | `app/manualrecovery_public.go` |
 | `OAuthClientAdminService` | 9 | `GetClient`、`ListClientCertificates`、`ListClientSecrets`、`RegisterClient`、`RegisterClientCertificate`、`RevokeClientCertificate`、`RevokeClientSecret`、`RotateClientSecret`、`UpdateClientSettings` | OAuthClientAdminService 是 OAuth 客户端凭证/安全设置公开门面 | `app/oauthclients_public.go` |
+| `OperationProofService` | 5 | `Begin`、`BeginWebAuthn`、`Cancel`、`Confirm`、`ConfirmWebAuthn` | OperationProofService 是目标绑定一次性两步验证证明的公开 Go 门面 | `app/operation_proof.go` |
 | `PasswordChangeService` | 1 | `ChangeOwnPassword` | PasswordChangeService 是本人受控改密门面 | `app/passwords_public.go` |
 | `PasswordResetService` | 4 | `Complete`、`Request`、`ValidateToken`、`ValidateTokenWithSource` | PasswordResetService 是找回密码公开门面 | `app/passwordreset.go` |
 | `ProfileService` | 3 | `ChangeUsername`、`GetProfile`、`UpdateProfile` | ProfileService 是个人资料公开门面 | `app/profile_public.go` |
@@ -95,6 +102,7 @@
 | `RBACService` | 6 | `Authorization`、`Delegations`、`Groups`、`Permissions`、`Presets`、`Roles` | RBACService 是分组清楚的 RBAC 公开服务入口 | `app/rbac_public.go` |
 | `RegistrationService` | 5 | `Availability`、`RegisterAccount`、`ResendEmailVerification`、`SendEmailVerification`、`VerifyEmail` | RegistrationService 是注册与邮箱验证公开门面 | `app/registration_public.go` |
 | `ReportsService` | 8 | `Cancel`、`Capabilities`、`CleanupExecute`、`CleanupPreview`、`Get`、`OpenArtifact`、`Retry`、`Start` | ReportsService 是统计报告生成与受控产物的公开门面 | `app/reports_public.go` |
+| `RequiredPasswordChangeService` | 1 | `Complete` | RequiredPasswordChangeService 是强制改密受限会话完成本人改密的门面 | `app/required_password_change.go` |
 | `SecurityService` | 4 | `BeginTOTPBinding`、`ConfirmTOTPBinding`、`GenerateRecoveryCodes`、`Status` | SecurityService 是认证/安全设置门面：敏感操作经真实再次认证后执行 | `app/public_security.go` |
 | `SessionService` | 7 | `Authorize`、`ListDevices`、`Revoke`、`RevokeDevice`、`RevokeOtherDevices`、`Validate`、`ValidateCSRF` | SessionService 会话语义：校验当前会话、应用+权限联合检查、撤销当前会话 | `app/public_session.go` |
 | `SettingsService` | 5 | `Fields`、`RestoreSensitiveDefaults`、`Status`、`Update`、`Validate` | SettingsService 是受认证、按字段白名单的配置查询/校验/变更/状态服务 | `app/settings_public.go` |
@@ -114,7 +122,7 @@
 | `NormalizeAdminPage` | `(page AdminPage) (AdminPage, error)` | NormalizeAdminPage 规范化公开分页输入：零值使用默认每页条数 | `app/pagination.go` |
 | `Open` | `(ctx context.Context, opts Options) (*Runtime, error)` | Open 构造真实服务运行时：配置/主密钥环/SQLite/迁移策略/审计/领域服务/敏感闸门/ | `app/runtime.go` |
 
-### 4.1 app 包公开变量/常量（17 个）
+### 4.1 app 包公开变量/常量（19 个）
 
 | 名称 | 类别 | 说明 | 源码 |
 |---|---|---|---|
@@ -135,18 +143,23 @@
 | `MaxIterationMaxItems` | const | MaxIterationMaxItems 是调用方允许设置的最大条目数上限 | `app/iterate.go` |
 | `MaxIterationMaxPages` | const | MaxIterationMaxPages 是调用方允许设置的最大页数上限 | `app/iterate.go` |
 | `NotFoundCode` | const | NotFoundCode 是公开门面“已通过调用身份与权限检查、但目标记录不存在”的稳定 | `app/errors.go` |
+| `OperationProofPasswordReset` | const | OperationProofPasswordReset 是直接重置他人密码操作 | `app/operation_proof.go` |
+| `OperationProofUsernameChange` | const | OperationProofUsernameChange 是直接修改他人用户名操作 | `app/operation_proof.go` |
 
-## 5. app 包公开类型（451 个）
+## 5. app 包公开类型（468 个）
 
 | 类别 | 数量 |
 |---|---|
-| interface | 39 |
-| struct | 412 |
+| interface | 43 |
+| struct | 424 |
+| alias | 1 |
 
 按源码文件分布（完整类型名与字段请用 `go doc ./app` 或 GoDoc 查询；Phase B 将按领域展开关键类型字段与边界）：
 
 | 源码文件 | 导出类型数 |
 |---|---|
+| `app/admin_user_rename.go` | 2 |
+| `app/admin_user_reset.go` | 3 |
 | `app/applications_public.go` | 13 |
 | `app/audit_public.go` | 31 |
 | `app/backup_public.go` | 17 |
@@ -160,6 +173,7 @@
 | `app/manualrecovery_public.go` | 14 |
 | `app/mfa_public.go` | 23 |
 | `app/oauthclients_public.go` | 12 |
+| `app/operation_proof.go` | 10 |
 | `app/options.go` | 1 |
 | `app/pagination.go` | 2 |
 | `app/passwordreset.go` | 5 |
@@ -186,6 +200,7 @@
 | `app/rbac_roles.go` | 6 |
 | `app/registration_public.go` | 10 |
 | `app/reports_public.go` | 19 |
+| `app/required_password_change.go` | 2 |
 | `app/runtime.go` | 1 |
 | `app/settings_public.go` | 13 |
 | `app/support_public.go` | 14 |
@@ -193,7 +208,7 @@
 | `app/users_public.go` | 6 |
 | `app/validity_public.go` | 3 |
 
-## 6. 根包公开函数（38 个；另含公开类型 441 个）
+## 6. 根包公开函数（38 个；另含公开类型 447 个）
 
 | 函数 | 签名 | 说明 | 源码 |
 |---|---|---|---|
@@ -244,7 +259,7 @@
 | `alias_contracts.go` | 22 | 0 | 24 |
 | `alias_errs.go` | 6 | 16 | 77 |
 | `alias_http.go` | 21 | 2 | 20 |
-| `alias_ui.go` | 350 | 1 | 50 |
+| `alias_ui.go` | 356 | 1 | 51 |
 | `embed.go` | 0 | 0 | 2 |
 | `http.go` | 0 | 6 | 0 |
 | `instance.go` | 1 | 1 | 2 |
@@ -256,12 +271,12 @@
 | 领域 | 待补内容 | 涉及接口数 |
 |---|---|---|
 | auth-session-mfa | 认证、会话、安全与 MFA 领域的方法级参考待 Phase B | 8 |
-| users-account | 账户、资料、密码、注册、邀请、批量与有效期领域的方法级参考待 Phase B | 8 |
+| users-account | 账户、资料、密码、注册、邀请、批量与有效期领域的方法级参考待 Phase B | 11 |
 | rbac-applications | RBAC、应用、OAuth 客户端与委派领域的方法级参考待 Phase B | 8 |
 | audit-reports | 审计与报告领域的方法级参考待 Phase B | 2 |
 | backup-restore | 备份、恢复与任务领域的方法级参考待 Phase B | 6 |
 | ops-diagnostics | 运维、诊断、设置、客服与协议管理领域的方法级参考待 Phase B | 6 |
-| misc-interfaces | 未归类接口（Phase B 复核领域映射）：AdminService | 1 |
+| misc-interfaces | 未归类接口（Phase B 复核领域映射）：AdminService、OperationProofService | 2 |
 
 ## 8. 最小可编译示例
 

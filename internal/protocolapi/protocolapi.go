@@ -16,6 +16,7 @@
 //	POST /oauth/token                        令牌端点（authorization_code / refresh_token /
 //	                                         client_credentials / 设备码 grant）
 //	GET  /oauth/userinfo                     UserInfo（Bearer Access Token，按 scope 裁剪）
+//	POST /oauth/userinfo                     UserInfo（同上，POST 兼容；令牌仍只从 Authorization 读取）
 //	POST /oauth/revoke                       令牌撤销（RFC 7009）
 //	POST /oauth/introspect                   令牌状态查询（需要 EnableIntrospection）
 //	POST /oauth/token/authorize              Token+当前权限联合判定（可选注入扩展）

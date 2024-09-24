@@ -16,6 +16,9 @@
 - `scripts/verify-docs` 接入 `-reference=auto|off|require`：`docs/reference` 存在时逐字节校验生成物；新增公开符号未登记映射、能力声明无法解析时 fail-closed。
 - 新增 `examples/reference-snippets` 最小可编译示例，并被参考文档内嵌；文档内嵌代码与源码逐字一致由 `-check` 保证。
 - 尚未包含**方法级** Go API 参考：Phase B 在 214/215 与 226–235 稳定后补齐，当前 [go-api.md](go-api.md) 提供生命周期/接口总览与稳定领域框架。
+- 步骤 268 起 OpenAPI 增加**页面/表单操作段**（账户/资料/会话/注册登录/MFA/三种恢复流程，95 条），新增生成物 [http-openapi.json](http-openapi.json)；页面与 JSON API 用 `x-login-route-kind` 分开标识，秘密字段 writeOnly、示例为合成值，契约与 AST 扫描路由不一致时 `-check` 失败。
+- 步骤 270 起新增**管理 JSON API 契约生成物** [http-openapi-admin.json](http-openapi-admin.json) 与 [http-admin-api.md](http-admin-api.md)，由 `scripts/adminapi-doc` 生成/校验；管理路由以它和 [http-routes.json](http-routes.json) 为权威对照。
+- 步骤 271 起新增**协议端点 HTTP 契约与离线 OpenAPI**：`http-routes.json` 增加 `protocol_contracts`（方法/开关/传输/认证/标准错误或项目信封/Discovery 声明），新增 [protocol-openapi.json](protocol-openapi.json)；协议例外（条件注册、自定义扫码信封、标准错误格式、默认关闭 404、宿主中间件）显式登记并与 `protocolapi` 端点表/`routes.go` 条件注册双向核对；不一致、例外未登记、$ref 失效或示例疑似真实凭据时 `-check` 失败。
 
 ## 3. 相关文档
 

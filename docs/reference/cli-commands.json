@@ -3,7 +3,7 @@
   "generated_by": "scripts/reference",
   "counts": {
     "binaries": 3,
-    "subcommands": 40,
+    "subcommands": 41,
     "flags": 98
   },
   "binaries": [
@@ -189,6 +189,10 @@
         },
         {
           "name": "confirm",
+          "source": "cmd/loginctl/loginctl.go"
+        },
+        {
+          "name": "deliveries",
           "source": "cmd/loginctl/loginctl.go"
         },
         {

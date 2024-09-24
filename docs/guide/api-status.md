@@ -50,23 +50,30 @@ Handler 会在 `<prefix>/openapi.json` 提供该文档。
 | 路径 | 只有两条：`<prefix>/healthz`（GET，返回固定 `{"status":"ok"}`）与 `<prefix>/openapi.json`（GET，返回本文档） |
 | 错误信封 | `Error` schema：`code`、`message`、`request_id` 必填，可选 `task_id`、`retry_after_seconds` |
 | 错误码枚举 | `code.enum` 与 `x-login-error-registry` 由错误码注册表**同源生成**，新增错误码无需手工维护第二份清单 |
-| 保留前缀 | `x-login-oauth-reserved-prefix: /oauth2/`：未来 OAuth/OIDC 标准协议响应空间，不使用统一错误信封 |
+| 保留前缀 | `x-login-oauth-reserved-prefix: /oauth2/`：OAuth/OIDC 标准协议响应空间，不使用统一错误信封 |
+| 离线参考 OpenAPI | `docs/reference/http-openapi.json`（页面/表单）、`docs/reference/http-openapi-admin.json`（管理 JSON API）、`docs/reference/protocol-openapi.json`（OAuth/OIDC/设备码/扫码协议端点）。这些是**代码生成的离线参考**，不等于运行期 `/openapi.json` 的内容；运行期文档仍只声明真实挂载的最小端点。 |
 | 通用响应 | `x-login-common-error-responses`：400/401/403/404/405/413/414/415/429/500/504 的说明 |
 
-**它不包含**业务接口（账户、权限、OAuth/OIDC、设备码、扫码、管理、报告、备份等）的
-路径定义。真实状态：**OAuth/OIDC 协议端点、管理 JSON API、托管 API 与应用客服 API 已装配**
-（可配置开关，默认关闭：`protocol.enabled`/`--enable-protocol`、`--enable-admin-api`、
-`--enable-managed-api`、`--enable-app-support`）；**设备码与扫码登录已按步骤 192/193
-验收其已实现边界；令牌状态查询（introspection）已实现（145/160 验收边界；默认关闭；mTLS/故障等未实测）**；维护模式一律 503（见
+运行期 `/openapi.json` **只记录实际挂载的最小端点**，不包含业务接口全集；业务能力由真实
+HTTP 路由承载，并通过显式开关启用（默认关闭：`protocol.enabled`/`--enable-protocol`、
+`--enable-admin-api`、`--enable-managed-api`、`--enable-app-support`）。真实状态：
+**OAuth/OIDC 协议端点、管理 JSON API、托管 API 与应用客服 API 已装配**；**设备码与扫码
+登录已按步骤 192/193 验收其已实现边界；令牌状态查询（introspection）已实现（145/160
+验收边界；默认关闭；mTLS/故障等未实测）**；维护模式一律 503（见
 [deployment-modes.md](deployment-modes.md) 第 3.1 节与 `standalone-service.md` 第
-3.8 节）。不要按“OpenAPI 里有”去对接，
-也不要为了对接去改本文件；协议契约目前以受信 Go API 与
-`docs/deployment/integration.md` 为准。
+3.8 节）。
+
+完整 HTTP 契约以 `docs/reference/` 的**代码生成物**为准（见
+[reference/README.md](../reference/README.md)）：页面/表单 OpenAPI、管理 JSON API OpenAPI、
+协议端点 OpenAPI 与 `http-routes.json` 的协议契约/例外登记；Go 嵌入契约以公开 Go API 与
+[deployment/integration.md](../deployment/integration.md) 为准。**不要按“离线文档里有”去
+对接**：协议端点默认关闭（关闭时命名空间 404），管理/托管/客服 API 同样需显式启用；
+文档存在不代表运行期已挂载。
 
 独立服务 `login-server serve` 现已真实启动，并向 `<prefix>/healthz`、`<prefix>/openapi.json`
-与内置账户入口页（`<prefix>/login` 等）提供服务；但它同样**不提供业务 JSON API**，
-OpenAPI 仍只有上述两条路径。`login-server init` 是本地受控首次初始化入口，
-不是 HTTP 接口。
+与内置账户入口页（`<prefix>/login` 等）提供服务；运行期 OpenAPI 仍只有上述最小端点，
+业务 JSON API/协议端点需按部署配置显式启用后才可达。`login-server init` 是本地受控首次
+初始化入口，不是 HTTP 接口。
 
 管理 JSON API（`--enable-admin-api` 开启，默认关闭）挂载在 `/admin/v1` 下，本轮新增/验收的
 关键路由包括：`GET /admin/v1/sessions`（强认证管理会话 + 范围授权；步骤 187）、

@@ -40,6 +40,8 @@ type routeCounts struct {
 	AdminRoutes       int `json:"admin_routes"`
 	ProtocolPaths     int `json:"protocol_paths"`
 	ProtocolEndpoints int `json:"protocol_endpoints"`
+	// ProtocolContracts 是已登记 HTTP 契约的协议端点数量（步骤 271）。
+	ProtocolContracts int `json:"protocol_contracts"`
 	Pages             int `json:"pages"`
 }
 
@@ -51,7 +53,19 @@ type httpRoutesJSON struct {
 	AdminRoutes       []AdminRoute       `json:"admin_routes"`
 	ProtocolPaths     []ProtocolPath     `json:"protocol_paths"`
 	ProtocolEndpoints []ProtocolEndpoint `json:"protocol_endpoints"`
+	// ProtocolContracts 是协议端点的 HTTP 契约（方法/传输/认证/错误/开关/例外证据）。
+	ProtocolContracts []ProtocolContract `json:"protocol_contracts"`
 	Pages             []PageRoute        `json:"pages"`
+}
+
+// protocolOpenAPIJSON 是 protocol-openapi.json 的顶层结构（步骤 271）。
+type protocolOpenAPIJSON struct {
+	Schema         string          `json:"schema"`
+	GeneratedBy    string          `json:"generated_by"`
+	OperationCount int             `json:"operation_count"`
+	Documented     int             `json:"documented"`
+	ExceptionCount int             `json:"exception_count"`
+	OpenAPI        json.RawMessage `json:"openapi"`
 }
 
 // httpOpenAPIJSON 是 http-openapi.json 的顶层结构：内嵌确定性 OpenAPI 3 文档，
@@ -107,12 +121,28 @@ func (m *Model) jsonFiles() map[string][]byte {
 		Schema: schemaVersion + "/http-routes", GeneratedBy: "scripts/reference",
 		Counts: routeCounts{
 			AdminRoutes: len(m.AdminRoutes), ProtocolPaths: len(m.ProtocolPaths),
-			ProtocolEndpoints: len(m.ProtocolEndpoints), Pages: len(m.Pages),
+			ProtocolEndpoints: len(m.ProtocolEndpoints),
+			ProtocolContracts: protocolContractCount(m), Pages: len(m.Pages),
 		},
 		AdminRoutes: m.AdminRoutes, ProtocolPaths: m.ProtocolPaths,
-		ProtocolEndpoints: m.ProtocolEndpoints, Pages: m.Pages,
+		ProtocolEndpoints: m.ProtocolEndpoints,
+		ProtocolContracts: protocolContractList(m), Pages: m.Pages,
 	}
 	files[fileHTTPRoutesJSON] = marshalJSON(routes)
+
+	protocolOpenAPI := protocolOpenAPIJSON{
+		Schema: schemaVersion + "/protocol-openapi", GeneratedBy: "scripts/reference",
+	}
+	if m.ProtocolContract != nil {
+		protocolOpenAPI.OperationCount = len(m.ProtocolContract.Contracts)
+		protocolOpenAPI.Documented = len(m.ProtocolContract.Contracts)
+		protocolOpenAPI.ExceptionCount = len(m.ProtocolContract.Exceptions)
+		protocolOpenAPI.OpenAPI = json.RawMessage(m.ProtocolContract.JSON)
+	}
+	if protocolOpenAPI.OpenAPI == nil {
+		protocolOpenAPI.OpenAPI = json.RawMessage(`{"openapi":"3.0.3","paths":{}}`)
+	}
+	files[fileProtocolOpenAPIJSON] = marshalJSON(protocolOpenAPI)
 
 	pageOpenAPI := httpOpenAPIJSON{
 		Schema: schemaVersion + "/http-openapi", GeneratedBy: "scripts/reference",
@@ -148,4 +178,20 @@ func marshalJSON(value any) []byte {
 		panic("apidoc: JSON 序列化失败: " + err.Error())
 	}
 	return append(data, '\n')
+}
+
+// protocolContractCount 返回协议 HTTP 契约数量（模型缺失时返回 0）。
+func protocolContractCount(model *Model) int {
+	if model.ProtocolContract == nil {
+		return 0
+	}
+	return len(model.ProtocolContract.Contracts)
+}
+
+// protocolContractList 返回协议 HTTP 契约（模型缺失时为空切片，保证 JSON 稳定为 []）。
+func protocolContractList(model *Model) []ProtocolContract {
+	if model.ProtocolContract == nil {
+		return []ProtocolContract{}
+	}
+	return model.ProtocolContract.Contracts
 }

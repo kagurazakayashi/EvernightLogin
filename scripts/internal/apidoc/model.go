@@ -241,12 +241,14 @@ type Model struct {
 	CLIBinaries       []CLIBinary
 	GoAPI             *GoAPI
 	// PageOpenAPI 是本步生成的页面/表单 OpenAPI 文档与契约核对结果。
-	PageOpenAPI     *PageOpenAPIArtifact
-	Snippets        []Snippet
-	CrossCheck      CrossCheck
-	Warnings        []string
-	ClaimIssues     []string
-	PendingSections []PendingSection
+	PageOpenAPI *PageOpenAPIArtifact
+	// ProtocolContract 是协议端点 HTTP 契约、例外登记与协议 OpenAPI（步骤 271）。
+	ProtocolContract *ProtocolContractArtifact
+	Snippets         []Snippet
+	CrossCheck       CrossCheck
+	Warnings         []string
+	ClaimIssues      []string
+	PendingSections  []PendingSection
 }
 
 // Markdown 生成的文件名（相对 docs/reference）。
@@ -266,7 +268,9 @@ const (
 	filePermissionsJSON = "permission-keys.json"
 	fileHTTPRoutesJSON  = "http-routes.json"
 	fileHTTPOpenAPIJSON = "http-openapi.json"
-	fileCLIJSON         = "cli-commands.json"
+	// fileProtocolOpenAPIJSON 是协议端点 OpenAPI（步骤 271；独立文档，不影响运行期 /openapi.json）。
+	fileProtocolOpenAPIJSON = "protocol-openapi.json"
+	fileCLIJSON             = "cli-commands.json"
 )
 
 // markdownFiles 返回全部生成 Markdown 文件的相对路径（顺序稳定）。
@@ -280,6 +284,7 @@ func markdownFiles() []string {
 // jsonFiles 返回全部生成 JSON 文件的相对路径（顺序稳定）。
 func jsonFiles() []string {
 	return []string{
-		fileErrorsJSON, filePermissionsJSON, fileHTTPRoutesJSON, fileHTTPOpenAPIJSON, fileCLIJSON,
+		fileErrorsJSON, filePermissionsJSON, fileHTTPRoutesJSON, fileHTTPOpenAPIJSON,
+		fileProtocolOpenAPIJSON, fileCLIJSON,
 	}
 }

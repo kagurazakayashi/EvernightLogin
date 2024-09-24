@@ -40,6 +40,10 @@ func Generate(root string) (*Model, error) {
 	if model.ProtocolPaths, model.ProtocolEndpoints, err = scanProtocol(root); err != nil {
 		return nil, err
 	}
+	if model.ProtocolContract, err = buildProtocolContract(root, model.ProtocolPaths,
+		model.ProtocolEndpoints); err != nil {
+		return nil, err
+	}
 	if model.Pages, err = scanPages(root); err != nil {
 		return nil, err
 	}
@@ -142,6 +146,9 @@ const (
 	// minPageOperations 是本步已定义模式的页面/表单操作安全下限（当前 88 条，
 	// 覆盖账户/资料/会话/注册登录/MFA/三种恢复流程）。
 	minPageOperations = 70
+	// minProtocolContracts 是协议端点 HTTP 契约安全下限（步骤 271 当前 18 条；
+	// 少于该数通常意味着端点表/契约表被误删或被“特殊端点”整体豁免）。
+	minProtocolContracts = 19
 )
 
 // validateCounts 校验关键盘点数量不低于安全下限，返回可操作的失败信息。
@@ -171,5 +178,11 @@ func validateCounts(model *Model) []string {
 	}
 	check("页面/表单 OpenAPI 操作", pageOperations, minPageOperations,
 		"检查 internal/transport/pagecontracts_*.go 与 ui/ 页面路由是否被误删")
+	protocolContracts := 0
+	if model.ProtocolContract != nil {
+		protocolContracts = len(model.ProtocolContract.Contracts)
+	}
+	check("协议端点 HTTP 契约", protocolContracts, minProtocolContracts,
+		"检查 scripts/internal/apidoc/protocol_contract.go 与 internal/protocolapi/doc.go 端点表是否被误删")
 	return issues
 }

@@ -4,7 +4,7 @@
 
 ## 1. 使用约定
 
-- 机器优先：需要枚举/匹配/生成调用时读 4 个机器 JSON；需要解释/边界/示例时读 Markdown。
+- 机器优先：需要枚举/匹配/生成调用时读机器 JSON（当前输出见 §2）；需要解释/边界/示例时读 Markdown。
 - 引用事实时带上错误码/权限键/路由/命令的稳定标识，不要引用会随重构变化的文件路径作为契约。
 - 未知符号先运行 `go run ./scripts/reference -check` 与 `go doc ./app`；`-check` 失败表示文档与代码漂移，先修生成物。
 - 不要把本目录之外的开发协作材料（`.ai/`、`AGENTS.md`、`MEMORY.md`）当作产品契约；产品交付文档只在 `docs/`。
@@ -17,8 +17,10 @@
 |---|---|---|
 | error-codes.json | error-codes | 48 个错误码 |
 | permission-keys.json | permission-keys | 53 权限 / 5 系统角色 / 5 用户组 |
-| http-routes.json | http-routes | 123 管理路由 / 17 协议路径 / 245 页面 |
-| cli-commands.json | cli-commands | 3 程序 / 40 子命令 |
+| http-routes.json | http-routes | 137 管理路由 / 17 协议路径 / 250 页面 |
+| http-openapi.json | http-openapi | 95 页面/表单操作 |
+| protocol-openapi.json | protocol-openapi | 19 协议端点（标准错误/项目信封/浏览器重定向） |
+| cli-commands.json | cli-commands | 3 程序 / 41 子命令 |
 
 ## 3. 任务 → 入口
 
@@ -28,6 +30,8 @@
 | 查权限键/谁能做什么 | [permissions.md](permissions.md) 或 [permission-keys.json](permission-keys.json) | 权限目录生成 |
 | 查配置字段/环境变量/是否秘密 | [configuration.md](configuration.md) | 语义以 guide 为准 |
 | 找 HTTP 管理路由/协议路径/页面路由 | [http-api.md](http-api.md) 或 [http-routes.json](http-routes.json) | AST 扫描注册 |
+| 查页面/表单的字段/响应/状态转移 | [http-api.md](http-api.md) §5 或 [http-openapi.json](http-openapi.json) | OpenAPI 页面段 + 契约/路由一致性校验 |
+| 查 OAuth/OIDC/设备码/扫码的 HTTP 契约 | [http-api.md](http-api.md) §3 或 [protocol-openapi.json](protocol-openapi.json) | 协议端点契约/例外 + 标准错误与项目信封区分 |
 | 查 CLI 命令/flag/退出码 | [cli.md](cli.md) 或 [cli-commands.json](cli-commands.json) | 双风格 CLI 扫描 |
 | 查公开 Go 接口/方法是否存在 | [go-api.md](go-api.md) + `go doc ./app` / GoDoc | Phase A 框架，Phase B 方法级 |
 | 找最小可编译示例 | 本页第 4 节 + 对应文档示例块 | 源码 examples/reference-snippets |
@@ -46,9 +50,9 @@
 
 ## 5. 覆盖范围与阶段
 
-- 错误码 48、权限键 53、配置字段 52、管理路由 123、协议路径 17、页面命名路由 245、CLI 子命令 40、能力 43。
+- 错误码 48、权限键 53、配置字段 52、管理路由 137、协议路径 17、页面命名路由 250、CLI 子命令 41、能力 52。
 - Go API：Phase A 提供 Runtime 生命周期/访问器与接口总览；方法级参考（身份/范围/分页/幂等/错误/示例）Phase B 补齐。
-- OpenAPI 仍是最小契约，不构造成完整业务 schema；业务路由以 http-routes.json 为准。
+- OpenAPI 含运行期最小 JSON API（健康/文档端点）、页面/表单操作（账户/资料/会话/注册登录/MFA/三种恢复流程）与协议端点离线段（OAuth/OIDC/设备码/扫码；protocol-openapi.json）；管理 JSON API 契约见 http-openapi-admin.json。
 
 ## 6. 生成与校验命令
 

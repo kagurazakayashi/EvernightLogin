@@ -13,6 +13,7 @@
 //	GET     /jwks                                JWT 签名公钥（ES256，公开可缓存）
 //	GET     /oauth/authorize                     授权端点：会话 Cookie → 最小同意页
 //	POST    /oauth/authorize                     同意/拒绝决定（会话 Cookie + CSRF）
+//	POST    /oauth/token/authorize               宿主注入的一次性授权处理器（仅 TokenAuthorize 非空时挂载）
 //	POST    /oauth/token                         令牌端点（authorization_code /
 //	                                             refresh_token / client_credentials /
 //	                                             urn:ietf:params:oauth:grant-type:device_code）

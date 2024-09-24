@@ -2,6 +2,7 @@ package apidoc
 
 import (
 	"fmt"
+	"strings"
 )
 
 // 本文件渲染 HTTP 与 CLI 参考。路由/命令由 AST 扫描实际注册得到，不手写第二份
@@ -19,9 +20,33 @@ func (m *Model) renderHTTPAPI(used map[string]bool) []byte {
 	for _, path := range m.ProtocolPaths {
 		pathRows = append(pathRows, []string{path.Name, "`" + path.Path + "`"})
 	}
-	endpointRows := make([][]string, 0, len(m.ProtocolEndpoints))
-	for _, endpoint := range m.ProtocolEndpoints {
-		endpointRows = append(endpointRows, []string{endpoint.Method, "`" + endpoint.Path + "`"})
+	contractRows := make([][]string, 0, protocolContractCount(m))
+	fieldRows := make([][]string, 0, protocolContractCount(m))
+	for _, contract := range protocolContractList(m) {
+		errorsText := joinPipes(contract.StandardErrors)
+		if len(contract.ProjectErrorCodes) > 0 {
+			errorsText = "项目信封：" + joinPipes(contract.ProjectErrorCodes)
+		}
+		contractRows = append(contractRows, []string{
+			contract.Method, "`" + contract.Path + "`", contract.EnabledWhen,
+			contract.TransportKind + " / " + successStatusText(contract.SuccessStatuses),
+			contract.ClientAuth, contract.SessionAuth, errorsText, contract.DiscoveryDeclared,
+		})
+		fieldRows = append(fieldRows, []string{
+			contract.Method + " `" + contract.Path + "`",
+			protocolFieldText(contract.RequestFields), protocolFieldText(contract.ResponseFields),
+			strings.Join(contract.Notes, "；"),
+		})
+	}
+	exceptionRows := make([][]string, 0, len(protocolExceptionTable()))
+	if m.ProtocolContract != nil {
+		exceptionRows = exceptionRows[:0]
+		for _, exception := range m.ProtocolContract.Exceptions {
+			exceptionRows = append(exceptionRows, []string{
+				"`" + exception.Code + "`", exception.Kind,
+				joinPipes(exception.Endpoints), exception.Reason,
+			})
+		}
 	}
 	pageRows := make([][]string, 0, len(m.Pages))
 	for _, page := range m.Pages {
@@ -48,10 +73,17 @@ func (m *Model) renderHTTPAPI(used map[string]bool) []byte {
 			}),
 		"## 2. 管理 JSON API 路由（"+fmt.Sprintf("%d", len(m.AdminRoutes))+" 条，相对管理前缀）\n\n"+
 			markdownTable([]string{"方法", "路径模式", "关联能力", "定义位置"}, adminRows),
-		"## 3. OAuth 2.0 / OIDC 协议路径常量（"+fmt.Sprintf("%d", len(m.ProtocolPaths))+" 个）\n\n"+
+		"## 3. OAuth 2.0 / OIDC 协议端点契约（默认关闭；关闭时命名空间 404）\n\n"+
+			"协议端点使用标准协议响应（RFC 6749/6750/7009/7662/8628），**不是**统一业务错误信封；"+
+			"自定义扫码端点例外使用项目信封。授权端点属浏览器重定向流程，其余端点返回 JSON。\n\n"+
+			"### 3.1 协议路径常量（"+fmt.Sprintf("%d", len(m.ProtocolPaths))+" 个）\n\n"+
 			markdownTable([]string{"常量名", "路径"}, pathRows),
-		"### 3.1 协议包文档声明的端点（"+fmt.Sprintf("%d", len(m.ProtocolEndpoints))+" 个）\n\n"+
-			markdownTable([]string{"方法", "路径"}, endpointRows),
+		"### 3.2 端点 HTTP 契约（"+fmt.Sprintf("%d", protocolContractCount(m))+" 个；与 doc.go 端点表双向一致）\n\n"+
+			markdownTable([]string{"方法", "路径", "注册条件", "传输 / 成功状态", "客户端认证", "会话/浏览器", "协议错误", "Discovery 声明"}, contractRows),
+		"### 3.3 请求/响应字段与安全说明\n\n"+
+			markdownTable([]string{"端点", "请求字段", "响应字段（秘密字段标注）", "说明"}, fieldRows),
+		"### 3.4 协议例外登记（显式登记，不能整体豁免）\n\n"+
+			markdownTable([]string{"例外", "类别", "涉及端点", "理由"}, exceptionRows),
 		"## 4. 内置页面命名路由（"+fmt.Sprintf("%d", len(m.Pages))+" 个冻结命名路由）\n\n"+
 			"页面路由是 `ui.v1` 命名契约：名字/路径/访问级别稳定，DOM 与模板不承诺稳定；"+
 			"宿主可用 `PageOverrides` 替换展示，但不改变服务端认证/授权/CSRF。214 起页面实现"+
@@ -77,17 +109,51 @@ func (m *Model) renderHTTPAPI(used map[string]bool) []byte {
 			m.PageOpenAPI.pageOperationTableRows()),
 		"## 6. OpenAPI 与 Discovery 边界（不造假完整契约）\n\n"+
 			bulletList([]string{
-				"OpenAPI 由两部分组成：JSON API（`/healthz`、`/openapi.json`，错误用统一信封）与页面/表单操作（本页 §5，HTML 语义、错误以页面呈现）。**管理 JSON API 的请求/响应模式由后续管理组步骤统一定义**，在此之前 §2 的路由清单与 [http-routes.json](http-routes.json) 才是管理路由的权威对照；本步不为管理 API 编造占位 schema。",
-				"OAuth 2.0 / OIDC 协议端点默认关闭（`protocol.enabled=false`），关闭时保留前缀返回普通 404；协议端点使用标准协议响应，不写入本页 OpenAPI，也不被统一业务错误信封包装。",
-				"OIDC Discovery 只声明真实启用的能力；默认关闭时相关路径 404。真实第三方 OIDC 客户端、设备码/扫码真机互操作等未完成验收的边界见 [../guide/login-and-oauth.md](../guide/login-and-oauth.md)。",
+				"OpenAPI 由三部分组成：运行期最小 JSON API（`/healthz`、`/openapi.json`，错误用统一信封）；页面/表单操作（本页 §5）；**协议端点离线 OpenAPI**（[protocol-openapi.json](protocol-openapi.json)，本页 §3 的同源生成物，不影响运行期 `/openapi.json`）。管理 JSON API 的请求/响应模式由管理组契约（[http-openapi-admin.json](http-openapi-admin.json)）定义，§2 路由清单用于交叉核对。",
+				"OAuth 2.0 / OIDC 协议端点默认关闭（`protocol.enabled=false`），关闭时协议命名空间返回普通 404；启用后使用标准协议响应（RFC 6749/6750/7009/7662/8628），**不被统一业务错误信封包装**；自定义扫码端点按 §3.4 例外使用项目信封。",
+				"协议契约与 OpenAPI 段由 `scripts/internal/apidoc/protocol_contract.go` 的同一份表生成：端点/方法/字段/错误/开关与 `internal/protocolapi/doc.go` 端点表及 `routes.go` 条件注册双向核对，不一致或例外未登记时 `scripts/reference -check` 直接失败。",
+				"OIDC Discovery 只声明真实启用的能力（含 `EnableIntrospection`/`EnableDeviceFlow` 条件端点）；扫码扩展与本包设备取消扩展不伪装成标准 Discovery 字段。真实第三方 OIDC 客户端、设备码/扫码真机互操作等未完成验收的边界见 [../guide/login-and-oauth.md](../guide/login-and-oauth.md)。",
 				"管理/托管/客服 API 的授权、对象/字段白名单与审计约束见对应部署文档；不要把管理 API 暴露给业务应用。",
-				"新增/删除路由必须同步更新能力声明（catalog.json）与 OpenAPI 页面契约；未映射的公开符号、能力声明或契约/路由不一致会让 `scripts/reference -check` 失败。",
+				"新增/删除路由必须同步更新能力声明（catalog.json）、页面契约与协议契约；未映射的公开符号、能力声明或契约/路由不一致会让 `scripts/reference -check` 失败。",
 			}),
 		"## 7. 机器可读\n\n"+
-			"- ["+fileHTTPRoutesJSON+"]("+fileHTTPRoutesJSON+")：方法/路径/来源/能力关联的完整机器表。\n"+
-			"- ["+fileHTTPOpenAPIJSON+"]("+fileHTTPOpenAPIJSON+")：与本页同源的 OpenAPI 3 文档（JSON API + 页面/表单操作；秘密字段 writeOnly、示例为合成值）。\n"+
+			"- ["+fileHTTPRoutesJSON+"]("+fileHTTPRoutesJSON+")：方法/路径/来源/能力关联的完整机器表（含协议端点 HTTP 契约与例外登记）。\n"+
+			"- ["+fileHTTPOpenAPIJSON+"]("+fileHTTPOpenAPIJSON+")：页面/表单 OpenAPI 3 文档（秘密字段 writeOnly、示例为合成值）。\n"+
+			"- ["+fileProtocolOpenAPIJSON+"]("+fileProtocolOpenAPIJSON+")：协议端点 OpenAPI 3 文档（OAuth/OIDC/设备码/扫码；标准错误与项目信封分别建模）。\n"+
 			"- 页面 `Access` 列来自 `UIRoute` 字面量；执行时仍由服务端重新判定，台账仅用于契约对照。",
 	)
+}
+
+// successStatusText 汇总成功状态码。
+func successStatusText(statuses []int) string {
+	if len(statuses) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		parts = append(parts, fmt.Sprintf("%d", status))
+	}
+	return strings.Join(parts, "/")
+}
+
+// protocolFieldText 渲染协议字段列表：名称、位置、必填与秘密标注。
+func protocolFieldText(fields []ProtocolField) string {
+	if len(fields) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		text := "`" + field.Name + "`（" + field.In
+		if field.Required {
+			text += "，必填"
+		}
+		if field.Secret {
+			text += "，秘密"
+		}
+		text += "）"
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "、")
 }
 
 // pageOperationCount 返回已登记页面操作数量（模型缺失时返回 0）。

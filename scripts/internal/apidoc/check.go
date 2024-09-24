@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -37,6 +38,11 @@ func Write(root string) ([]string, []string, error) {
 	if model.PageOpenAPI != nil && len(model.PageOpenAPI.Issues) > 0 {
 		return nil, model.PageOpenAPI.Issues, fmt.Errorf(
 			"页面/表单 OpenAPI 契约存在 %d 个与真实路由不一致的问题，拒绝生成文档", len(model.PageOpenAPI.Issues))
+	}
+	if model.ProtocolContract != nil && len(model.ProtocolContract.Issues) > 0 {
+		return nil, model.ProtocolContract.Issues, fmt.Errorf(
+			"协议端点 HTTP 契约存在 %d 个问题（端点/开关/例外/证据/OpenAPI 不一致），拒绝生成文档",
+			len(model.ProtocolContract.Issues))
 	}
 	if countIssues := validateCounts(model); len(countIssues) > 0 {
 		return nil, countIssues, fmt.Errorf(
@@ -121,6 +127,9 @@ func Check(root string) (CheckResult, error) {
 	if model.PageOpenAPI != nil {
 		result.Issues = append(result.Issues, model.PageOpenAPI.Issues...)
 	}
+	if model.ProtocolContract != nil {
+		result.Issues = append(result.Issues, model.ProtocolContract.Issues...)
+	}
 	result.Issues = append(result.Issues, validateCounts(model)...)
 	files, snippetIssues, err := model.Files()
 	if err != nil {
@@ -183,6 +192,8 @@ func Check(root string) (CheckResult, error) {
 			result.Issues = append(result.Issues, fmt.Sprintf("%s 不是合法 JSON", name))
 		}
 	}
+	// 步骤 271：离线 OpenAPI 一致性（重复 schema/失效 $ref/无效示例/跨文档重复路径）。
+	result.Issues = append(result.Issues, validateReferenceOpenAPIDocuments(root, files)...)
 	// 文档相对链接必须可达（生成物内部的交叉引用）。
 	for _, name := range markdownFiles() {
 		rel := referenceDir + "/" + name
@@ -277,4 +288,124 @@ func truncateText(text string, limit int) string {
 		return text
 	}
 	return text[:limit] + "…"
+}
+
+// validateReferenceOpenAPIDocuments 校验 docs/reference 下三份 OpenAPI：
+//   - 页面段（http-openapi.json 内嵌）、协议段（protocol-openapi.json 内嵌）、
+//     管理段（http-openapi-admin.json，由 scripts/adminapi-doc 生成）；
+//   - $ref 可解析、示例合法且不含真实凭据、operationId 重复；
+//   - 跨文档同一「方法+路径」不得重复定义（页面/管理/协议命名空间互斥）；
+//   - 同名 component schema 在不同文档中的定义必须一致，避免同名不同义。
+func validateReferenceOpenAPIDocuments(root string, files map[string][]byte) []string {
+	var issues []string
+	documents := map[string]map[string]any{}
+	for _, name := range []string{fileHTTPOpenAPIJSON, fileProtocolOpenAPIJSON} {
+		raw := files[referenceDir+"/"+name]
+		if raw == nil {
+			continue
+		}
+		var wrapper map[string]any
+		if err := json.Unmarshal(raw, &wrapper); err != nil {
+			issues = append(issues, fmt.Sprintf("%s 不是合法 JSON：%v", name, err))
+			continue
+		}
+		if openapi, ok := wrapper["openapi"].(map[string]any); ok {
+			documents[name] = openapi
+		}
+	}
+	adminPath := filepath.Join(root, filepath.FromSlash(referenceDir), "http-openapi-admin.json")
+	if raw, err := os.ReadFile(adminPath); err != nil {
+		issues = append(issues, "缺少管理 JSON API OpenAPI（http-openapi-admin.json）：由 scripts/adminapi-doc -write 生成")
+	} else {
+		var adminDocument map[string]any
+		if err := json.Unmarshal(raw, &adminDocument); err != nil {
+			issues = append(issues, "http-openapi-admin.json 不是合法 JSON："+err.Error())
+		} else if _, ok := adminDocument["paths"].(map[string]any); ok {
+			documents["http-openapi-admin.json"] = adminDocument
+		} else if openapi, ok := adminDocument["openapi"].(map[string]any); ok {
+			documents["http-openapi-admin.json"] = openapi
+		} else {
+			issues = append(issues, "http-openapi-admin.json 缺少 paths 且无内嵌 openapi 文档")
+		}
+	}
+	operationSets := map[string]string{}
+	schemaDefinitions := map[string]any{}
+	schemaOwner := map[string]string{}
+	for name, document := range documents {
+		issues = append(issues, prefixIssues(validateOpenAPIReferencesAny(document), name)...)
+		issues = append(issues, prefixIssues(validateOpenAPIExamplesAny(document), name)...)
+		if paths, ok := document["paths"].(map[string]any); ok {
+			for path, value := range paths {
+				pathItem, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				for method := range pathItem {
+					upper := strings.ToUpper(method)
+					if !isHTTPMethod(upper) {
+						continue
+					}
+					// 不同文档的挂载命名空间不同：页面/协议是站内路径，管理 JSON API
+					// 契约路径相对管理前缀（实际为 <admin prefix> + path）。比较前统一
+					// 到站内绝对命名空间，避免把“页面 /support/cases”和“管理 API
+					// support/cases”误判为重复操作。
+					namespacePath := path
+					if name == "http-openapi-admin.json" {
+						namespacePath = "/admin/v1" + path
+					}
+					key := upper + " " + namespacePath
+					if existing, ok := operationSets[key]; ok && existing != name {
+						issues = append(issues, fmt.Sprintf(
+							"跨文档重复操作 %s：同时出现在 %s 与 %s（页面/管理/协议命名空间必须互斥）",
+							key, existing, name))
+					}
+					operationSets[key] = name
+				}
+			}
+		}
+		components, _ := document["components"].(map[string]any)
+		definitions, _ := components["schemas"].(map[string]any)
+		for schemaName, definition := range definitions {
+			if previous, ok := schemaDefinitions[schemaName]; ok {
+				if !reflect.DeepEqual(previous, definition) {
+					issues = append(issues, fmt.Sprintf(
+						"同名 schema %s 在 %s 与 %s 中定义不一致（同名不同义）",
+						schemaName, schemaOwner[schemaName], name))
+				}
+				continue
+			}
+			schemaDefinitions[schemaName] = definition
+			schemaOwner[schemaName] = name
+		}
+	}
+	return uniqueSorted(issues)
+}
+
+// prefixIssues 给问题条目加上文档名前缀。
+func prefixIssues(issues []string, name string) []string {
+	prefixed := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		prefixed = append(prefixed, name+"："+issue)
+	}
+	return prefixed
+}
+
+// isHTTPMethod 报告是否为 OpenAPI 支持的 HTTP 方法。
+func isHTTPMethod(method string) bool {
+	switch method {
+	case "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateOpenAPIReferencesAny 校验任意 OpenAPI 文档的 $ref 与 operationId。
+func validateOpenAPIReferencesAny(document map[string]any) []string {
+	return validateOpenAPIReferences(document)
+}
+
+// validateOpenAPIExamplesAny 校验任意 OpenAPI 文档的示例。
+func validateOpenAPIExamplesAny(document map[string]any) []string {
+	return validateOpenAPIExamples(document)
 }

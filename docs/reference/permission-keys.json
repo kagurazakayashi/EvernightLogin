@@ -217,7 +217,10 @@
       "default_roles": [
         "system_admin"
       ],
-      "implemented": false
+      "implemented": true,
+      "capabilities": [
+        "users.direct_management"
+      ]
     },
     {
       "key": "users.password.reset.other",
@@ -230,7 +233,10 @@
       "default_roles": [
         "system_admin"
       ],
-      "implemented": false
+      "implemented": true,
+      "capabilities": [
+        "users.direct_management"
+      ]
     },
     {
       "key": "recovery.request",
@@ -922,7 +928,8 @@
         "reports.generate",
         "session.admin",
         "settings.managed",
-        "support.recovery"
+        "support.recovery",
+        "users.direct_management"
       ]
     },
     {

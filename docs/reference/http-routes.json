@@ -2,10 +2,11 @@
   "schema": "evernight.reference/v1/http-routes",
   "generated_by": "scripts/reference",
   "counts": {
-    "admin_routes": 123,
+    "admin_routes": 137,
     "protocol_paths": 17,
-    "protocol_endpoints": 18,
-    "pages": 245
+    "protocol_endpoints": 19,
+    "protocol_contracts": 19,
+    "pages": 250
   },
   "admin_routes": [
     {
@@ -226,6 +227,14 @@
     },
     {
       "method": "GET",
+      "pattern": "deliveries",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "mail.delivery_console"
+      ]
+    },
+    {
+      "method": "GET",
       "pattern": "diagnostics",
       "source": "internal/serverapp/diagnostics.go",
       "capabilities": [
@@ -294,6 +303,14 @@
       "source": "internal/adminapi/handler.go",
       "capabilities": [
         "adminapi.core"
+      ]
+    },
+    {
+      "method": "GET",
+      "pattern": "notifications/history",
+      "source": "internal/adminapi/handler.go",
+      "capabilities": [
+        "notifications.security_history"
       ]
     },
     {
@@ -890,8 +907,104 @@
     },
     {
       "method": "POST",
+      "pattern": "users/{user_id}/password",
+      "source": "internal/serverapp/admin_direct_password_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/password-verification",
+      "source": "internal/serverapp/admin_direct_password_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/password-verification/cancel",
+      "source": "internal/serverapp/admin_direct_password_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/password-verification/confirm",
+      "source": "internal/serverapp/admin_direct_password_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/password-verification/webauthn/begin",
+      "source": "internal/serverapp/admin_direct_password_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/password-verification/webauthn/confirm",
+      "source": "internal/serverapp/admin_direct_password_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
       "pattern": "users/{user_id}/state",
       "source": "internal/serverapp/admin_domain_writes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/username",
+      "source": "internal/serverapp/admin_direct_username_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/username-verification",
+      "source": "internal/serverapp/admin_direct_username_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/username-verification/cancel",
+      "source": "internal/serverapp/admin_direct_username_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/username-verification/confirm",
+      "source": "internal/serverapp/admin_direct_username_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/username-verification/webauthn/begin",
+      "source": "internal/serverapp/admin_direct_username_routes.go",
+      "capabilities": [
+        "account.users"
+      ]
+    },
+    {
+      "method": "POST",
+      "pattern": "users/{user_id}/username-verification/webauthn/confirm",
+      "source": "internal/serverapp/admin_direct_username_routes.go",
       "capabilities": [
         "account.users"
       ]
@@ -1135,6 +1248,1153 @@
     {
       "method": "GET",
       "path": "/oauth/userinfo"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/userinfo"
+    }
+  ],
+  "protocol_contracts": [
+    {
+      "method": "GET",
+      "path": "/.well-known/openid-configuration",
+      "summary": "OIDC Discovery：只声明真实启用的能力",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true（默认 false，关闭时协议命名空间 404）",
+      "transport_kind": "json-standard",
+      "response_content_type": "application/json",
+      "client_auth": "无（公开只读）",
+      "session_auth": "无",
+      "audience": "issuer（部署公开基址）",
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "404（协议未启用）",
+        "405（非 GET）"
+      ],
+      "discovery_declared": "是（文档自身）",
+      "notes": [
+        "只声明已启用端点与能力；不声明 end_session/PAR/动态注册/CIBA/token exchange 等未实现项。",
+        "缓存由宿主中间件决定；本包不设置 CORS。"
+      ],
+      "evidence": [
+        "internal/protocolapi/discovery.go:只声明",
+        "internal/protocolapi/doc.go:未实现 OIDC 会话管理"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/jwks",
+      "summary": "JWT 签名公钥（JWKS）",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true",
+      "transport_kind": "json-standard",
+      "response_content_type": "application/json",
+      "client_auth": "无（公开只读）",
+      "session_auth": "无",
+      "audience": "issuer",
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "404（协议未启用）",
+        "405（非 GET）"
+      ],
+      "discovery_declared": "是（jwks_uri）",
+      "notes": [
+        "只含公钥与 kid/alg（ES256）；不含私钥材料。"
+      ],
+      "evidence": [
+        "internal/protocolapi/protocolapi.go:PathJWKS"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/authorize",
+      "summary": "授权端点：Cookie 会话 → 最小同意页（浏览器流程）",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true",
+      "transport_kind": "browser-redirect",
+      "response_content_type": "text/html（同意页）或 303 Location",
+      "client_auth": "公开/保密客户端均可（PKCE 必填；不支持 implicit/password）",
+      "session_auth": "真实浏览器会话 Cookie（或 Bearer 会话）；未登录 303 到宿主登录页/受控错误",
+      "audience": "token 响应中的 audience 由授权请求/应用配置决定",
+      "request_fields": [
+        {
+          "name": "response_type",
+          "in": "query",
+          "required": true,
+          "summary": "固定 code（仅授权码流程）"
+        },
+        {
+          "name": "client_id",
+          "in": "query",
+          "required": true
+        },
+        {
+          "name": "redirect_uri",
+          "in": "query",
+          "required": true,
+          "summary": "必须已登记且逐字节匹配"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "required": false
+        },
+        {
+          "name": "state",
+          "in": "query",
+          "required": false
+        },
+        {
+          "name": "code_challenge",
+          "in": "query",
+          "required": true,
+          "summary": "S256 PKCE；plain 被拒绝"
+        },
+        {
+          "name": "code_challenge_method",
+          "in": "query",
+          "required": true,
+          "summary": "S256"
+        },
+        {
+          "name": "login_path",
+          "in": "query",
+          "required": false,
+          "summary": "未登录时宿主登录页（只能站内相对路径）"
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "state",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "code",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "error",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "error_description",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200,
+        303
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "unauthorized_client",
+        "unsupported_response_type",
+        "invalid_scope",
+        "server_error",
+        "temporarily_unavailable",
+        "access_denied"
+      ],
+      "discovery_declared": "是（authorization_endpoint）",
+      "notes": [
+        "无效 client_id/redirect_uri 不重定向，返回 JSON 错误（不得开放重定向）；其余错误只在已登记回调上用 error 参数 303 重定向。",
+        "同意页是内置窄 HTML；GET 只创建待确认请求，绝不自动批准。"
+      ],
+      "evidence": [
+        "internal/protocolapi/authorize.go:handleAuthorizeGet",
+        "internal/protocolapi/doc.go:无效 client_id/redirect_uri 不重定向"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/authorize",
+      "summary": "同意/拒绝决定（浏览器表单 + 会话 + CSRF）",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true",
+      "transport_kind": "browser-redirect",
+      "request_content_type": "application/x-www-form-urlencoded",
+      "response_content_type": "303 Location 或 application/json（错误）",
+      "client_auth": "沿用授权请求的客户端登记",
+      "session_auth": "同一浏览器会话 + 会话绑定 CSRF 令牌 +（携带时）同源 Origin",
+      "audience": "同授权请求",
+      "request_fields": [
+        {
+          "name": "request_id",
+          "in": "form",
+          "required": true,
+          "summary": "授权请求确认编号"
+        },
+        {
+          "name": "decision",
+          "in": "form",
+          "required": true,
+          "summary": "approve|deny"
+        },
+        {
+          "name": "csrf_token",
+          "in": "form",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "success_statuses": [
+        303
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "access_denied",
+        "server_error"
+      ],
+      "discovery_declared": "-",
+      "notes": [
+        "批准/拒绝是显式决定；CSRF 与 Origin 两类校验不可互相替代。"
+      ],
+      "evidence": [
+        "internal/protocolapi/authorize.go:handleAuthorizeDecision"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/device/cancel",
+      "summary": "设备授权取消（本包扩展，显式启用）",
+      "registration": "device",
+      "enabled_when": "protocol.enabled=true 且 EnableDeviceFlow=true",
+      "transport_kind": "json-standard",
+      "request_content_type": "application/x-www-form-urlencoded",
+      "response_content_type": "无（204 No Content）",
+      "client_auth": "必须绑定申请时的同一 client_id；保密客户端还需客户端认证",
+      "session_auth": "无",
+      "audience": "不改变用户已授予的授权",
+      "request_fields": [
+        {
+          "name": "device_code",
+          "in": "form",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "success_statuses": [
+        204
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "invalid_client",
+        "access_denied"
+      ],
+      "discovery_declared": "否（本包扩展，不在 OIDC 标准 Discovery 字段中）",
+      "notes": [
+        "扩展端点只在 Discovery 说明或部署文档中出现，不伪造标准字段。"
+      ],
+      "evidence": [
+        "internal/protocolapi/device.go:handleDeviceCancel"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/device_authorization",
+      "summary": "设备授权申请（RFC 8628，显式启用）",
+      "registration": "device",
+      "enabled_when": "protocol.enabled=true 且 EnableDeviceFlow=true（需 DeviceVerificationURI）",
+      "transport_kind": "json-standard",
+      "request_content_type": "application/x-www-form-urlencoded",
+      "response_content_type": "application/json",
+      "client_auth": "客户端认证（设备为公开客户端时可仅 client_id）",
+      "session_auth": "无",
+      "audience": "设备码最终签发令牌的 audience 由授权请求决定",
+      "request_fields": [
+        {
+          "name": "client_id",
+          "in": "form",
+          "required": false
+        },
+        {
+          "name": "scope",
+          "in": "form",
+          "required": false
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "device_code",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "user_code",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "verification_uri",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "expires_in",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "interval",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "invalid_client",
+        "unsupported_grant_type",
+        "temporarily_unavailable"
+      ],
+      "discovery_declared": "是（device_authorization_endpoint，仅启用时）",
+      "notes": [
+        "device_code/短码只在申请响应出现一次；短码只存 keyed HMAC 摘要。",
+        "轮询由 /oauth/token 的 device_code grant 完成，服务端强制 interval/slow_down。"
+      ],
+      "evidence": [
+        "internal/protocolapi/routes.go:enabledDevice",
+        "internal/protocolapi/device.go:handleDeviceAuthorization"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/introspect",
+      "summary": "令牌状态查询（RFC 7662，显式启用）",
+      "registration": "introspection",
+      "enabled_when": "protocol.enabled=true 且 EnableIntrospection=true（依赖 InspectAuthorizer/InspectClientAuthorizer）",
+      "transport_kind": "json-standard",
+      "request_content_type": "application/x-www-form-urlencoded",
+      "response_content_type": "application/json",
+      "client_auth": "资源服务器客户端认证（client_secret_basic/post 或已验证 TLS 证书）",
+      "session_auth": "无",
+      "audience": "由请求 audience/resource 声明，披露裁剪由注入 Authorizer 判定",
+      "request_fields": [
+        {
+          "name": "token",
+          "in": "form",
+          "required": true,
+          "secret": true
+        },
+        {
+          "name": "token_type_hint",
+          "in": "form",
+          "required": false
+        },
+        {
+          "name": "audience",
+          "in": "form",
+          "required": false
+        },
+        {
+          "name": "resource",
+          "in": "form",
+          "required": false
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "active",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "scope",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "client_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "sub",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "aud",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "exp",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "invalid_client",
+        "invalid_token",
+        "temporarily_unavailable"
+      ],
+      "discovery_declared": "是（introspection_endpoint，仅启用时）",
+      "notes": [
+        "ResourceServerClientID 只来自真实客户端认证结果，不来自请求自报。",
+        "未启用时端点不注册（404），Discovery 不声明。"
+      ],
+      "evidence": [
+        "internal/protocolapi/routes.go:enabledInspect",
+        "internal/protocolapi/token.go:handleIntrospect"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/cancel",
+      "summary": "扫码登录：原发起端取消",
+      "registration": "qr",
+      "enabled_when": "protocol.enabled=true 且注入 QRLogin 服务",
+      "transport_kind": "json-project-envelope",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json（成功 data；错误项目统一信封）",
+      "client_auth": "持有一次性领取绑定的原发起端",
+      "session_auth": "无",
+      "audience": "只取消该请求，不影响已领取会话",
+      "request_fields": [
+        {
+          "name": "request_id",
+          "in": "json",
+          "required": true
+        },
+        {
+          "name": "claim_secret",
+          "in": "json",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "status",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "expires_at",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "project_error_codes": [
+        "REQ_INVALID",
+        "ACCESS_DENIED",
+        "CONFLICT",
+        "INTERNAL_ERROR"
+      ],
+      "discovery_declared": "否",
+      "evidence": [
+        "internal/protocolapi/qr.go:handleQRCancel"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/claim",
+      "summary": "扫码登录：原发起端领取目标应用会话",
+      "registration": "qr",
+      "enabled_when": "protocol.enabled=true 且注入 QRLogin 服务",
+      "transport_kind": "json-project-envelope",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json（成功 data；错误项目统一信封；会话 Cookie）",
+      "client_auth": "持有正确领取绑定且请求已批准/未过期的原发起端",
+      "session_auth": "无（领取后写入目标应用会话 Cookie）",
+      "audience": "只签发目标应用会话，不是发起者长期 Token",
+      "request_fields": [
+        {
+          "name": "request_id",
+          "in": "json",
+          "required": true
+        },
+        {
+          "name": "claim_secret",
+          "in": "json",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "status",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "user_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "session_id",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "app_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "expires_at",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "project_error_codes": [
+        "REQ_INVALID",
+        "ACCESS_DENIED",
+        "RESOURCE_FORBIDDEN",
+        "CONFLICT",
+        "GONE",
+        "INTERNAL_ERROR"
+      ],
+      "discovery_declared": "否",
+      "notes": [
+        "领取只能成功一次；跨用户/无绑定 410；正文绝不返回会话秘密或 Token。"
+      ],
+      "evidence": [
+        "internal/protocolapi/qr.go:handleQRClaim"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/decision",
+      "summary": "扫码登录：确认端批准/拒绝（会话 + CSRF + Origin）",
+      "registration": "qr",
+      "enabled_when": "protocol.enabled=true 且注入 QRLogin 服务",
+      "transport_kind": "json-project-envelope",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json（成功 data；错误项目统一信封）",
+      "client_auth": "无",
+      "session_auth": "真实完整会话 + 会话绑定 CSRF（Cookie 会话）；Origin/Referer 至少一个存在并与 issuer 同源",
+      "audience": "批准绑定用户+会话+安全版本快照；批准前按敏感策略要求近期认证",
+      "request_fields": [
+        {
+          "name": "request_id",
+          "in": "json",
+          "required": true
+        },
+        {
+          "name": "decision",
+          "in": "json",
+          "required": true,
+          "summary": "approve|deny"
+        },
+        {
+          "name": "csrf_token",
+          "in": "json",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "status",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "request_id",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "project_error_codes": [
+        "AUTH_FAILED",
+        "REQ_INVALID",
+        "ACCESS_DENIED",
+        "RESOURCE_FORBIDDEN",
+        "REAUTH_REQUIRED",
+        "INTERNAL_ERROR"
+      ],
+      "discovery_declared": "否",
+      "notes": [
+        "缺少 Origin/Referer 直接 403（纵深防御）；批准页由宿主页面层实现，本端点不提供页面。"
+      ],
+      "evidence": [
+        "internal/protocolapi/qr.go:handleQRDecision"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/qr/prompt",
+      "summary": "扫码登录：确认端读取受控上下文（会话）",
+      "registration": "qr",
+      "enabled_when": "protocol.enabled=true 且注入 QRLogin 服务",
+      "transport_kind": "json-project-envelope",
+      "response_content_type": "application/json（成功 data；错误项目统一信封）",
+      "client_auth": "无",
+      "session_auth": "真实完整会话（Cookie/Bearer）",
+      "audience": "只读受控上下文，不返回秘密、不构成批准",
+      "request_fields": [
+        {
+          "name": "request_id",
+          "in": "query",
+          "required": true
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "request_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "client_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "application_name",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "scopes",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "status",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "warning",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "project_error_codes": [
+        "AUTH_FAILED",
+        "REQ_INVALID",
+        "ACCESS_DENIED",
+        "RESOURCE_FORBIDDEN",
+        "INTERNAL_ERROR"
+      ],
+      "discovery_declared": "否",
+      "notes": [
+        "不存在/无权限统一错误，避免探测他人请求；不返回 claim_secret。"
+      ],
+      "evidence": [
+        "internal/protocolapi/qr.go:handleQRPrompt"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/regenerate",
+      "summary": "扫码登录：重新生成二维码（旧绑定立即失效）",
+      "registration": "qr",
+      "enabled_when": "protocol.enabled=true 且注入 QRLogin 服务",
+      "transport_kind": "json-project-envelope",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json（成功 data；错误项目统一信封）",
+      "client_auth": "持有一次性领取绑定的原发起端",
+      "session_auth": "无",
+      "audience": "同一事务内取消旧请求并创建新请求",
+      "request_fields": [
+        {
+          "name": "request_id",
+          "in": "json",
+          "required": true
+        },
+        {
+          "name": "claim_secret",
+          "in": "json",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "request_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "qr_payload",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "claim_secret",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "expires_at",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "project_error_codes": [
+        "REQ_INVALID",
+        "ACCESS_DENIED",
+        "RESOURCE_FORBIDDEN",
+        "CONFLICT",
+        "INTERNAL_ERROR"
+      ],
+      "discovery_declared": "否",
+      "evidence": [
+        "internal/protocolapi/qr.go:handleQRRegenerate"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/request",
+      "summary": "扫码登录：匿名发起端创建请求（一次性领取绑定）",
+      "registration": "qr",
+      "enabled_when": "protocol.enabled=true 且注入 QRLogin 服务",
+      "transport_kind": "json-project-envelope",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json（成功 data；错误项目统一信封）",
+      "client_auth": "仅允许登记/允许的 QRClientID（可请求体声明，服务端复核）",
+      "session_auth": "无（匿名）",
+      "audience": "扫码成功后签发目标应用会话 Cookie，不签发 OAuth Token",
+      "request_fields": [
+        {
+          "name": "client_id",
+          "in": "json",
+          "required": false
+        },
+        {
+          "name": "scopes",
+          "in": "json",
+          "required": false
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "request_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "qr_payload",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "claim_secret",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "expires_at",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "poll_interval_seconds",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "project_error_codes": [
+        "REQ_INVALID",
+        "ACCESS_DENIED",
+        "RATE_LIMITED",
+        "INTERNAL_ERROR"
+      ],
+      "discovery_declared": "否（项目扩展；Discovery 不声明扫码端点）",
+      "notes": [
+        "二维码载荷只含 request_id，不含令牌/会话秘密/领取绑定。",
+        "claim_secret 只出现一次；共享缓存/日志不得记录响应正文。"
+      ],
+      "evidence": [
+        "internal/protocolapi/qr.go:handleQRRequest",
+        "internal/protocolapi/routes.go:QRLogin != nil"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/qr/status",
+      "summary": "扫码登录：原发起端轮询状态（需 request_id + claim_secret）",
+      "registration": "qr",
+      "enabled_when": "protocol.enabled=true 且注入 QRLogin 服务",
+      "transport_kind": "json-project-envelope",
+      "request_content_type": "application/json",
+      "response_content_type": "application/json（成功 data；错误项目统一信封）",
+      "client_auth": "持有一次性领取绑定的原发起端（无客户端密钥）",
+      "session_auth": "无",
+      "audience": "状态含 retry_after_seconds；服务端强制最小查询间隔",
+      "request_fields": [
+        {
+          "name": "request_id",
+          "in": "json",
+          "required": true
+        },
+        {
+          "name": "claim_secret",
+          "in": "json",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "request_id",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "status",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "retry_after_seconds",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "expires_at",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "project_error_codes": [
+        "REQ_INVALID",
+        "ACCESS_DENIED",
+        "RESOURCE_FORBIDDEN",
+        "CONFLICT",
+        "INTERNAL_ERROR"
+      ],
+      "discovery_declared": "否",
+      "notes": [
+        "不存在的请求与无绑定请求使用同一受控错误，避免探测他人请求。"
+      ],
+      "evidence": [
+        "internal/protocolapi/qr.go:handleQRStatus"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/revoke",
+      "summary": "令牌撤销（RFC 7009）",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true",
+      "transport_kind": "json-standard",
+      "request_content_type": "application/x-www-form-urlencoded",
+      "response_content_type": "application/json（通常 200 空体）",
+      "client_auth": "与令牌端点相同的客户端认证",
+      "session_auth": "无",
+      "audience": "遍历 access/refresh token 的撤销状态由 oauthflow 判定",
+      "request_fields": [
+        {
+          "name": "token",
+          "in": "form",
+          "required": true,
+          "secret": true
+        },
+        {
+          "name": "token_type_hint",
+          "in": "form",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "invalid_client",
+        "unsupported_token_type"
+      ],
+      "discovery_declared": "是（revocation_endpoint）",
+      "notes": [
+        "撤销是幂等语义；未知 token 不披露存在性（200）。"
+      ],
+      "evidence": [
+        "internal/protocolapi/token.go:handleRevoke"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token",
+      "summary": "令牌端点：授权码/刷新令牌/客户端凭证/设备码（标准 JSON，表单请求）",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true",
+      "transport_kind": "json-standard",
+      "request_content_type": "application/x-www-form-urlencoded",
+      "response_content_type": "application/json",
+      "client_auth": "保密客户端：client_secret_basic / client_secret_post / 已验证 TLS 客户端证书（三选一）；公开客户端 PKCE",
+      "session_auth": "无",
+      "audience": "由 grant/授权请求与 resource/audience 参数决定；不发无 audience 的万能令牌",
+      "request_fields": [
+        {
+          "name": "grant_type",
+          "in": "form",
+          "required": true,
+          "summary": "authorization_code|refresh_token|client_credentials|urn:ietf:params:oauth:grant-type:device_code"
+        },
+        {
+          "name": "code",
+          "in": "form",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "redirect_uri",
+          "in": "form",
+          "required": false
+        },
+        {
+          "name": "code_verifier",
+          "in": "form",
+          "required": false,
+          "secret": true,
+          "summary": "PKCE S256"
+        },
+        {
+          "name": "refresh_token",
+          "in": "form",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "device_code",
+          "in": "form",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "scope",
+          "in": "form",
+          "required": false
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "access_token",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "token_type",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "expires_in",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "refresh_token",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "id_token",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "scope",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "invalid_client",
+        "invalid_grant",
+        "unauthorized_client",
+        "unsupported_grant_type",
+        "invalid_scope",
+        "authorization_pending",
+        "slow_down",
+        "access_denied",
+        "expired_token",
+        "temporarily_unavailable"
+      ],
+      "discovery_declared": "是（token_endpoint；grant_types_supported 只列真实支持项）",
+      "notes": [
+        "一次请求只能使用一种客户端认证方式；重复参数/未知参数按 invalid_request 拒绝。",
+        "响应 no-store；成功=签发事实，审计不可用时返回 temporarily_unavailable。"
+      ],
+      "evidence": [
+        "internal/protocolapi/token.go:handleToken",
+        "internal/protocolapi/doc.go:client_secret_basic/post"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token/authorize",
+      "summary": "宿主注入的一次性授权处理器（仅 TokenAuthorize 非空时挂载）",
+      "registration": "token-authorize-hook",
+      "enabled_when": "protocol.enabled=true 且宿主注入 TokenAuthorize 处理器（本包不内置实现）",
+      "transport_kind": "json-standard",
+      "request_content_type": "application/x-www-form-urlencoded",
+      "response_content_type": "application/json 或宿主定义（取决于注入处理器）",
+      "client_auth": "由注入处理器与真实服务判定（不得自行信任请求参数）",
+      "session_auth": "由注入处理器判定",
+      "audience": "本包只负责路由与请求边界；授权/audience/审计由宿主处理器负责",
+      "success_statuses": [
+        200
+      ],
+      "discovery_declared": "否（宿主扩展，不写入 Discovery）",
+      "notes": [
+        "该端点只登记路径常量与条件注册：没有注入处理器时不会挂载（404），不能按“存在路径常量”认为可用。",
+        "处理器由宿主装配，契约字段/响应以宿主实现为准；本包不伪造成功。"
+      ],
+      "evidence": [
+        "internal/protocolapi/routes.go:TokenAuthorize != nil"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/userinfo",
+      "summary": "OIDC UserInfo（Authorization: Bearer）",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true",
+      "transport_kind": "json-standard",
+      "response_content_type": "application/json",
+      "client_auth": "Access Token 的客户端/audience 校验由令牌与授权服务判定",
+      "session_auth": "无；只接受 Authorization: Bearer",
+      "audience": "access token 的 aud 必须覆盖 UserInfo 资源服务",
+      "request_fields": [
+        {
+          "name": "Authorization",
+          "in": "header",
+          "required": true,
+          "secret": true,
+          "summary": "Bearer \u003caccess_token\u003e"
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "sub",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "name",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "preferred_username",
+          "in": "body",
+          "required": false
+        },
+        {
+          "name": "email",
+          "in": "body",
+          "required": false,
+          "secret": true
+        },
+        {
+          "name": "email_verified",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "invalid_token",
+        "insufficient_scope"
+      ],
+      "discovery_declared": "是（userinfo_endpoint）",
+      "notes": [
+        "查询串/请求体里的令牌被拒绝（避免进 URL/日志）；ID Token 不能冒充 Access Token。",
+        "错误响应带 RFC 6750 WWW-Authenticate 挑战。"
+      ],
+      "evidence": [
+        "internal/protocolapi/token.go:handleUserInfo",
+        "internal/protocolapi/token.go:只从 Authorization: Bearer 读取"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/userinfo",
+      "summary": "OIDC UserInfo（POST 兼容）",
+      "registration": "always",
+      "enabled_when": "protocol.enabled=true",
+      "transport_kind": "json-standard",
+      "response_content_type": "application/json",
+      "client_auth": "同 GET /oauth/userinfo",
+      "session_auth": "无；只接受 Authorization: Bearer",
+      "audience": "同 GET /oauth/userinfo",
+      "request_fields": [
+        {
+          "name": "Authorization",
+          "in": "header",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "response_fields": [
+        {
+          "name": "sub",
+          "in": "body",
+          "required": false
+        }
+      ],
+      "success_statuses": [
+        200
+      ],
+      "standard_errors": [
+        "invalid_request",
+        "invalid_token",
+        "insufficient_scope"
+      ],
+      "discovery_declared": "是（userinfo_endpoint；GET/POST 均支持）",
+      "notes": [
+        "POST 不把令牌放进请求体；请求体参数被忽略/拒绝。"
+      ],
+      "evidence": [
+        "internal/protocolapi/token.go:MethodPost"
+      ]
     }
   ],
   "pages": [
@@ -2632,6 +3892,16 @@
       ]
     },
     {
+      "name": "admin.tasks",
+      "method": "GET",
+      "path": "/admin/tasks",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
       "name": "admin.user_batch",
       "method": "GET",
       "path": "/admin/users/batch",
@@ -2755,6 +4025,46 @@
       "name": "admin.user_import.submit",
       "method": "POST",
       "path": "/admin/users/import",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_password_reset",
+      "method": "GET",
+      "path": "/admin/users/password-reset",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_password_reset.submit",
+      "method": "POST",
+      "path": "/admin/users/password-reset",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_rename",
+      "method": "GET",
+      "path": "/admin/users/rename",
+      "access": "UIAccessManagement",
+      "source": "ui/pages_admin.go",
+      "capabilities": [
+        "ui.admin_pages"
+      ]
+    },
+    {
+      "name": "admin.user_rename.submit",
+      "method": "POST",
+      "path": "/admin/users/rename",
       "access": "UIAccessManagement",
       "source": "ui/pages_admin.go",
       "capabilities": [

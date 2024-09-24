@@ -11,7 +11,7 @@
 - 请求身份必须来自可信边界（Cookie/Authorization/宿主服务端存储）；请求参数不能自称管理员、root、应用或用户。
 - `Host`、可信代理、TLS/mTLS 与公开基址使用同一套配置规则（`server.public_base_url`、`server.trusted_proxies`、`server.tls_terminating_proxy`）。
 
-## 2. 管理 JSON API 路由（123 条，相对管理前缀）
+## 2. 管理 JSON API 路由（137 条，相对管理前缀）
 
 | 方法 | 路径模式 | 关联能力 | 定义位置 |
 |---|---|---|---|
@@ -42,6 +42,7 @@
 | GET | `backups/schedules` | backup.restore | `internal/adminapi/handler.go` |
 | GET | `backups/schedules/{schedule_id}` | backup.restore | `internal/adminapi/handler.go` |
 | GET | `backups/{backup_id}` | backup.restore | `internal/adminapi/handler.go` |
+| GET | `deliveries` | mail.delivery_console | `internal/adminapi/handler.go` |
 | GET | `diagnostics` | diagnostics.operations | `internal/serverapp/diagnostics.go` |
 | GET | `diagnostics/errors` | diagnostics.operations | `internal/serverapp/diagnostics.go` |
 | GET | `diagnostics/export` | diagnostics.operations | `internal/serverapp/diagnostics.go` |
@@ -51,6 +52,7 @@
 | GET | `groups/{group_id}/members` | rbac.roles_permissions | `internal/serverapp/admin_domain_routes.go` |
 | GET | `meta` | adminapi.core | `internal/adminapi/handler.go` |
 | GET | `notifications` | adminapi.core | `internal/adminapi/handler.go` |
+| GET | `notifications/history` | notifications.security_history | `internal/adminapi/handler.go` |
 | GET | `permissions` | rbac.roles_permissions | `internal/serverapp/admin_domain_routes.go` |
 | GET | `report-plans` | reports.generate | `internal/adminapi/handler.go` |
 | GET | `report-plans/{plan_id}` | reports.generate | `internal/adminapi/handler.go` |
@@ -125,7 +127,19 @@
 | POST | `users` | account.users | `internal/serverapp/admin_domain_writes.go` |
 | POST | `users/{user_id}/delete` | account.users | `internal/serverapp/admin_domain_writes2.go` |
 | POST | `users/{user_id}/delete-preview` | account.users | `internal/serverapp/admin_domain_writes2.go` |
+| POST | `users/{user_id}/password` | account.users | `internal/serverapp/admin_direct_password_routes.go` |
+| POST | `users/{user_id}/password-verification` | account.users | `internal/serverapp/admin_direct_password_routes.go` |
+| POST | `users/{user_id}/password-verification/cancel` | account.users | `internal/serverapp/admin_direct_password_routes.go` |
+| POST | `users/{user_id}/password-verification/confirm` | account.users | `internal/serverapp/admin_direct_password_routes.go` |
+| POST | `users/{user_id}/password-verification/webauthn/begin` | account.users | `internal/serverapp/admin_direct_password_routes.go` |
+| POST | `users/{user_id}/password-verification/webauthn/confirm` | account.users | `internal/serverapp/admin_direct_password_routes.go` |
 | POST | `users/{user_id}/state` | account.users | `internal/serverapp/admin_domain_writes.go` |
+| POST | `users/{user_id}/username` | account.users | `internal/serverapp/admin_direct_username_routes.go` |
+| POST | `users/{user_id}/username-verification` | account.users | `internal/serverapp/admin_direct_username_routes.go` |
+| POST | `users/{user_id}/username-verification/cancel` | account.users | `internal/serverapp/admin_direct_username_routes.go` |
+| POST | `users/{user_id}/username-verification/confirm` | account.users | `internal/serverapp/admin_direct_username_routes.go` |
+| POST | `users/{user_id}/username-verification/webauthn/begin` | account.users | `internal/serverapp/admin_direct_username_routes.go` |
+| POST | `users/{user_id}/username-verification/webauthn/confirm` | account.users | `internal/serverapp/admin_direct_username_routes.go` |
 | POST | `users/{user_id}/validity` | account.users | `internal/serverapp/admin_validity_routes.go` |
 | PUT | `applications/{application_id}` | applications.manage | `internal/serverapp/admin_domain_writes.go` |
 | PUT | `applications/{application_id}/managed-policy` | applications.manage | `internal/serverapp/admin_domain_writes2.go` |
@@ -139,7 +153,11 @@
 | PUT | `roles/{role_id}/permissions` | rbac.roles_permissions | `internal/serverapp/admin_domain_writes2.go` |
 | PUT | `settings` | settings.managed | `internal/serverapp/settings.go` |
 
-## 3. OAuth 2.0 / OIDC 协议路径常量（17 个）
+## 3. OAuth 2.0 / OIDC 协议端点契约（默认关闭；关闭时命名空间 404）
+
+协议端点使用标准协议响应（RFC 6749/6750/7009/7662/8628），**不是**统一业务错误信封；自定义扫码端点例外使用项目信封。授权端点属浏览器重定向流程，其余端点返回 JSON。
+
+### 3.1 协议路径常量（17 个）
 
 | 常量名 | 路径 |
 |---|---|
@@ -161,30 +179,72 @@
 | PathTokenAuthorize | `/oauth/token/authorize` |
 | PathUserInfo | `/oauth/userinfo` |
 
-### 3.1 协议包文档声明的端点（18 个）
+### 3.2 端点 HTTP 契约（19 个；与 doc.go 端点表双向一致）
 
-| 方法 | 路径 |
-|---|---|
-| GET | `/.well-known/openid-configuration` |
-| GET | `/jwks` |
-| GET | `/oauth/authorize` |
-| POST | `/oauth/authorize` |
-| POST | `/oauth/device/cancel` |
-| POST | `/oauth/device_authorization` |
-| POST | `/oauth/introspect` |
-| POST | `/oauth/qr/cancel` |
-| POST | `/oauth/qr/claim` |
-| POST | `/oauth/qr/decision` |
-| GET | `/oauth/qr/prompt` |
-| POST | `/oauth/qr/regenerate` |
-| POST | `/oauth/qr/request` |
-| POST | `/oauth/qr/status` |
-| POST | `/oauth/revoke` |
-| POST | `/oauth/token` |
-| POST | `/oauth/token/authorize` |
-| GET | `/oauth/userinfo` |
+| 方法 | 路径 | 注册条件 | 传输 / 成功状态 | 客户端认证 | 会话/浏览器 | 协议错误 | Discovery 声明 |
+|---|---|---|---|---|---|---|---|
+| GET | `/.well-known/openid-configuration` | protocol.enabled=true（默认 false，关闭时协议命名空间 404） | json-standard / 200 | 无（公开只读） | 无 | 404（协议未启用）、405（非 GET） | 是（文档自身） |
+| GET | `/jwks` | protocol.enabled=true | json-standard / 200 | 无（公开只读） | 无 | 404（协议未启用）、405（非 GET） | 是（jwks_uri） |
+| GET | `/oauth/authorize` | protocol.enabled=true | browser-redirect / 200/303 | 公开/保密客户端均可（PKCE 必填；不支持 implicit/password） | 真实浏览器会话 Cookie（或 Bearer 会话）；未登录 303 到宿主登录页/受控错误 | invalid_request、unauthorized_client、unsupported_response_type、invalid_scope、server_error、temporarily_unavailable、access_denied | 是（authorization_endpoint） |
+| POST | `/oauth/authorize` | protocol.enabled=true | browser-redirect / 303 | 沿用授权请求的客户端登记 | 同一浏览器会话 + 会话绑定 CSRF 令牌 +（携带时）同源 Origin | invalid_request、access_denied、server_error | - |
+| POST | `/oauth/device/cancel` | protocol.enabled=true 且 EnableDeviceFlow=true | json-standard / 204 | 必须绑定申请时的同一 client_id；保密客户端还需客户端认证 | 无 | invalid_request、invalid_client、access_denied | 否（本包扩展，不在 OIDC 标准 Discovery 字段中） |
+| POST | `/oauth/device_authorization` | protocol.enabled=true 且 EnableDeviceFlow=true（需 DeviceVerificationURI） | json-standard / 200 | 客户端认证（设备为公开客户端时可仅 client_id） | 无 | invalid_request、invalid_client、unsupported_grant_type、temporarily_unavailable | 是（device_authorization_endpoint，仅启用时） |
+| POST | `/oauth/introspect` | protocol.enabled=true 且 EnableIntrospection=true（依赖 InspectAuthorizer/InspectClientAuthorizer） | json-standard / 200 | 资源服务器客户端认证（client_secret_basic/post 或已验证 TLS 证书） | 无 | invalid_request、invalid_client、invalid_token、temporarily_unavailable | 是（introspection_endpoint，仅启用时） |
+| POST | `/oauth/qr/cancel` | protocol.enabled=true 且注入 QRLogin 服务 | json-project-envelope / 200 | 持有一次性领取绑定的原发起端 | 无 | 项目信封：REQ_INVALID、ACCESS_DENIED、CONFLICT、INTERNAL_ERROR | 否 |
+| POST | `/oauth/qr/claim` | protocol.enabled=true 且注入 QRLogin 服务 | json-project-envelope / 200 | 持有正确领取绑定且请求已批准/未过期的原发起端 | 无（领取后写入目标应用会话 Cookie） | 项目信封：REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、CONFLICT、GONE、INTERNAL_ERROR | 否 |
+| POST | `/oauth/qr/decision` | protocol.enabled=true 且注入 QRLogin 服务 | json-project-envelope / 200 | 无 | 真实完整会话 + 会话绑定 CSRF（Cookie 会话）；Origin/Referer 至少一个存在并与 issuer 同源 | 项目信封：AUTH_FAILED、REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、REAUTH_REQUIRED、INTERNAL_ERROR | 否 |
+| GET | `/oauth/qr/prompt` | protocol.enabled=true 且注入 QRLogin 服务 | json-project-envelope / 200 | 无 | 真实完整会话（Cookie/Bearer） | 项目信封：AUTH_FAILED、REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、INTERNAL_ERROR | 否 |
+| POST | `/oauth/qr/regenerate` | protocol.enabled=true 且注入 QRLogin 服务 | json-project-envelope / 200 | 持有一次性领取绑定的原发起端 | 无 | 项目信封：REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、CONFLICT、INTERNAL_ERROR | 否 |
+| POST | `/oauth/qr/request` | protocol.enabled=true 且注入 QRLogin 服务 | json-project-envelope / 200 | 仅允许登记/允许的 QRClientID（可请求体声明，服务端复核） | 无（匿名） | 项目信封：REQ_INVALID、ACCESS_DENIED、RATE_LIMITED、INTERNAL_ERROR | 否（项目扩展；Discovery 不声明扫码端点） |
+| POST | `/oauth/qr/status` | protocol.enabled=true 且注入 QRLogin 服务 | json-project-envelope / 200 | 持有一次性领取绑定的原发起端（无客户端密钥） | 无 | 项目信封：REQ_INVALID、ACCESS_DENIED、RESOURCE_FORBIDDEN、CONFLICT、INTERNAL_ERROR | 否 |
+| POST | `/oauth/revoke` | protocol.enabled=true | json-standard / 200 | 与令牌端点相同的客户端认证 | 无 | invalid_request、invalid_client、unsupported_token_type | 是（revocation_endpoint） |
+| POST | `/oauth/token` | protocol.enabled=true | json-standard / 200 | 保密客户端：client_secret_basic / client_secret_post / 已验证 TLS 客户端证书（三选一）；公开客户端 PKCE | 无 | invalid_request、invalid_client、invalid_grant、unauthorized_client、unsupported_grant_type、invalid_scope、authorization_pending、slow_down、access_denied、expired_token、temporarily_unavailable | 是（token_endpoint；grant_types_supported 只列真实支持项） |
+| POST | `/oauth/token/authorize` | protocol.enabled=true 且宿主注入 TokenAuthorize 处理器（本包不内置实现） | json-standard / 200 | 由注入处理器与真实服务判定（不得自行信任请求参数） | 由注入处理器判定 | - | 否（宿主扩展，不写入 Discovery） |
+| GET | `/oauth/userinfo` | protocol.enabled=true | json-standard / 200 | Access Token 的客户端/audience 校验由令牌与授权服务判定 | 无；只接受 Authorization: Bearer | invalid_request、invalid_token、insufficient_scope | 是（userinfo_endpoint） |
+| POST | `/oauth/userinfo` | protocol.enabled=true | json-standard / 200 | 同 GET /oauth/userinfo | 无；只接受 Authorization: Bearer | invalid_request、invalid_token、insufficient_scope | 是（userinfo_endpoint；GET/POST 均支持） |
 
-## 4. 内置页面命名路由（246 个冻结命名路由）
+### 3.3 请求/响应字段与安全说明
+
+| 端点 | 请求字段 | 响应字段（秘密字段标注） | 说明 |
+|---|---|---|---|
+| GET `/.well-known/openid-configuration` | - | - | 只声明已启用端点与能力；不声明 end_session/PAR/动态注册/CIBA/token exchange 等未实现项。；缓存由宿主中间件决定；本包不设置 CORS。 |
+| GET `/jwks` | - | - | 只含公钥与 kid/alg（ES256）；不含私钥材料。 |
+| GET `/oauth/authorize` | `response_type`（query，必填）、`client_id`（query，必填）、`redirect_uri`（query，必填）、`scope`（query）、`state`（query）、`code_challenge`（query，必填）、`code_challenge_method`（query，必填）、`login_path`（query） | `state`（body）、`code`（body，秘密）、`error`（body）、`error_description`（body） | 无效 client_id/redirect_uri 不重定向，返回 JSON 错误（不得开放重定向）；其余错误只在已登记回调上用 error 参数 303 重定向。；同意页是内置窄 HTML；GET 只创建待确认请求，绝不自动批准。 |
+| POST `/oauth/authorize` | `request_id`（form，必填）、`decision`（form，必填）、`csrf_token`（form，必填，秘密） | - | 批准/拒绝是显式决定；CSRF 与 Origin 两类校验不可互相替代。 |
+| POST `/oauth/device/cancel` | `device_code`（form，必填，秘密） | - | 扩展端点只在 Discovery 说明或部署文档中出现，不伪造标准字段。 |
+| POST `/oauth/device_authorization` | `client_id`（form）、`scope`（form） | `device_code`（body，秘密）、`user_code`（body，秘密）、`verification_uri`（body）、`expires_in`（body）、`interval`（body） | device_code/短码只在申请响应出现一次；短码只存 keyed HMAC 摘要。；轮询由 /oauth/token 的 device_code grant 完成，服务端强制 interval/slow_down。 |
+| POST `/oauth/introspect` | `token`（form，必填，秘密）、`token_type_hint`（form）、`audience`（form）、`resource`（form） | `active`（body）、`scope`（body）、`client_id`（body）、`sub`（body）、`aud`（body）、`exp`（body） | ResourceServerClientID 只来自真实客户端认证结果，不来自请求自报。；未启用时端点不注册（404），Discovery 不声明。 |
+| POST `/oauth/qr/cancel` | `request_id`（json，必填）、`claim_secret`（json，必填，秘密） | `status`（body）、`expires_at`（body） |  |
+| POST `/oauth/qr/claim` | `request_id`（json，必填）、`claim_secret`（json，必填，秘密） | `status`（body）、`user_id`（body）、`session_id`（body，秘密）、`app_id`（body）、`expires_at`（body） | 领取只能成功一次；跨用户/无绑定 410；正文绝不返回会话秘密或 Token。 |
+| POST `/oauth/qr/decision` | `request_id`（json，必填）、`decision`（json，必填）、`csrf_token`（json，必填，秘密） | `status`（body）、`request_id`（body） | 缺少 Origin/Referer 直接 403（纵深防御）；批准页由宿主页面层实现，本端点不提供页面。 |
+| GET `/oauth/qr/prompt` | `request_id`（query，必填） | `request_id`（body）、`client_id`（body）、`application_name`（body）、`scopes`（body）、`status`（body）、`warning`（body） | 不存在/无权限统一错误，避免探测他人请求；不返回 claim_secret。 |
+| POST `/oauth/qr/regenerate` | `request_id`（json，必填）、`claim_secret`（json，必填，秘密） | `request_id`（body）、`qr_payload`（body）、`claim_secret`（body，秘密）、`expires_at`（body） |  |
+| POST `/oauth/qr/request` | `client_id`（json）、`scopes`（json） | `request_id`（body）、`qr_payload`（body）、`claim_secret`（body，秘密）、`expires_at`（body）、`poll_interval_seconds`（body） | 二维码载荷只含 request_id，不含令牌/会话秘密/领取绑定。；claim_secret 只出现一次；共享缓存/日志不得记录响应正文。 |
+| POST `/oauth/qr/status` | `request_id`（json，必填）、`claim_secret`（json，必填，秘密） | `request_id`（body）、`status`（body）、`retry_after_seconds`（body）、`expires_at`（body） | 不存在的请求与无绑定请求使用同一受控错误，避免探测他人请求。 |
+| POST `/oauth/revoke` | `token`（form，必填，秘密）、`token_type_hint`（form） | - | 撤销是幂等语义；未知 token 不披露存在性（200）。 |
+| POST `/oauth/token` | `grant_type`（form，必填）、`code`（form，秘密）、`redirect_uri`（form）、`code_verifier`（form，秘密）、`refresh_token`（form，秘密）、`device_code`（form，秘密）、`scope`（form） | `access_token`（body，秘密）、`token_type`（body）、`expires_in`（body）、`refresh_token`（body，秘密）、`id_token`（body，秘密）、`scope`（body） | 一次请求只能使用一种客户端认证方式；重复参数/未知参数按 invalid_request 拒绝。；响应 no-store；成功=签发事实，审计不可用时返回 temporarily_unavailable。 |
+| POST `/oauth/token/authorize` | - | - | 该端点只登记路径常量与条件注册：没有注入处理器时不会挂载（404），不能按“存在路径常量”认为可用。；处理器由宿主装配，契约字段/响应以宿主实现为准；本包不伪造成功。 |
+| GET `/oauth/userinfo` | `Authorization`（header，必填，秘密） | `sub`（body）、`name`（body）、`preferred_username`（body）、`email`（body，秘密）、`email_verified`（body） | 查询串/请求体里的令牌被拒绝（避免进 URL/日志）；ID Token 不能冒充 Access Token。；错误响应带 RFC 6750 WWW-Authenticate 挑战。 |
+| POST `/oauth/userinfo` | `Authorization`（header，必填，秘密） | `sub`（body） | POST 不把令牌放进请求体；请求体参数被忽略/拒绝。 |
+
+### 3.4 协议例外登记（显式登记，不能整体豁免）
+
+| 例外 | 类别 | 涉及端点 | 理由 |
+|---|---|---|---|
+| `STD-OAUTH-ERROR` | standard-error-envelope | POST /oauth/token、GET /oauth/userinfo、POST /oauth/userinfo、POST /oauth/revoke、POST /oauth/introspect、POST /oauth/device_authorization、POST /oauth/device/cancel、GET /oauth/authorize | 标准协议端点错误使用 RFC 6749/6750/7009/7662/8628 的 error/error_description（UserInfo 带 WWW-Authenticate），不得改写为项目 {code,message,request_id} 信封 |
+| `QR-PROJECT-ENVELOPE` | project-envelope | POST /oauth/qr/request、POST /oauth/qr/status、POST /oauth/qr/claim、POST /oauth/qr/cancel、POST /oauth/qr/regenerate、GET /oauth/qr/prompt、POST /oauth/qr/decision | 自定义扫码端点使用项目统一错误信封 {code,message,request_id}（与业务 API 一致），成功响应为 data |
+| `CONDITIONAL-INTROSPECTION` | conditional-registration | POST /oauth/introspect | 只有宿主显式 EnableIntrospection 且注入真实 Authorizer 才注册；未启用时 404，Discovery 不声明 |
+| `CONDITIONAL-DEVICE` | conditional-registration | POST /oauth/device_authorization、POST /oauth/device/cancel | 只有 EnableDeviceFlow=true（且配置设备确认页）才注册；未启用时 404，Discovery 不声明 |
+| `CONDITIONAL-QR` | conditional-registration | POST /oauth/qr/request、POST /oauth/qr/status、POST /oauth/qr/claim、POST /oauth/qr/cancel、POST /oauth/qr/regenerate、GET /oauth/qr/prompt、POST /oauth/qr/decision | 只有注入 QRLogin 服务才注册；未注入时 404。Discovery 不声明扫码扩展端点 |
+| `CONDITIONAL-TOKEN-AUTHORIZE` | conditional-registration | POST /oauth/token/authorize | POST /oauth/token/authorize 只有在宿主注入 TokenAuthorize 处理器时才存在；本包不内置该端点实现，契约索引只登记路径常量 |
+| `BROWSER-REDIRECT` | browser-redirect | GET /oauth/authorize、POST /oauth/authorize | 授权端点是浏览器流程：成功/协议错误可能是 303 重定向到已登记回调，而不是 JSON 响应；无效 client_id/redirect_uri 仍是 JSON 错误（防开放重定向） |
+| `DISABLED-404` | disabled-404 | - | protocol.enabled=false（默认）时整个协议命名空间不挂载，所有协议路径 404；不要把它当作“端点存在但未授权” |
+| `DISCOVERY-LIMIT` | discovery-limit | GET /.well-known/openid-configuration | Discovery 只声明真实启用的能力；end_session/PAR/动态注册/request_uri/CIBA/token exchange 未实现且不声明 |
+| `HOST-MIDDLEWARE` | host-middleware | - | TLS/HSTS、请求体总量、限流、访问日志、可信客户端地址与反向代理前缀由宿主负责；协议包只做单请求上限与协议语义 |
+| `ROOT-ROUTER-ENVELOPE` | root-router | - | 协议命名空间未匹配路径/panic 恢复返回项目统一 404/500 信封（不是 OAuth 标准错误）；这是路由边界而不是协议端点契约 |
+| `HOST-CONFIRM-PAGES` | host-middleware | - | 设备码/扫码“用户确认页”由宿主页面层实现，本包只提供协议端点；确认页接线未验收，不得宣传为已交付 |
+
+## 4. 内置页面命名路由（250 个冻结命名路由）
 
 页面路由是 `ui.v1` 命名契约：名字/路径/访问级别稳定，DOM 与模板不承诺稳定；宿主可用 `PageOverrides` 替换展示，但不改变服务端认证/授权/CSRF。214 起页面实现位于公开包 `ui/`，根包保留 `UIRoute`/`BuiltinUIRoutes` 等兼容别名；下表“定义位置”即实际定义文件。表中包含仅在 `EnableComponentPreview` 时注册的组件预览路由（默认不注册），不要把它们当作默认页面。
 
@@ -353,6 +413,10 @@
 | `admin.user_export.submit` | POST | `/admin/users/export` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
 | `admin.user_import` | GET | `/admin/users/import` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
 | `admin.user_import.submit` | POST | `/admin/users/import` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
+| `admin.user_password_reset` | GET | `/admin/users/password-reset` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
+| `admin.user_password_reset.submit` | POST | `/admin/users/password-reset` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
+| `admin.user_rename` | GET | `/admin/users/rename` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
+| `admin.user_rename.submit` | POST | `/admin/users/rename` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
 | `admin.user_state` | POST | `/admin/users/state` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
 | `admin.user_update` | POST | `/admin/users/update` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
 | `admin.user_validity` | POST | `/admin/users/validity` | UIAccessManagement | ui.admin_pages | `ui/pages_admin.go` |
@@ -548,14 +612,16 @@
 
 ## 6. OpenAPI 与 Discovery 边界（不造假完整契约）
 
-- OpenAPI 由两部分组成：JSON API（`/healthz`、`/openapi.json`，错误用统一信封）与页面/表单操作（本页 §5，HTML 语义、错误以页面呈现）。**管理 JSON API 的请求/响应模式由后续管理组步骤统一定义**，在此之前 §2 的路由清单与 [http-routes.json](http-routes.json) 才是管理路由的权威对照；本步不为管理 API 编造占位 schema。
-- OAuth 2.0 / OIDC 协议端点默认关闭（`protocol.enabled=false`），关闭时保留前缀返回普通 404；协议端点使用标准协议响应，不写入本页 OpenAPI，也不被统一业务错误信封包装。
-- OIDC Discovery 只声明真实启用的能力；默认关闭时相关路径 404。真实第三方 OIDC 客户端、设备码/扫码真机互操作等未完成验收的边界见 [../guide/login-and-oauth.md](../guide/login-and-oauth.md)。
+- OpenAPI 由三部分组成：运行期最小 JSON API（`/healthz`、`/openapi.json`，错误用统一信封）；页面/表单操作（本页 §5）；**协议端点离线 OpenAPI**（[protocol-openapi.json](protocol-openapi.json)，本页 §3 的同源生成物，不影响运行期 `/openapi.json`）。管理 JSON API 的请求/响应模式由管理组契约（[http-openapi-admin.json](http-openapi-admin.json)）定义，§2 路由清单用于交叉核对。
+- OAuth 2.0 / OIDC 协议端点默认关闭（`protocol.enabled=false`），关闭时协议命名空间返回普通 404；启用后使用标准协议响应（RFC 6749/6750/7009/7662/8628），**不被统一业务错误信封包装**；自定义扫码端点按 §3.4 例外使用项目信封。
+- 协议契约与 OpenAPI 段由 `scripts/internal/apidoc/protocol_contract.go` 的同一份表生成：端点/方法/字段/错误/开关与 `internal/protocolapi/doc.go` 端点表及 `routes.go` 条件注册双向核对，不一致或例外未登记时 `scripts/reference -check` 直接失败。
+- OIDC Discovery 只声明真实启用的能力（含 `EnableIntrospection`/`EnableDeviceFlow` 条件端点）；扫码扩展与本包设备取消扩展不伪装成标准 Discovery 字段。真实第三方 OIDC 客户端、设备码/扫码真机互操作等未完成验收的边界见 [../guide/login-and-oauth.md](../guide/login-and-oauth.md)。
 - 管理/托管/客服 API 的授权、对象/字段白名单与审计约束见对应部署文档；不要把管理 API 暴露给业务应用。
-- 新增/删除路由必须同步更新能力声明（catalog.json）与 OpenAPI 页面契约；未映射的公开符号、能力声明或契约/路由不一致会让 `scripts/reference -check` 失败。
+- 新增/删除路由必须同步更新能力声明（catalog.json）、页面契约与协议契约；未映射的公开符号、能力声明或契约/路由不一致会让 `scripts/reference -check` 失败。
 
 ## 7. 机器可读
 
-- [http-routes.json](http-routes.json)：方法/路径/来源/能力关联的完整机器表。
-- [http-openapi.json](http-openapi.json)：与本页同源的 OpenAPI 3 文档（JSON API + 页面/表单操作；秘密字段 writeOnly、示例为合成值）。
+- [http-routes.json](http-routes.json)：方法/路径/来源/能力关联的完整机器表（含协议端点 HTTP 契约与例外登记）。
+- [http-openapi.json](http-openapi.json)：页面/表单 OpenAPI 3 文档（秘密字段 writeOnly、示例为合成值）。
+- [protocol-openapi.json](protocol-openapi.json)：协议端点 OpenAPI 3 文档（OAuth/OIDC/设备码/扫码；标准错误与项目信封分别建模）。
 - 页面 `Access` 列来自 `UIRoute` 字面量；执行时仍由服务端重新判定，台账仅用于契约对照。
