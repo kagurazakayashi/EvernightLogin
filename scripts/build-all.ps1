@@ -1,4 +1,4 @@
-﻿# build-all.ps1 - 步骤179 一键六平台构建入口的核心逻辑。
+# build-all.ps1 - 步骤179 一键六平台构建入口的核心逻辑。
 #
 # 流程：预检（go/工具链/GOWORK/GOFLAGS/go.work/replace/子模块固定 SHA 与 clean）
 #   -> 从源码构建 go-build-all 到 _tools/（记录 SHA256，不进入产品清单）
@@ -30,9 +30,9 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-# 固定基线（本提交 = go-build-all 179 工具提交；Mail = 175 提交）。
+# 固定基线（本轮发布绑定）：go-build-all = 8764de6；EvernightMail = 5c43ae2（父仓库 gitlink）。
 $ToolSHA = '8764de6504db1ecd1ecc5c3d4dd6618b51699cf1'
-$MailSHA = 'aa7ccf57f6c0a8bb000a7dff6f101983ed6219fa'
+$MailSHA = '5c43ae285babcadd6821581edce4f487167b802a'
 $MinGoVersion = '1.27.0'
 $StdoutLog = New-Object System.Collections.Generic.List[string]
 $Warnings = New-Object System.Collections.Generic.List[string]
