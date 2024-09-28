@@ -331,7 +331,46 @@ _ = result.UserID
 - `Complete` 只改密码并撤销旧会话，不签发业务会话；完成后必须重新登录。
 - 所有响应不得区分“邮箱不存在”和“邮件已发送”。
 
-### 3.2.3 用户列表与按用户名查询
+### 3.2.3 管理员直接改名/直接重置口令（独立管理操作）
+
+宿主若把管理端嵌入业务流程，可直接调用公开直接管理门面；权限、目标校验、本次目标绑定
+两步验证、证明消费、事务一致提交与审计仍由门面执行，宿主不要自建“管理员绕过”路径：
+
+```go
+caller := runtime.AdminSession(sessionSecret) // 必须来自真实用户管理会话；LocalAdmin 不可
+proof := runtime.OperationProof()
+challenge, err := proof.Begin(ctx, app.OperationProofBeginRequest{
+    Caller: caller, TargetUserID: targetUserID,
+    Operation: app.OperationProofUsernameChange, NewUsername: "new-name",
+    RequestID: login.NewRequestID(),
+})
+if err != nil { return err }
+grant, err := proof.Confirm(ctx, app.OperationProofConfirmRequest{
+    Caller: caller, ChallengeID: challenge.ChallengeID,
+    Password: adminPassword, TOTPCode: totpCode, RequestID: login.NewRequestID(),
+})
+if err != nil { return err }
+updated, err := runtime.DirectUserManagement().ChangeUserUsername(ctx,
+    app.AdminChangeUserUsernameRequest{Caller: caller, TargetUserID: targetUserID,
+        NewUsername: "new-name", ExpectedRowVersion: rowVersion, Reason: "工单 #123",
+        ProofToken: grant.ProofToken, RequestID: login.NewRequestID()})
+_ = updated
+```
+
+直接重置口令把操作换成 `OperationProofPasswordReset` + `NewPassword`，提交调用
+`runtime.DirectPasswordManagement().ResetUserPassword(...)`；新口令只来自受控输入，不写
+日志/响应，成功后目标旧会话与找回入口失效、MFA/Passkey 保留并强制下次登录改密
+（must_change）。完整权限语义、HTTP/CLI 路径见根 [README §7](../README.md#7-管理员直接管理与列表模糊搜索本轮新增)。
+
+### 3.2.4 列表有界模糊搜索
+
+用户/应用成员、角色、权限、用户组、应用、客服工单、报告历史与计划等列表支持可选
+`Search` + `SearchFields`（公开 Go 请求字段）与 HTTP `search`/`search_fields`；先授权范围
+后匹配、字面转义、有界分页/游标，空搜索等价原列表；`GetUserByUsername` 仍为精确查询，
+公开登录/找回不做账户枚举。字段白名单与完整请求/响应以
+[`docs/reference/`](../reference/README.md) 生成物为准。
+
+### 3.2.5 用户列表与按用户名查询
 
 宿主创建/同步业务账号时，以 Evernight 返回的 username 为准；需要分页列表或按
 用户名查找时使用管理门面，不要直接读 Evernight 的 SQLite 表：

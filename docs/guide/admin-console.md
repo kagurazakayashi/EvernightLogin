@@ -4,7 +4,7 @@
 与“root/授权管理员”两条路径，说明页面地址与常用操作。
 
 > 本文内容迁移自根 `README.md` §4「内置 Web 管理台操作指南」（步骤 244 阶段 A），
-> 保证信息不丢失；根 README 将在步骤 244 阶段 B 收敛为入口页。页面路由以实际注册为
+> 保证信息不丢失；根 README 已收敛为入口页。页面路由以实际注册为
 > 准，依赖不满足的页面可能返回 404。
 
 服务启动后，页面按配置和权限显示。管理页要求已完成强认证的管理会话；普通用户只能访问
@@ -59,6 +59,10 @@
   MFA/Passkey 保留、目标下次登录强制改密（must_change）。改名权与重置权互相独立。
 - 未配置邮件（`mail.enabled=false`）时登录页不显示“忘记密码”入口，找回页返回稳定不可用
   提示与恢复代码/客服/管理员下一路径；管理员直接重置仍可用（不依赖邮件）。
+- 直接管理的另一种入口是 CLI/管理 API（与页面共用同一门面与证明消费）：`loginctl admin
+  rename-user <user_id> --new-username <新用户名> --reason <原因> --confirm RENAME-USER`、
+  `loginctl admin reset-password <user_id> --reason <原因> --confirm RESET-PASSWORD
+  [--new-password-file <受保护文件>]`；管理 API 路径见 [README §7](../README.md#7-管理员直接管理与列表模糊搜索本轮新增)。
 
 ## 4. 相关文档
 

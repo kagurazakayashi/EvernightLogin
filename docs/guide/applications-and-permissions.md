@@ -43,10 +43,7 @@
 说明：
 - “作用范围”列是直白概括，完整范围/限制由权限目录（含页面展示）提供。
 - 权限目录中每项带有“是否已实现”标记，表示**服务端是否已有该权限键对应的真实业务执行
-  路径且执行前经服务端授权判定**（不是“页面/领域服务是否存在”的粗略口径）。当前 53 项中
-  51 项为已实现；保持未实现的是本轮新增的 2 项直接管理权限：`users.username.change.other`、
-  `users.password.reset.other`（其业务执行入口在后续步骤落地；当前只登记目录与预设说明，
-  新装 `system_admin` 预设包含两项，客服需由 root 逐项授予，能力矩阵不得提前标记为已实现）。
+  路径且执行前经服务端授权判定**（不是“页面/领域服务是否存在”的粗略口径）。当前 53 项全部为已实现；其中本轮新增的 2 项直接管理权限（管理页/管理 JSON API/CLI 入口见 256～259；新装 `system_admin` 预设包含两项，客服需由 root 逐项授予）。
   `authorization.check` 已实现：扩展联合判定端点 `POST /oauth/token/authorize` 在登记
   `protocol.resource_services` 时由生产装配挂载，权限键是资源服务能力标记、不授予预设角色。
   **这个标记不是功能开关**，接入时以真实服务装配与测试为准，不要据此推断某能力完全不可用
@@ -73,8 +70,8 @@
 | `users.disable` | 禁用普通用户 |
 | `users.delete` | 删除普通用户 |
 | `users.export` | 按字段许可批量导出用户资料 |
-| `users.username.change.other` | 直接修改他人用户名（独立权限；需操作者本次两步验证，不需要目标当前密码、目标确认或另一管理员审批；不能修改 root） |
-| `users.password.reset.other` | 直接重置他人密码（独立权限；需操作者本次两步验证，不需要目标旧密码、目标确认或独立审批；不能读取旧密码、重置 root 或重置 MFA） |
+| `users.username.change.other` | 直接修改他人用户名（独立权限；需操作者本次两步验证；管理页 `/admin/users/rename`、管理 API `POST /admin/v1/users/{id}/username`、CLI `loginctl admin rename-user`；不需要目标当前密码、目标确认或另一管理员审批；不能修改 root） |
+| `users.password.reset.other` | 直接重置他人密码（独立权限；需操作者本次两步验证；管理页 `/admin/users/password-reset`、管理 API `POST /admin/v1/users/{id}/password`、CLI `loginctl admin reset-password`；不需要目标旧密码、目标确认或独立审批；不能读取旧密码、重置 root 或重置 MFA；成功后目标下次登录强制改密） |
 
 ### 3.3 找回、客服与人工恢复
 

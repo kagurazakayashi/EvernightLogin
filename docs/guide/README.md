@@ -43,7 +43,7 @@
 | [../requirements/login_功能列表_v1.1.md](../requirements/login_功能列表_v1.1.md) | 产品功能范围（设计目标，不等于全部已实现） |
 | [../requirements/login_错误码与排障手册.md](../requirements/login_错误码与排障手册.md) | 错误码权威手册（与 `error_codes.go` 自动比对） |
 | [../acceptance/README.md](../acceptance/README.md) | 验收记录索引，含 OWASP ASVS 4.0.3 第一版适用性内部自评与未覆盖项（**非认证、不宣称合规**） |
-| [../acceptance/requirements-matrix-login.md](../acceptance/requirements-matrix-login.md) | 步骤 157 需求矩阵起草：24 章需求→代码→生产入口→证据与当前缺口（**142–156 在途，非最终通过**） |
+| [../acceptance/requirements-matrix-login.md](../acceptance/requirements-matrix-login.md) | 步骤 157 需求矩阵起草：24 章需求→代码→生产入口→证据与当前缺口（**142–156 已收口，最终状态以验收记录为准**） |
 | [../database/存储模型与迁移设计.md](../database/存储模型与迁移设计.md) | 数据库表、迁移与版本口径 |
 | [../../README.md](../../README.md) | 面向部署者/管理员的新手部署、Web 管理台、CLI/API 接入与安全运维总览（入门优先；本指南为深入细节） |
 
@@ -57,7 +57,7 @@
 | `external-consumer` | 独立外部 Go module，仅用公开包完成嵌入 | 可运行（138 A01） |
 | `embedded-runtime` | 嵌入式运行时与页面/HTTP 挂载骨架 | 可运行（138） |
 | `embedded-minimal` | 最小嵌入示例：打开→注册/登录→会话校验→HTTP/UI 挂载→关闭清理；`-self-test` 15 项 | 可运行；2026-11-25 自检 PASS（步骤 240） |
-| `custom-pages-profile-sync` | 宿主自定义页面与内置页面并存；`Profile()` 资料读写/受控改名；业务投影按稳定 UserID 同步；本地邮件验证/找回；`-self-test` 23 项 | 可运行；2026-11-25 自检 PASS（步骤 241，审计中） |
+| `custom-pages-profile-sync` | 宿主自定义页面与内置页面并存；`Profile()` 资料读写/受控改名；业务投影按稳定 UserID 同步；本地邮件验证/找回；`-self-test` 23 项 | 可运行；2026-11-25 自检 PASS（步骤 241） |
 | `deployment-minimal` | 最小独立部署配置样例 | 可运行 |
 | `oidc-login` | OIDC 授权码+PKCE 客户端演示 | 可运行；真实第三方互操作未测 |
 | `service-identity` | 服务身份 client credentials 演示 | 可运行；真实 HTTP 黑盒待 144 |
@@ -98,7 +98,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scena
 | 本地应急命令 `cmd/loginctl` | 已实现（部分写动作受限） | `root-recover`、恢复/维护命令、`config`/`diag`/`migrate`/`task`/`session`/`user` 可用；`group`/`role`/`app`/`permission`/`notify` 本地管理（读取与受控建组；受限写动作返回 `MANAGEMENT_WRITE_NOT_EXPOSED`）与 `audit`/`reports`/`backups`/`notifications`/`tasks` 在线管理（需 `--session-file`）已接通，详见 [root-cli.md](root-cli.md) 第 8 节 |
 | 备份工具 `cmd/login-backup` | 已实现 | `create`/`verify`/`info`/`list`/`tables`/`preview`/`export`/`extract` |
 | 一键构建与发布打包（179/202） | 已实现 | `build.ps1` 构建双产品 × 六目标 24 项 + `dist/build/build-summary.json`；`scripts/verify-build.ps1` 校验类型/架构/哈希；`scripts/package-release.ps1` 生成 12 个 per-target zip 并用 `verify-release.ps1` 校验（详见 [packaging.md](../deployment/packaging.md) §1.1/§9） |
-| SQLite 数据库与迁移 | 已实现 | 52 个内嵌迁移（`0001`…`0052`）；SQLite 为唯一运行实测目标 |
+| SQLite 数据库与迁移 | 已实现 | 54 个内嵌迁移（`0001`…`0054`）；SQLite 为唯一运行实测目标 |
 | MySQL / PostgreSQL / SQL Server 适配 | 部分实现 | 有方言与迁移代码，**未运行实测** |
 | 多实例/集群、TCP 代理协议、OCSP/CRL、证书自动续期 | 未实现 | 第一版不含 |
 

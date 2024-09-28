@@ -113,18 +113,6 @@ go run . -self-test -json      # 预期 status=PASS（15 项检查），退出�
 go run . -demo                 # 显式启动演示，Ctrl+C 或 -duration 到期后清理
 ```
 
-## 5. 自包含协议与安全集成测试（开发/CI）
-
-无需外网、外部数据库或手工安装第三方软件，可直接运行真实协议/安全场景（OAuth/OIDC、
-会话权限、CSRF/来源、防枚举、软件 TOTP/WebAuthn）：
-
-```powershell
-go run ./scripts/protocol-selftest -out P:\go\tmp\protocol-selftest.json -verbose
-```
-
-场景、覆盖矩阵、JSON 结果与退出码见
-[`docs/deployment/protocol-selftest.md`](docs/deployment/protocol-selftest.md)。
-
 ## 5. 快速开始 B：独立部署（约 10 分钟）
 
 1. 准备目录：`config/login.yaml`、`data/login.db`、`secrets/master.key`、`logs/` 分开存放。
@@ -150,7 +138,123 @@ D:\login\bin\login-server.exe serve --config D:\login\config\login.yaml ^
 [首次配置](docs/deployment/first-run.md)、[独立服务启动](docs/deployment/standalone-service.md)、
 [业务接入契约](docs/deployment/integration.md)、[完整配置](docs/guide/configuration.md)。
 
-## 6. 目录说明
+## 6. 自包含协议与安全集成测试（开发/CI）
+
+无需外网、外部数据库或手工安装第三方软件，可直接运行真实协议/安全场景（OAuth/OIDC、
+会话权限、CSRF/来源、防枚举、软件 TOTP/WebAuthn）：
+
+```powershell
+go run ./scripts/protocol-selftest -out P:\go\tmp\protocol-selftest.json -verbose
+```
+
+场景、覆盖矩阵、JSON 结果与退出码见
+[`docs/deployment/protocol-selftest.md`](docs/deployment/protocol-selftest.md)。
+
+## 7. 管理员直接管理与列表模糊搜索（本轮新增）
+
+### 7.1 两项独立直接管理权限
+
+| 权限键 | 能做什么 | 授予与边界 |
+|---|---|---|
+| `users.username.change.other` | 对可管理的其他用户**直接修改全局用户名**；稳定 UserID、角色、应用成员与历史关联不变 | 通过角色/委派授予（管理页或公开管理门面）；`system_admin` 预设包含，客服/用户管理员默认不含，需 root 逐项授予；不能改 root 或超出管理范围的目标，仍执行用户名唯一性/保留名/Unicode 规则 |
+| `users.password.reset.other` | 为可管理的其他用户**直接设置新口令**；旧会话与旧找回入口失效，MFA/Passkey 保留，目标下次登录强制改密（must_change） | 同上授予方式；不能读取旧口令/MFA 种子/恢复码，不能重置 root，不能为无密码账户添加密码，不能替代人工恢复审批 |
+
+两项权限**互相独立**（只有改名权不能重置口令，反之亦然），也不能由 `users.update` 隐式获得。root 拥有完整权限，但执行直接操作时仍需真实管理会话、独立权限判定、本次两步验证、目标/参数绑定与关键审计；不能借“全权限”跳过证明或目标保护。
+
+### 7.2 一次两步验证 + 目标绑定（可复制 Go 示例）
+
+直接改名/直接重置要求操作者**本人**完成一次真实两步验证（密码 + TOTP，或 Passkey/安全密钥）。证明绑定操作者、会话、操作、目标 UserID 与本次新值（新用户名或新口令密封意图），换目标/换新值/换会话/重放均拒绝；取得的证明**直接用于紧随其后的提交**，不需要逐层重复验证。
+
+```go
+// 操作者必须持有真实管理会话秘密（例如来自受控存储的 Cookie 会话秘密）。
+caller := runtime.AdminSession(sessionSecret)
+proof := runtime.OperationProof()
+
+// 1) 发起挑战：直接改名绑定新用户名；直接重置口令绑定新口令（只保存在服务端密封意图中）。
+challenge, err := proof.Begin(ctx, app.OperationProofBeginRequest{
+    Caller: caller, TargetUserID: targetUserID,
+    Operation: app.OperationProofUsernameChange, NewUsername: "new-name",
+    RequestID: login.NewRequestID(),
+})
+if err != nil { return err }
+
+// 2) 完成第二步验证，得到一次性证明（密码/TOTP 只来自受控输入，不写日志/响应）。
+grant, err := proof.Confirm(ctx, app.OperationProofConfirmRequest{
+    Caller: caller, ChallengeID: challenge.ChallengeID,
+    Password: adminPassword, TOTPCode: totpCode, RequestID: login.NewRequestID(),
+})
+if err != nil { return err }
+
+// 3) 立即提交；同一证明只用于本次逻辑操作。
+updated, err := runtime.DirectUserManagement().ChangeUserUsername(ctx,
+    app.AdminChangeUserUsernameRequest{
+        Caller: caller, TargetUserID: targetUserID, NewUsername: "new-name",
+        ExpectedRowVersion: rowVersion, Reason: "工单 #123",
+        ProofToken: grant.ProofToken, RequestID: login.NewRequestID(),
+    })
+```
+
+直接重置口令把第 1 步改为 `Operation: app.OperationProofPasswordReset, NewPassword: newPassword`，提交改为：
+
+```go
+result, err := runtime.DirectPasswordManagement().ResetUserPassword(ctx,
+    app.AdminResetUserPasswordRequest{
+        Caller: caller, TargetUserID: targetUserID, NewPassword: newPassword,
+        Reason: "工单 #123", ProofToken: grant.ProofToken, RequestID: login.NewRequestID(),
+    })
+// result.MustChange 恒为 true；result.SessionsRevoked / OldResetRequests*/OutboxEventID 为受控事实。
+```
+
+约束：`LocalAdmin()` 不能用于直接管理（没有用户两步因素）；新口令只接受交互隐藏输入、标准输入或受保护文件，不作为命令行明文参数/环境变量；失败（弱口令、历史复用、并发冲突、证明不匹配）不产生半更新，证明按语义可重试或需重新验证。must_change 语义见 [客服恢复与账户找回](docs/guide/support-and-recovery.md#11-直接管理操作与-must_change-语义第-11-轮)。
+
+HTTP 管理 API（需启用管理 API 与真实管理会话；Cookie 写请求必须带 CSRF 头/隐藏域）：
+
+| 方法 | 路径（`/admin/v1` 前缀） | 用途 |
+|---|---|---|
+| `POST` | `/users/{user_id}/username-verification` | 发起直接改名两步验证（body 含 `new_username`） |
+| `POST` | `/users/{user_id}/username-verification/confirm` | 密码 + TOTP 完成验证，返回一次性证明 |
+| `POST` | `/users/{user_id}/username-verification/webauthn/begin`、`.../confirm` | Passkey/安全密钥第二步 |
+| `POST` | `/users/{user_id}/password-verification`、`.../confirm`、`.../webauthn/begin`、`.../confirm` | 直接重置口令的两步验证 |
+| `POST` | `/users/{user_id}/username`、`/users/{user_id}/password` | 用一次性证明提交改名/重置（body 含 `confirm: true`、`reason`、`proof_token`） |
+
+CLI 一次完成“两步验证 + 提交”（秘密只从隐藏输入/受保护文件读取）：
+
+```bash
+loginctl admin rename-user usr_xxx --new-username new-name --reason "工单 #123" \
+  --confirm RENAME-USER --server https://login.example --session-file ./session.secret
+loginctl admin reset-password usr_xxx --reason "工单 #123" --confirm RESET-PASSWORD \
+  --new-password-file ./new-password.secret --server https://login.example --session-file ./session.secret
+```
+
+### 7.3 三种用户恢复路径与直接管理的区别
+
+| 路径 | 触发者 | 前提 | 是否签发正常会话 |
+|---|---|---|---|
+| 已登录本人改密 | 用户本人 | 完整会话 + 再次认证 | 保持登录，旧会话/凭证按规则失效 |
+| 邮件找回（`/login/forgot-password`、`/login/reset-password`） | 用户本人 | 部署启用邮件（`mail.enabled=true`）且有已验证邮箱/密码；令牌一次性 | 否，成功后需重新登录 |
+| ManualRecovery 人工核验恢复 | 客服 + 独立审批人 + 执行人（三权分离） | root 配置可执行依据/审批人/等待期；可信渠道 | 否 |
+| **直接管理**（改名/重置口令） | 获授独立权限的管理员 | 真实管理会话 + 本次两步验证 + 目标在管理范围；目标非 root/非本人 | 否；重置后目标下次登录只能得到“仅改密、无业务访问”的受限会话（must_change） |
+
+直接管理**不是第四种匿名找回**：它不替换自助找回、恢复代码或人工核验恢复流程，也不把人工恢复改成“直接设置口令”。未配置邮件时登录页不显示找回入口，找回页给出稳定不可用提示与恢复代码/客服/管理员等下一路径；不会自动跳过 MFA。
+
+### 7.4 列表字面模糊搜索（有界、不越权）
+
+搜索是**可选**参数：空搜索等价原列表；先按授权范围过滤再匹配；参数化 `LIKE` 并转义 `%`/`_`/转义符与方言特殊字符（字面匹配）；长度与返回量有界；沿用各列表既有排序与分页/游标；游标绑定筛选条件。精确 `GetUserByUsername` 保持精确语义，模糊匹配不参与登录唯一身份判定；公开登录/找回不提供账户枚举。
+
+| 列表 | 匹配字段 | 公开 Go / HTTP / CLI |
+|---|---|---|
+| 用户 | `username`、`nickname` | `AdminListUsersRequest.Search/SearchFields`；`GET /admin/v1/users?search=&search_fields=`；`loginctl admin users --search ... --search-fields username,nickname` |
+| 应用成员 | `username`、`nickname`（仅目标应用成员范围，不跨应用枚举） | `AdminListApplicationMembersRequest.Search/SearchFields`；`GET /admin/v1/applications/{id}/members?search=&search_fields=`；`loginctl admin application <id> members --search ... --search-fields username,nickname` |
+| 角色 | `name`、`key` | `AdminListRolesRequest`；`GET /admin/v1/roles`；`loginctl admin roles --search/--search-fields`；本地 `loginctl role list` 同名参数 |
+| 权限 | `name`、`key` | `AdminListPermissionsRequest`；`GET /admin/v1/permissions` |
+| 用户组 | `name`、`key` | `AdminListGroupsRequest`；`GET /admin/v1/groups`；`loginctl group list` 本地搜索 |
+| 应用 | `name`、`description` | `AdminListApplicationsRequest`；`GET /admin/v1/applications`；`loginctl app list`/`admin applications` |
+| 客服工单 | `id`（编号）、`reason` | `GET /admin/v1/support/cases`；`loginctl admin support-cases --search-fields id,reason` |
+| 报告历史 / 报告计划 | `name` | `GET /admin/v1/reports`、`/report-plans`；`loginctl reports history list`/`reports plans list` |
+| 应用范围角色/组 | `name`、`key` | `GET /admin/v1/applications/{id}/roles`、`.../groups` |
+
+未知搜索字段/超长文本返回 `REQ_INVALID`（个别旧路径对“空搜索+非法字段”的容忍见验收登记 D-263-1）；邮箱/电话不默认纳入搜索（需独立字段可见权限）。完整请求/响应与权限绑定以 [`docs/reference/`](docs/reference/README.md)（由代码生成）为准。
+## 8. 目录说明
 
 ```text
 cmd/            独立程序入口：login-server、loginctl、login-backup
@@ -172,7 +276,7 @@ go-build-all/   通用跨平台构建工具（独立 Git 子模块与 Go Module�
 > 包文档及 `alias_*.go` 兼容别名；步骤 214/215 会把页面实现迁入专门目录并收敛公开运行时
 > 入口，本节目录结构会在重构提交后更新。
 
-## 7. 三个示例与一键自检
+## 9. 三个示例与一键自检
 
 | 示例 | 演示 | 实测命令（仓库根执行） |
 |---|---|---|
@@ -192,7 +296,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scena
 其余示例（OIDC 客户端、设备码/扫码、托管 API、客服、恢复密码消费方、RBAC 消费方等）见
 [示例索引](docs/guide/README.md#11-示例索引)。
 
-## 8. 文档地图
+## 10. 文档地图
 
 | 入口 | 内容 |
 |---|---|
@@ -210,16 +314,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scena
 开发协作材料，**不属于产品文档，也不进入发布包**；产品交付文档以 `docs/` 为准。本 README
 为简体中文单语版本（历史没有其他语言版本）；新增翻译需以本文件为基准同步维护。
 
-## 9. 安全边界速览
+## 11. 安全边界速览
 
 - **账户与应用隔离**：全局账户 + 应用成员/应用内角色权限/数据范围隔离；默认拒绝、fail-closed；功能权限不代替资源归属检查。
 - **可信身份**：`LocalAdmin` 仅代表持有宿主进程控制权的可信本地代码，不能由 HTTP 参数或普通用户取得；root 是唯一受保护账户，不能作为普通角色分配。
 - **账户有效期**：全局可用时间（UTC 半开区间）在身份生效和请求校验处即时判断，不依赖后台扫描；到期不等于手动禁用，续期不解除禁用；root 不受普通期限管理。
 - **邮件**：测试用本地 EvernightMail/捕获器，生产需显式配置 SMTP；`mail.enabled=false` 时明确失败，不伪造成功；不要向真实第三方地址发测试邮件。
 - **能力默认关闭**：OAuth/OIDC、管理 JSON API、托管 API、客服 API 需显式开关，Discovery 只声明真实能力；验收边界见 [登录与 OAuth 文档](docs/guide/login-and-oauth.md)。
+- **直接管理操作**：直接改名/直接重置口令需独立权限 + 真实管理会话 + 本次目标绑定两步验证，操作者身份只来自服务端会话（不信任请求体）；不能处理 root，不能读取旧口令/MFA 秘密，直接重置后 MFA/Passkey 保留且目标下次登录强制改密；一次两步验证证明只用于本次提交。
+- **模糊搜索边界**：列表搜索先授权范围后匹配、字面转义、有界分页/游标；空搜索等价原列表；精确 `GetUserByUsername` 不改变，公开登录/找回不做账户枚举；邮箱/电话默认不纳入搜索。
 - **不做的事与平台口径**：不做多租户/多实例共享状态、短信供应商、第三方社交登录、动态 Go plugin、跨数据库迁移；只有 Windows 11 + SQLite 做过运行实测，其他平台/数据库仅编译或静态检查，未测能力不写成“已验证”。
 
-## 10. 排障与许可
+## 12. 排障与许可
 
 排障入口：[错误码与排障](docs/guide/troubleshooting.md)、
 [错误码手册](docs/requirements/login_错误码与排障手册.md)、
