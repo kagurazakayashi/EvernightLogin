@@ -125,10 +125,7 @@ func (r *runner) runAdminRenameUser(args []string) int {
 			if failure != nil {
 				return r.onlineFailure("读取目标用户版本", failure)
 			}
-			user, _ := userReply.data["user"].(map[string]any)
-			if value, ok := user["row_version"].(float64); ok && value > 0 {
-				expectedRowVersion = int64(value)
-			}
+			expectedRowVersion = adminReplyUserRowVersion(userReply.data)
 			if expectedRowVersion < 1 {
 				return r.fail("ROW_VERSION_MISSING", ExitError, "目标用户缺少可用行版本", nil)
 			}
@@ -151,4 +148,25 @@ func (r *runner) runAdminRenameUser(args []string) int {
 		io.WriteString(r.stdout, "稳定用户 ID、角色、应用成员与历史关联保持不变。\n")
 		return ExitOK
 	})
+}
+
+// adminReplyUserRowVersion 从管理 API 用户响应中读取 row_version。
+// 真实 GET /admin/v1/users/{id} 返回扁平用户对象（id/username/row_version 等）；
+// 兼容测试替身/旧包装可能返回 {"user": {...}}。取第一个正整数值；缺失返回 0，
+// 由调用方给出稳定 ROW_VERSION_MISSING（不猜测版本、不跳过乐观并发）。
+func adminReplyUserRowVersion(data map[string]any) int64 {
+	if len(data) == 0 {
+		return 0
+	}
+	candidates := make([]map[string]any, 0, 2)
+	candidates = append(candidates, data)
+	if nested, ok := data["user"].(map[string]any); ok {
+		candidates = append(candidates, nested)
+	}
+	for _, object := range candidates {
+		if value, ok := object["row_version"].(float64); ok && value > 0 {
+			return int64(value)
+		}
+	}
+	return 0
 }

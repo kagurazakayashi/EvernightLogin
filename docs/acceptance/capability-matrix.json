@@ -2,11 +2,11 @@
   "schema": "evernight.capability-matrix/v1",
   "description": "EvernightLogin 本轮机器可读能力清单：由 scripts/capabilities 扫描源码生成，状态由声明面是否真实解析决定，禁止手写全绿。",
   "metadata": {
-    "generated_at": "2026-11-26T03:05:37Z",
+    "generated_at": "2026-11-26T06:09:33Z",
     "generator": "go run ./scripts/capabilities",
     "repo_root": ".",
-    "git_head": "8ecdb2aae1eb8f6c6f0374c77156a4938c0ffc7e",
-    "git_branch": "HEAD",
+    "git_head": "a5527a14486d01afe271c339f9d863e65137613a",
+    "git_branch": "main",
     "git_dirty": true,
     "go_version": "go1.27.4",
     "platform": "windows",
@@ -21,7 +21,7 @@
       "internal/",
       "测试函数（根、app、internal、cmd 的 *_test.go）"
     ],
-    "files_scanned": 779
+    "files_scanned": 803
   },
   "summary": {
     "total": 52,
@@ -6174,9 +6174,9 @@
   ],
   "coverage": {
     "app_types_total": 468,
-    "admin_routes_total": 131,
+    "admin_routes_total": 137,
     "protocol_paths_total": 17,
-    "pages_total": 248,
+    "pages_total": 250,
     "cli_commands_total": 41,
     "permissions_total": 53
   },
@@ -16158,6 +16158,8 @@
       "BeginEmailEnrollment",
       "BeginPasskeyLogin",
       "BeginPasskeyRegistration",
+      "BeginPasswordResetVerification",
+      "BeginPasswordResetWebAuthnVerification",
       "BeginRecovery",
       "BeginTOTPBinding",
       "BeginUsernameVerification",
@@ -16168,6 +16170,7 @@
       "CancelExport",
       "CancelInvitation",
       "CancelJob",
+      "CancelPasswordResetVerification",
       "CancelPurge",
       "CancelTask",
       "CancelUsernameVerification",
@@ -16189,6 +16192,8 @@
       "Configure",
       "Confirm",
       "ConfirmEmailEnrollment",
+      "ConfirmPasswordResetVerification",
+      "ConfirmPasswordResetWebAuthnVerification",
       "ConfirmTOTPBinding",
       "ConfirmUsernameVerification",
       "ConfirmUsernameWebAuthnVerification",
@@ -16359,6 +16364,7 @@
       "RequestUserDeletion",
       "RequiredPasswordChanges",
       "ResendEmailVerification",
+      "ResetPassword",
       "ResetUserPassword",
       "Restore",
       "RestoreSensitiveDefaults",
@@ -17471,6 +17477,36 @@
       },
       {
         "method": "POST",
+        "pattern": "users/{user_id}/password",
+        "source": "internal/serverapp/admin_direct_password_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/password-verification",
+        "source": "internal/serverapp/admin_direct_password_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/password-verification/cancel",
+        "source": "internal/serverapp/admin_direct_password_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/password-verification/confirm",
+        "source": "internal/serverapp/admin_direct_password_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/password-verification/webauthn/begin",
+        "source": "internal/serverapp/admin_direct_password_routes.go"
+      },
+      {
+        "method": "POST",
+        "pattern": "users/{user_id}/password-verification/webauthn/confirm",
+        "source": "internal/serverapp/admin_direct_password_routes.go"
+      },
+      {
+        "method": "POST",
         "pattern": "users/{user_id}/state",
         "source": "internal/serverapp/admin_domain_writes.go"
       },
@@ -17662,6 +17698,10 @@
       },
       {
         "method": "POST",
+        "path": "/oauth/userinfo"
+      },
+      {
+        "method": "POST",
         "path": "/oauth/revoke"
       },
       {
@@ -17707,10 +17747,6 @@
       {
         "method": "POST",
         "path": "/oauth/qr/decision"
-      },
-      {
-        "method": "POST",
-        "path": "/oauth/userinfo"
       },
       {
         "method": "POST",
@@ -18694,6 +18730,18 @@
         "name": "admin.user_import.submit",
         "method": "POST",
         "path": "/admin/users/import",
+        "file": "pages_admin.go"
+      },
+      {
+        "name": "admin.user_password_reset",
+        "method": "GET",
+        "path": "/admin/users/password-reset",
+        "file": "pages_admin.go"
+      },
+      {
+        "name": "admin.user_password_reset.submit",
+        "method": "POST",
+        "path": "/admin/users/password-reset",
         "file": "pages_admin.go"
       },
       {
@@ -20557,6 +20605,20 @@
         "TestConfigPendingRestart",
         "TestScopeAndCancellation"
       ],
+      "./internal/e2e": [
+        "TestMatrixCLIDirectManagement",
+        "TestMatrixCLIKnownDefectRenameAutoRowVersion",
+        "TestMatrixDirectManagementActorsTargetsProofs",
+        "TestMatrixOpenAPIContractNoSecrets",
+        "TestMatrixAuditCursorBinding",
+        "TestMatrixResourceIDScope",
+        "TestMatrixHTTPDirectManagement",
+        "TestMatrixEmailChangeResetLinkPermanentRejection",
+        "TestMatrixNotificationDeliveryTerminalState",
+        "TestMatrixPasswordResetRecoveryInvariants",
+        "TestMatrixRootAuthorizationConsistency",
+        "TestPendingMailSearchPrivacy"
+      ],
       "./internal/emailchange": [
         "TestEmailIdentityVersionIncrementsOnRealWrites",
         "TestRequestChangeSensitivePolicy",
@@ -20757,9 +20819,13 @@
         "TestOnlineBackupsContract",
         "TestOnlineNotificationsAndTasks",
         "TestOnlineHelpAndUsage",
+        "TestAdminResetPasswordFlow",
+        "TestAdminResetPasswordFileAndGuards",
         "TestAdminRenameUserFlow",
         "TestAdminRenameUserProofFile",
         "TestAdminRenameUserMissingArgs",
+        "TestAdminRenameUserExplicitVersionSkipsFetch",
+        "TestAdminRenameUserMissingRowVersion",
         "TestOnlineDownloadOverwriteAtomic",
         "TestOnlineDownloadFailurePreservesExistingFile",
         "TestOnlineDownloadRejectsSymlinkTarget",
@@ -21504,6 +21570,8 @@
         "TestOtherStrongFactorAdapters"
       ],
       "./internal/serverapp": [
+        "TestDirectPasswordResetRoutesUseTrustedCallerAndProof",
+        "TestDirectPasswordResetRoutesFailClosed",
         "TestDirectUsernameRoutesUseTrustedCallerAndProof",
         "TestDirectUsernameRoutesFailClosed",
         "TestParseAdminDomainSearch",
@@ -22006,6 +22074,8 @@
         "TestAdminContractsMatchRegisteredRoutes",
         "TestAdminContractsExcludeOtherSteps",
         "TestAdminComponentSchemasCoverSuccessReferences",
+        "TestAdminManagementDomainsPresent",
+        "TestAdminUserStatePermissionCombination",
         "TestAdminDownloadSemanticsAreAccurate",
         "TestAdminOperationsNoServerPathExamples",
         "TestBoundaryLoopbackDefaultAndSpoofedHeaders",
@@ -22152,6 +22222,9 @@
         "TestForwardedHeader",
         "TestForwardedLimits"
       ],
+      "./tests": [
+        "TestStep275DirectManagementNoticeTerminalState"
+      ],
       "./ui": [
         "TestWebUIIntegrationWithRealSession",
         "TestWebUIDisabledKeepsAPIAvailable",
@@ -22173,6 +22246,10 @@
         "TestAdminIntegrationGroupsAndMembers",
         "TestAdminIntegrationBatchPartialFailure",
         "TestAdminIntegrationAuthorizationFailClosed",
+        "TestAdminPasswordResetPageShowsTargetWithoutSecrets",
+        "TestAdminPasswordResetPageOneShotProof",
+        "TestAdminPasswordResetPageMFAChallenge",
+        "TestAdminPasswordResetPageFailClosed",
         "TestAdminUserRenamePageShowsTargetWithoutSecrets",
         "TestAdminUserRenamePageOneShotProof",
         "TestAdminUserRenamePageMFAChallenge",
@@ -22227,6 +22304,8 @@
         "TestAuditMaintenanceRawNumberFieldsAndRetentionFailure",
         "TestAuditPageDenialsAreRecorded",
         "TestAuditListHonorsControlledTimeZone",
+        "TestLoginPagePasswordResetEntryByConfig",
+        "TestPasswordForgotPageAvailability",
         "TestAuthPagesRenderWithRealServices",
         "TestLoginRealBackendAndRedirectWhitelist",
         "TestRegisterClosedAndNoEmailFlow",

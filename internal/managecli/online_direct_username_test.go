@@ -24,6 +24,9 @@ type renameUserFakeAPI struct {
 	proofSubmitted bool
 	committed      bool
 	rowVersion     float64
+	// getCalls 统计 GET /users/{id} 读取次数；omitRowVersion 模拟真实 API 缺字段。
+	getCalls       int
+	omitRowVersion bool
 }
 
 func newRenameUserFakeAPI(t *testing.T) (*renameUserFakeAPI, *httptest.Server) {
@@ -69,8 +72,14 @@ func newRenameUserFakeAPI(t *testing.T) (*renameUserFakeAPI, *httptest.Server) {
 				"granted_strength": "strong",
 				"expires_at":       time.Now().Add(time.Minute).UTC().Format(time.RFC3339)})
 		case request.Method == http.MethodGet && path == "/users/usr_target":
-			encode(map[string]any{"user": map[string]any{"id": "usr_target",
-				"username": "old-name", "row_version": api.rowVersion}})
+			// 真实管理 API 返回扁平用户对象（非 {"user": ...} 包装）。
+			api.getCalls++
+			if api.omitRowVersion {
+				encode(map[string]any{"id": "usr_target", "username": "old-name"})
+				return
+			}
+			encode(map[string]any{"id": "usr_target", "username": "old-name",
+				"row_version": api.rowVersion})
 		case request.Method == http.MethodPost && path == "/users/usr_target/username":
 			var body struct {
 				NewUsername        string `json:"new_username"`
@@ -167,5 +176,55 @@ func TestAdminRenameUserMissingArgs(t *testing.T) {
 		if exit := RunWithOptions(args, strings.NewReader(""), &stdout, &stderr, Options{}); exit == ExitOK {
 			t.Fatalf("缺少参数应失败: %v", args)
 		}
+	}
+}
+
+// TestAdminRenameUserExplicitVersionSkipsFetch 覆盖显式 --expected-row-version 优先：
+// 不读取目标版本（避免读到与操作者确认不一致的版本），且请求体使用显式值。
+func TestAdminRenameUserExplicitVersionSkipsFetch(t *testing.T) {
+	api, server := newRenameUserFakeAPI(t)
+	defer server.Close()
+	api.rowVersion = 9 // GET 若被调用会给出 9；显式传入 7 必须优先。
+	sessionFile := writeProtectedSecretFile(t, "rename-session3.secret", "session-secret")
+	args := []string{"admin", "rename-user", "usr_target", "--new-username", "new-name",
+		"--reason", "用户申请", "--confirm", "RENAME-USER", "--expected-row-version", "7",
+		"--json", "--server", server.URL, "--session-file", sessionFile}
+	var stdout, stderr strings.Builder
+	exit := RunWithOptions(args, strings.NewReader("secret-password\n654321\n"),
+		&stdout, &stderr, Options{})
+	if exit != ExitOK || !api.committed {
+		t.Fatalf("显式版本退出码 = %d，stderr=%s", exit, stderr.String())
+	}
+	if api.getCalls != 0 {
+		t.Fatalf("显式版本不应读取目标用户版本，getCalls=%d", api.getCalls)
+	}
+}
+
+// TestAdminRenameUserMissingRowVersion 覆盖真实 API 缺 row_version 时明确失败：
+// 稳定 ROW_VERSION_MISSING、不执行改名，不猜测或跳过乐观并发。
+func TestAdminRenameUserMissingRowVersion(t *testing.T) {
+	api, server := newRenameUserFakeAPI(t)
+	defer server.Close()
+	api.omitRowVersion = true
+	sessionFile := writeProtectedSecretFile(t, "rename-session4.secret", "session-secret")
+	args := []string{"admin", "rename-user", "usr_target", "--new-username", "new-name",
+		"--reason", "用户申请", "--confirm", "RENAME-USER", "--json",
+		"--server", server.URL, "--session-file", sessionFile}
+	var stdout, stderr strings.Builder
+	exit := RunWithOptions(args, strings.NewReader("secret-password\n654321\n"),
+		&stdout, &stderr, Options{})
+	if exit != ExitError {
+		t.Fatalf("缺版本退出码 = %d，期望 %d（stderr=%s）", exit, ExitError, stderr.String())
+	}
+	if api.committed || api.getCalls != 1 {
+		t.Fatalf("缺版本时不应提交改名: committed=%v getCalls=%d", api.committed, api.getCalls)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(stdout.String()), &envelope); err != nil {
+		t.Fatalf("JSON 输出无效: %v (%s)", err, stdout.String())
+	}
+	failure, _ := envelope["error"].(map[string]any)
+	if failure["code"] != "ROW_VERSION_MISSING" {
+		t.Fatalf("错误码 = %v，期望 ROW_VERSION_MISSING", failure["code"])
 	}
 }
