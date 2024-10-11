@@ -87,6 +87,13 @@ type DatabaseOverrides struct {
 	Path          *string
 	WAL           *bool
 	BusyTimeoutMS *int
+	// 以下为非 SQLite 连接字段覆盖项；语义与 DatabaseConfig 同名字段一致。
+	Host     *string
+	Port     *int
+	Username *string
+	Password *SecretSource
+	Name     *string
+	TLSMode  *string
 }
 
 // SecretsOverrides 是 SecretsConfig 的显式覆盖项。MasterKey 由宿主密钥提供者
@@ -270,6 +277,12 @@ type configOverrides struct {
 	databasePath             *string
 	databaseWAL              *bool
 	databaseBusyTimeout      *int
+	databaseHost             *string
+	databasePort             *int
+	databaseUsername         *string
+	databasePassword         *SecretSource
+	databaseName             *string
+	databaseTLSMode          *string
 	registrationEnabled      *bool
 	registrationReview       *bool
 	registrationEmail        *bool
@@ -384,6 +397,24 @@ func (ov *configOverrides) apply(cfg *Config) {
 	}
 	if ov.databaseBusyTimeout != nil {
 		cfg.Database.BusyTimeoutMS = *ov.databaseBusyTimeout
+	}
+	if ov.databaseHost != nil {
+		cfg.Database.Host = *ov.databaseHost
+	}
+	if ov.databasePort != nil {
+		cfg.Database.Port = *ov.databasePort
+	}
+	if ov.databaseUsername != nil {
+		cfg.Database.Username = *ov.databaseUsername
+	}
+	if ov.databasePassword != nil {
+		cfg.Database.Password = *ov.databasePassword
+	}
+	if ov.databaseName != nil {
+		cfg.Database.Database = *ov.databaseName
+	}
+	if ov.databaseTLSMode != nil {
+		cfg.Database.TLSMode = *ov.databaseTLSMode
 	}
 	if ov.registrationEnabled != nil {
 		cfg.Registration.Enabled = *ov.registrationEnabled
@@ -615,10 +646,16 @@ type yamlLogging struct {
 }
 
 type yamlDatabase struct {
-	Driver        *string `yaml:"driver"`
-	Path          *string `yaml:"path"`
-	WAL           *bool   `yaml:"wal"`
-	BusyTimeoutMS *int    `yaml:"busy_timeout_ms"`
+	Driver        *string           `yaml:"driver"`
+	Path          *string           `yaml:"path"`
+	WAL           *bool             `yaml:"wal"`
+	BusyTimeoutMS *int              `yaml:"busy_timeout_ms"`
+	Host          *string           `yaml:"host"`
+	Port          *int              `yaml:"port"`
+	Username      *string           `yaml:"username"`
+	Password      *yamlSecretSource `yaml:"password"`
+	Name          *string           `yaml:"name"`
+	TLSMode       *string           `yaml:"tls_mode"`
 }
 
 type yamlSecrets struct {
@@ -710,6 +747,11 @@ var (
 			{name: "path", tag: "!!str"},
 			{name: "wal", tag: "!!bool"},
 			{name: "busy_timeout_ms", tag: "!!int"},
+			{name: "host", tag: "!!str"},
+			{name: "port", tag: "!!int"},
+			{name: "username", tag: "!!str"},
+			{name: "name", tag: "!!str"},
+			{name: "tls_mode", tag: "!!str"},
 		},
 		"registration": {
 			{name: "enabled", tag: "!!bool"},
@@ -854,6 +896,10 @@ func checkYAMLStructure(root *yaml.Node) ConfigErrors {
 
 		if name == "mail" {
 			errs = append(errs, checkYAMLMailSection(value)...)
+			continue
+		}
+		if name == "database" {
+			errs = append(errs, checkYAMLDatabaseSection(value)...)
 			continue
 		}
 		specs, known := yamlSectionFields[name]
@@ -1183,6 +1229,19 @@ func convertYAML(doc *yamlConfig) (configOverrides, ConfigErrors) {
 		ov.databasePath = doc.Database.Path
 		ov.databaseWAL = doc.Database.WAL
 		ov.databaseBusyTimeout = doc.Database.BusyTimeoutMS
+		ov.databaseHost = doc.Database.Host
+		ov.databasePort = doc.Database.Port
+		ov.databaseUsername = doc.Database.Username
+		ov.databaseName = doc.Database.Name
+		ov.databaseTLSMode = doc.Database.TLSMode
+		if doc.Database.Password != nil {
+			source, sourceErr := convertYAMLSecretSource("database.password", doc.Database.Password)
+			if sourceErr != nil {
+				errs = append(errs, sourceErr)
+			} else {
+				ov.databasePassword = source
+			}
+		}
 	}
 	if doc.Registration != nil {
 		ov.registrationEnabled = doc.Registration.Enabled
@@ -1487,6 +1546,35 @@ func overridesFromEnv(lookup func(string) (string, bool)) (configOverrides, Conf
 			ov.databaseBusyTimeout = &number
 		}
 	}
+	if value, ok := lookup(envDatabaseHost); ok {
+		ov.databaseHost = Ptr(value)
+	}
+	if value, ok := lookup(envDatabasePort); ok {
+		number, err := parseEnvInt(value)
+		if err != nil {
+			errs = append(errs, configErr(ConfigErrorValue, "env", "database.port", 0, err.Error()))
+		} else {
+			ov.databasePort = &number
+		}
+	}
+	if value, ok := lookup(envDatabaseUsername); ok {
+		ov.databaseUsername = Ptr(value)
+	}
+	if value, ok := lookup(envDatabasePassword); ok {
+		source, parseErr := ParseSecretSource(value)
+		if parseErr != nil {
+			errs = append(errs, configErrWrap(ConfigErrorSecretSource, "env", "database.password", 0,
+				"数据库密码环境变量必须使用 env:NAME 或 file:绝对路径 引用", parseErr))
+		} else {
+			ov.databasePassword = &source
+		}
+	}
+	if value, ok := lookup(envDatabaseName); ok {
+		ov.databaseName = Ptr(value)
+	}
+	if value, ok := lookup(envDatabaseTLSMode); ok {
+		ov.databaseTLSMode = Ptr(value)
+	}
 	if value, ok := lookup(envRegistrationEnabled); ok {
 		flag, err := parseEnvBool(value)
 		if err != nil {
@@ -1719,6 +1807,12 @@ func overridesFromOptions(options *Overrides) (configOverrides, ConfigErrors) {
 		databasePath:             options.Database.Path,
 		databaseWAL:              options.Database.WAL,
 		databaseBusyTimeout:      options.Database.BusyTimeoutMS,
+		databaseHost:             options.Database.Host,
+		databasePort:             options.Database.Port,
+		databaseUsername:         options.Database.Username,
+		databasePassword:         options.Database.Password,
+		databaseName:             options.Database.Name,
+		databaseTLSMode:          options.Database.TLSMode,
 		registrationEnabled:      options.Registration.Enabled,
 		registrationReview:       options.Registration.RequireReview,
 		registrationEmail:        options.Registration.RequireEmailVerification,
@@ -1897,13 +1991,17 @@ func validateOverrides(ov *configOverrides, source string) ConfigErrors {
 		add(ConfigErrorValue, "logging.format", "日志格式必须是 text 或 json")
 	}
 	if ov.databaseDriver != nil && !ov.databaseDriver.Valid() {
-		add(ConfigErrorValue, "database.driver", "当前版本只支持 sqlite 驱动，其他驱动尚未实现")
+		add(ConfigErrorValue, "database.driver",
+			"数据库驱动必须是 sqlite、mysql、postgres 或 sqlserver")
 	}
 	if ov.databasePath != nil && *ov.databasePath == "" {
 		add(ConfigErrorValue, "database.path", "SQLite 数据库路径不能为空")
 	}
 	if ov.databaseBusyTimeout != nil && (*ov.databaseBusyTimeout < 1 || *ov.databaseBusyTimeout > 600000) {
 		add(ConfigErrorRange, "database.busy_timeout_ms", "锁等待超时必须是 1～600000 毫秒")
+	}
+	if ov.databasePort != nil && (*ov.databasePort < 0 || *ov.databasePort > 65535) {
+		add(ConfigErrorRange, "database.port", "数据库端口必须在 0～65535 之间（0 表示驱动默认端口）")
 	}
 	if ov.registrationRoles != nil {
 		if problem := registrationDefaultRolesProblem(*ov.registrationRoles); problem != "" {
@@ -2022,6 +2120,25 @@ func checkYAMLMailSection(node *yaml.Node) ConfigErrors {
 			}, nil)...)
 		default:
 			errs = append(errs, configErr(ConfigErrorUnknownField, "yaml", "mail."+name, key.Line, "未定义的配置字段"))
+		}
+	}
+	return errs
+}
+
+// checkYAMLDatabaseSection 校验 database 配置段：普通字段交由通用映射校验，
+// password 只允许受保护秘密来源映射（env/file 二选一），不允许明文密码。
+func checkYAMLDatabaseSection(node *yaml.Node) ConfigErrors {
+	errs := checkYAMLMappingKeys(node, "database", map[string]string{
+		"driver": "!!str", "path": "!!str", "wal": "!!bool", "busy_timeout_ms": "!!int",
+		"host": "!!str", "port": "!!int", "username": "!!str", "name": "!!str",
+		"tls_mode": "!!str",
+	}, map[string]string{"password": "secret"})
+	if node.Kind != yaml.MappingNode {
+		return errs
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "password" {
+			errs = append(errs, checkYAMLSecretMapping(node.Content[i+1], "database.password")...)
 		}
 	}
 	return errs

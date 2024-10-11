@@ -251,9 +251,11 @@ type LoggingConfig struct {
 }
 
 // DatabaseConfig 是数据库连接配置。本步不打开数据库，只校验配置；
-// SQLite 连接实现见步骤 07，其他数据库驱动见后续步骤。
+// SQLite 是当前唯一接入运行时的驱动；MySQL/PostgreSQL/SQL Server 只提供配置
+// 字段与既有适配代码，运行入口会明确拒绝（不得用 SQLite 仿真冒充）。
 type DatabaseConfig struct {
-	// Driver 是数据库驱动类型，当前版本只接受 sqlite。
+	// Driver 是数据库驱动类型：sqlite（运行时已接入）或 mysql/postgres/
+	// sqlserver（配置可用、运行未接入）。
 	Driver DatabaseDriver
 	// Path 是 SQLite 数据库文件路径。加载配置不会创建该文件。
 	Path string
@@ -262,6 +264,22 @@ type DatabaseConfig struct {
 	WAL bool
 	// BusyTimeoutMS 是 SQLite 锁等待毫秒数，默认 5000，范围 1～600000。
 	BusyTimeoutMS int
+	// Host 是 MySQL/PostgreSQL/SQL Server 主机名或 IP；SQLite 驱动必须为空。
+	Host string
+	// Port 是 MySQL/PostgreSQL/SQL Server 端口；0 表示驱动默认端口
+	// （MySQL 3306、PostgreSQL 5432、SQL Server 1433）。
+	Port int
+	// Username 是 MySQL/PostgreSQL/SQL Server 登录用户名；SQLite 必须为空。
+	Username string
+	// Password 指向非 SQLite 连接的受保护秘密来源（env:NAME 或 file:绝对路径）；
+	// 配置本身不含密码明文。SQLite 必须为空。
+	Password SecretSource
+	// Database 是 MySQL/PostgreSQL/SQL Server 数据库名；SQLite 必须为空。
+	Database string
+	// TLSMode 是非 SQLite 连接的 TLS 模式；空值使用驱动默认安全模式
+	// （MySQL "true" 校验服务器证书、PostgreSQL "verify-full"、
+	// SQL Server "1.2"）。本轮只接受安全模式，明文/跳过校验模式被拒绝。
+	TLSMode string
 }
 
 // RegistrationConfig 是自主注册与邮箱验证的策略配置（步骤 33）。它只承载策略，
@@ -638,14 +656,58 @@ func (f LogFormat) Valid() bool {
 type DatabaseDriver string
 
 const (
-	// DatabaseDriverSQLite 是当前唯一接受的驱动；其他数据库的适配在后续步骤
-	// 增加，本步不接受未实现的驱动名，避免配置看似生效。
+	// DatabaseDriverSQLite 是当前唯一接入运行时的驱动。
 	DatabaseDriverSQLite DatabaseDriver = "sqlite"
+	// DatabaseDriverMySQL 是 MySQL 驱动标识；本轮只提供配置字段与既有适配代码，
+	// 运行入口 fail-closed（不做后端接线，不使用 SQLite 仿真冒充）。
+	DatabaseDriverMySQL DatabaseDriver = "mysql"
+	// DatabaseDriverPostgreSQL 是 PostgreSQL 驱动标识，语义同 MySQL。
+	DatabaseDriverPostgreSQL DatabaseDriver = "postgres"
+	// DatabaseDriverSQLServer 是 SQL Server 驱动标识，语义同 MySQL。
+	DatabaseDriverSQLServer DatabaseDriver = "sqlserver"
 )
 
-// Valid 报告驱动是否被当前版本接受。
+// Valid 报告驱动是否为已定义的配置驱动（不代表运行时已接入）。
 func (d DatabaseDriver) Valid() bool {
-	return d == DatabaseDriverSQLite
+	switch d {
+	case DatabaseDriverSQLite, DatabaseDriverMySQL, DatabaseDriverPostgreSQL,
+		DatabaseDriverSQLServer:
+		return true
+	default:
+		return false
+	}
+}
+
+// RuntimeSupported 报告该驱动是否已接入运行时。未接入的驱动只能保存/校验配置，
+// 数据库打开与迁移入口必须明确拒绝（fail-closed）。
+func (d DatabaseDriver) RuntimeSupported() bool { return d == DatabaseDriverSQLite }
+
+// DefaultPort 返回该驱动的默认端口；SQLite 返回 0（不使用网络端口）。
+func (d DatabaseDriver) DefaultPort() int {
+	switch d {
+	case DatabaseDriverMySQL:
+		return 3306
+	case DatabaseDriverPostgreSQL:
+		return 5432
+	case DatabaseDriverSQLServer:
+		return 1433
+	default:
+		return 0
+	}
+}
+
+// DefaultTLSMode 返回该驱动的默认安全 TLS 模式；SQLite 返回空串。
+func (d DatabaseDriver) DefaultTLSMode() string {
+	switch d {
+	case DatabaseDriverMySQL:
+		return "true"
+	case DatabaseDriverPostgreSQL:
+		return "verify-full"
+	case DatabaseDriverSQLServer:
+		return "1.2"
+	default:
+		return ""
+	}
 }
 
 // ReloadClass 表示配置字段改变后需要如何生效。
@@ -700,6 +762,12 @@ const (
 	envDatabasePath          = EnvVarPrefix + "DATABASE_PATH"
 	envDatabaseWAL           = EnvVarPrefix + "DATABASE_WAL"
 	envDatabaseBusyTimeout   = EnvVarPrefix + "DATABASE_BUSY_TIMEOUT_MS"
+	envDatabaseHost          = EnvVarPrefix + "DATABASE_HOST"
+	envDatabasePort          = EnvVarPrefix + "DATABASE_PORT"
+	envDatabaseUsername      = EnvVarPrefix + "DATABASE_USERNAME"
+	envDatabasePassword      = EnvVarPrefix + "DATABASE_PASSWORD"
+	envDatabaseName          = EnvVarPrefix + "DATABASE_NAME"
+	envDatabaseTLSMode       = EnvVarPrefix + "DATABASE_TLS_MODE"
 	envRegistrationEnabled   = EnvVarPrefix + "REGISTRATION_ENABLED"
 	envRegistrationReview    = EnvVarPrefix + "REGISTRATION_REQUIRE_REVIEW"
 	envRegistrationEmail     = EnvVarPrefix + "REGISTRATION_REQUIRE_EMAIL_VERIFICATION"
@@ -757,6 +825,12 @@ var configFields = []FieldInfo{
 	{Field: "database.path", Env: envDatabasePath, Class: ReloadRestartRequired},
 	{Field: "database.wal", Env: envDatabaseWAL, Class: ReloadRestartRequired},
 	{Field: "database.busy_timeout_ms", Env: envDatabaseBusyTimeout, Class: ReloadRestartRequired},
+	{Field: "database.host", Env: envDatabaseHost, Class: ReloadRestartRequired},
+	{Field: "database.port", Env: envDatabasePort, Class: ReloadRestartRequired},
+	{Field: "database.username", Env: envDatabaseUsername, Class: ReloadRestartRequired},
+	{Field: "database.password", Env: envDatabasePassword, Class: ReloadRestartRequired, Secret: true},
+	{Field: "database.name", Env: envDatabaseName, Class: ReloadRestartRequired},
+	{Field: "database.tls_mode", Env: envDatabaseTLSMode, Class: ReloadRestartRequired},
 	{Field: "registration.enabled", Env: envRegistrationEnabled, Class: ReloadRestartRequired},
 	{Field: "registration.require_review", Env: envRegistrationReview, Class: ReloadRestartRequired},
 	{Field: "registration.require_email_verification", Env: envRegistrationEmail, Class: ReloadRestartRequired},
@@ -873,6 +947,131 @@ func Default() Config {
 			RequestTTLSeconds:  7 * 24 * 60 * 60,
 			RebindMethods:      []string{"passkey"},
 		},
+	}
+}
+
+// databaseConfigProblem 是一条数据库配置校验问题（字段+原因+错误分类）。
+type databaseConfigProblem struct {
+	field  string
+	kind   ConfigErrorKind
+	detail string
+}
+
+// databaseConfigProblems 校验数据库配置。SQLite 与网络数据库字段互斥；网络数据库
+// 本轮只校验配置合法性（运行入口会明确 fail-closed），TLS 只接受安全模式，避免
+// 配置看似可用却以明文/跳过证书校验运行。
+func databaseConfigProblems(database DatabaseConfig) []databaseConfigProblem {
+	var problems []databaseConfigProblem
+	add := func(field string, kind ConfigErrorKind, detail string) {
+		problems = append(problems, databaseConfigProblem{field: field, kind: kind, detail: detail})
+	}
+	if !database.Driver.Valid() {
+		add("database.driver", ConfigErrorValue,
+			"数据库驱动必须是 sqlite、mysql、postgres 或 sqlserver")
+		return problems
+	}
+	hasNetworkFields := strings.TrimSpace(database.Host) != "" || database.Port != 0 ||
+		strings.TrimSpace(database.Username) != "" || database.Password.Kind != "" ||
+		strings.TrimSpace(database.Database) != "" || strings.TrimSpace(database.TLSMode) != ""
+	if database.Driver == DatabaseDriverSQLite {
+		if strings.TrimSpace(database.Path) == "" {
+			add("database.path", ConfigErrorValue, "SQLite 数据库路径不能为空")
+		}
+		if database.BusyTimeoutMS < 1 || database.BusyTimeoutMS > 600000 {
+			add("database.busy_timeout_ms", ConfigErrorRange, "锁等待超时必须是 1～600000 毫秒")
+		}
+		if hasNetworkFields {
+			add("database.host", ConfigErrorConflict,
+				"SQLite 驱动不接受 host/port/username/password/name/tls_mode 连接字段")
+		}
+		return problems
+	}
+	// 非 SQLite：SQLite 字段互斥，其余字段按配置语义校验。
+	if strings.TrimSpace(database.Path) != "" {
+		add("database.path", ConfigErrorConflict, "非 SQLite 驱动不接受 SQLite 路径字段")
+	}
+	if database.WAL || database.BusyTimeoutMS != 0 {
+		add("database.wal", ConfigErrorConflict, "非 SQLite 驱动不接受 SQLite WAL/忙等待字段")
+	}
+	if problem := databaseHostProblem(database.Host); problem != "" {
+		add("database.host", ConfigErrorValue, problem)
+	}
+	if database.Port < 0 || database.Port > 65535 {
+		add("database.port", ConfigErrorRange, "数据库端口必须在 0～65535 之间（0 表示驱动默认端口）")
+	}
+	if strings.TrimSpace(database.Username) == "" {
+		add("database.username", ConfigErrorValue, "数据库用户名不能为空")
+	}
+	if strings.TrimSpace(database.Database) == "" {
+		add("database.name", ConfigErrorValue, "数据库名不能为空")
+	}
+	if database.Password.Kind != "" || database.Password.Name != "" {
+		switch database.Password.Kind {
+		case SecretSourceEnv, SecretSourceFile:
+			if strings.TrimSpace(database.Password.Name) == "" {
+				add("database.password", ConfigErrorSecretSource, "数据库密码秘密来源名称不能为空")
+			}
+		default:
+			add("database.password", ConfigErrorSecretSource,
+				"数据库密码必须使用 env:环境变量名 或 file:绝对路径 来源")
+		}
+	}
+	if mode := strings.TrimSpace(database.TLSMode); mode != "" &&
+		!databaseTLSModeAllowed(database.Driver, mode) {
+		add("database.tls_mode", ConfigErrorValue, databaseTLSModeHint(database.Driver))
+	}
+	return problems
+}
+
+// databaseHostProblem 校验网络数据库主机名/IP 的基本形态；更严格的连接期校验由
+// 既有存储适配器负责。
+func databaseHostProblem(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "数据库主机不能为空"
+	}
+	if len(host) > 255 {
+		return "数据库主机名过长（最多 255 字节）"
+	}
+	if candidate := strings.Trim(host, "[]"); net.ParseIP(candidate) != nil {
+		return ""
+	}
+	for _, r := range host {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			r == '.' || r == '-' || r == '_' {
+			continue
+		}
+		return "数据库主机名只能包含字母、数字、点、连字符或下划线（IPv6 用方括号）"
+	}
+	return ""
+}
+
+// databaseTLSModeAllowed 报告 TLS 模式是否属于本轮允许的安全模式；空值表示使用
+// 驱动默认安全模式。
+func databaseTLSModeAllowed(driver DatabaseDriver, mode string) bool {
+	switch driver {
+	case DatabaseDriverMySQL:
+		return mode == "true"
+	case DatabaseDriverPostgreSQL:
+		return mode == "verify-full"
+	case DatabaseDriverSQLServer:
+		return mode == "1.2" || mode == "1.3"
+	default:
+		return false
+	}
+}
+
+// databaseTLSModeHint 说明各驱动允许的安全 TLS 模式。
+func databaseTLSModeHint(driver DatabaseDriver) string {
+	switch driver {
+	case DatabaseDriverMySQL:
+		return "MySQL TLS 模式只接受 true（校验服务器证书）；明文/跳过校验模式本轮拒绝"
+	case DatabaseDriverPostgreSQL:
+		return "PostgreSQL TLS 模式只接受 verify-full（校验证书与主机名）；其余模式本轮拒绝"
+	case DatabaseDriverSQLServer:
+		return "SQL Server TLS 版本只接受 1.2 或 1.3"
+	default:
+		return "该驱动不接受 TLS 模式字段"
 	}
 }
 
@@ -1525,17 +1724,10 @@ func validateMerged(c Config) ConfigErrors {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "logging.format", 0,
 			"日志格式必须是 text 或 json"))
 	}
-	if !c.Database.Driver.Valid() {
-		errs = append(errs, configErr(ConfigErrorValue, "final", "database.driver", 0,
-			"当前版本只支持 sqlite 驱动，其他驱动尚未实现"))
-	}
-	if strings.TrimSpace(c.Database.Path) == "" {
-		errs = append(errs, configErr(ConfigErrorValue, "final", "database.path", 0,
-			"SQLite 数据库路径不能为空"))
-	}
-	if c.Database.BusyTimeoutMS < 1 || c.Database.BusyTimeoutMS > 600000 {
-		errs = append(errs, configErr(ConfigErrorRange, "final", "database.busy_timeout_ms", 0,
-			"锁等待超时必须是 1～600000 毫秒"))
+	if problems := databaseConfigProblems(c.Database); len(problems) > 0 {
+		for _, problem := range problems {
+			errs = append(errs, configErr(problem.kind, "final", problem.field, 0, problem.detail))
+		}
 	}
 	if problem := registrationDefaultRolesProblem(c.Registration.DefaultRoleIDs); problem != "" {
 		errs = append(errs, configErr(ConfigErrorValue, "final", "registration.default_role_ids", 0, problem))

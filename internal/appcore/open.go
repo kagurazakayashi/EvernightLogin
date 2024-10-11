@@ -19,9 +19,27 @@ import (
 	"github.com/kagurazakayashi/EvernightLogin/migrations"
 )
 
+// ErrDatabaseDriverNotWired 表示配置/适配代码存在但本轮未接入运行时后端。
+// 打开数据库、迁移等入口必须明确返回该错误并 fail-closed，不得用 SQLite 仿真
+// 冒充其他数据库，也不得静默成功。
+var ErrDatabaseDriverNotWired = errors.New("数据库驱动本轮未接入运行，仅配置与适配代码存在")
+
 // OpenStore 按配置打开 SQLite 存储；writeGuard 非 nil 时接入维护门闸。
+//
+// 仅 sqlite 驱动接入运行时；MySQL/PostgreSQL/SQL Server 本轮只允许保存/校验
+// 配置，打开入口明确返回 ErrDatabaseDriverNotWired（fail-closed，不建文件、不
+// 尝试连接，也不回退到 SQLite）。
 func OpenStore(ctx context.Context, cfg config.Config,
 	writeGuard func(context.Context) (func(), error)) (*sqlite.Store, error) {
+	driver := cfg.Database.Driver
+	if driver == "" {
+		// 兼容旧程序化零值：历史行为等价 sqlite；正式配置校验仍要求显式驱动。
+		driver = config.DatabaseDriverSQLite
+	}
+	if !driver.RuntimeSupported() {
+		return nil, fmt.Errorf("%w: 驱动 %q 本轮只有配置字段与既有适配代码，运行入口未接入；"+
+			"不得用 SQLite 仿真冒充或静默成功", ErrDatabaseDriverNotWired, driver)
+	}
 	options := sqlite.DefaultOptions(cfg.Database.Path)
 	options.WAL = cfg.Database.WAL
 	options.BusyTimeout = time.Duration(cfg.Database.BusyTimeoutMS) * time.Millisecond

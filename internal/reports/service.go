@@ -130,6 +130,13 @@ type payloadReportID struct {
 // 敏感操作确认（reports.export 策略，强认证）；然后冻结窗口/筛选并投递任务。
 // 提交成功只表示已受理，真实结果由 Get 查询任务状态。
 func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, error) {
+	return s.startInternal(ctx, request, false)
+}
+
+// startInternal 是 Start 实现；skipGuard 仅供本地维护控制台显式窄方法使用
+// （不要求管理会话/敏感策略，但仍校验范围/格式/窗口/任务入队与关键审计）。
+func (s *Service) startInternal(ctx context.Context, request StartRequest,
+	skipGuard bool) (ReportView, error) {
 	actor := request.Caller.Actor()
 	if err := actor.Validate(); err != nil {
 		return ReportView{}, ErrAccessDenied
@@ -142,16 +149,20 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, 
 	requestID := normalizeRequestID(request.RequestID)
 	// 数据来源（生产为 stats.Service）自身要求 reports.read；生成前先复核该权限，
 	// 避免任务在读取阶段才因缺读权限失败而留下半成品。
-	readGrant, err := s.authorizeScope(ctx, request.Caller, PermissionRead, scope.ID)
-	if err != nil {
-		s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
-			"read_not_authorized", CodeAccessDenied, requestID, "")
-		return ReportView{}, err
-	}
-	if _, err := s.authorizeScope(ctx, request.Caller, PermissionGenerate, scope.ID); err != nil {
-		s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
-			"generate_not_authorized", CodeAccessDenied, requestID, "")
-		return ReportView{}, err
+	readGrant := stats.ScopeGrant{Allowed: true, AllData: true}
+	if !skipGuard {
+		grant, grantErr := s.authorizeScope(ctx, request.Caller, PermissionRead, scope.ID)
+		readGrant = grant
+		if grantErr != nil {
+			s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
+				"read_not_authorized", CodeAccessDenied, requestID, "")
+			return ReportView{}, grantErr
+		}
+		if _, authzErr := s.authorizeScope(ctx, request.Caller, PermissionGenerate, scope.ID); authzErr != nil {
+			s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
+				"generate_not_authorized", CodeAccessDenied, requestID, "")
+			return ReportView{}, authzErr
+		}
 	}
 	// 先校验请求中的每个格式，未知格式必须拒绝，不能因“过滤未知值”静默降级为
 	// 只生成 HTML（那会让调用方以为请求的格式已生成）。
@@ -171,10 +182,12 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, 
 	}
 	// 每个格式都会写受控可下载产物，因而都属于“导出”面：与 internal/policy 中
 	// reports.export 操作的 PermissionKey 声明保持一致，不因只请求 HTML 而放宽。
-	if _, err := s.authorizeScope(ctx, request.Caller, PermissionExport, scope.ID); err != nil {
-		s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
-			"export_not_authorized", CodeAccessDenied, requestID, "")
-		return ReportView{}, err
+	if !skipGuard {
+		if _, exportErr := s.authorizeScope(ctx, request.Caller, PermissionExport, scope.ID); exportErr != nil {
+			s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
+				"export_not_authorized", CodeAccessDenied, requestID, "")
+			return ReportView{}, exportErr
+		}
 	}
 	if err := validateAppFilter(request.AppID, scope, readGrant); err != nil {
 		s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
@@ -201,12 +214,16 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, 
 	if err != nil {
 		return ReportView{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	sensitiveResult, err := s.authorizeSensitive(ctx, request.Caller, scope.ID, formats,
-		window, request.AppID, detailRows, requestID)
-	if err != nil {
-		s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
-			"export_reauth_denied", CodeAccessDenied, requestID, "")
-		return ReportView{}, err
+	var sensitiveResult reauth.Result
+	if !skipGuard {
+		var sensitiveErr error
+		sensitiveResult, sensitiveErr = s.authorizeSensitive(ctx, request.Caller, scope.ID,
+			formats, window, request.AppID, detailRows, requestID)
+		if sensitiveErr != nil {
+			s.recordFailure(ctx, actor, ActionGenerateRequest, scope.ID,
+				"export_reauth_denied", CodeAccessDenied, requestID, "")
+			return ReportView{}, sensitiveErr
+		}
 	}
 	reportID, err := s.newID(reportIDPrefix)
 	if err != nil {
@@ -239,7 +256,9 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (ReportView, 
 		return true
 	})
 	s.persistHistory(ctx, reportID)
-	s.notifySensitive(ctx, sensitiveResult)
+	if !skipGuard {
+		s.notifySensitive(ctx, sensitiveResult)
+	}
 	// 直接用已授权创建结果构造视图，避免任务已受理后再次授权失败导致“返回错误
 	// 但任务仍在跑”的歧义；之后查询/下载仍逐次重新授权。
 	created, found := s.get(reportID)

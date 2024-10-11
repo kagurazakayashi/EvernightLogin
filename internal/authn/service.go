@@ -518,6 +518,14 @@ func (s *Service) Authenticate(ctx context.Context, request AuthenticateRequest)
 //   - 不强制没有依据的定期改密；RequireChange 只用于管理员创建账户后要求首次
 //     登录改密（一次性标记，成功改密后清除）。
 func (s *Service) SetPassword(ctx context.Context, caller Caller, request SetPasswordRequest) (SetPasswordResult, error) {
+	return s.setPasswordInternal(ctx, caller, request, false)
+}
+
+// setPasswordInternal 是 SetPassword 的实现；skipSensitive 仅供本地维护控制台的
+// 显式窄方法使用（AGENTS §14 本地绝对权限：不要求应用 MFA/近期认证），普通远程
+// 调用永远 skipSensitive=false，仍走敏感策略与审计。
+func (s *Service) setPasswordInternal(ctx context.Context, caller Caller,
+	request SetPasswordRequest, skipSensitive bool) (SetPasswordResult, error) {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return SetPasswordResult{}, err
@@ -595,9 +603,13 @@ func (s *Service) SetPassword(ctx context.Context, caller Caller, request SetPas
 				user.UserID, reasonPasswordReused, CodeOf(err), err)
 		}
 	}
-	sensitiveResult, guardErr := s.authorizeSensitive(ctx, caller, user.UserID, request.RequestID)
-	if guardErr != nil {
-		return SetPasswordResult{}, guardErr
+	var sensitiveResult reauth.Result
+	if !skipSensitive {
+		var guardErr error
+		sensitiveResult, guardErr = s.authorizeSensitive(ctx, caller, user.UserID, request.RequestID)
+		if guardErr != nil {
+			return SetPasswordResult{}, guardErr
+		}
 	}
 	newHash, err := s.hashPassword(ctx, request.NewPassword)
 	if err != nil {
@@ -654,7 +666,9 @@ func (s *Service) SetPassword(ctx context.Context, caller Caller, request SetPas
 		"argon2_params", s.params.String(),
 		"security_version", changeResult.SecurityVersion,
 	)
-	s.notifySensitive(ctx, sensitiveResult)
+	if !skipSensitive {
+		s.notifySensitive(ctx, sensitiveResult)
+	}
 	return SetPasswordResult{
 		UserID:            user.UserID,
 		SecurityVersion:   changeResult.SecurityVersion,
@@ -744,6 +758,13 @@ func (s *Service) recordPasswordChangeFailure(ctx context.Context, caller Caller
 //     要求强认证，因此本步成功后状态保持 setup_verified，RequiredSteps 含强因素
 //     绑定与第二因素；不签发会话、不伪造已完成的强认证。
 func (s *Service) SetRootPassword(ctx context.Context, caller Caller, request SetRootPasswordRequest) (RootPasswordResult, error) {
+	return s.setRootPasswordInternal(ctx, caller, request, false)
+}
+
+// setRootPasswordInternal 是 SetRootPassword 实现；allowReady 仅供本地维护控制台
+// 显式窄方法使用（正常运行实例救援 root，不改变普通远程/初始化状态机语义）。
+func (s *Service) setRootPasswordInternal(ctx context.Context, caller Caller,
+	request SetRootPasswordRequest, allowReady bool) (RootPasswordResult, error) {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return RootPasswordResult{}, err
@@ -784,8 +805,10 @@ func (s *Service) SetRootPassword(ctx context.Context, caller Caller, request Se
 		return RootPasswordResult{}, s.rejectedPasswordChange(ctx, caller, ActionRootPasswordSet,
 			record.RootUserID, reasonRootStateRejected, CodeConflict, ErrSetupVerificationRequired)
 	case bootstrap.StateReady:
-		return RootPasswordResult{}, s.rejectedPasswordChange(ctx, caller, ActionRootPasswordSet,
-			record.RootUserID, reasonRootStateRejected, CodeConflict, ErrSetupCompleted)
+		if !allowReady {
+			return RootPasswordResult{}, s.rejectedPasswordChange(ctx, caller, ActionRootPasswordSet,
+				record.RootUserID, reasonRootStateRejected, CodeConflict, ErrSetupCompleted)
+		}
 	default:
 		return RootPasswordResult{}, fmt.Errorf("%w: root 初始化状态数据无效", ErrStoreUnavailable)
 	}
@@ -833,9 +856,11 @@ func (s *Service) SetRootPassword(ctx context.Context, caller Caller, request Se
 	}
 	readyEligible := !strongAuthRequired
 	finalState := bootstrap.StateSetupVerified
-	if readyEligible {
+	if readyEligible || record.State == bootstrap.StateReady {
 		finalState = bootstrap.StateReady
 	}
+	// 已 ready 的本地救援重设：不再调用 MarkReady（状态已终态），只更新密码。
+	markReady := readyEligible && record.State != bootstrap.StateReady
 	now := s.clockNow()
 	event := audit.Event{
 		Actor:     caller.actor,
@@ -870,7 +895,7 @@ func (s *Service) SetRootPassword(ctx context.Context, caller Caller, request Se
 			return setErr
 		}
 		changeResult = result
-		if readyEligible {
+		if markReady {
 			return s.root.MarkReady(txCtx, tx, bootstrap.RootReadyChange{
 				RootUserID: user.UserID,
 				Now:        now,

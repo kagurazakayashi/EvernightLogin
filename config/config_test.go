@@ -369,7 +369,7 @@ func TestRangeAndEnumErrors(t *testing.T) {
 		{"监听地址缺端口", "server:\n  listen_addr: \"127.0.0.1\"\n", ConfigErrorValue, "server.listen_addr"},
 		{"未知日志级别", "logging:\n  level: verbose\n", ConfigErrorValue, "logging.level"},
 		{"未知日志格式", "logging:\n  format: xml\n", ConfigErrorValue, "logging.format"},
-		{"未实现驱动", "database:\n  driver: mysql\n", ConfigErrorValue, "database.driver"},
+		{"未实现驱动", "database:\n  driver: oracle\n", ConfigErrorValue, "database.driver"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -510,6 +510,12 @@ func TestEnvFieldMetadataStable(t *testing.T) {
 		{Field: "database.path", Env: "LOGIN_DATABASE_PATH", Class: ReloadRestartRequired},
 		{Field: "database.wal", Env: "LOGIN_DATABASE_WAL", Class: ReloadRestartRequired},
 		{Field: "database.busy_timeout_ms", Env: "LOGIN_DATABASE_BUSY_TIMEOUT_MS", Class: ReloadRestartRequired},
+		{Field: "database.host", Env: "LOGIN_DATABASE_HOST", Class: ReloadRestartRequired},
+		{Field: "database.port", Env: "LOGIN_DATABASE_PORT", Class: ReloadRestartRequired},
+		{Field: "database.username", Env: "LOGIN_DATABASE_USERNAME", Class: ReloadRestartRequired},
+		{Field: "database.password", Env: "LOGIN_DATABASE_PASSWORD", Class: ReloadRestartRequired, Secret: true},
+		{Field: "database.name", Env: "LOGIN_DATABASE_NAME", Class: ReloadRestartRequired},
+		{Field: "database.tls_mode", Env: "LOGIN_DATABASE_TLS_MODE", Class: ReloadRestartRequired},
 		{Field: "registration.enabled", Env: "LOGIN_REGISTRATION_ENABLED", Class: ReloadRestartRequired},
 		{Field: "registration.require_review", Env: "LOGIN_REGISTRATION_REQUIRE_REVIEW", Class: ReloadRestartRequired},
 		{Field: "registration.require_email_verification", Env: "LOGIN_REGISTRATION_REQUIRE_EMAIL_VERIFICATION", Class: ReloadRestartRequired},

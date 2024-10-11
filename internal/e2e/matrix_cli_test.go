@@ -5,7 +5,7 @@ package e2e
 // 用当前源码构建自包含 `loginctl` 二进制，对真实嵌入式 HTTP 管理 API 执行：
 //   - 258 `admin rename-user`：一次两步验证后提交改名；输出脱敏、不泄露管理密码/TOTP；
 //   - 259 `admin reset-password`：新口令来自受保护文件，一次两步验证后提交，must_change；
-//   - 负向：缺少 --confirm 的用法错误；无权限普通用户会话被服务端拒绝（稳定错误码/退出码）；
+//   - D-274-1 回归：省略 --expected-row-version 时自动读取扁平 data.row_version 成功改名；\n//   - 负向：缺少 --confirm 的用法错误；无权限普通用户会话被服务端拒绝（稳定错误码/退出码）；
 //   - 会话文件/新口令文件均按平台要求收紧权限（secrets.ProtectFile），不进入命令行参数。
 
 import (
@@ -153,37 +153,48 @@ func cliFailureCode(envelope map[string]any) string {
 	return code
 }
 
-// TestMatrixCLIKnownDefectRenameAutoRowVersion 记录 258 CLI 与真实管理 API 的已知契约
-// 缺陷（不在本步修产品代码；修复由原写者另派）：
+// TestMatrixCLIRenameAutoRowVersion 覆盖 258 CLI 省略 `--expected-row-version` 的
+// 自动版本读取路径（D-274-1 回归）。
 //
-//   - `loginctl admin rename-user` 在省略 `--expected-row-version` 时先 GET
-//     `/admin/v1/users/{id}` 并读取 `data.user.row_version`；
-//   - 真实管理 API 的 GET 用户路由返回**扁平**用户对象（`data.id/username/row_version`），
-//     没有 `user` 包装，因此 CLI 总是报 ROW_VERSION_MISSING 退出 1；
-//   - 显式 `--expected-row-version` 的路径正常（上方成功用例已覆盖）。
-//
-// 本用例断言“当前缺陷行为”，修复后应更新此测试为成功路径并移除缺陷记录。
-func TestMatrixCLIKnownDefectRenameAutoRowVersion(t *testing.T) {
+// 历史：C2 之前 `loginctl admin rename-user` 读取 `data.user.row_version`，但真实
+// 管理 API 的 GET 用户路由返回扁平对象（`data.id/username/row_version`），导致
+// ROW_VERSION_MISSING 失败。C2 修复后 CLI 读取扁平 `data.row_version`，本用例断言
+// 省略版本参数时可成功改名（显式版本路径由上方 TestMatrixCLIDirectManagement 覆盖）。
+func TestMatrixCLIRenameAutoRowVersion(t *testing.T) {
 	env := openEnvHTTP(t)
 	server := startHTTP(t, env.Runtime)
 	operatorSession, operatorTOTP := httpDirectOperator(t, env)
 	binary := buildLoginctl(t)
-	sessionFile := writeProtectedSecret(t, env.Dir, "cli-defect-session.secret",
+	sessionFile := writeProtectedSecret(t, env.Dir, "cli-auto-version-session.secret",
 		string(operatorSession))
-	target := createUser(t, env.Runtime, "cli-defect-target", targetPassword)
+	target := createUser(t, env.Runtime, "cli-auto-version-target", targetPassword)
 	env.Clock.Advance(30 * time.Second)
 	result := runCLI(t, binary, []string{"admin", "rename-user", target.ID,
-		"--new-username", "cli-defect-renamed", "--reason", "自动版本读取缺陷",
+		"--new-username", "cli-auto-version-renamed", "--reason", "D-274-1 自动版本读取回归",
 		"--confirm", "RENAME-USER", "--server", server.URL,
 		"--session-file", sessionFile, "--json"},
 		operatorPassword+"\n"+totpCode(t, env.Clock, operatorTOTP)+"\n")
-	if result.Exit != 1 || !strings.Contains(result.Stdout, "ROW_VERSION_MISSING") {
-		t.Fatalf("已知缺陷行为变化：退出码=%d stdout=%s（若产品已修复，请改为成功断言并删除缺陷记录）",
-			result.Exit, truncate(result.Stdout))
+	if result.Exit != 0 {
+		t.Fatalf("CLI 自动版本改名退出码 = %d，stdout=%s stderr=%s", result.Exit,
+			truncate(result.Stdout), truncate(result.Stderr))
+	}
+	envelope := cliEnvelope(t, result.Stdout)
+	if ok, _ := envelope["ok"].(bool); !ok {
+		t.Fatalf("CLI 自动版本改名输出 ok=false: %s", truncate(result.Stdout))
+	}
+	if strings.Contains(result.Stdout, operatorPassword) ||
+		strings.Contains(result.Stdout, totpCode(t, env.Clock, operatorTOTP)) {
+		t.Fatal("CLI 输出泄露管理密码或 TOTP")
+	}
+	renamed, err := env.Runtime.Admin().GetUserByUsername(context.Background(),
+		loginapp.AdminUserByUsernameRequest{Caller: env.Runtime.LocalAdmin(),
+			Username: "cli-auto-version-renamed", RequestID: login.NewRequestID()})
+	if err != nil || renamed.ID != target.ID {
+		t.Fatalf("自动版本改名后数据库未落到目标 ID: %+v err=%v", renamed, err)
 	}
 	if _, err := env.Runtime.Admin().GetUserByUsername(context.Background(),
 		loginapp.AdminUserByUsernameRequest{Caller: env.Runtime.LocalAdmin(),
-			Username: "cli-defect-renamed", RequestID: login.NewRequestID()}); !loginapp.IsNotFound(err) {
-		t.Fatalf("已知缺陷用例不应产生改名: %v", err)
+			Username: "cli-auto-version-target", RequestID: login.NewRequestID()}); !loginapp.IsNotFound(err) {
+		t.Fatalf("旧用户名应不再存在: %v", err)
 	}
 }

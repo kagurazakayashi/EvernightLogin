@@ -8,6 +8,7 @@ import (
 
 	"github.com/kagurazakayashi/EvernightLogin/internal/account"
 	"github.com/kagurazakayashi/EvernightLogin/internal/audit"
+	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
 	"github.com/kagurazakayashi/EvernightLogin/internal/task"
 )
 
@@ -126,8 +127,18 @@ type PurgeListRequest struct {
 // SetRetention 设置保留策略：仅 root，要求 audit.purge 敏感策略校验；版本 CAS
 // 防止旧页面覆盖新策略；受保护清理日志与审计事件同事务写入。
 func (s *Service) SetRetention(ctx context.Context, request SetRetentionRequest) (RetentionInfo, error) {
-	if err := s.requireRoot(ctx, request.Caller); err != nil {
-		return RetentionInfo{}, err
+	return s.setRetentionInternal(ctx, request, false)
+}
+
+// setRetentionInternal 是 SetRetention 实现；skipGuard 仅供本地维护控制台显式
+// 窄方法使用（不要求 root/近期强认证，但仍写受保护清理日志与审计，危险动作需
+// 维护锁由调用方写门保证）。
+func (s *Service) setRetentionInternal(ctx context.Context, request SetRetentionRequest,
+	skipGuard bool) (RetentionInfo, error) {
+	if !skipGuard {
+		if err := s.requireRoot(ctx, request.Caller); err != nil {
+			return RetentionInfo{}, err
+		}
 	}
 	if request.RetentionDays < 1 || request.RetentionDays > MaxRetentionDays {
 		return RetentionInfo{}, fmt.Errorf("%w: 保留天数必须在 1～%d 之间", ErrInvalidRequest, MaxRetentionDays)
@@ -149,15 +160,19 @@ func (s *Service) SetRetention(ctx context.Context, request SetRetentionRequest)
 	if request.ExpectedVersion != currentVersion {
 		return RetentionInfo{}, ErrConflict
 	}
-	sensitiveResult, err := s.authorizeSensitive(ctx, request.Caller, OperationPurge, ScopeSystem,
-		"audit_retention", ScopeSystem,
-		map[string]string{"retention_days": fmt.Sprintf("%d", request.RetentionDays),
-			"expected_version": fmt.Sprintf("%d", request.ExpectedVersion)},
-		"修改安全审计保留策略", request.RequestID)
-	if err != nil {
-		s.recordFailure(ctx, request.Caller.Actor(), ActionRetentionSet, ScopeSystem,
-			"retention_reauth_denied", CodeAccessDenied, request.RequestID)
-		return RetentionInfo{}, err
+	var sensitiveResult reauth.Result
+	if !skipGuard {
+		var sensitiveErr error
+		sensitiveResult, sensitiveErr = s.authorizeSensitive(ctx, request.Caller, OperationPurge, ScopeSystem,
+			"audit_retention", ScopeSystem,
+			map[string]string{"retention_days": fmt.Sprintf("%d", request.RetentionDays),
+				"expected_version": fmt.Sprintf("%d", request.ExpectedVersion)},
+			"修改安全审计保留策略", request.RequestID)
+		if sensitiveErr != nil {
+			s.recordFailure(ctx, request.Caller.Actor(), ActionRetentionSet, ScopeSystem,
+				"retention_reauth_denied", CodeAccessDenied, request.RequestID)
+			return RetentionInfo{}, sensitiveErr
+		}
 	}
 	now := s.now()
 	record := RetentionRecord{
@@ -181,15 +196,25 @@ func (s *Service) SetRetention(ctx context.Context, request SetRetentionRequest)
 	if !written {
 		return RetentionInfo{}, ErrConflict
 	}
-	s.notifySensitive(ctx, sensitiveResult)
+	if !skipGuard {
+		s.notifySensitive(ctx, sensitiveResult)
+	}
 	return s.retentionInfo(ctx)
 }
 
 // PreviewPurge 生成只读清理预估（root）：真实计数/截断、保留期边界与参数摘要。
 // 它不删除记录，并记录一次成功审计便于追踪“谁在何时预估了什么范围”。
 func (s *Service) PreviewPurge(ctx context.Context, request PurgePreviewRequest) (PurgePreview, error) {
-	if err := s.requireRoot(ctx, request.Caller); err != nil {
-		return PurgePreview{}, err
+	return s.previewPurgeInternal(ctx, request, false)
+}
+
+// previewPurgeInternal 是 PreviewPurge 实现；skipGuard 仅供本地维护控制台使用。
+func (s *Service) previewPurgeInternal(ctx context.Context, request PurgePreviewRequest,
+	skipGuard bool) (PurgePreview, error) {
+	if !skipGuard {
+		if err := s.requireRoot(ctx, request.Caller); err != nil {
+			return PurgePreview{}, err
+		}
 	}
 	scope, cutoff, batchSize, maxRecords, err := s.normalizePurgeRequest(request.ScopeID,
 		request.Cutoff, request.BatchSize, request.MaxRecords)
@@ -256,8 +281,16 @@ func (s *Service) purgeEstimate(ctx context.Context, scope ScopeInfo, cutoff tim
 // StartPurge 提交 root 手动清理任务：root + audit.purge 敏感策略 + 预估摘要
 // 复核 + 异步任务；保存请求、执行者、范围、截止时间与上限。
 func (s *Service) StartPurge(ctx context.Context, request StartPurgeRequest) (PurgeRunView, error) {
-	if err := s.requireRoot(ctx, request.Caller); err != nil {
-		return PurgeRunView{}, err
+	return s.startPurgeInternal(ctx, request, false)
+}
+
+// startPurgeInternal 是 StartPurge 实现；skipGuard 仅供本地维护控制台使用。
+func (s *Service) startPurgeInternal(ctx context.Context, request StartPurgeRequest,
+	skipGuard bool) (PurgeRunView, error) {
+	if !skipGuard {
+		if err := s.requireRoot(ctx, request.Caller); err != nil {
+			return PurgeRunView{}, err
+		}
 	}
 	scope, cutoff, batchSize, maxRecords, err := s.normalizePurgeRequest(request.ScopeID,
 		request.Cutoff, request.BatchSize, request.MaxRecords)
@@ -287,17 +320,21 @@ func (s *Service) StartPurge(ctx context.Context, request StartPurgeRequest) (Pu
 	if expectedDigest != request.Digest {
 		return PurgeRunView{}, fmt.Errorf("%w: 预估已过期或参数变化，请重新预估", ErrConflict)
 	}
-	sensitiveResult, err := s.authorizeSensitive(ctx, request.Caller, OperationPurge, scope.ID,
-		"audit_retention", scope.ID,
-		map[string]string{"scope": scope.ID, "cutoff": cutoff.UTC().Format(time.RFC3339),
-			"batch_size":     fmt.Sprintf("%d", batchSize),
-			"max_records":    fmt.Sprintf("%d", maxRecords),
-			"preview_digest": request.Digest},
-		"清理安全审计记录", request.RequestID)
-	if err != nil {
-		s.recordFailure(ctx, request.Caller.Actor(), ActionPurgeRequest, scope.ID,
-			"purge_reauth_denied", CodeAccessDenied, request.RequestID)
-		return PurgeRunView{}, err
+	var sensitiveResult reauth.Result
+	if !skipGuard {
+		var sensitiveErr error
+		sensitiveResult, sensitiveErr = s.authorizeSensitive(ctx, request.Caller, OperationPurge, scope.ID,
+			"audit_retention", scope.ID,
+			map[string]string{"scope": scope.ID, "cutoff": cutoff.UTC().Format(time.RFC3339),
+				"batch_size":     fmt.Sprintf("%d", batchSize),
+				"max_records":    fmt.Sprintf("%d", maxRecords),
+				"preview_digest": request.Digest},
+			"清理安全审计记录", request.RequestID)
+		if sensitiveErr != nil {
+			s.recordFailure(ctx, request.Caller.Actor(), ActionPurgeRequest, scope.ID,
+				"purge_reauth_denied", CodeAccessDenied, request.RequestID)
+			return PurgeRunView{}, sensitiveErr
+		}
 	}
 	runID, err := s.newID(purgeIDPrefix)
 	if err != nil {
@@ -337,7 +374,9 @@ func (s *Service) StartPurge(ctx context.Context, request StartPurgeRequest) (Pu
 	if err != nil {
 		return PurgeRunView{}, err
 	}
-	s.notifySensitive(ctx, sensitiveResult)
+	if !skipGuard {
+		s.notifySensitive(ctx, sensitiveResult)
+	}
 	return view, nil
 }
 
@@ -427,8 +466,16 @@ func (s *Service) PurgeHandler(ctx context.Context, job task.Job) error {
 // GetPurgeRun 读取清理运行；仅 root。
 func (s *Service) GetPurgeRun(ctx context.Context, caller account.Caller,
 	runID string) (PurgeRunView, error) {
-	if err := s.requireRoot(ctx, caller); err != nil {
-		return PurgeRunView{}, err
+	return s.getPurgeRunInternal(ctx, caller, runID, false)
+}
+
+// getPurgeRunInternal 是 GetPurgeRun 实现；skipGuard 仅供本地维护控制台使用。
+func (s *Service) getPurgeRunInternal(ctx context.Context, caller account.Caller,
+	runID string, skipGuard bool) (PurgeRunView, error) {
+	if !skipGuard {
+		if err := s.requireRoot(ctx, caller); err != nil {
+			return PurgeRunView{}, err
+		}
 	}
 	if !validPurgeID(runID) {
 		return PurgeRunView{}, fmt.Errorf("%w: 清理编号格式无效", ErrInvalidRequest)
@@ -445,8 +492,16 @@ func (s *Service) GetPurgeRun(ctx context.Context, caller account.Caller,
 
 // ListPurgeRuns 列出清理运行；仅 root。
 func (s *Service) ListPurgeRuns(ctx context.Context, request PurgeListRequest) ([]PurgeRunView, bool, error) {
-	if err := s.requireRoot(ctx, request.Caller); err != nil {
-		return nil, false, err
+	return s.listPurgeRunsInternal(ctx, request, false)
+}
+
+// listPurgeRunsInternal 是 ListPurgeRuns 实现；skipGuard 仅供本地维护控制台使用。
+func (s *Service) listPurgeRunsInternal(ctx context.Context, request PurgeListRequest,
+	skipGuard bool) ([]PurgeRunView, bool, error) {
+	if !skipGuard {
+		if err := s.requireRoot(ctx, request.Caller); err != nil {
+			return nil, false, err
+		}
 	}
 	if request.Kind != "" && request.Kind != "manual" && request.Kind != "policy" {
 		return nil, false, fmt.Errorf("%w: 清理类型未知", ErrInvalidRequest)
@@ -488,8 +543,16 @@ func (s *Service) ListPurgeRuns(ctx context.Context, request PurgeListRequest) (
 // 运行状态为准。取消请求本身写入受保护清理日志以便追踪。
 func (s *Service) CancelPurge(ctx context.Context, caller account.Caller, runID,
 	reason, requestID string) (task.CancelResult, error) {
-	if err := s.requireRoot(ctx, caller); err != nil {
-		return task.CancelResult{}, err
+	return s.cancelPurgeInternal(ctx, caller, runID, reason, requestID, false)
+}
+
+// cancelPurgeInternal 是 CancelPurge 实现；skipGuard 仅供本地维护控制台使用。
+func (s *Service) cancelPurgeInternal(ctx context.Context, caller account.Caller, runID,
+	reason, requestID string, skipGuard bool) (task.CancelResult, error) {
+	if !skipGuard {
+		if err := s.requireRoot(ctx, caller); err != nil {
+			return task.CancelResult{}, err
+		}
 	}
 	if !validPurgeID(runID) {
 		return task.CancelResult{}, fmt.Errorf("%w: 清理编号格式无效", ErrInvalidRequest)
@@ -536,8 +599,16 @@ func (s *Service) CancelPurge(ctx context.Context, caller account.Caller, runID,
 // MaintenanceLog 读取某次清理的受保护审计记录；仅 root。
 func (s *Service) MaintenanceLog(ctx context.Context, caller account.Caller,
 	runID string) ([]MaintenanceEntry, error) {
-	if err := s.requireRoot(ctx, caller); err != nil {
-		return nil, err
+	return s.maintenanceLogInternal(ctx, caller, runID, false)
+}
+
+// maintenanceLogInternal 是 MaintenanceLog 实现；skipGuard 仅供本地维护控制台使用。
+func (s *Service) maintenanceLogInternal(ctx context.Context, caller account.Caller,
+	runID string, skipGuard bool) ([]MaintenanceEntry, error) {
+	if !skipGuard {
+		if err := s.requireRoot(ctx, caller); err != nil {
+			return nil, err
+		}
 	}
 	if !validPurgeID(runID) {
 		return nil, fmt.Errorf("%w: 清理编号格式无效", ErrInvalidRequest)

@@ -148,6 +148,13 @@ type CertificateRequest struct {
 // 必须与应用登记的 client_type 一致；公开客户端禁止 secret/证书与 client_credentials，
 // 保密客户端必须配置至少一种身份验证方式并具备对应凭证。
 func (s *Service) RegisterClient(ctx context.Context, caller Caller, request RegisterRequest) (RegisterResult, error) {
+	return s.registerClientInternal(ctx, caller, request, false)
+}
+
+// registerClientInternal 是 RegisterClient 实现；skipAuthz 仅供本地维护控制台显式
+// 窄方法使用（不要求应用管理会话/再次认证，但仍写关键审计与一次性秘密展示）。
+func (s *Service) registerClientInternal(ctx context.Context, caller Caller,
+	request RegisterRequest, skipAuthz bool) (RegisterResult, error) {
 	ctx = normalizeContext(ctx)
 	if err := account.ValidateRequestID(request.RequestID); err != nil {
 		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "invalid_request_id", string(CodeReqInvalid), "")
@@ -157,9 +164,11 @@ func (s *Service) RegisterClient(ctx context.Context, caller Caller, request Reg
 		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "invalid_client", string(CodeReqInvalid), request.RequestID)
 		return RegisterResult{}, fmt.Errorf("%w: 客户端 ID 或类型无效", ErrInvalidRequest)
 	}
-	if err := s.authorize(ctx, caller, request.ClientID, ActionUpdateSettings); err != nil {
-		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "not_authorized", string(CodeOf(err)), request.RequestID)
-		return RegisterResult{}, err
+	if !skipAuthz {
+		if err := s.authorize(ctx, caller, request.ClientID, ActionUpdateSettings); err != nil {
+			s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "not_authorized", string(CodeOf(err)), request.RequestID)
+			return RegisterResult{}, err
+		}
 	}
 	grants, redirects, logoutURIs, scopes, audiences, methods, requirePKCE, err :=
 		validateClientSettings(request.ClientType, request.GrantTypes, request.RedirectURIs,
@@ -230,13 +239,17 @@ func (s *Service) RegisterClient(ctx context.Context, caller Caller, request Reg
 		info := certificateInfoOf(*certificateRecord)
 		certificateInfo = &info
 	}
-	guard, err := s.authorizeSensitive(ctx, caller, OperationClientRegister, "application", request.ClientID,
-		map[string]string{"client_id": request.ClientID, "client_type": string(request.ClientType),
-			"config_sha256": settingsDigest(record.Client), "request_id": request.RequestID},
-		"登记 OAuth 客户端安全设置", request.RequestID)
-	if err != nil {
-		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "reauth_rejected", string(CodeOf(err)), request.RequestID)
-		return RegisterResult{}, err
+	var guard reauth.Result
+	if !skipAuthz {
+		var guardErr error
+		guard, guardErr = s.authorizeSensitive(ctx, caller, OperationClientRegister, "application", request.ClientID,
+			map[string]string{"client_id": request.ClientID, "client_type": string(request.ClientType),
+				"config_sha256": settingsDigest(record.Client), "request_id": request.RequestID},
+			"登记 OAuth 客户端安全设置", request.RequestID)
+		if guardErr != nil {
+			s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "reauth_rejected", string(CodeOf(guardErr)), request.RequestID)
+			return RegisterResult{}, guardErr
+		}
 	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
@@ -259,7 +272,9 @@ func (s *Service) RegisterClient(ctx context.Context, caller Caller, request Reg
 	}); err != nil {
 		return RegisterResult{}, mapCriticalError(err)
 	}
-	s.notifySensitive(ctx, guard)
+	if !skipAuthz {
+		s.notifySensitive(ctx, guard)
+	}
 	return RegisterResult{Client: clientView(record), Secret: revealed, Certificate: certificateInfo}, nil
 }
 
@@ -366,6 +381,13 @@ func (s *Service) UpdateClientSettings(ctx context.Context, caller Caller, reque
 // 立即生效，旧密钥在过渡期（默认 24 小时，且不超过其原有效期）内仍可用，超出即
 // 拒绝。明文只在本响应出现一次。仅适用于配置了密钥身份验证方式的保密客户端。
 func (s *Service) RotateClientSecret(ctx context.Context, caller Caller, request RotateSecretRequest) (RevealedClientSecret, error) {
+	return s.rotateClientSecretInternal(ctx, caller, request, false)
+}
+
+// rotateClientSecretInternal 是 RotateClientSecret 实现；skipAuthz 仅供本地维护
+// 控制台显式窄方法使用（仍写关键审计与一次性秘密展示）。
+func (s *Service) rotateClientSecretInternal(ctx context.Context, caller Caller,
+	request RotateSecretRequest, skipAuthz bool) (RevealedClientSecret, error) {
 	ctx = normalizeContext(ctx)
 	if err := account.ValidateRequestID(request.RequestID); err != nil {
 		return RevealedClientSecret{}, fmt.Errorf("%w: 请求编号无效", ErrInvalidRequest)
@@ -373,9 +395,11 @@ func (s *Service) RotateClientSecret(ctx context.Context, caller Caller, request
 	if !app.ValidApplicationID(request.ClientID) {
 		return RevealedClientSecret{}, fmt.Errorf("%w: 客户端 ID 无效", ErrInvalidRequest)
 	}
-	if err := s.authorize(ctx, caller, request.ClientID, ActionManageCredentials); err != nil {
-		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "not_authorized", string(CodeOf(err)), request.RequestID)
-		return RevealedClientSecret{}, err
+	if !skipAuthz {
+		if err := s.authorize(ctx, caller, request.ClientID, ActionManageCredentials); err != nil {
+			s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "not_authorized", string(CodeOf(err)), request.RequestID)
+			return RevealedClientSecret{}, err
+		}
 	}
 	record, found, err := s.opts.Store.GetClient(ctx, request.ClientID)
 	if err != nil {
@@ -402,12 +426,16 @@ func (s *Service) RotateClientSecret(ctx context.Context, caller Caller, request
 	if usable >= MaxActiveClientSecrets {
 		return RevealedClientSecret{}, ErrCredentialConflict
 	}
-	guard, err := s.authorizeSensitive(ctx, caller, OperationCredentialRotate, "application", request.ClientID,
-		map[string]string{"client_id": request.ClientID, "action": "rotate_secret", "request_id": request.RequestID},
-		"轮换 OAuth 客户端密钥", request.RequestID)
-	if err != nil {
-		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "reauth_rejected", string(CodeOf(err)), request.RequestID)
-		return RevealedClientSecret{}, err
+	var guard reauth.Result
+	if !skipAuthz {
+		var guardErr error
+		guard, guardErr = s.authorizeSensitive(ctx, caller, OperationCredentialRotate, "application", request.ClientID,
+			map[string]string{"client_id": request.ClientID, "action": "rotate_secret", "request_id": request.RequestID},
+			"轮换 OAuth 客户端密钥", request.RequestID)
+		if guardErr != nil {
+			s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "reauth_rejected", string(CodeOf(guardErr)), request.RequestID)
+			return RevealedClientSecret{}, guardErr
+		}
 	}
 	secret, prefix, err := s.newClientSecret()
 	if err != nil {
@@ -440,13 +468,22 @@ func (s *Service) RotateClientSecret(ctx context.Context, caller Caller, request
 	}); err != nil {
 		return RevealedClientSecret{}, mapCriticalError(err)
 	}
-	s.notifySensitive(ctx, guard)
+	if !skipAuthz {
+		s.notifySensitive(ctx, guard)
+	}
 	return RevealedClientSecret{Info: secretInfo(secretRecord), Secret: secret}, nil
 }
 
 // RevokeClientSecret 立即撤销指定客户端密钥；已撤销的重复请求幂等成功。若客户端
 // 仅用密钥方式认证且这是最后一个可用密钥，拒绝撤销（先轮换新密钥，避免自锁）。
 func (s *Service) RevokeClientSecret(ctx context.Context, caller Caller, request RevokeSecretRequest) error {
+	return s.revokeClientSecretInternal(ctx, caller, request, false)
+}
+
+// revokeClientSecretInternal 是 RevokeClientSecret 实现；skipAuthz 仅供本地维护
+// 控制台显式窄方法使用（仍写关键审计）。
+func (s *Service) revokeClientSecretInternal(ctx context.Context, caller Caller,
+	request RevokeSecretRequest, skipAuthz bool) error {
 	ctx = normalizeContext(ctx)
 	if err := account.ValidateRequestID(request.RequestID); err != nil {
 		return fmt.Errorf("%w: 请求编号无效", ErrInvalidRequest)
@@ -454,9 +491,11 @@ func (s *Service) RevokeClientSecret(ctx context.Context, caller Caller, request
 	if !app.ValidApplicationID(request.ClientID) || !validCredentialID(request.SecretID, "ocs_") {
 		return fmt.Errorf("%w: 客户端或密钥 ID 无效", ErrInvalidRequest)
 	}
-	if err := s.authorize(ctx, caller, request.ClientID, ActionManageCredentials); err != nil {
-		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "not_authorized", string(CodeOf(err)), request.RequestID)
-		return err
+	if !skipAuthz {
+		if err := s.authorize(ctx, caller, request.ClientID, ActionManageCredentials); err != nil {
+			s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "not_authorized", string(CodeOf(err)), request.RequestID)
+			return err
+		}
 	}
 	record, found, err := s.opts.Store.GetClient(ctx, request.ClientID)
 	if err != nil {
@@ -487,17 +526,22 @@ func (s *Service) RevokeClientSecret(ctx context.Context, caller Caller, request
 	if !target.RevokedAt.IsZero() {
 		return nil
 	}
-	if usable <= 1 && hasSecretMethod(record.AuthMethods) && !hasTLSMethod(record.AuthMethods) {
+	if !skipAuthz && usable <= 1 && hasSecretMethod(record.AuthMethods) &&
+		!hasTLSMethod(record.AuthMethods) {
 		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "last_credential", string(CodeConflict), request.RequestID)
 		return ErrLastCredential
 	}
-	guard, err := s.authorizeSensitive(ctx, caller, OperationCredentialRotate, "application", request.ClientID,
-		map[string]string{"client_id": request.ClientID, "action": "revoke_secret",
-			"secret_id": request.SecretID, "request_id": request.RequestID},
-		"撤销 OAuth 客户端密钥", request.RequestID)
-	if err != nil {
-		s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "reauth_rejected", string(CodeOf(err)), request.RequestID)
-		return err
+	var guard reauth.Result
+	if !skipAuthz {
+		var guardErr error
+		guard, guardErr = s.authorizeSensitive(ctx, caller, OperationCredentialRotate, "application", request.ClientID,
+			map[string]string{"client_id": request.ClientID, "action": "revoke_secret",
+				"secret_id": request.SecretID, "request_id": request.RequestID},
+			"撤销 OAuth 客户端密钥", request.RequestID)
+		if guardErr != nil {
+			s.recordFailure(ctx, caller.actor, ActionClientDenied, "application", request.ClientID, "reauth_rejected", string(CodeOf(guardErr)), request.RequestID)
+			return guardErr
+		}
 	}
 	critical := audit.CriticalRequest{
 		Event: audit.Event{
@@ -520,7 +564,9 @@ func (s *Service) RevokeClientSecret(ctx context.Context, caller Caller, request
 	if !ok {
 		return ErrCredentialConflict
 	}
-	s.notifySensitive(ctx, guard)
+	if !skipAuthz {
+		s.notifySensitive(ctx, guard)
+	}
 	return nil
 }
 
