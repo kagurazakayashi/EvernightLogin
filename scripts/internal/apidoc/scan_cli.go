@@ -106,6 +106,17 @@ func scanCLI(root string) ([]CLIBinary, error) {
 				return nil, err
 			}
 		}
+		if program == "login-setup" {
+			// login-setup 使用标准库 flag + 显式命令表（非 cobra）；从
+			// cliCommandTable 与各命令 cliFlags(...) 提取稳定子命令与 flag。
+			setupCommands, err := scanLoginSetupCommands(root, dir)
+			if err != nil {
+				return nil, err
+			}
+			for _, command := range setupCommands {
+				add(command.Name, command.Source, command.Flags)
+			}
+		}
 		sorted := make([]CLISubcommand, 0, len(commands))
 		for _, command := range commands {
 			sort.Slice(command.Flags, func(i, j int) bool { return command.Flags[i].Name < command.Flags[j].Name })
@@ -121,7 +132,7 @@ func scanCLI(root string) ([]CLIBinary, error) {
 		})
 	}
 	sort.Slice(binaries, func(i, j int) bool {
-		order := map[string]int{"login-server": 0, "loginctl": 1, "login-backup": 2}
+		order := map[string]int{"login-server": 0, "loginctl": 1, "login-backup": 2, "login-setup": 3}
 		left, leftOK := order[binaries[i].Name]
 		right, rightOK := order[binaries[j].Name]
 		if leftOK && rightOK {
@@ -545,4 +556,148 @@ func relPath(root, path string) string {
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(rel)
+}
+
+// scanLoginSetupCommands 扫描 cmd/login-setup 的显式命令表与 flag。
+//
+// login-setup 不使用 cobra：顶层命令在 cliCommandTable() 的 cliCommandRow 字面量中声明，
+// 每个命令函数通过 cliFlags(&env, "命令名", stringDef/boolDef/intDef(...)) 注册 flag。
+// 全局 flag（--config/--master-key-file/--json/--version）由 main.go 的 flag.*Var 声明。
+func scanLoginSetupCommands(root, dir string) ([]CLISubcommand, error) {
+	files, err := listGoFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	globalFlags := map[string]CLIFlag{}
+	commandFlags := map[string][]CLIFlag{}
+	commandSources := map[string]string{}
+	commandOrder := []string{}
+	for _, path := range files {
+		file, fset, err := parseAt(path)
+		if err != nil {
+			return nil, err
+		}
+		rel := relPath(root, path)
+		for _, decl := range file.Decls {
+			funcDecl, ok := decl.(*ast.FuncDecl)
+			if !ok || funcDecl.Body == nil {
+				continue
+			}
+			// 全局 flag：main.go 的 flag.StringVar/BoolVar(&x, "name", ...)。
+			if funcDecl.Name.Name == "main" {
+				ast.Inspect(funcDecl.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					selector, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || (selector.Sel.Name != "StringVar" && selector.Sel.Name != "BoolVar") {
+						return true
+					}
+					pkgIdent, ok := selector.X.(*ast.Ident)
+					if !ok || pkgIdent.Name != "flag" || len(call.Args) < 4 {
+						return true
+					}
+					name := stringLit(call.Args[1])
+					if name == "" {
+						return true
+					}
+					flagType := "string"
+					if selector.Sel.Name == "BoolVar" {
+						flagType = "bool"
+					}
+					flag := CLIFlag{Name: name, Type: flagType}
+					flag.Default = flagDefaultText(fset, call.Args[2])
+					flag.Usage = singleLine(stringLit(call.Args[3]))
+					globalFlags[name] = flag
+					return true
+				})
+			}
+			// 命令函数中的 cliFlags 调用：命令名 + stringDef/boolDef/intDef 附加 flag。
+			ast.Inspect(funcDecl.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				ident, ok := call.Fun.(*ast.Ident)
+				if !ok || ident.Name != "cliFlags" || len(call.Args) < 2 {
+					return true
+				}
+				name := stringLit(call.Args[1])
+				if name == "" {
+					return true
+				}
+				if _, exists := commandSources[name]; !exists {
+					commandSources[name] = rel
+					commandOrder = append(commandOrder, name)
+				}
+				for _, extra := range call.Args[2:] {
+					extraCall, ok := extra.(*ast.CallExpr)
+					if !ok {
+						continue
+					}
+					extraIdent, ok := extraCall.Fun.(*ast.Ident)
+					if !ok || len(extraCall.Args) < 2 {
+						continue
+					}
+					flagName := stringLit(extraCall.Args[0])
+					if flagName == "" {
+						continue
+					}
+					flagType := "string"
+					switch extraIdent.Name {
+					case "boolDef":
+						flagType = "bool"
+					case "intDef":
+						flagType = "int"
+					}
+					flag := CLIFlag{Name: flagName, Type: flagType,
+						Usage: singleLine(stringLit(extraCall.Args[1]))}
+					commandFlags[name] = append(commandFlags[name], flag)
+				}
+				return true
+			})
+			// 命令表：cliCommandTable() 返回 cliCommandRow{Name: "..."}。
+			if funcDecl.Name.Name == "cliCommandTable" {
+				ast.Inspect(funcDecl.Body, func(node ast.Node) bool {
+					composite, ok := node.(*ast.CompositeLit)
+					if !ok || compositeTypeName(composite) != "cliCommandRow" {
+						return true
+					}
+					name := stringLit(compositeKeyValue(composite, "Name"))
+					if name == "" {
+						return true
+					}
+					if _, exists := commandSources[name]; !exists {
+						commandSources[name] = rel
+						commandOrder = append(commandOrder, name)
+					}
+					return true
+				})
+			}
+		}
+	}
+	seen := map[string]bool{}
+	commands := make([]CLISubcommand, 0, len(commandSources))
+	for _, name := range commandOrder {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		flags := map[string]CLIFlag{}
+		for flagName, flag := range globalFlags {
+			flags[flagName] = flag
+		}
+		for _, flag := range commandFlags[name] {
+			flags[flag.Name] = flag
+		}
+		sorted := make([]CLIFlag, 0, len(flags))
+		for _, flag := range flags {
+			sorted = append(sorted, flag)
+		}
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		commands = append(commands, CLISubcommand{Name: name, Source: commandSources[name], Flags: sorted})
+	}
+	sort.Slice(commands, func(i, j int) bool { return commands[i].Name < commands[j].Name })
+	return commands, nil
 }

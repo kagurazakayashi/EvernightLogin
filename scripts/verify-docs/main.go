@@ -291,6 +291,12 @@ var defaultSnapshot = map[string]string{
 	"database.path":                           "database/login.db",
 	"database.wal":                            "true",
 	"database.busy_timeout_ms":                "5000",
+	"database.host":                           "空",
+	"database.port":                           "0",
+	"database.username":                       "空",
+	"database.password":                       "未配置",
+	"database.name":                           "空",
+	"database.tls_mode":                       "空",
 	"registration.enabled":                    "false",
 	"registration.require_review":             "false",
 	"registration.require_email_verification": "false",
@@ -353,8 +359,8 @@ func (v *verifier) checkConfigReference() {
 		}
 		fields = append(fields, configField{Field: match[1], Env: env, Class: class, Secret: match[4] != ""})
 	}
-	if len(fields) != 52 {
-		v.fail("配置字段数为 %d，文档约定为 52", len(fields))
+	if len(fields) != 58 {
+		v.fail("配置字段数为 %d，文档约定为 58", len(fields))
 	}
 	if len(defaultSnapshot) != len(fields) {
 		v.fail("默认值快照条目数 %d 与字段数 %d 不一致", len(defaultSnapshot), len(fields))

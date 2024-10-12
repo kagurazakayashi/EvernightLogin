@@ -28,6 +28,9 @@
 | [backup-and-restore.md](backup-and-restore.md) | 加密热备份、离线校验与只读查看/导出、维护模式恢复流程 |
 | [troubleshooting.md](troubleshooting.md) | 48 个稳定错误码、按类别的排障顺序、CLI 退出码与常见“看起来坏了”的问题 |
 | [admin-console.md](admin-console.md) | 内置 Web 管理台操作：普通用户个人中心、root/授权管理员管理页与操作注意 |
+| [login-setup.md](login-setup.md) | 本地维护控制台：零配置启动、初始化/root/账户方案、坏配置修复、密码/MFA 救援、三类恢复、导入导出与终端兼容 |
+| [login-setup-cli.md](login-setup-cli.md) | login-setup 非交互命令参考：命令表、稳定退出码、JSON、秘密通道、确认串与示例 |
+| [login-setup-ai.md](login-setup-ai.md) | login-setup 的 AI/自动化使用边界：先读后写、秘密处理、幂等与服务锁、报告要求 |
 
 已有的详细文档（本指南会引用，不重复内容）：
 

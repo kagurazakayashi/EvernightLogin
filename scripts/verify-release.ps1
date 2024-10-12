@@ -217,11 +217,11 @@ try {
     try { $build = Get-Content -LiteralPath $BuildSummary -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { Fail 10 "build-summary is not valid JSON" }
     if ([int]$build.format -ne 1 -or [int]$build.exit_code -ne 0 -or [string]$build.stage -ne "completed" -or
-        [int]$build.totals.verified -ne 24 -or [int]$build.totals.failed -ne 0 -or
-        [int]$build.verification.exit_code -ne 0) { Fail 20 "build-summary is not a fully verified clean 24/24 build" }
+        [int]$build.totals.verified -ne 30 -or [int]$build.totals.failed -ne 0 -or
+        [int]$build.verification.exit_code -ne 0) { Fail 20 "build-summary is not a fully verified clean 30/30 build" }
     foreach ($module in @($build.modules)) { if ([bool]$module.dirty) { Fail 20 "build-summary records dirty module $($module.name)" } }
     $checklist = @($build.checklist)
-    if ($checklist.Count -ne 24) { Fail 20 "build-summary checklist != 24" }
+    if ($checklist.Count -ne 30) { Fail 20 "build-summary checklist != 30" }
     foreach ($item in $checklist) { if ([string]$item.status -ne "OK") { Fail 20 "build-summary non-OK artifact: $($item.path)" } }
     $checkByKey = @{}
     foreach ($item in $checklist) {
@@ -312,7 +312,7 @@ try {
 
         # Binary type/arch and build-summary size/sha.
         $requiredBins = if ([string]$zip.product -eq "login") {
-            @("login-server", "loginctl", "login-backup") } else { @("evernightmail") }
+            @("login-server", "loginctl", "login-backup", "login-setup") } else { @("evernightmail") }
         foreach ($bin in $requiredBins) {
             $candidates = @((Join-Path (Join-Path $packageRoot "bin") $bin),
                 (Join-Path (Join-Path $packageRoot "bin") ($bin + ".exe")))
@@ -346,6 +346,10 @@ try {
                 if ($ctlResult.ExitCode -ne 0 -or $ctlResult.Stdout -notmatch "loginctl") { Fail 31 "loginctl --version smoke failed" }
                 $backupResult = Invoke-Captured (Join-Path $binDir "login-backup.exe") @("version")
                 if ($backupResult.ExitCode -ne 0 -or $backupResult.Stdout -notmatch "login-backup") { Fail 31 "login-backup version smoke failed" }
+                $setupVersion = Invoke-Captured (Join-Path $binDir "login-setup.exe") @("--version")
+                if ($setupVersion.ExitCode -ne 0 -or $setupVersion.Stdout -notmatch "login-setup") { Fail 31 "login-setup --version smoke failed" }
+                $setupHelp = Invoke-Captured (Join-Path $binDir "login-setup.exe") @("--help")
+                if ($setupHelp.ExitCode -ne 0) { Fail 31 "login-setup --help smoke failed" }
             } else {
                 $mailResult = Invoke-Captured (Join-Path $binDir "evernightmail.exe") @("--version")
                 if ($mailResult.ExitCode -ne 0 -or $mailResult.Stdout -notmatch "evernightmail") { Fail 31 "evernightmail --version smoke failed" }

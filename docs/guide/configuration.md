@@ -51,7 +51,7 @@ loginctl config set logging.level debug --file copy.yaml --dry-run
 loginctl config set-secret secrets.tls_pfx_password --source env:LOGIN_PFX_PASS --file copy.yaml
 ```
 
-预期（Windows amd64 实测）：默认配置 `field_count` 为 **52**；`config set` 预演输出
+预期（Windows amd64 实测）：默认配置 `field_count` 为 **58**；`config set` 预演输出
 `"written": false, "dry_run": true`，并给出 `class`（`hot-reloadable` 或
 `restart-required`）与 `needs_restart`。
 
@@ -123,6 +123,12 @@ secrets:
 | `database.path` | `database/login.db` | restart-required | 否 | `LOGIN_DATABASE_PATH` | SQLite 文件路径；加载配置不会创建文件；目录必须存在且仅服务账号可读写 |
 | `database.wal` | `true` | restart-required | 否 | `LOGIN_DATABASE_WAL` | 是否启用 WAL；显式 `false` 会被保留 |
 | `database.busy_timeout_ms` | `5000` | restart-required | 否 | `LOGIN_DATABASE_BUSY_TIMEOUT_MS` | 锁等待毫秒数，范围 1～600000 |
+| `database.host` | 空 | restart-required | 否 | `LOGIN_DATABASE_HOST` | 非 SQLite 驱动的主机名；SQLite 下必须为空（配置了网络字段会因冲突失败） |
+| `database.port` | `0` | restart-required | 否 | `LOGIN_DATABASE_PORT` | 非 SQLite 驱动端口，范围 0～65535；0 表示驱动默认端口 |
+| `database.username` | 空 | restart-required | 否 | `LOGIN_DATABASE_USERNAME` | 非 SQLite 驱动用户名；启用网络驱动时不能为空 |
+| `database.password` | 未配置 | restart-required | 是 | `LOGIN_DATABASE_PASSWORD` | 数据库密码秘密来源；不要写明文，按秘密来源/环境变量提供 |
+| `database.name` | 空 | restart-required | 否 | `LOGIN_DATABASE_NAME` | 非 SQLite 驱动数据库名；启用网络驱动时不能为空 |
+| `database.tls_mode` | 空 | restart-required | 否 | `LOGIN_DATABASE_TLS_MODE` | 数据库 TLS 模式（按驱动适配校验）；SQLite 下不适用 |
 
 ### 4.4 自主注册（`registration`，默认关闭）
 

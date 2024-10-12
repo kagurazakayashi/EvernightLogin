@@ -1,7 +1,7 @@
 # package-release.ps1 - Step 248 release packaging (local artifacts only).
 #
 # Input: a clean build produced by scripts/build-all.ps1 (step 179) with a v1
-# build-summary.json containing 24 verified product binaries.
+# build-summary.json containing 30 verified product binaries.
 # Output: dist/release/evernight-<version>/ with 12 per-target zip files
 # (2 products x 6 targets), top-level SHA256SUMS.txt, build-matrix.txt,
 # release-summary.json and a four-section RELEASE-NOTES.md.
@@ -55,7 +55,7 @@ $Targets = @(
     "windows/amd64", "windows/arm64", "linux/amd64",
     "linux/arm64", "darwin/amd64", "darwin/arm64"
 )
-$LoginProducts = @("login-server", "loginctl", "login-backup")
+$LoginProducts = @("login-server", "loginctl", "login-backup", "login-setup")
 $MailProducts = @("evernightmail")
 
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
@@ -99,11 +99,11 @@ try {
     if ([int]$summary.exit_code -ne 0) { Fail 20 "build-summary exit_code != 0" }
     if ([string]$summary.stage -ne "completed") { Fail 20 "build-summary stage != completed" }
     if ([string]$summary.version -ne $Version) { Fail 10 "version mismatch: summary=$($summary.version) requested=$Version" }
-    if ([int]$summary.totals.expected -ne 24 -or [int]$summary.totals.verified -ne 24 -or
-        [int]$summary.totals.failed -ne 0) { Fail 20 "build-summary totals are not 24/24/0" }
+    if ([int]$summary.totals.expected -ne 30 -or [int]$summary.totals.verified -ne 30 -or
+        [int]$summary.totals.failed -ne 0) { Fail 20 "build-summary totals are not 30/30/0" }
     if ([int]$summary.verification.exit_code -ne 0) { Fail 20 "build verification exit_code != 0" }
     $checklist = @($summary.checklist)
-    if ($checklist.Count -ne 24) { Fail 20 "build-summary checklist count != 24" }
+    if ($checklist.Count -ne 30) { Fail 20 "build-summary checklist count != 30" }
     foreach ($item in $checklist) {
         if ([string]$item.status -ne "OK") { Fail 20 "build-summary has non-OK artifact: $($item.path)" }
     }

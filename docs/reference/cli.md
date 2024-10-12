@@ -1,4 +1,4 @@
-# CLI 参考（login-server / loginctl / login-backup）
+# CLI 参考（login-server / loginctl / login-backup / login-setup）
 
 > 命令树、flag 与退出码由 AST 扫描 `cmd/` 与 `internal/managecli/` 实际注册生成；任务导向说明见 [../guide/root-cli.md](../guide/root-cli.md)、[../guide/backup-and-restore.md](../guide/backup-and-restore.md) 与 [../deployment/standalone-service.md](../deployment/standalone-service.md)。
 
@@ -281,11 +281,209 @@
 | ExitQueryInvalid | 6 | 稳定退出码 |
 | ExitCancelled | 130 | 稳定退出码 |
 
+## 程序：login-setup（17 个子命令）
+
+| 子命令 | flag 数 | 定义位置 |
+|---|---|---|
+| `accounts apply` | 12 | `cmd/login-setup/noninteractive.go` |
+| `accounts list` | 3 | `cmd/login-setup/noninteractive.go` |
+| `apply` | 8 | `cmd/login-setup/noninteractive.go` |
+| `check` | 3 | `cmd/login-setup/noninteractive.go` |
+| `commands` | 3 | `cmd/login-setup/noninteractive.go` |
+| `db init` | 6 | `cmd/login-setup/noninteractive.go` |
+| `db test` | 4 | `cmd/login-setup/noninteractive.go` |
+| `export config` | 6 | `cmd/login-setup/noninteractive.go` |
+| `import config` | 6 | `cmd/login-setup/noninteractive.go` |
+| `plan` | 4 | `cmd/login-setup/noninteractive.go` |
+| `presets install` | 4 | `cmd/login-setup/noninteractive.go` |
+| `recover apply` | 5 | `cmd/login-setup/noninteractive.go` |
+| `recover plan` | 4 | `cmd/login-setup/noninteractive.go` |
+| `root init` | 14 | `cmd/login-setup/noninteractive.go` |
+| `root status` | 3 | `cmd/login-setup/noninteractive.go` |
+| `selftest` | 3 | `cmd/login-setup/noninteractive.go` |
+| `status` | 3 | `cmd/login-setup/noninteractive.go` |
+
+### `login-setup accounts apply` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--confirm` | string | `` | 逐字确认串 APPLY-ACCOUNT |
+| `--generate-password` | bool | `` | 生成临时密码 |
+| `--generated-password-file` | string | `` | 临时密码写入的受控文件（0600，新建） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--nickname` | string | `` | 昵称（可空） |
+| `--password-file` | string | `` | 从 0600 受限文件读取密码 |
+| `--password-stdin` | bool | `` | 从标准输入读取密码 |
+| `--print-generated` | bool | `` | 允许把临时密码打印到标准输出（显式通道） |
+| `--scheme` | string | `` | 账户方案 key（accounts list） |
+| `--username` | string | `` | 用户名 |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup accounts list` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup apply` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--confirm` | string | `` | 逐字确认串 APPLY-RECOMMENDATION |
+| `--conflict-policy` | string | `` | 外部修改冲突策略：fail\|reload\|use-draft |
+| `--create-master-key` | bool | `` | 初始化数据库时允许新实例生成主密钥 |
+| `--init-db` | bool | `` | 保存后对当前 SQLite 配置执行幂等迁移 |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--profile` | string | `` | 推荐配置方案：local\|intranet\|embedding |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup check` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup commands` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup db init` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--confirm` | string | `` | 逐字确认串 INIT-DATABASE |
+| `--create-master-key` | bool | `` | 允许新实例生成受保护主密钥 |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--sqlite-path` | string | `` | 覆盖 SQLite 数据库路径（默认取配置文件值） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup db test` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--sqlite-path` | string | `` | 覆盖 SQLite 数据库路径（默认取配置文件值） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup export config` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--encrypted` | bool | `` | 导出可还原的加密敏感配置包 |
+| `--masked` | bool | `` | 导出默认脱敏配置 YAML（不含秘密值） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--out` | string | `` | 导出目标路径（必须不存在） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup import config` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--confirm` | string | `` | 预览要求的确认串 |
+| `--conflict-policy` | string | `` | 冲突策略：fail\|reload\|use-draft |
+| `--file` | string | `` | 导入源（.yaml 脱敏导出或 .lncfg 加密包） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup plan` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--profile` | string | `` | 推荐配置方案：local\|intranet\|embedding |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup presets install` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--confirm` | string | `` | 逐字确认串 INSTALL-PRESETS |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup recover apply` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--confirm` | string | `` | 计划要求的确认串 |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--profile` | string | `` | 推荐运行配置方案 |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup recover plan` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--profile` | string | `` | 推荐运行配置方案 |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup root init` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--confirm` | string | `` | 逐字确认串 INIT-ROOT |
+| `--generate-password` | bool | `` | 生成高熵一次性密码 |
+| `--generated-password-file` | string | `` | 一次性密码写入的受控文件（0600，新建） |
+| `--language` | string | `` | 语言（可空） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--nickname` | string | `` | root 昵称（可空） |
+| `--password-file` | string | `` | 从 0600 受限文件读取密码 |
+| `--password-stdin` | bool | `` | 从标准输入读取密码（不回显） |
+| `--print-generated` | bool | `` | 允许把一次性密码打印到标准输出（显式通道） |
+| `--reset-existing` | bool | `` | 对已初始化 root 本地重设密码 |
+| `--timezone` | string | `` | 时区（可空） |
+| `--username` | string | `` | root 保留用户名（只接受 root/空） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup root status` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup selftest` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
+### `login-setup status` 的 flag
+
+| flag | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | string | `` | login.yaml 配置路径（默认尝试当前目录 login.yaml） |
+| `--master-key-file` | string | `` | 可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析） |
+| `--version` | bool | `false` | 打印版本信息后退出 |
+
 ## 嵌套子命令说明
 
 - `loginctl` 的部分命令是命令组：`loginctl config <子命令>`、`loginctl diag <子命令>`、`loginctl user list`、`loginctl audit events list` 等；上面只展开顶层命令与其 flag，二级动作以 [../guide/root-cli.md](../guide/root-cli.md) 与 `loginctl help` 为准。
 - `login-server` 使用 cobra 命令树（`serve`、`init`），全局 `--version/--help` 由框架提供。
-- `login-backup` 的每个子命令都有独立 flag（见上表）；离线查看/导出不连接生产库。
+- `login-setup` 的顶层子命令来自其显式命令表，flag 含全局 `--config`/`--master-key-file`/`--json` 与各命令附加项；需要 PTY 的是全屏 CUI，非交互命令不需要。`login-backup` 的每个子命令都有独立 flag（见上表）；离线查看/导出不连接生产库。
 - Phase B 可继续补齐命令组二级动作与每命令的鉴权/审计边界；本页当前覆盖顶层命令、flag 与退出码。
 
 ## 机器可读

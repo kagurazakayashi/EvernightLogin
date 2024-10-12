@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# build.sh - 一键四产品 × 六目标构建入口（POSIX）。
+# build.sh - 一键五产品 × 六目标构建入口（POSIX）。
 #
 # 两种路径：
 #   1) 默认自动选用现成 PowerShell（pwsh/powershell）并通过 scripts/build-all.ps1
@@ -235,8 +235,8 @@ MAIL_LDFLAGS="-s -w -X github.com/kagurazakayashi/EvernightMail/internal/version
 
 CURRENT_STAGE=login-build
 if [ "$BUILD_LOGIN" -eq 1 ]; then
-    echo "[build] invoking go-build-all for login (cmd/login-server,cmd/loginctl,cmd/login-backup)"
-    "$TOOL_EXE" -r "$REPO_ROOT" -e 'cmd/login-server,cmd/loginctl,cmd/login-backup' \
+    echo "[build] invoking go-build-all for login (cmd/login-server,cmd/loginctl,cmd/login-backup,cmd/login-setup)"
+    "$TOOL_EXE" -r "$REPO_ROOT" -e 'cmd/login-server,cmd/loginctl,cmd/login-backup,cmd/login-setup' \
         -p "$TARGETS" -o "$OUTPUT_DIR/login" -P cli -v "$VERSION" -A off -l off \
         -j "$JOBS" -T 1200 -trimpath -buildvcs=false -L "$LOGIN_LDFLAGS" || { echo "build.sh: Login build failed" >&2; exit 21; }
 fi
@@ -285,7 +285,7 @@ add_product() { # add_product <product> <command> <root>
         EXPECTED=$((EXPECTED + 1))
     done
 }
-[ "$BUILD_LOGIN" -eq 1 ] && { add_product login-server cmd/login-server "$OUTPUT_DIR/login"; add_product loginctl cmd/loginctl "$OUTPUT_DIR/login"; add_product login-backup cmd/login-backup "$OUTPUT_DIR/login"; }
+[ "$BUILD_LOGIN" -eq 1 ] && { add_product login-server cmd/login-server "$OUTPUT_DIR/login"; add_product loginctl cmd/loginctl "$OUTPUT_DIR/login"; add_product login-backup cmd/login-backup "$OUTPUT_DIR/login"; add_product login-setup cmd/login-setup "$OUTPUT_DIR/login"; }
 [ "$BUILD_MAIL" -eq 1 ] && add_product evernightmail cmd/evernightmail "$OUTPUT_DIR/mail"
 
 if [ "$SKIP_VERIFY" -eq 0 ]; then
@@ -315,7 +315,7 @@ SUMMARY="$OUTPUT_DIR/build-summary.json"
 } > "$SUMMARY"
 
 {
-    printf 'EvernightLogin/EvernightMail one-click build checklist (posix-sh fallback)\n'
+    printf 'EvernightLogin/EvernightMail one-click build checklist (posix-sh fallback; five programs)\n'
     printf 'version=%s go=%s tool=%s mail=%s\n' "$VERSION" "$GO_VERSION" "$TOOL_SHA" "$MAIL_SHA"
     while IFS="$(printf '\t')" read -r product command goos goarch ftype arch commit size sha rel; do
         [ -n "$product" ] || continue

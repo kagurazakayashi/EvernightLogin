@@ -20,7 +20,7 @@
 | http-routes.json | http-routes | 137 管理路由 / 17 协议路径 / 250 页面 |
 | http-openapi.json | http-openapi | 95 页面/表单操作 |
 | protocol-openapi.json | protocol-openapi | 19 协议端点（标准错误/项目信封/浏览器重定向） |
-| cli-commands.json | cli-commands | 3 程序 / 41 子命令 |
+| cli-commands.json | cli-commands | 4 程序 / 58 子命令 |
 
 ## 3. 任务 → 入口
 
@@ -50,7 +50,7 @@
 
 ## 5. 覆盖范围与阶段
 
-- 错误码 48、权限键 53、配置字段 52、管理路由 137、协议路径 17、页面命名路由 250、CLI 子命令 41、能力 52。
+- 错误码 48、权限键 53、配置字段 58、管理路由 137、协议路径 17、页面命名路由 250、CLI 子命令 58、能力 52。
 - Go API：Phase A 提供 Runtime 生命周期/访问器与接口总览；方法级参考（身份/范围/分页/幂等/错误/示例）Phase B 补齐。
 - OpenAPI 含运行期最小 JSON API（健康/文档端点）、页面/表单操作（账户/资料/会话/注册登录/MFA/三种恢复流程）与协议端点离线段（OAuth/OIDC/设备码/扫码；protocol-openapi.json）；管理 JSON API 契约见 http-openapi-admin.json。
 

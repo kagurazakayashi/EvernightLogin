@@ -1,12 +1,12 @@
-﻿# verify-build.ps1 - 步骤179 构建树独立校验器（24 项产物 + manifest 字段）。
+# verify-build.ps1 - 步骤179 构建树独立校验器（30 项产物 + manifest 字段）。
 #
-# 职责：读取 Login/Mail 两次 go-build-all 产物清单，独立核验 4 产品 × 6 目标：
+# 职责：读取 Login/Mail 两次 go-build-all 产物清单，独立核验 5 产品 × 6 目标（Login 4 + Mail 1）：
 #   - manifest 契约：format/exit_code/summary/requested==effective/结果数/状态/
 #     tool_version 固定 SHA/build_options（trimpath/buildvcs/ldflags）；
 #   - 每个产物：由 manifest output 定位、命名规则交叉核对、存在、非空、
 #     大小与 SHA-256 与 manifest 一致、文件类型与架构用 magic 判定（PE/ELF/
 #     Mach-O），不依赖扩展名；
-#   - 工具自身不得出现在产品清单；两模块命令集合固定为 4 个产品。
+#   - 工具自身不得出现在产品清单；两模块命令集合固定为 5 个产品（Login 4 + Mail 1）。
 # 退出码：0 全部通过；30 manifest/聚合字段不符；31 产物缺失/类型/尺寸/SHA 不符；
 #         40 内部错误。任何必需项失败都不得返回 0。
 # 可选 -SelfTest：不读取构建树，只对 magic 判定函数做合成字节自检（0 通过/1 失败）。
@@ -226,7 +226,7 @@ try {
 
     $knownPlatforms = @('windows/amd64', 'windows/arm64', 'linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64')
     $products = [ordered]@{
-        'EvernightLogin' = @('login-server', 'loginctl', 'login-backup')
+        'EvernightLogin' = @('login-server', 'loginctl', 'login-backup', 'login-setup')
         'EvernightMail' = @('evernightmail')
     }
 
@@ -346,7 +346,7 @@ try {
         }
     }
 
-    # 产物矩阵必须恰好覆盖所选模块的 4 产品 × 6 目标（完整构建 = 24），且不得混入工具或其他产品。
+    # 产物矩阵必须恰好覆盖所选模块的 5 产品 × 6 目标（完整构建 = 30），且不得混入工具或其他产品。
     $expectedKeys = New-Object System.Collections.Generic.List[string]
     $expectedTotal = 0
     foreach ($moduleName in @($manifests.Keys)) {

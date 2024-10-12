@@ -1,8 +1,8 @@
-﻿# build.ps1 - 步骤179/239 根目录一键构建入口（Windows PowerShell 5.1/7）。
+# build.ps1 - 步骤179/239 根目录一键构建入口（Windows PowerShell 5.1/7）。
 # 239 起 build-summary.json 追加 entry/status/cancelled/artifacts(command/version/hash) 可追溯字段。
 #
 # 用法示例：
-#   .\build.ps1                                       # 四产品 × 六目标，输出 dist/build
+#   .\build.ps1                                       # 五产品 × 六目标，输出 dist/build
 #   .\build.ps1 -Version 1.0.0                        # 指定版本（注入 ldflags + 目录命名）
 #   .\build.ps1 -Products login -Targets windows/amd64,linux/amd64
 #   .\build.ps1 -OutputDir P:\go\tmp\build-output -Jobs 2

@@ -1,4 +1,4 @@
-# 配置字段机器参考（52 个字段）
+# 配置字段机器参考（58 个字段）
 
 > **语义权威不在本页**：字段含义、默认值、校验规则、覆盖优先级与迁移说明见 [../guide/configuration.md](../guide/configuration.md)（由 `verify-docs` 逐字段核对）。本页只提供机器元数据（字段/环境变量/生效分类/秘密标记），由 `config.Fields()` 生成。
 
@@ -11,7 +11,7 @@
 - **秘密字段**：诊断/日志只显示“已配置/未配置”等脱敏状态；秘密只通过 `{env: NAME}` 或 `{file: 路径}` 引用，不写明文 YAML。
 - 环境变量命名为 `LOGIN_` + 点分路径大写并用下划线连接（如 `LOGIN_DATABASE_PATH`）。
 
-## 2. 字段表（52 个）
+## 2. 字段表（58 个）
 
 | 字段 | 环境变量 | 生效分类 | 秘密 |
 |---|---|---|---|
@@ -37,6 +37,12 @@
 | `database.path` | `LOGIN_DATABASE_PATH` | 重启生效 | 否 |
 | `database.wal` | `LOGIN_DATABASE_WAL` | 重启生效 | 否 |
 | `database.busy_timeout_ms` | `LOGIN_DATABASE_BUSY_TIMEOUT_MS` | 重启生效 | 否 |
+| `database.host` | `LOGIN_DATABASE_HOST` | 重启生效 | 否 |
+| `database.port` | `LOGIN_DATABASE_PORT` | 重启生效 | 否 |
+| `database.username` | `LOGIN_DATABASE_USERNAME` | 重启生效 | 否 |
+| `database.password` | `LOGIN_DATABASE_PASSWORD` | 重启生效 | 是 |
+| `database.name` | `LOGIN_DATABASE_NAME` | 重启生效 | 否 |
+| `database.tls_mode` | `LOGIN_DATABASE_TLS_MODE` | 重启生效 | 否 |
 | `registration.enabled` | `LOGIN_REGISTRATION_ENABLED` | 重启生效 | 否 |
 | `registration.require_review` | `LOGIN_REGISTRATION_REQUIRE_REVIEW` | 重启生效 | 否 |
 | `registration.require_email_verification` | `LOGIN_REGISTRATION_REQUIRE_EMAIL_VERIFICATION` | 重启生效 | 否 |

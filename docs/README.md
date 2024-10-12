@@ -8,7 +8,7 @@
 
 | 目录 | 读它做什么 |
 |---|---|
-| [guide/](guide/README.md) | **产品使用主干**：能力状态、快速开始、两模式选择、登录/OAuth、应用与权限、角色与范围、配置、客服恢复、CLI、审计报告、备份恢复、错误码排障、内置 Web 管理台操作（[admin-console.md](guide/admin-console.md)） |
+| [guide/](guide/README.md) | **产品使用主干**：能力状态、快速开始、两模式选择、登录/OAuth、应用与权限、角色与范围、配置、客服恢复、CLI、审计报告、备份恢复、错误码排障、内置 Web 管理台操作（[admin-console.md](guide/admin-console.md)）、本地维护控制台（[login-setup.md](guide/login-setup.md) / [非交互命令](guide/login-setup-cli.md) / [AI 指南](guide/login-setup-ai.md)） |
 | [deployment/](deployment/README.md) | 独立部署：首次初始化、独立服务启动、TLS/反代、容器、服务托管、邮件子模块、协议/管理 API 接入、打包与构建入口 |
 | [embedding/](embedding/README.md) | 作为 Go Module 嵌入：公开 API 稳定范围、生命周期与资源所有权、页面替换、嵌入示例与宿主调用边界 |
 | [database/](database/数据库基线说明.md) | 存储模型、迁移设计、表字段索引与 SQLite/MySQL/PostgreSQL/SQL Server 适配说明 |
@@ -31,13 +31,14 @@
    可运行示例：[../examples/embedded-minimal/](../examples/embedded-minimal/README.md)、
    [../examples/custom-pages-profile-sync/](../examples/custom-pages-profile-sync/README.md)、
    [../examples/external-consumer/](../examples/external-consumer/)。
-3. **独立部署服务**：[deployment/first-run.md](deployment/first-run.md) →
+3. **本地初始化/救援**：[guide/login-setup.md](guide/login-setup.md) → [guide/login-setup-cli.md](guide/login-setup-cli.md)（空目录、坏配置、root 丢失、导入导出与恢复）。
+4. **独立部署服务**：[deployment/first-run.md](deployment/first-run.md) →
    [deployment/standalone-service.md](deployment/standalone-service.md) →
    [deployment/reverse-proxy.md](deployment/reverse-proxy.md)。
-4. **运维已部署实例**：[guide/configuration.md](guide/configuration.md)、
+5. **运维已部署实例**：[guide/configuration.md](guide/configuration.md)、
    [guide/root-cli.md](guide/root-cli.md)、[guide/backup-and-restore.md](guide/backup-and-restore.md)、
    [guide/troubleshooting.md](guide/troubleshooting.md)。
-5. **出问题**：[guide/troubleshooting.md](guide/troubleshooting.md) 的错误码表与排障顺序，
+6. **出问题**：[guide/troubleshooting.md](guide/troubleshooting.md) 的错误码表与排障顺序，
    再按对应主题深入。
 
 ## 3. 文档约定

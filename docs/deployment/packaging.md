@@ -45,13 +45,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-build.ps1 -Bu
 - 预检要求：无 `go.work`、两模块 `go.mod` 无 `replace`、EvernightMail 与 go-build-all
   子模块 HEAD 等于固定提交且工作树干净；工具自身构建到 `_tools/`，不进入产品清单。
 - 交付接口：`dist/build/build-summary.json`（format=1）与 `dist/build/checklist.txt`，
-  记录 24 项产物的路径/大小/SHA-256/类型/架构、工具与模块版本、调用耗时与警告。
+  记录 30 项产物（5 程序 × 6 目标）的路径/大小/SHA-256/类型/架构、工具与模块版本、调用耗时与警告。
 - 输出目录安全：`-OutputDir` 已存在且非空时不会直接递归删除；只有目录内含本入口的
   `.build-all-root` 标记或显式传 `-ForceClean` 才允许清理，否则退出 10 并保留原目录。
 - 退出码：0 成功；10 预检失败；20 工具构建失败；21 Login 构建失败；22 Mail 构建失败；
   30 manifest/聚合字段不符；31 产物缺失/类型/尺寸/SHA 不符；40 内部错误。任何必需项
   缺失或类型/哈希不符都不得返回 0。
-- **发布包压缩不属于本入口**：每目标一个 zip（12 个）由步骤 202/248 基于 24 项目录生成。
+- **发布包压缩不属于本入口**：每目标一个 zip（Login/Mail 两模块 × 6 目标 = 12 个）由步骤 202/248 基于 30 项产物目录生成；login zip 从本步起含 login-setup。
 
 ## 2. 发布包内容
 
@@ -283,7 +283,7 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 
 | 包 | 内容（显式复制，非 glob 仓库） |
 |---|---|
-| Login | `bin/{login-server,loginctl,login-backup}[.exe]`；`LICENSE`；`README.md`；`THIRD_PARTY_NOTICES.txt`（来自 `docs/licenses/THIRD_PARTY_NOTICES.md`）；**产品文档** `docs/README.md`、`docs/guide/`、`docs/deployment/`（含 samples/）、`docs/embedding/`、`docs/database/`、`docs/requirements/`、`docs/licenses/`、`docs/reference/`（步骤 245 存在时）；`README-PACKAGE.txt`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、包内 `SHA256SUMS.txt`。 |
+| Login | `bin/{login-server,loginctl,login-backup,login-setup}[.exe]`；`LICENSE`；`README.md`；`THIRD_PARTY_NOTICES.txt`（来自 `docs/licenses/THIRD_PARTY_NOTICES.md`）；**产品文档** `docs/README.md`、`docs/guide/`、`docs/deployment/`（含 samples/）、`docs/embedding/`、`docs/database/`、`docs/requirements/`、`docs/licenses/`、`docs/reference/`（步骤 245 存在时）；`README-PACKAGE.txt`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、包内 `SHA256SUMS.txt`。 |
 | Mail | `bin/evernightmail[.exe]`；子模块 `EvernightMail/LICENSE`、`EvernightMail/README.md` → 包根 `LICENSE`/`README.md`；`EvernightMail.example.yaml` → `evernightmail.example.yaml`；`EvernightMail/THIRD_PARTY_NOTICES.md` → `THIRD_PARTY_NOTICES.txt`；选定文档 `docs/{README,config-reference,cli-reference,protocol-matrix,offline-security}.md`；`README-PACKAGE.txt`、`VERSION.txt`、`BUILDINFO.txt`、`DEPENDENCIES.txt`、包内 `SHA256SUMS.txt`。 |
 
 明确不随包：`docs/acceptance/`、`docs/evidence/`、`examples/`、`scripts/`、`tools/`、`_tools/`、
@@ -346,3 +346,11 @@ SKIPPED/FAILED）；21 解压/文件集合/禁止项；22 顶层或包内校验�
 - 仅 Windows/amd64 运行冒烟；其他五目标只做编译/类型/SHA 检查。
 - 字体文件本体不随包（仅 OFL 文本）；PDF 报告使用系统/外部字体。
 - PowerShell 7 未在本机实测（仅 Windows PowerShell 5.1）。
+
+## 10. 步骤 299 追加：五程序发布接入
+
+299 将 login-setup 纳入 Login 发布包：`$LoginProducts` 增加 `login-setup`，build-summary 验收阈值
+由 24/24 改为 30/30，Login zip 的 `bin/` 增加 `login-setup[.exe]`，Windows amd64 冒烟新增
+`login-setup --version` 与 `--help`。zip 组织沿用“每模块 × 每目标一个 zip”（12 个），不机械拆成
+30 个压缩包。打包/发布校验脚本已同步；由于本步工作树含未提交改动，正式 package-release /
+verify-release 需在干净提交上执行，本步只验证脚本接入与 30 项构建清单。

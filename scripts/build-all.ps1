@@ -2,8 +2,8 @@
 #
 # 流程：预检（go/工具链/GOWORK/GOFLAGS/go.work/replace/子模块固定 SHA 与 clean）
 #   -> 从源码构建 go-build-all 到 _tools/（记录 SHA256，不进入产品清单）
-#   -> 串行两次调用工具（Login 3 命令、Mail 1 命令；六目标；-P cli；-j 由工具夹紧）
-#   -> 调用 verify-build.ps1 独立校验 24 项产物（manifest/大小/SHA256/PE-ELF-Mach-O）
+#   -> 串行两次调用工具（Login 4 命令、Mail 1 命令；六目标；-P cli；-j 由工具夹紧）
+#   -> 调用 verify-build.ps1 独立校验 30 项产物（manifest/大小/SHA256/PE-ELF-Mach-O）
 #   -> 写 dist/build/build-summary.json（format=1）与 checklist.txt。
 # 退出码：0 成功；10 预检失败；20 工具构建失败；21 Login 构建失败；22 Mail 构建失败；
 #         30 manifest/聚合字段不符；31 产物缺失/类型/尺寸/SHA 不符；40 内部错误。
@@ -114,6 +114,7 @@ function Get-ArtifactCommand([string]$product) {
         'login-server' { return 'cmd/login-server' }
         'loginctl' { return 'cmd/loginctl' }
         'login-backup' { return 'cmd/login-backup' }
+        'login-setup' { return 'cmd/login-setup' }
         'evernightmail' { return 'cmd/evernightmail' }
         default { return '' }
     }
@@ -389,7 +390,7 @@ try {
         "-X github.com/kagurazakayashi/EvernightMail/internal/version.BuildDate=$BuildTime"
 
     $targetArgument = $context.platforms -join ','
-    $loginCommandList = @('cmd/login-server', 'cmd/loginctl', 'cmd/login-backup')
+    $loginCommandList = @('cmd/login-server', 'cmd/loginctl', 'cmd/login-backup', 'cmd/login-setup')
     $mailCommandList = @('cmd/evernightmail')
     if ($Commands -ne '') {
         $override = @($Commands.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
@@ -451,12 +452,12 @@ try {
 
     Test-Cancelled 'after-build'
 
-    # ==== 独立校验 24 项产物 ====
+    # ==== 独立校验 30 项产物 ====
     $verifyJson = Join-Path $AbsoluteOutputDir 'verify-result.json'
     $verification = $null
     $verifyExit = 0
     if ($SkipVerify) {
-        Write-Warn "-SkipVerify used: 24-item artifact verification was skipped (diagnosis only)"
+        Write-Warn "-SkipVerify used: 30-item artifact verification was skipped (diagnosis only)"
     } else {
         $verifyScript = Join-Path $PSScriptRoot 'verify-build.ps1'
         $verifyArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $verifyScript,

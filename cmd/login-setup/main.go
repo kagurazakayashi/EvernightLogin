@@ -25,22 +25,37 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/kagurazakayashi/EvernightLogin"
 	"github.com/kagurazakayashi/EvernightLogin/internal/setupconsole"
 )
 
 func main() {
 	var configPath string
 	var masterKeyFile string
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "打印版本信息后退出")
 	flag.StringVar(&configPath, "config", "", "login.yaml 配置路径（默认尝试当前目录 login.yaml）")
 	flag.StringVar(&masterKeyFile, "master-key-file", "",
 		"可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）")
 	flag.Parse()
+	if showVersion {
+		// 版本信息可安全打印，不含秘密；发布校验/运维排查使用。
+		fmt.Println("login-setup " + login.CurrentBuildInfo().String())
+		return
+	}
 	if configPath == "" {
 		if _, err := os.Stat("login.yaml"); err == nil {
 			configPath = "login.yaml"
 		}
 	}
 	ctx := context.Background()
+	// 非交互子命令：命令及参数、JSON、确认串与秘密通道由子命令处理；不需要 PTY，
+	// 不弹交互框。非交互模式同样只装配本地 OS 维护身份，不接受请求自报 local/root。
+	if args := flag.Args(); len(args) > 0 {
+		os.Exit(runNonInteractive(args, cliEnv{ctx: ctx, stdin: os.Stdin,
+			stdout: os.Stdout, stderr: os.Stderr, configPath: configPath,
+			masterKeyFile: masterKeyFile}))
+	}
 	stdinFD := int(os.Stdin.Fd())
 	stdoutFD := int(os.Stdout.Fd())
 	if term.IsTerminal(stdinFD) && term.IsTerminal(stdoutFD) {

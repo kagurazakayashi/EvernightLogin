@@ -2,9 +2,9 @@
   "schema": "evernight.reference/v1/cli-commands",
   "generated_by": "scripts/reference",
   "counts": {
-    "binaries": 3,
-    "subcommands": 41,
-    "flags": 98
+    "binaries": 4,
+    "subcommands": 58,
+    "flags": 189
   },
   "binaries": [
     {
@@ -815,6 +815,586 @@
           "name": "ExitCancelled",
           "value": 130,
           "doc": "稳定退出码"
+        }
+      ]
+    },
+    {
+      "name": "login-setup",
+      "source": "cmd/login-setup",
+      "subcommands": [
+        {
+          "name": "accounts apply",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "逐字确认串 APPLY-ACCOUNT"
+            },
+            {
+              "name": "generate-password",
+              "type": "bool",
+              "usage": "生成临时密码"
+            },
+            {
+              "name": "generated-password-file",
+              "type": "string",
+              "usage": "临时密码写入的受控文件（0600，新建）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "nickname",
+              "type": "string",
+              "usage": "昵称（可空）"
+            },
+            {
+              "name": "password-file",
+              "type": "string",
+              "usage": "从 0600 受限文件读取密码"
+            },
+            {
+              "name": "password-stdin",
+              "type": "bool",
+              "usage": "从标准输入读取密码"
+            },
+            {
+              "name": "print-generated",
+              "type": "bool",
+              "usage": "允许把临时密码打印到标准输出（显式通道）"
+            },
+            {
+              "name": "scheme",
+              "type": "string",
+              "usage": "账户方案 key（accounts list）"
+            },
+            {
+              "name": "username",
+              "type": "string",
+              "usage": "用户名"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "accounts list",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "apply",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "逐字确认串 APPLY-RECOMMENDATION"
+            },
+            {
+              "name": "conflict-policy",
+              "type": "string",
+              "usage": "外部修改冲突策略：fail|reload|use-draft"
+            },
+            {
+              "name": "create-master-key",
+              "type": "bool",
+              "usage": "初始化数据库时允许新实例生成主密钥"
+            },
+            {
+              "name": "init-db",
+              "type": "bool",
+              "usage": "保存后对当前 SQLite 配置执行幂等迁移"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "profile",
+              "type": "string",
+              "usage": "推荐配置方案：local|intranet|embedding"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "check",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "commands",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "db init",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "逐字确认串 INIT-DATABASE"
+            },
+            {
+              "name": "create-master-key",
+              "type": "bool",
+              "usage": "允许新实例生成受保护主密钥"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "sqlite-path",
+              "type": "string",
+              "usage": "覆盖 SQLite 数据库路径（默认取配置文件值）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "db test",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "sqlite-path",
+              "type": "string",
+              "usage": "覆盖 SQLite 数据库路径（默认取配置文件值）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "export config",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "encrypted",
+              "type": "bool",
+              "usage": "导出可还原的加密敏感配置包"
+            },
+            {
+              "name": "masked",
+              "type": "bool",
+              "usage": "导出默认脱敏配置 YAML（不含秘密值）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "out",
+              "type": "string",
+              "usage": "导出目标路径（必须不存在）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "import config",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "预览要求的确认串"
+            },
+            {
+              "name": "conflict-policy",
+              "type": "string",
+              "usage": "冲突策略：fail|reload|use-draft"
+            },
+            {
+              "name": "file",
+              "type": "string",
+              "usage": "导入源（.yaml 脱敏导出或 .lncfg 加密包）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "plan",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "profile",
+              "type": "string",
+              "usage": "推荐配置方案：local|intranet|embedding"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "presets install",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "逐字确认串 INSTALL-PRESETS"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "recover apply",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "计划要求的确认串"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "profile",
+              "type": "string",
+              "usage": "推荐运行配置方案"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "recover plan",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "profile",
+              "type": "string",
+              "usage": "推荐运行配置方案"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "root init",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "confirm",
+              "type": "string",
+              "usage": "逐字确认串 INIT-ROOT"
+            },
+            {
+              "name": "generate-password",
+              "type": "bool",
+              "usage": "生成高熵一次性密码"
+            },
+            {
+              "name": "generated-password-file",
+              "type": "string",
+              "usage": "一次性密码写入的受控文件（0600，新建）"
+            },
+            {
+              "name": "language",
+              "type": "string",
+              "usage": "语言（可空）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "nickname",
+              "type": "string",
+              "usage": "root 昵称（可空）"
+            },
+            {
+              "name": "password-file",
+              "type": "string",
+              "usage": "从 0600 受限文件读取密码"
+            },
+            {
+              "name": "password-stdin",
+              "type": "bool",
+              "usage": "从标准输入读取密码（不回显）"
+            },
+            {
+              "name": "print-generated",
+              "type": "bool",
+              "usage": "允许把一次性密码打印到标准输出（显式通道）"
+            },
+            {
+              "name": "reset-existing",
+              "type": "bool",
+              "usage": "对已初始化 root 本地重设密码"
+            },
+            {
+              "name": "timezone",
+              "type": "string",
+              "usage": "时区（可空）"
+            },
+            {
+              "name": "username",
+              "type": "string",
+              "usage": "root 保留用户名（只接受 root/空）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "root status",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "selftest",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "source": "cmd/login-setup/noninteractive.go",
+          "flags": [
+            {
+              "name": "config",
+              "type": "string",
+              "usage": "login.yaml 配置路径（默认尝试当前目录 login.yaml）"
+            },
+            {
+              "name": "master-key-file",
+              "type": "string",
+              "usage": "可选：本地维护会话使用的主密钥环文件（默认按配置/实例目录解析）"
+            },
+            {
+              "name": "version",
+              "type": "bool",
+              "default": "false",
+              "usage": "打印版本信息后退出"
+            }
+          ]
         }
       ]
     }

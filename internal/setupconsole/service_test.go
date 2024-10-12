@@ -244,3 +244,89 @@ func TestServiceSupervisorFastExitNeverReportsReady(t *testing.T) {
 		t.Fatal("退出状态读取后应保持未就绪")
 	}
 }
+
+func TestWithMaintenanceEvidenceAllowsAndRecordsReceipt(t *testing.T) {
+	instanceDir := t.TempDir()
+	result, err := RunWithMaintenanceEvidence(context.Background(), instanceDir,
+		"config.import", "config", func(ctx context.Context) (string, error) {
+			return `{"imported":true}`, nil
+		})
+	if err != nil {
+		t.Fatalf("维护证据包装应允许操作：%v", err)
+	}
+	if result.Result != `{"imported":true}` {
+		t.Fatalf("业务结果未透传：%+v", result)
+	}
+	if result.OperationID == "" {
+		t.Fatal("应返回维护操作编号供 CLI JSON 关联")
+	}
+	raw, err := os.ReadFile(filepath.Join(instanceDir, ".login-setup-maintenance.jsonl"))
+	if err != nil {
+		t.Fatalf("维护日志不存在：%v", err)
+	}
+	text := string(raw)
+	for _, fragment := range []string{"config.import", result.OperationID, `"started"`, `"success"`} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("维护日志缺少 %q：%s", fragment, text)
+		}
+	}
+	// 简单包装返回同一业务结果。
+	plain, err := WithMaintenanceEvidence(context.Background(), instanceDir,
+		"config.import", "config", func(ctx context.Context) (string, error) { return "ok", nil })
+	if err != nil || plain != "ok" {
+		t.Fatalf("WithMaintenanceEvidence 应返回业务结果：result=%q err=%v", plain, err)
+	}
+	if encoded := ws4EvidenceJSON(result); !strings.Contains(encoded, "operation_id") ||
+		strings.Contains(encoded, "password") {
+		t.Fatalf("JSON 输出错误：%s", encoded)
+	}
+}
+
+func TestWithMaintenanceEvidenceDeniesWhenLogUnavailable(t *testing.T) {
+	base := t.TempDir()
+	notDir := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("写入临时文件失败：%v", err)
+	}
+	called := false
+	_, err := WithMaintenanceEvidence(context.Background(), notDir, "config.import", "config",
+		func(ctx context.Context) (string, error) { called = true; return "ok", nil })
+	if err == nil {
+		t.Fatal("维护日志不可写时必须 deny")
+	}
+	if called {
+		t.Fatal("维护日志不可写时不得执行 fn")
+	}
+}
+
+func TestWithMaintenanceEvidenceDeniesWhenLockHeld(t *testing.T) {
+	instanceDir := t.TempDir()
+	identity, err := LocalMaintenanceIdentity(instanceDir)
+	if err != nil {
+		t.Fatalf("构造维护身份失败：%v", err)
+	}
+	lock, err := AcquireMaintenanceLock(context.Background(), LockRequest{
+		InstanceDir: instanceDir, DatabasePath: "",
+		Purpose: "test hold", Operator: identity,
+	})
+	if err != nil {
+		t.Fatalf("预占维护锁失败：%v", err)
+	}
+	defer func() { _ = lock.Release() }()
+	called := false
+	_, err = WithMaintenanceEvidence(context.Background(), instanceDir, "config.import", "config",
+		func(ctx context.Context) (string, error) { called = true; return "ok", nil })
+	if err == nil {
+		t.Fatal("维护锁被占用时必须 deny")
+	}
+	if called {
+		t.Fatal("维护锁被占用时不得执行 fn")
+	}
+	raw, readErr := os.ReadFile(filepath.Join(instanceDir, ".login-setup-maintenance.jsonl"))
+	if readErr != nil {
+		t.Fatalf("维护日志不存在：%v", readErr)
+	}
+	if !strings.Contains(string(raw), `"failed"`) || !strings.Contains(string(raw), "E_LOCK") {
+		t.Fatalf("锁占用拒绝应写入 failed/E_LOCK 证据：%s", string(raw))
+	}
+}

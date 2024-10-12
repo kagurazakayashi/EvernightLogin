@@ -11,12 +11,12 @@
 |---|---|---|
 | `build.ps1` / `build.cmd` | Windows PowerShell 5.1/7 | 推荐主入口；参数与退出码透传 `scripts/build-all.ps1` |
 | `build.sh`（自动） | POSIX shell + PowerShell（若存在） | 默认自动选用 `pwsh`/`powershell`，与 `build.ps1` 使用同一逻辑 |
-| `build.sh --no-powershell`（原生） | 仅 POSIX shell + Go | 仅在缺少 PowerShell 时使用：从固定源码构建 `go-build-all`，编排 Login 三程序与 Mail，生成清单/校验和 |
+| `build.sh --no-powershell`（原生） | 仅 POSIX shell + Go | 仅在缺少 PowerShell 时使用：从固定源码构建 `go-build-all`，编排 Login 四程序（含 login-setup）与 Mail，生成清单/校验和 |
 
 示例：
 
 ```powershell
-# 四产品 × 六目标（默认输出 dist/build）
+# 五产品 × 六目标（默认输出 dist/build）
 .\build.ps1 -Version 0.1.0-dev
 
 # 指定子集/临时输出目录（正式验收不要污染 dist/）
@@ -39,7 +39,7 @@ sh build.sh --no-powershell --products login --targets windows/amd64 \
 
 构建先从**固定源码**在输出目录 `_tools/` 构建 `go-build-all`（记录 SHA-256，不进入
 产品清单），再分两次串行调用：Login（`cmd/login-server`、`cmd/loginctl`、
-`cmd/login-backup`）与 Mail（`cmd/evernightmail`），四产品 × 六目标共 24 项产物。
+`cmd/login-backup`、`cmd/login-setup`）与 Mail（`cmd/evernightmail`），五程序 × 六目标共 30 项产物。
 
 ## 3. 输出与可追溯清单
 
@@ -50,7 +50,7 @@ dist/build/
   .build-all-root              # 构建目录标记（仅用于安全清理判定）
   _tools/                      # 固定源码构建的 go-build-all（不进入产品清单）
   login/EvernightLogin.manifest.json
-  login/<command>/<goos>_<goarch>/...
+  login/<command>/<goos>_<goarch>/...    # 四命令：login-server/loginctl/login-backup/login-setup
   mail/EvernightMail.manifest.json
   mail/evernightmail/<goos>_<goarch>/...
   build-summary.json           # 聚合清单（见下）
@@ -130,3 +130,18 @@ POSIX 原生路径生成结构等价的 `build-summary.json`（`entry.wrapper=bu
 `checklist-full.txt`、`verify-result-full.json`、`build-summary-shell-login.json`、
 `build-summary-cancelled.json`、`build-summary-failed.json`。
 本次运行父工作树含其他并行步骤改动（`dirty=yes` 已如实记录）；正式发布需在干净提交上复跑。
+
+## 8. 步骤 299 追加：五程序 × 六目标（30 项）
+
+299 在既有 24 项入口上加入 `cmd/login-setup`，五程序 = Login 四程序（login-server、loginctl、
+login-backup、login-setup）+ Mail（evernightmail）。2026-11-26 在当前工作树（包含本步未提交改动，
+summary 如实记录 dirty=yes）执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Version 0.1.0-dev -Products all -OutputDir P:\go\tmp\r11-ws5-build30 -Jobs 4
+```
+
+结果：**exit 0；verify-build artifacts=30/30；build-summary totals=30/30/0**；清单按产品统计为
+login-server 6、loginctl 6、login-backup 6、login-setup 6、evernightmail 6。Windows amd64 额外
+运行 `login-setup.exe --version` 返回 `login-setup devel (commit ...)` 并退出 0；其余平台仅编译，
+未运行实测。正式发布仍须在干净提交上复跑（本步只做定向/接入验证，最终全量包留最后合并步骤）。

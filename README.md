@@ -14,6 +14,7 @@ OpenID Connect、审计、报告、备份恢复和管理后台。
 | 嵌入 Go 业务 | 已有 Go 服务，想复用账户/权限/会话/审计/页面，同时自己控制进程、数据库与 HTTP 服务器 | 公开包 `github.com/kagurazakayashi/EvernightLogin` + `/app`；[嵌入文档](docs/embedding/README.md) |
 | 独立身份服务 | 需要开箱即用的身份服务与内置管理页面，以独立进程部署 | `login-server` CLI；[首次部署](docs/deployment/first-run.md) |
 | 两者混用 | 先嵌入跑通业务，再切独立服务或反向挂载 | 两条路径共用同一套领域服务与配置；[模式对照](docs/guide/deployment-modes.md) |
+| 本地初始化与救援 | 空目录起步、坏配置修复、root 丢失/口令/MFA 救援、配置与账户维护 | `login-setup`（全屏 CUI/简化模式/非交互命令）；[控制台指南](docs/guide/login-setup.md) |
 
 能力速览：全局账户 + 应用成员/应用内角色权限隔离（默认拒绝）；密码、Passkey、TOTP、邮件
 验证码、恢复代码、邀请/注册审核；OAuth 2.0 / OIDC、设备码、APP 扫码、令牌状态查询；用户/
@@ -37,16 +38,18 @@ OpenID Connect、审计、报告、备份恢复和管理后台。
 
 ## 3. 构建
 
-从源码构建三个程序（单命令调试；Windows 下把输出路径换成 `build\login-server.exe` 等）：
+从源码构建 Login 的四个程序（单命令调试；Windows 下把输出路径换成 `build\login-server.exe` 等）。Mail 在独立子模块中构建：
 
 ```bash
 CGO_ENABLED=0 go build -o build/login-server ./cmd/login-server
 CGO_ENABLED=0 go build -o build/loginctl ./cmd/loginctl
 CGO_ENABLED=0 go build -o build/login-backup ./cmd/login-backup
+CGO_ENABLED=0 go build -o build/login-setup ./cmd/login-setup
 ```
 
-推荐根目录一键入口（4 个命令 × 6 个目标 = 24 项产物，含版本/commit/平台/命令入口/SHA-256
-的可追溯清单与失败/取消状态）：
+推荐根目录一键入口（五程序 = Login 四程序 + Mail 一程序；5 个命令 × 6 个目标 = **30 项产物**，
+含版本/commit/平台/命令入口/SHA-256 的可追溯清单与失败/取消状态；Linux/macOS 仅编译，运行
+实测仍以 Windows + SQLite 为准）：
 
 ```powershell
 .\build.ps1 -Version 0.1.0-dev          # Windows PowerShell 5.1/7
@@ -64,7 +67,47 @@ sh build.sh --no-powershell            # 仅 POSIX shell + Go 的原生路径
 `build.sh --no-powershell` 使用等价的 POSIX shell + Go 原生路径。入口参数、退出码、失败/取消
 与清理边界见 [一键构建与可追溯产物清单](docs/deployment/one-click-build.md)。
 
-## 4. 快速开始 A：嵌入（约 5 分钟）
+## 4. 本地维护控制台 login-setup（首选启动路径）
+
+`login-setup` 是独立于主服务的本地维护程序：不需要先启动 `login-server`，也不需要已有数据库
+或 root。它提供类 BIOS 的全屏 CUI、无 TTY 时的简化文本模式，以及与界面同源的非交互子命令，
+用于从空目录初始化、修复坏配置、维护账户/角色/应用、导出导入配置、服务协调与备份，以及
+root 口令/MFA 丢失后的本地救援。
+
+本地维护身份的可信来源是**操作系统对实例配置、数据库与密钥目录的访问授权**，不要求
+EvernightLogin 账户、原口令或 MFA；它不是远程 HTTP 管理入口，也不能由请求参数伪造
+`local/root`。绝对权限仍受数据库一致性、用户名唯一性、密码策略、排他维护锁和关键审计约束，
+不能删除唯一 root 或创建第二个 root。
+
+从空目录起步（Windows 示例；先在目标实例目录运行，避免相对路径歧义）：
+
+```powershell
+# 1) 诊断当前状态（零配置也能显示；不写任何文件）
+.\login-setup.exe status --config .\login.yaml
+
+# 2) 预览并应用推荐运行配置（本机快速体验；写入原子保存并保留最后有效副本）
+.\login-setup.exe apply --profile local --confirm APPLY-RECOMMENDATION --init-db --create-master-key --config .\login.yaml
+
+# 3) 创建唯一 root：密码从标准输入（TTY 无回显）或受保护文件；也可生成一次性密码到受保护新文件
+Get-Content .\root.pwd | .\login-setup.exe root init --confirm INIT-ROOT --username root --password-stdin --config .\login.yaml
+
+# 4) 按账户方案创建常用账户；一次性密码只在显式受控通道交付
+.\login-setup.exe accounts apply --scheme normal_user --username helper --generate-password --generated-password-file .\helper.pwd --confirm APPLY-ACCOUNT --config .\login.yaml
+```
+
+不带子命令、在真实终端启动时进入全屏 CUI；输入/输出被重定向或不是 TTY 时自动进入简化文本
+模式，不会输出全屏控制序列或等待交互框。非交互命令无需 PTY，提供稳定退出码与 `--json`：
+`status`/`check` 诊断，`plan`/`apply` 差异与应用，`db test`/`db init`，`root status`/`root init`，
+`accounts list`/`accounts apply`，`presets install`，`export config`/`import config`，
+`recover plan`/`recover apply`，`selftest` 与 `commands` 命令表。
+
+- 坏配置修复、三类恢复（推荐运行配置/预设角色/完全重新初始化）、导入导出与本地救援流程：
+  [本地维护控制台指南](docs/guide/login-setup.md)
+- 非交互命令表、退出码、JSON、秘密通道与确认串：
+  [login-setup 非交互命令参考](docs/guide/login-setup-cli.md)
+- 给 AI/自动化使用的安全边界与顺序：
+  [login-setup AI 使用指南](docs/guide/login-setup-ai.md)
+## 5. 快速开始 A：嵌入（约 5 分钟）
 
 ```go
 import (
@@ -113,7 +156,7 @@ go run . -self-test -json      # 预期 status=PASS（15 项检查），退出�
 go run . -demo                 # 显式启动演示，Ctrl+C 或 -duration 到期后清理
 ```
 
-## 5. 快速开始 B：独立部署（约 10 分钟）
+## 6. 快速开始 B：独立部署（约 10 分钟）
 
 1. 准备目录：`config/login.yaml`、`data/login.db`、`secrets/master.key`、`logs/` 分开存放。
 2. 首次初始化（只执行一次；root 密码不回显）：
@@ -138,7 +181,7 @@ D:\login\bin\login-server.exe serve --config D:\login\config\login.yaml ^
 [首次配置](docs/deployment/first-run.md)、[独立服务启动](docs/deployment/standalone-service.md)、
 [业务接入契约](docs/deployment/integration.md)、[完整配置](docs/guide/configuration.md)。
 
-## 6. 自包含协议与安全集成测试（开发/CI）
+## 7. 自包含协议与安全集成测试（开发/CI）
 
 无需外网、外部数据库或手工安装第三方软件，可直接运行真实协议/安全场景（OAuth/OIDC、
 会话权限、CSRF/来源、防枚举、软件 TOTP/WebAuthn）：
@@ -150,9 +193,9 @@ go run ./scripts/protocol-selftest -out P:\go\tmp\protocol-selftest.json -verbos
 场景、覆盖矩阵、JSON 结果与退出码见
 [`docs/deployment/protocol-selftest.md`](docs/deployment/protocol-selftest.md)。
 
-## 7. 管理员直接管理与列表模糊搜索（本轮新增）
+## 8. 管理员直接管理与列表模糊搜索（本轮新增）
 
-### 7.1 两项独立直接管理权限
+### 8.1 两项独立直接管理权限
 
 | 权限键 | 能做什么 | 授予与边界 |
 |---|---|---|
@@ -161,7 +204,7 @@ go run ./scripts/protocol-selftest -out P:\go\tmp\protocol-selftest.json -verbos
 
 两项权限**互相独立**（只有改名权不能重置口令，反之亦然），也不能由 `users.update` 隐式获得。root 拥有完整权限，但执行直接操作时仍需真实管理会话、独立权限判定、本次两步验证、目标/参数绑定与关键审计；不能借“全权限”跳过证明或目标保护。
 
-### 7.2 一次两步验证 + 目标绑定（可复制 Go 示例）
+### 8.2 一次两步验证 + 目标绑定（可复制 Go 示例）
 
 直接改名/直接重置要求操作者**本人**完成一次真实两步验证（密码 + TOTP，或 Passkey/安全密钥）。证明绑定操作者、会话、操作、目标 UserID 与本次新值（新用户名或新口令密封意图），换目标/换新值/换会话/重放均拒绝；取得的证明**直接用于紧随其后的提交**，不需要逐层重复验证。
 
@@ -226,7 +269,7 @@ loginctl admin reset-password usr_xxx --reason "工单 #123" --confirm RESET-PAS
   --new-password-file ./new-password.secret --server https://login.example --session-file ./session.secret
 ```
 
-### 7.3 三种用户恢复路径与直接管理的区别
+### 8.3 三种用户恢复路径与直接管理的区别
 
 | 路径 | 触发者 | 前提 | 是否签发正常会话 |
 |---|---|---|---|
@@ -237,7 +280,7 @@ loginctl admin reset-password usr_xxx --reason "工单 #123" --confirm RESET-PAS
 
 直接管理**不是第四种匿名找回**：它不替换自助找回、恢复代码或人工核验恢复流程，也不把人工恢复改成“直接设置口令”。未配置邮件时登录页不显示找回入口，找回页给出稳定不可用提示与恢复代码/客服/管理员等下一路径；不会自动跳过 MFA。
 
-### 7.4 列表字面模糊搜索（有界、不越权）
+### 8.4 列表字面模糊搜索（有界、不越权）
 
 搜索是**可选**参数：空搜索等价原列表；先按授权范围过滤再匹配；参数化 `LIKE` 并转义 `%`/`_`/转义符与方言特殊字符（字面匹配）；长度与返回量有界；沿用各列表既有排序与分页/游标；游标绑定筛选条件。精确 `GetUserByUsername` 保持精确语义，模糊匹配不参与登录唯一身份判定；公开登录/找回不提供账户枚举。
 
@@ -254,14 +297,14 @@ loginctl admin reset-password usr_xxx --reason "工单 #123" --confirm RESET-PAS
 | 应用范围角色/组 | `name`、`key` | `GET /admin/v1/applications/{id}/roles`、`.../groups` |
 
 未知搜索字段/超长文本返回 `REQ_INVALID`（个别旧路径对“空搜索+非法字段”的容忍见验收登记 D-263-1）；邮箱/电话不默认纳入搜索（需独立字段可见权限）。完整请求/响应与权限绑定以 [`docs/reference/`](docs/reference/README.md)（由代码生成）为准。
-## 8. 目录说明
+## 9. 目录说明
 
 ```text
-cmd/            独立程序入口：login-server、loginctl、login-backup
+cmd/            独立程序入口：login-server、loginctl、login-backup、login-setup
 app/            公开嵌入式装配（Open/生命周期/领域服务门面）
 config/ errs/ httpapi/ appids/ netpolicy/ proxytrust/ passkeypolicy/ httppolicy/
 correlation/    可被宿主导入的公开叶子包（配置/错误码/HTTP 契约等）
-internal/       领域实现与内部装配（宿主不能导入）
+internal/       领域实现与内部装配（含 setupconsole 本地维护控制台；宿主不能导入）
 migrations/     有序数据库迁移（增量、不清库）
 web/            内置页面模板与静态资源（go:embed）
 examples/       可运行示例（部分为独立 Go module）
@@ -276,7 +319,7 @@ go-build-all/   通用跨平台构建工具（独立 Git 子模块与 Go Module�
 > 包文档及 `alias_*.go` 兼容别名；步骤 214/215 会把页面实现迁入专门目录并收敛公开运行时
 > 入口，本节目录结构会在重构提交后更新。
 
-## 9. 三个示例与一键自检
+## 10. 三个示例与一键自检
 
 | 示例 | 演示 | 实测命令（仓库根执行） |
 |---|---|---|
@@ -296,12 +339,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scena
 其余示例（OIDC 客户端、设备码/扫码、托管 API、客服、恢复密码消费方、RBAC 消费方等）见
 [示例索引](docs/guide/README.md#11-示例索引)。
 
-## 10. 文档地图
+## 11. 文档地图
 
 | 入口 | 内容 |
 |---|---|
 | [`docs/README.md`](docs/README.md) | **文档中心**：目录地图、阅读路径、文档约定 |
-| [`docs/guide/`](docs/guide/README.md) | 产品使用主干：能力状态、快速开始、两模式、登录/OAuth、应用与权限、角色与范围、配置、客服恢复、CLI、审计报告、备份恢复、错误码与[内置 Web 管理台](docs/guide/admin-console.md) |
+| [`docs/guide/`](docs/guide/README.md) | 产品使用主干：能力状态、快速开始、两模式、登录/OAuth、应用与权限、角色与范围、配置、客服恢复、CLI、审计报告、备份恢复、错误码、[内置 Web 管理台](docs/guide/admin-console.md) 与 [login-setup 控制台](docs/guide/login-setup.md)/[非交互命令](docs/guide/login-setup-cli.md)/[AI 指南](docs/guide/login-setup-ai.md) |
 | [`docs/deployment/`](docs/deployment/README.md) | 首次配置、独立服务、TLS/反代、容器、服务托管、邮件子模块、协议/管理 API 接入、一键构建与发布打包 |
 | [`docs/embedding/`](docs/embedding/README.md) | 作为 Go Module 嵌入：公开 API 稳定范围、生命周期与资源所有权、页面替换、示例与宿主调用边界 |
 | [`docs/reference/`](docs/reference/README.md) | 人类与 AI 共用的接口参考：Go API/HTTP/CLI/权限/错误码/配置/能力映射与 4 个机器可读 JSON（由代码生成，勿手改） |
@@ -314,10 +357,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scena
 开发协作材料，**不属于产品文档，也不进入发布包**；产品交付文档以 `docs/` 为准。本 README
 为简体中文单语版本（历史没有其他语言版本）；新增翻译需以本文件为基准同步维护。
 
-## 11. 安全边界速览
+## 12. 安全边界速览
 
 - **账户与应用隔离**：全局账户 + 应用成员/应用内角色权限/数据范围隔离；默认拒绝、fail-closed；功能权限不代替资源归属检查。
 - **可信身份**：`LocalAdmin` 仅代表持有宿主进程控制权的可信本地代码，不能由 HTTP 参数或普通用户取得；root 是唯一受保护账户，不能作为普通角色分配。
+- **本地维护控制台**：`login-setup` 仅在本地受控进程装配，信任来自 OS 对实例文件的访问授权，不新增匿名 HTTP 入口；所有写操作进入排他维护锁/审计并 fail-closed，不直写正在服务的库。它可本地救援 root 口令/MFA，但不代表远程免 MFA 或可绕过业务一致性。
 - **账户有效期**：全局可用时间（UTC 半开区间）在身份生效和请求校验处即时判断，不依赖后台扫描；到期不等于手动禁用，续期不解除禁用；root 不受普通期限管理。
 - **邮件**：测试用本地 EvernightMail/捕获器，生产需显式配置 SMTP；`mail.enabled=false` 时明确失败，不伪造成功；不要向真实第三方地址发测试邮件。
 - **能力默认关闭**：OAuth/OIDC、管理 JSON API、托管 API、客服 API 需显式开关，Discovery 只声明真实能力；验收边界见 [登录与 OAuth 文档](docs/guide/login-and-oauth.md)。
@@ -325,7 +369,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\shorttest.ps1 -Scena
 - **模糊搜索边界**：列表搜索先授权范围后匹配、字面转义、有界分页/游标；空搜索等价原列表；精确 `GetUserByUsername` 不改变，公开登录/找回不做账户枚举；邮箱/电话默认不纳入搜索。
 - **不做的事与平台口径**：不做多租户/多实例共享状态、短信供应商、第三方社交登录、动态 Go plugin、跨数据库迁移；只有 Windows 11 + SQLite 做过运行实测，其他平台/数据库仅编译或静态检查，未测能力不写成“已验证”。
 
-## 12. 排障与许可
+## 13. 排障与许可
 
 排障入口：[错误码与排障](docs/guide/troubleshooting.md)、
 [错误码手册](docs/requirements/login_错误码与排障手册.md)、

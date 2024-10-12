@@ -175,7 +175,7 @@ func pageUnregisteredCount(model *Model) int {
 // renderCLI 渲染 cli.md。
 func (m *Model) renderCLI(used map[string]bool) []byte {
 	blocks := []string{
-		"# CLI 参考（login-server / loginctl / login-backup）\n\n" +
+		"# CLI 参考（login-server / loginctl / login-backup / login-setup）\n\n" +
 			"> 命令树、flag 与退出码由 AST 扫描 `cmd/` 与 `internal/managecli/` 实际注册生成；" +
 			"任务导向说明见 [../guide/root-cli.md](../guide/root-cli.md)、" +
 			"[../guide/backup-and-restore.md](../guide/backup-and-restore.md) 与 " +
@@ -225,7 +225,7 @@ func (m *Model) renderCLI(used map[string]bool) []byte {
 			bulletList([]string{
 				"`loginctl` 的部分命令是命令组：`loginctl config <子命令>`、`loginctl diag <子命令>`、`loginctl user list`、`loginctl audit events list` 等；上面只展开顶层命令与其 flag，二级动作以 [../guide/root-cli.md](../guide/root-cli.md) 与 `loginctl help` 为准。",
 				"`login-server` 使用 cobra 命令树（`serve`、`init`），全局 `--version/--help` 由框架提供。",
-				"`login-backup` 的每个子命令都有独立 flag（见上表）；离线查看/导出不连接生产库。",
+				"`login-setup` 的顶层子命令来自其显式命令表，flag 含全局 `--config`/`--master-key-file`/`--json` 与各命令附加项；需要 PTY 的是全屏 CUI，非交互命令不需要。`login-backup` 的每个子命令都有独立 flag（见上表）；离线查看/导出不连接生产库。",
 				"Phase B 可继续补齐命令组二级动作与每命令的鉴权/审计边界；本页当前覆盖顶层命令、flag 与退出码。",
 			}),
 		"## 机器可读\n\n"+
