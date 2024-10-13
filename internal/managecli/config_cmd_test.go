@@ -291,3 +291,157 @@ func TestConfigSetExpectedVersionConflict(t *testing.T) {
 		t.Fatalf("写入后内容异常: %s err=%v", updated, err)
 	}
 }
+
+// TestConfigDatabaseNetworkFieldKinds 覆盖 C4 新增多驱动字段的 CLI 类型映射与
+// 秘密字段分类：host/username/name/tls_mode 字符串、port 整数、password 秘密。
+func TestConfigDatabaseNetworkFieldKinds(t *testing.T) {
+	want := map[string]configFieldKind{
+		"database.host":     configKindString,
+		"database.port":     configKindInt,
+		"database.username": configKindString,
+		"database.password": configKindSecret,
+		"database.name":     configKindString,
+		"database.tls_mode": configKindString,
+	}
+	for field, expected := range want {
+		kind, ok := configFieldKinds[field]
+		if !ok {
+			t.Fatalf("字段 %s 缺少 CLI 写入类型", field)
+		}
+		if kind != expected {
+			t.Fatalf("字段 %s 类型 = %s，期望 %s", field, kind, expected)
+		}
+	}
+	// 类型转换器：字符串与整数节点标签必须与 config 注册表一致。
+	stringNode, _, err := buildValueNode(configKindString, "db.example.test")
+	if err != nil || stringNode.Tag != "!!str" {
+		t.Fatalf("字符串字段节点异常: node=%v err=%v", stringNode, err)
+	}
+	intNode, _, err := buildValueNode(configKindInt, "3307")
+	if err != nil || intNode.Tag != "!!int" || intNode.Value != "3307" {
+		t.Fatalf("整数字段节点异常: node=%v err=%v", intNode, err)
+	}
+}
+
+// TestConfigSetDatabasePasswordRefusesPlaintext 验证数据库密码字段不能通过明文
+// set 写入，只能使用 set-secret 来源引用；拒绝时原文件保持不变。
+func TestConfigSetDatabasePasswordRefusesPlaintext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "login.yaml")
+	original := []byte("database:\n  driver: sqlite\n  path: database/login.db\nlogging:\n  level: info\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, exit := runCLI(t, "config", "set", "database.password", "plaintext-secret",
+		"--file", path, "--json")
+	if exit != ExitUsage {
+		t.Fatalf("数据库密码明文写入退出码 = %d，stderr=%s", exit, stderr)
+	}
+	if code := envelopeErrorCode(t, decodeEnvelope(t, stdout)); code != "CONFIG_FIELD_SECRET" {
+		t.Fatalf("数据库密码错误码 = %s", code)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "plaintext-secret") {
+		t.Fatal("数据库密码明文进入了配置文件")
+	}
+	if string(content) != string(original) {
+		t.Fatalf("拒绝秘密明文时不应修改原文件: %s", content)
+	}
+}
+
+// TestConfigValidateNetworkDriverYAML 验证 DBA 可用配置文件表达非 SQLite 驱动：
+// sqlite 专属默认值不应用到网络驱动，CLI validate 通过；运行入口仍由 appcore
+// fail-closed（不在 CLI validate 中执行/连接）。
+func TestConfigValidateNetworkDriverYAML(t *testing.T) {
+	for _, driver := range []string{"mysql", "postgres", "sqlserver"} {
+		t.Run(driver, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "login.yaml")
+			tlsMode := "true"
+			if driver == "postgres" {
+				tlsMode = "verify-full"
+			} else if driver == "sqlserver" {
+				tlsMode = "1.2"
+			}
+			yamlText := "database:\n  driver: " + driver + "\n  host: db.example.test\n" +
+				"  port: 3306\n  username: login-service\n  password:\n" +
+				"    env: LOGIN_DATABASE_PASSWORD\n  name: login\n  tls_mode: \"" + tlsMode + "\"\n" +
+				"logging:\n  level: info\n"
+			if err := os.WriteFile(path, []byte(yamlText), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, exit := runCLI(t, "config", "validate", "--config", path, "--json")
+			if exit != ExitOK {
+				t.Fatalf("%s 配置应校验通过，退出码 %d，stdout=%s stderr=%s",
+					driver, exit, stdout, stderr)
+			}
+		})
+	}
+}
+
+// TestConfigSetDatabaseNetworkFields 覆盖 C4 新增多驱动字段的真实 CLI 写入；
+// 网络驱动不继承 sqlite 字段，因此每次 set 后配置仍可校验通过；密码字段拒绝明文。
+func TestConfigSetDatabaseNetworkFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "login.yaml")
+	initial := []byte("database:\n" +
+		"  driver: mysql\n" +
+		"  host: db.example.test\n" +
+		"  port: 3306\n" +
+		"  username: login-service\n" +
+		"  password:\n" +
+		"    env: LOGIN_DATABASE_PASSWORD\n" +
+		"  name: login\n" +
+		"  tls_mode: \"true\"\n" +
+		"logging:\n  level: info\n")
+	if err := os.WriteFile(path, initial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		field string
+		value string
+		want  string
+	}{
+		{"database.host", "db2.example.test", "db2.example.test"},
+		{"database.port", "3307", "3307"},
+		{"database.username", "login-svc-2", "login-svc-2"},
+		{"database.name", "login_prod", "login_prod"},
+		{"database.tls_mode", "true", "\"true\""},
+	}
+	for _, testCase := range cases {
+		stdout, stderr, exit := runCLI(t, "config", "set", testCase.field, testCase.value,
+			"--file", path, "--json")
+		if exit != ExitOK {
+			t.Fatalf("字段 %s 写入退出码 = %d，stderr=%s", testCase.field, exit, stderr)
+		}
+		data := decodeEnvelope(t, stdout)["data"].(map[string]any)
+		if data["written"] != true {
+			t.Fatalf("字段 %s 未真实写入: %v", testCase.field, data)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), testCase.want) {
+			t.Fatalf("字段 %s 写入内容缺失（期望含 %q）: %s", testCase.field, testCase.want, content)
+		}
+		if _, _, validateExit := runCLI(t, "config", "validate", "--config", path); validateExit != ExitOK {
+			t.Fatalf("字段 %s 写入后配置无法通过校验", testCase.field)
+		}
+	}
+	stdout, stderr, exit := runCLI(t, "config", "set", "database.password", "plaintext-secret",
+		"--file", path, "--json")
+	if exit != ExitUsage {
+		t.Fatalf("数据库密码明文写入退出码 = %d，stderr=%s", exit, stderr)
+	}
+	if code := envelopeErrorCode(t, decodeEnvelope(t, stdout)); code != "CONFIG_FIELD_SECRET" {
+		t.Fatalf("数据库密码错误码 = %s", code)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "plaintext-secret") || !strings.Contains(string(content), "LOGIN_DATABASE_PASSWORD") {
+		t.Fatalf("数据库密码拒绝明文后文件状态异常: %s", content)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -392,8 +393,13 @@ func (i *Instance) Close(ctx context.Context) error {
 	}
 	wrapped := make([]error, 0, len(closeErrors))
 	var primary *AppError
+	detail := summarizeLifecycleFailures(closeErrors)
+	message := "关闭已启动对象失败"
+	if detail != "" {
+		message += ": " + detail
+	}
 	for _, closeErr := range closeErrors {
-		appError := classifyLifecycleError("关闭已启动对象失败", closeErr, requestID)
+		appError := classifyLifecycleError(message, closeErr, requestID)
 		wrapped = append(wrapped, appError)
 		if primary == nil {
 			primary = appError
@@ -402,6 +408,52 @@ func (i *Instance) Close(ctx context.Context) error {
 	}
 	i.pendingLifecycleLocked(LifecycleCloseFailed, primary)
 	return errors.Join(wrapped...)
+}
+
+// componentCloseFailure 是组件关闭失败的安全错误视图：Error()/公开日志只包含
+// 组件序号与类型（不含底层原因/路径/秘密），完整原因通过 Unwrap 保留给调用方
+// 用 errors.Is/errors.As 做程序化诊断，不进入公开错误消息或结构化日志。
+type componentCloseFailure struct {
+	index         int
+	componentType string
+	cause         error
+}
+
+// Error 返回可公开的关闭失败摘要（不含底层原因）。
+func (e *componentCloseFailure) Error() string {
+	if e == nil {
+		return "组件关闭失败"
+	}
+	return fmt.Sprintf("组件 %d（%s）关闭失败", e.index, e.componentType)
+}
+
+// Unwrap 保留底层原因链，供调用方程序化判断；不用于渲染公开消息/日志。
+func (e *componentCloseFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// summarizeLifecycleFailures 汇总关闭失败的安全标签（组件序号/类型），不拼接
+// 底层错误文本，避免文件路径/秘密进入公开错误与日志。非组件类型统一给固定摘要。
+func summarizeLifecycleFailures(errs []error) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(errs))
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		var failure *componentCloseFailure
+		if errors.As(err, &failure) {
+			parts = append(parts, failure.Error())
+			continue
+		}
+		parts = append(parts, "组件/扩展关闭失败")
+	}
+	return strings.Join(parts, "; ")
 }
 
 // classifyLifecycleError 把生命周期错误转为统一 AppError。已经是 AppError 的
@@ -471,8 +523,11 @@ func (i *Instance) closeStarted(ctx context.Context) []error {
 	for position := len(i.started) - 1; position >= 0; position-- {
 		started := i.started[position]
 		if err := i.closeComponentSafely(ctx, started); err != nil {
-			errs = append(errs, fmt.Errorf("组件 %d（%T）关闭失败: %w",
-				started.index, started.component, err))
+			errs = append(errs, &componentCloseFailure{
+				index:         started.index,
+				componentType: fmt.Sprintf("%T", started.component),
+				cause:         err,
+			})
 		}
 	}
 	return errs

@@ -782,5 +782,25 @@
       ],
       "notes": "这些是验证边界与阻塞事实，不是通过也不是缺陷；发布说明必须保留相同口径。"
     }
-  ]
+  ,{
+      "id": "setup.console_cli",
+      "title": "login-setup 本地维护非交互命令（297）",
+      "domain": "本地维护控制台",
+      "internal_services": ["cmd/login-setup", "internal/setupconsole", "internal/securefile"],
+      "cli": ["login-setup:status", "login-setup:check", "login-setup:plan", "login-setup:apply",
+        "login-setup:db test", "login-setup:db init", "login-setup:root status",
+        "login-setup:root init", "login-setup:accounts list", "login-setup:accounts apply",
+        "login-setup:presets install", "login-setup:export config", "login-setup:import config",
+        "login-setup:recover plan", "login-setup:recover apply", "login-setup:selftest",
+        "login-setup:commands"],
+      "tests": [
+        {"package": "./cmd/login-setup", "run": "TestNonInteractiveCommandTable"},
+        {"package": "./cmd/login-setup", "run": "TestNonInteractiveApplyPlanExportImport"},
+        {"package": "./cmd/login-setup", "run": "TestNonInteractiveImportFailsClosedWhenMaintenanceLocked"},
+        {"package": "./cmd/login-setup", "run": "TestNonInteractiveRootResetConflictDoesNotChangeState"},
+        {"package": "./internal/securefile", "run": "TestWriteReadRoundTrip"}
+      ],
+      "pagination": {"mode": "none", "reason": "非交互维护命令本身不返回可增长列表；列表类只读诊断（status/selftest）为单次快照。"},
+      "notes": "与 CUI 同源复用 WS1–WS4 领域能力；无 PTY，稳定退出码与 JSON；秘密经 stdin/受保护文件。"
+    }]
 }

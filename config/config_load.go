@@ -199,6 +199,15 @@ func Load(opts LoadOptions) (Config, error) {
 	for i := range layers {
 		layers[i].apply(&cfg)
 	}
+	// driver-aware 语义：SQLite 专属连接字段只对 sqlite 生效。选择 mysql/postgres/
+	// sqlserver 时，Default() 的 sqlite 默认值（path/wal/busy_timeout_ms）以及显式
+	// 覆盖的同名字段都不应用到网络驱动，避免“看起来生效”的假配置；网络驱动自身的
+	// host/port/username/password/name/tls_mode 由最终校验要求。
+	if cfg.Database.Driver.Valid() && cfg.Database.Driver != DatabaseDriverSQLite {
+		cfg.Database.Path = ""
+		cfg.Database.WAL = false
+		cfg.Database.BusyTimeoutMS = 0
+	}
 
 	// 秘密单独合并：越靠后的层优先，直接值会覆盖 YAML 中的来源引用。主密钥与
 	// PFX 密码分别合并，避免一个字段的秘密来源覆盖另一个字段。

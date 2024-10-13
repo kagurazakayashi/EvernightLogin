@@ -445,14 +445,22 @@ func TestStep91PermissionMatrixAcrossApps(t *testing.T) {
 		authz.ListOptions{}); !errors.Is(err, authz.ErrAccessDenied) {
 		t.Fatalf("普通用户查询他人权限应被拒绝，实际 %v", err)
 	}
-	// root 不通过普通权限引擎推导权限。
+	// root 全权限由授权内核按 root 语义推导（步骤252）：root 不依赖角色/成员分配，
+	// 但普通权限引擎在装配真实预设目录后按 root 语义允许已实现权限，并显式标记
+	// 来源 Kind=root。旧断言“root 在普通引擎中一律 ACCESS_DENIED”与步骤252 语义
+	// 冲突；这里验证真实产品语义（未装配目录时仍应 AUTHZ_UNAVAILABLE，由 authz
+	// 定向测试覆盖）。
 	systemCaller, err := authz.SystemCaller("step91-target-guard")
 	if err != nil {
 		t.Fatalf("系统查询 Caller: %v", err)
 	}
 	rootCheck := readCheck(systemCaller, env.root, "system", "users.read")
-	if rootCheck.Allowed || rootCheck.Code != authz.CodeAccessDenied {
-		t.Fatalf("root 不应通过普通权限引擎获得权限: %+v", rootCheck)
+	if !rootCheck.Allowed {
+		t.Fatalf("root 应按 root 语义获得已实现权限: %+v", rootCheck)
+	}
+	if len(rootCheck.Permissions) != 1 || len(rootCheck.Permissions[0].Sources) == 0 ||
+		rootCheck.Permissions[0].Sources[0].Kind != authz.SourceKindRoot {
+		t.Fatalf("root 权限来源应显式标记 root: %+v", rootCheck)
 	}
 
 	// 成员移除：通过真实用户组服务移除组成员后，间接授权立即失效。

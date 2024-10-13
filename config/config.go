@@ -986,13 +986,8 @@ func databaseConfigProblems(database DatabaseConfig) []databaseConfigProblem {
 		}
 		return problems
 	}
-	// 非 SQLite：SQLite 字段互斥，其余字段按配置语义校验。
-	if strings.TrimSpace(database.Path) != "" {
-		add("database.path", ConfigErrorConflict, "非 SQLite 驱动不接受 SQLite 路径字段")
-	}
-	if database.WAL || database.BusyTimeoutMS != 0 {
-		add("database.wal", ConfigErrorConflict, "非 SQLite 驱动不接受 SQLite WAL/忙等待字段")
-	}
+	// 非 SQLite：SQLite 专属字段不应用到网络驱动（加载器会清空继承默认值），
+	// 程序化 Config 中残留同名字段也不参与运行；这里不再误报冲突。
 	if problem := databaseHostProblem(database.Host); problem != "" {
 		add("database.host", ConfigErrorValue, problem)
 	}

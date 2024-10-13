@@ -2,7 +2,7 @@
 
 > 能力声明来自 `scripts/capabilities/catalog.json`（机器可读能力映射的唯一来源），**实现状态不在这里重复**：请以 [能力矩阵](../acceptance/capability-matrix.md) 为准。本页提供“能力 → 公开面（Go/HTTP/页面/CLI/权限）→ 参考位置”的导航索引。
 
-## 1. 能力参考索引（52 项）
+## 1. 能力参考索引（53 项）
 
 | 能力 id | 领域 | 标题 | 分页 | 权限数 | 管理路由声明 | 页面声明 | CLI 声明 | 主要公开 Go API |
 |---|---|---|---|---|---|---|---|---|
@@ -47,6 +47,7 @@
 | `security.policy_reauth` | 认证与会话 | 敏感操作安全策略与再次认证 | none | 1 | 0 | 0 | 0 | - |
 | `session.admin` | 认证与会话 | 管理员会话查询与强制下线 | offset | 1 | 2 | 0 | 0 | `SessionService`、`SessionService.ListDevices`、`SessionDeviceRequest`、`SessionDevice`、`SessionDeviceList`、`AdminListUserSessionsRequest` |
 | `settings.managed` | 配置 | 常规设置读取、校验、更新与敏感默认恢复 | none | 1 | 5 | 1 | 0 | `SettingField`、`SettingValidationError`、`SettingsFieldsRequest`、`SettingsRestoreSensitiveRequest`、`SettingsRestoreSensitiveResult`、`SettingsService` |
+| `setup.console_cli` | 本地维护控制台 | login-setup 本地维护非交互命令（297） | none | 0 | 0 | 0 | 17 | - |
 | `stats.overview` | 审计与报告 | 统计概览与健康状态 | fixed | 0 | 0 | 0 | 0 | - |
 | `storage.sqlite_migrations` | 存储 | SQLite 存储、增量迁移与其他数据库方言适配 | none | 0 | 0 | 0 | 0 | - |
 | `support.recovery` | 恢复 | 客服求助单、人工核验恢复与 root 本地应急 | offset | 7 | 2 | 1 | 1 | `SupportAdminService`、`SupportCase`、`SupportCaseEvent`、`SupportCasePage`、`SupportCaseRequest`、`SupportCreateCaseRequest` |
@@ -63,16 +64,14 @@
 
 | 对象 | 能力矩阵盘点 | reference 扫描 |
 |---|---|---|
-| 能力总数 | 52 | 52 |
+| 能力总数 | 53 | 53 |
 | 管理路由 | 137 | 137 |
 | 页面路由 | 250 | 250 |
 | 协议路径 | 17 | 17 |
-| CLI 子命令 | 41 | 58 |
+| CLI 子命令 | 58 | 58 |
 | 权限键 | 53 | 53 |
 
-- CLI 子命令：能力矩阵盘点=41，reference 扫描=58（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
-- app 函数（含导出方法）：能力矩阵盘点=287，reference 扫描=340（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
-- 协议端点表：能力矩阵盘点=20，reference 扫描=19（矩阵可能过期或扫描口径不同，需人工核对；不自动改写矩阵）
+无。
 
 ## 3. 使用方式
 

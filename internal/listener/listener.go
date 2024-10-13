@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,6 +76,9 @@ type Server struct {
 	listeners  []net.Listener
 	addrs      []net.Addr
 	serveWG    sync.WaitGroup
+	// connStates 跟踪活动连接状态，仅用于关闭超时的可诊断错误（不记录对端地址）。
+	connMu     sync.Mutex
+	connStates map[net.Conn]http.ConnState
 }
 
 // New 校验并构造监听器，但不绑定任何端口、不创建协程。地址或 Handler 非法时
@@ -153,6 +157,7 @@ func (s *Server) Start(ctx context.Context) error {
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(s.options.Logger.Handler(), slog.LevelWarn),
 		TLSConfig:         s.options.TLSConfig,
+		ConnState:         s.trackConnState,
 	}
 	useTLS := s.options.TLSConfig != nil
 	addrCopies := make([]net.Addr, 0, len(listeners))
@@ -186,6 +191,67 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// trackConnState 记录连接状态用于关闭超时诊断；不记录对端地址/请求内容。
+// net/http 会在连接关闭或劫持后回调 StateClosed/StateHijacked。
+func (s *Server) trackConnState(conn net.Conn, state http.ConnState) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.connStates == nil {
+		s.connStates = make(map[net.Conn]http.ConnState)
+	}
+	switch state {
+	case http.StateClosed, http.StateHijacked:
+		delete(s.connStates, conn)
+	default:
+		s.connStates[conn] = state
+	}
+}
+
+// connectionStateSummary 返回当前活动连接状态计数（只含状态名与数量）。
+func (s *Server) connectionStateSummary() string {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if len(s.connStates) == 0 {
+		return "无活动连接"
+	}
+	counts := make(map[string]int)
+	names := map[http.ConnState]string{
+		http.StateNew: "new", http.StateActive: "active",
+		http.StateIdle: "idle", http.StateHijacked: "hijacked", http.StateClosed: "closed",
+	}
+	for _, state := range s.connStates {
+		counts[names[state]]++
+	}
+	order := []string{"new", "active", "idle", "hijacked", "closed"}
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		if counts[name] > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", name, counts[name]))
+		}
+	}
+	return "活动连接: " + strings.Join(parts, ", ")
+}
+
+// closeNewConnections 关闭仍处于 StateNew（已 accept、尚未读到任何请求字节）的
+// 连接并返回关闭数量。它们没有任何在处理中的请求，关闭是安全的；若不主动关闭，
+// net/http 的 Shutdown 不会把 StateNew 连接视为空闲连接，会一直等到读超时/关闭
+// 期限（慢连接或环境探测连接可导致优雅关闭间歇超时）。
+func (s *Server) closeNewConnections() int {
+	s.connMu.Lock()
+	var pending []net.Conn
+	for conn, state := range s.connStates {
+		if state == http.StateNew {
+			pending = append(pending, conn)
+			delete(s.connStates, conn)
+		}
+	}
+	s.connMu.Unlock()
+	for _, conn := range pending {
+		_ = conn.Close()
+	}
+	return len(pending)
+}
+
 // Close 优雅关闭全部监听与连接，并等待监听协程退出。关闭受调用方 ctx 与
 // ShutdownTimeout 双重期限约束：期限内未完成时强制关闭连接与监听，并如实返回
 // 未完成的原因，不假装已经优雅退出。
@@ -209,11 +275,36 @@ func (s *Server) Close(ctx context.Context) error {
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
+	// 先关闭 keep-alive 并主动清空“已 accept 但未读请求”的新连接：避免 Shutdown
+	// 与连接新建竞态把 StateNew 连接当作需等待的活动连接（Windows/环境探测连接下
+	// 可复现的间歇超时）。正常活动请求仍由 Shutdown 等待，不忽略活动连接错误。
+	s.httpServer.SetKeepAlivesEnabled(false)
+	s.closeNewConnections()
 	shutdownCtx, cancel := context.WithDeadline(ctx, deadline)
-	shutdownErr := s.httpServer.Shutdown(shutdownCtx)
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- s.httpServer.Shutdown(shutdownCtx) }()
+	var shutdownErr error
+	ticker := time.NewTicker(10 * time.Millisecond)
+waitShutdown:
+	for {
+		select {
+		case shutdownErr = <-shutdownDone:
+			break waitShutdown
+		case <-ticker.C:
+			// Shutdown 关闭监听前可能仍有新连接被 accept；持续清掉未读连接，
+			// 直到 Shutdown 返回（活动请求不受影响）。
+			s.closeNewConnections()
+		case <-shutdownCtx.Done():
+			s.closeNewConnections()
+			shutdownErr = <-shutdownDone
+			break waitShutdown
+		}
+	}
+	ticker.Stop()
 	cancel()
 	if shutdownErr != nil {
-		errs = append(errs, fmt.Errorf("优雅关闭 HTTP 监听未在期限内完成: %w", shutdownErr))
+		errs = append(errs, fmt.Errorf("优雅关闭 HTTP 监听未在期限内完成: %w（%s）",
+			shutdownErr, s.connectionStateSummary()))
 		if closeErr := s.httpServer.Close(); closeErr != nil {
 			errs = append(errs, fmt.Errorf("强制关闭 HTTP 连接失败: %w", closeErr))
 		}

@@ -22,13 +22,17 @@ import (
 	loginapp "github.com/kagurazakayashi/EvernightLogin/app"
 )
 
-// waitCapturedURL 等待邮件中首次出现指定路径的一次性链接。
+// waitCapturedURL 等待邮件中出现尚未消费过的指定路径一次性链接（多次发送时不复用旧链接）。
 func waitCapturedURL(t *testing.T, capture *smtpCapture, pathFragment string,
-	timeout time.Duration) *url.URL {
+	seen map[string]bool, timeout time.Duration) *url.URL {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if raw, ok := capturedURL(capture.snapshot(), pathFragment); ok {
+		for _, raw := range capturedURLList(capture.snapshot(), pathFragment) {
+			if seen[raw] {
+				continue
+			}
+			seen[raw] = true
 			parsed, err := url.Parse(raw)
 			if err != nil {
 				t.Fatalf("解析邮件链接失败: %v", err)
@@ -54,9 +58,9 @@ func passwordResetToken(t *testing.T, link *url.URL) string {
 
 // TestMatrixEmailChangeResetLinkPermanentRejection 覆盖 250 A→B→A 旧链接永久拒绝。
 func TestMatrixEmailChangeResetLinkPermanentRejection(t *testing.T) {
-	t.Skip("250 A→B→A 邮件旧链接：本机 SMTP 已捕获邮件，但找回模板链接路径解析未在当前阶段完成（捕获到邮件但未提取 /login/reset-password 链接）；实现保留，校正解析后并入合并回归 300。通知投递终态矩阵已通过。")
 	ctx := context.Background()
 	capture := startSMTPCapture(t)
+	seenLinks := make(map[string]bool)
 	env := openEnvMail(t, capture)
 	const oldEmail = "old-address@example.test"
 	const newEmail = "new-address@example.test"
@@ -75,7 +79,8 @@ func TestMatrixEmailChangeResetLinkPermanentRejection(t *testing.T) {
 		RequestID: login.NewRequestID()}); err != nil {
 		t.Fatalf("发起找回: %v", err)
 	}
-	resetLink := waitCapturedURL(t, capture, "/login/reset-password", 15*time.Second)
+	resetLink := waitCapturedURL(t, capture, "/login/reset-password",
+		seenLinks, 15*time.Second)
 	oldToken := passwordResetToken(t, resetLink)
 	if err := env.Runtime.PasswordReset().ValidateToken(ctx, oldToken); err != nil {
 		t.Fatalf("新签发找回链接应可用（前置）: %v", err)
@@ -90,7 +95,8 @@ func TestMatrixEmailChangeResetLinkPermanentRejection(t *testing.T) {
 				RequestID: login.NewRequestID()}); err != nil {
 			t.Fatalf("发起邮箱变更到 %s: %v", email, err)
 		}
-		link := waitCapturedURL(t, capture, "/email/change/verify", 15*time.Second)
+		link := waitCapturedURL(t, capture, "/email/change/verify",
+			seenLinks, 15*time.Second)
 		query := link.Query()
 		verified, verifyErr := env.Runtime.EmailChange().Verify(ctx,
 			loginapp.VerifyEmailChangeRequest{ChangeRequestID: query.Get("rid"),

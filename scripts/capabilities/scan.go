@@ -112,7 +112,7 @@ type inventory struct {
 }
 
 var (
-	protocolEndpointLine = regexp.MustCompile(`^\s*//\s+(GET|POST|PUT|DELETE)\s+(/\S+)\s*(.*)$`)
+	protocolEndpointLine = regexp.MustCompile(`^\s*//\s+(GET|POST|PUT|DELETE)\s+(/[A-Za-z0-9_./{}-]+)\s*(.*)$`)
 	methodConstNames     = map[string]string{
 		"MethodGet": "GET", "MethodPost": "POST", "MethodPut": "PUT",
 		"MethodDelete": "DELETE", "MethodPatch": "PATCH", "MethodHead": "HEAD",
@@ -438,13 +438,24 @@ func scanAppPackage(root string, inv *inventory) error {
 					}
 				}
 			case *ast.FuncDecl:
-				if typed.Name.IsExported() && !funcSeen[typed.Name.Name] {
+				if typed.Name.IsExported() && typed.Recv == nil &&
+					!funcSeen[typed.Name.Name] {
 					funcSeen[typed.Name.Name] = true
 					inv.AppFuncs = append(inv.AppFuncs, typed.Name.Name)
 				}
 				// 导出接收者上的导出方法也是公开 Go 接口（如 Runtime.Admin）。
 				if typed.Recv == nil || !typed.Name.IsExported() {
 					continue
+				}
+				// 与 reference 交叉核对口径一致：app_funcs 盘点包含导出方法
+				// （Type.Method），否则会长期出现 287 vs 340 的假差异。
+				methodKey := typed.Name.Name
+				if methodReceiver := receiverTypeName(typed.Recv); methodReceiver != "" {
+					methodKey = methodReceiver + "." + typed.Name.Name
+				}
+				if !funcSeen[methodKey] {
+					funcSeen[methodKey] = true
+					inv.AppFuncs = append(inv.AppFuncs, methodKey)
 				}
 				receiver := receiverTypeName(typed.Recv)
 				if receiver == "" || !ast.IsExported(receiver) {
@@ -716,6 +727,28 @@ func scanPages(root string, inv *inventory) error {
 	return nil
 }
 
+// addLoginSetupCLICommands 盘点 login-setup 显式命令表（cliCommandTable 的
+// cliCommandRow{Name:"..."}）。该程序不用 cobra/switch args[0]，需要单独解析。
+func addLoginSetupCLICommands(file *ast.File, source string,
+	add func(binary, name, source string)) {
+	for _, decl := range file.Decls {
+		funcDecl, ok := decl.(*ast.FuncDecl)
+		if !ok || funcDecl.Body == nil || funcDecl.Name.Name != "cliCommandTable" {
+			continue
+		}
+		ast.Inspect(funcDecl.Body, func(node ast.Node) bool {
+			composite, ok := node.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if name := stringLit(compositeKeyValue(composite, "Name")); name != "" {
+				add("login-setup", name, source)
+			}
+			return true
+		})
+	}
+}
+
 // scanCLI 盘点命令行子命令：
 //   - cmd/* 中 cobra 的 Use: 字面量与顶层 switch args[0] 的 case 字面量；
 //   - internal/managecli 中 args[0] 分组的子命令（归属 loginctl）。
@@ -728,7 +761,12 @@ func scanCLI(root string, inv *inventory) error {
 	fset := token.NewFileSet()
 	seen := map[string]bool{}
 	add := func(binary, name, source string) {
-		name = strings.TrimSpace(strings.Fields(name)[0])
+		name = strings.TrimSpace(name)
+		// cobra Use / switch case 的首个词是命令名；login-setup 的显式命令表允许
+		// 带空格的二级命令（如 "db test"），必须保留完整名称。
+		if binary != "login-setup" {
+			name = strings.Fields(name)[0]
+		}
 		if name == "" {
 			return
 		}
@@ -764,6 +802,9 @@ func scanCLI(root string, inv *inventory) error {
 			}
 			inv.FilesScanned++
 			rel := "cmd/" + binary.Name() + "/" + filepath.Base(path)
+			if binary.Name() == "login-setup" {
+				addLoginSetupCLICommands(file, rel, add)
+			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				switch typed := node.(type) {
 				case *ast.CompositeLit:

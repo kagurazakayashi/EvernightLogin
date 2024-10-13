@@ -6,13 +6,13 @@
 
 | 项 | 值 |
 |---|---|
-| 生成时间（UTC） | 2026-11-26T06:09:33Z |
+| 生成时间（UTC） | 2026-11-27T03:01:40Z |
 | 仓库 | . |
-| Git HEAD / 分支 | `a5527a14486d01afe271c339f9d863e65137613a` / `main`（工作树含未提交修改） |
+| Git HEAD / 分支 | `faa011a4cd9fe0d8b25ed60cd9231cffcd0c2f70` / `main`（工作树含未提交修改） |
 | 工具链 / 平台 | go1.27.4 / windows/amd64 |
 | 逻辑处理器 / 并发预算 | 16 / 8 |
 | 能力声明 | `scripts/capabilities/catalog.json` |
-| 扫描文件数 | 803 |
+| 扫描文件数 | 843 |
 
 复跑命令（根目录，Windows PowerShell 示例）：
 
@@ -27,12 +27,12 @@ go run ./scripts/capabilities -check   # 只读校验（不写 tracked 文件，
 
 | 状态 | 数量 | 含义 |
 |---|---|---|
-| `implemented` | 48 | 声明面全部在源码中解析到，且有定向测试证据 |
+| `implemented` | 49 | 声明面全部在源码中解析到，且有定向测试证据 |
 | `implemented_untested` | 0 | 声明面全部解析到，但缺少可核验的定向测试证据（未测，不是已完成） |
 | `partial` | 3 | 声明面与测试解析到，但有已登记的产品缺口/环境未测/子模块阻塞（不能当作全部完成） |
 | `missing` | 0 | 至少一个声明面/测试/缺口证据未解析到（未实现或文档超前） |
 | `unimplemented` | 1 | 已知未实现能力，缺口证据已核验（不得当作可用能力） |
-| 合计 | 52 | 定向测试证据 236 条 |
+| 合计 | 53 | 定向测试证据 241 条 |
 
 证据分级（步骤 267，防止“符号存在=完成”）：
 
@@ -90,6 +90,7 @@ go run ./scripts/capabilities -check   # 只读校验（不写 tracked 文件，
 | `security.policy_reauth` 敏感操作安全策略与再次认证 | 认证与会话 | `implemented` | 4 | - | - | - | - | - | - | 1 | none | 3 |
 | `session.admin` 管理员会话查询与强制下线 | 认证与会话 | `implemented` | 1 | 18 | - | 2 | - | - | - | 1 | offset | 6 |
 | `settings.managed` 常规设置读取、校验、更新与敏感默认恢复 | 配置 | `implemented` | 3 | 19 | - | 5 | - | - | 1 | 1 | none | 6 |
+| `setup.console_cli` login-setup 本地维护非交互命令（297） | 本地维护控制台 | `implemented` | 3 | - | - | - | - | 17 | - | - | none | 5 |
 | `stats.overview` 统计概览与健康状态 | 审计与报告 | `implemented` | 1 | - | - | - | - | - | - | - | fixed | 2 |
 | `storage.sqlite_migrations` SQLite 存储、增量迁移与其他数据库方言适配 | 存储 | `implemented` | 6 | - | - | - | - | - | - | - | none | 3 |
 | `support.recovery` 客服求助单、人工核验恢复与 root 本地应急 | 恢复 | `implemented` | 3 | 48 | - | 2 | - | 1 | 1 | 7 | offset | 9 |
@@ -145,6 +146,7 @@ go run ./scripts/capabilities -check   # 只读校验（不写 tracked 文件，
 - `security.policy_reauth`: internal_service 4/4, permission 1/1, test 3/3, matched_tests 3
 - `session.admin`: internal_service 1/1, app_api 18/18, admin_route 2/2, permission 1/1, test 6/6, matched_tests 6
 - `settings.managed`: internal_service 3/3, app_api 19/19, admin_route 5/5, page 1/1, permission 1/1, test 6/6, matched_tests 6
+- `setup.console_cli`: internal_service 3/3, cli 17/17, test 5/5, matched_tests 5
 - `stats.overview`: internal_service 1/1, test 2/2, matched_tests 2
 - `storage.sqlite_migrations`: internal_service 6/6, test 3/3, matched_tests 3
 - `support.recovery`: internal_service 3/3, app_api 48/48, admin_route 2/2, cli 1/1, page 1/1, permission 7/7, test 9/9, matched_tests 9
@@ -209,7 +211,7 @@ go run ./scripts/capabilities -check   # 只读校验（不写 tracked 文件，
 | 管理 API 路由 | 137 | 0 |
 | 协议端点点位 | 17 | 0 |
 | 页面命名路由 | 250 | 0 |
-| CLI 子命令 | 41 | 0 |
+| CLI 子命令 | 58 | 0 |
 | 内置权限键 | 53 | 0 |
 
 ## 分页审计

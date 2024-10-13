@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,6 +45,7 @@ import (
 	manualrecoverysqlite "github.com/kagurazakayashi/EvernightLogin/internal/manualrecovery/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/onboarding"
 	onboardingsqlite "github.com/kagurazakayashi/EvernightLogin/internal/onboarding/sqlite"
+	"github.com/kagurazakayashi/EvernightLogin/internal/preset"
 	"github.com/kagurazakayashi/EvernightLogin/internal/profile"
 	profilesqlite "github.com/kagurazakayashi/EvernightLogin/internal/profile/sqlite"
 	"github.com/kagurazakayashi/EvernightLogin/internal/reauth"
@@ -64,6 +67,75 @@ var step91AcceptanceTime = time.Date(2026, 11, 20, 4, 0, 0, 0, time.UTC)
 
 // step91LocalAdmin 是受信本地管理员标识（用于账户初始化/系统种子通道）。
 const step91LocalAdmin = "step91-local-admin"
+
+// step91PermissionCatalog 是测试侧的 authz.PermissionCatalog 适配器：使用真实
+// 版本化预设目录（internal/preset.DefaultCatalog）回答权限实现状态，与生产装配
+// （serverapp.permission_catalog）语义一致；只在测试环境注入，产品代码不变。
+type step91PermissionCatalog struct {
+	implemented map[string]bool
+	entries     []authz.CatalogPermission
+}
+
+// newStep91PermissionCatalog 读取并校验真实预设目录，构造只读视图。
+func newStep91PermissionCatalog(t *testing.T) *step91PermissionCatalog {
+	t.Helper()
+	catalog := preset.DefaultCatalog()
+	if catalog == nil {
+		t.Fatal("预设权限目录为空")
+	}
+	if err := catalog.Validate(); err != nil {
+		t.Fatalf("预设权限目录校验失败: %v", err)
+	}
+	implemented := make(map[string]bool, len(catalog.Permissions))
+	entries := make([]authz.CatalogPermission, 0, len(catalog.Permissions))
+	for _, definition := range catalog.Permissions {
+		key := strings.TrimSpace(definition.Key)
+		if key == "" {
+			t.Fatal("预设权限目录包含空权限键")
+		}
+		implemented[key] = definition.Implemented
+		if definition.Implemented {
+			entries = append(entries, authz.CatalogPermission{Key: key,
+				Name: definition.Name, RootOnly: definition.RootOnly})
+		}
+	}
+	sort.Slice(entries, func(left, right int) bool { return entries[left].Key < entries[right].Key })
+	return &step91PermissionCatalog{implemented: implemented, entries: entries}
+}
+
+// IsImplemented 实现 authz.PermissionCatalog。
+func (c *step91PermissionCatalog) IsImplemented(key string) (bool, bool) {
+	if c == nil {
+		return false, false
+	}
+	implemented, known := c.implemented[strings.TrimSpace(key)]
+	return implemented, known
+}
+
+// ImplementedPermissions 实现 authz.PermissionCatalog（返回副本）。
+func (c *step91PermissionCatalog) ImplementedPermissions() []authz.CatalogPermission {
+	if c == nil {
+		return nil
+	}
+	return append([]authz.CatalogPermission(nil), c.entries...)
+}
+
+// ImplementedPermission 实现 authz.PermissionCatalog。
+func (c *step91PermissionCatalog) ImplementedPermission(key string) (authz.CatalogPermission, bool) {
+	if c == nil {
+		return authz.CatalogPermission{}, false
+	}
+	normalized := strings.TrimSpace(key)
+	if !c.implemented[normalized] {
+		return authz.CatalogPermission{}, false
+	}
+	for _, entry := range c.entries {
+		if entry.Key == normalized {
+			return entry, true
+		}
+	}
+	return authz.CatalogPermission{}, false
+}
 
 // step91UserID/step91AppID 生成符合生产格式的稳定 ID（usr_/app_ + 32 位十六进制）。
 func step91UserID(n int) string { return fmt.Sprintf("usr_%032x", n) }
@@ -267,7 +339,7 @@ func newStep91Env(t *testing.T) *step91Env {
 		t.Fatalf("授权查询器: %v", err)
 	}
 	env.access, err = authz.New(authz.Options{Store: authzStore, Authorizer: queryAuthorizer,
-		Logger: testDiscardLogger()})
+		Logger: testDiscardLogger(), Catalog: newStep91PermissionCatalog(t)})
 	if err != nil {
 		t.Fatalf("授权引擎: %v", err)
 	}

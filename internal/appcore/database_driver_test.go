@@ -96,3 +96,30 @@ func TestOpenStoreSQLiteBehaviorUnchanged(t *testing.T) {
 		t.Fatalf("SQLite 路径行为应保持（文件已创建）: %v", statErr)
 	}
 }
+
+// TestOpenStoreRejectsLoadedNetworkDriverConfig 验证从 YAML 加载的网络驱动配置
+// （driver-aware 默认语义生效后）仍由运行入口明确 fail-closed，不建文件。
+func TestOpenStoreRejectsLoadedNetworkDriverConfig(t *testing.T) {
+	instanceDir := t.TempDir()
+	yamlText := "database:\n  driver: mysql\n  host: db.example.test\n  username: u\n" +
+		"  password:\n    env: LOGIN_DATABASE_PASSWORD\n  name: n\n  tls_mode: \"true\"\n" +
+		"logging:\n  level: info\n"
+	cfg, err := config.Load(config.LoadOptions{YAML: []byte(yamlText)})
+	if err != nil {
+		t.Fatalf("网络驱动 YAML 应可加载: %v", err)
+	}
+	if cfg.Database.Driver != config.DatabaseDriverMySQL {
+		t.Fatalf("驱动解析错误: %s", cfg.Database.Driver)
+	}
+	store, err := appcore.OpenStore(context.Background(), cfg, nil)
+	if store != nil {
+		_ = store.Close()
+		t.Fatal("网络驱动不得返回可用存储")
+	}
+	if !errors.Is(err, appcore.ErrDatabaseDriverNotWired) {
+		t.Fatalf("应返回 fail-closed 错误，实际: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(instanceDir, "database")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("不得创建数据库目录: %v", statErr)
+	}
+}

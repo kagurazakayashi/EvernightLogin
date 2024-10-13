@@ -9,10 +9,16 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
+	"net/mail"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -218,11 +224,112 @@ VALUES('`+normalized+`','`+userID+`','`+normalized+`',`+
 // int64Text 是 SQL 夹具的小工具。
 func int64Text(value int64) string { return strconv.FormatInt(value, 10) }
 
-// capturedURL 从原始邮件中还原指定路径的一次性链接（处理 quoted-printable 软换行）。
+// decodeCapturedMessage 解码捕获到的原始 MIME 邮件，返回可搜索的正文文本。
+//
+// 产品邮件模板含中文，传输时正文常为 base64/quoted-printable 或 multipart；
+// 直接对原始 DATA 字符串搜索 URL 会因编码而漏检。这里按 MIME 逐部分解码（不改变
+// 捕获存储本身），再交给 URL/token 提取；解码失败时退回软换行+base64 片段扫描。
+func decodeCapturedMessage(raw string) string {
+	message, err := mail.ReadMessage(strings.NewReader(raw))
+	if err != nil {
+		return decodeCapturedFallback(raw)
+	}
+	return decodeMIMEPart(message.Header, message.Body)
+}
+
+// decodeMIMEPart 递归解码一个 MIME 部分。
+func decodeMIMEPart(header interface{ Get(string) string }, body io.Reader) string {
+	data, readErr := io.ReadAll(body)
+	if readErr != nil {
+		data = nil
+	}
+	mediaType, params, parseErr := mime.ParseMediaType(header.Get("Content-Type"))
+	if parseErr != nil {
+		mediaType = ""
+	}
+	switch strings.ToLower(strings.TrimSpace(header.Get("Content-Transfer-Encoding"))) {
+	case "base64":
+		if decoded, decodeErr := base64.StdEncoding.DecodeString(
+			strings.Join(strings.Fields(string(data)), "")); decodeErr == nil {
+			data = decoded
+		}
+	case "quoted-printable":
+		if decoded, decodeErr := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(data))); decodeErr == nil {
+			data = decoded
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		boundary := params["boundary"]
+		if boundary == "" {
+			return string(data)
+		}
+		var builder strings.Builder
+		reader := multipart.NewReader(bytes.NewReader(data), boundary)
+		for {
+			part, partErr := reader.NextPart()
+			if partErr != nil {
+				break
+			}
+			builder.WriteString(decodeMIMEPart(part.Header, part))
+			builder.WriteString("\n")
+		}
+		return builder.String()
+	}
+	return string(data)
+}
+
+// decodeCapturedFallback 在 MIME 解析失败时解码软换行与 base64 片段。
+func decodeCapturedFallback(raw string) string {
+	decoded := strings.ReplaceAll(raw, "=\r\n", "")
+	decoded = strings.ReplaceAll(decoded, "=\n", "")
+	var builder strings.Builder
+	builder.WriteString(decoded)
+	for _, token := range regexp.MustCompile(`[A-Za-z0-9+/=\r\n]{200,}`).FindAllString(raw, -1) {
+		binary, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(token), ""))
+		if err != nil {
+			continue
+		}
+		builder.WriteString("\n")
+		builder.Write(binary)
+	}
+	return builder.String()
+}
+
+// capturedURLList 返回全部匹配的一次性链接（按邮件新到旧、去重）。
+func capturedURLList(messages []string, pathFragment string) []string {
+	seen := make(map[string]bool)
+	var links []string
+	for index := len(messages) - 1; index >= 0; index-- {
+		decoded := decodeCapturedMessage(messages[index])
+		decoded = strings.ReplaceAll(decoded, "&amp;", "&")
+		for _, candidate := range strings.Fields(decoded) {
+			trimmed := strings.Trim(candidate, "<>\"'()[]{}")
+			if !strings.Contains(trimmed, pathFragment) {
+				continue
+			}
+			if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+				continue
+			}
+			parsed, err := url.Parse(trimmed)
+			if err != nil || parsed.Scheme == "" {
+				continue
+			}
+			normalized := parsed.String()
+			if seen[normalized] {
+				continue
+			}
+			seen[normalized] = true
+			links = append(links, normalized)
+		}
+	}
+	return links
+}
+
+// capturedURL 从原始邮件中还原指定路径的一次性链接（MIME 解码 + quoted-printable 软换行）。
+// 按捕获顺序从新到旧扫描：同一路径多次发送时返回最新一封的链接（避免复用已消费链接）。
 func capturedURL(messages []string, pathFragment string) (string, bool) {
-	for _, message := range messages {
-		decoded := strings.ReplaceAll(message, "=\r\n", "")
-		decoded = strings.ReplaceAll(decoded, "=\n", "")
+	for index := len(messages) - 1; index >= 0; index-- {
+		decoded := decodeCapturedMessage(messages[index])
 		decoded = strings.ReplaceAll(decoded, "&amp;", "&")
 		for _, candidate := range strings.Fields(decoded) {
 			trimmed := strings.Trim(candidate, "<>\"'()[]{}")
@@ -248,8 +355,7 @@ func linkTokens(messages []string) []string {
 	seen := make(map[string]bool)
 	var tokens []string
 	for _, message := range messages {
-		decoded := strings.ReplaceAll(message, "=\r\n", "")
-		decoded = strings.ReplaceAll(decoded, "=\n", "")
+		decoded := decodeCapturedMessage(message)
 		for _, candidate := range linkTokenPattern.FindAllString(decoded, -1) {
 			if len(candidate) < 24 || seen[candidate] {
 				continue

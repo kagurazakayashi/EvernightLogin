@@ -16,6 +16,9 @@ import "testing"
 
 // TestPendingMailSearchPrivacy 264 Mail 搜索索引隐私属于 EvernightMail 独立子模块：
 // 264 已在其模块内验证；父模块 e2e 不导入子模块实现，不重复第二套测试。
+// 步骤 300 的证据入口：scripts/r12-300-acceptance.ps1 的
+// mail-submodule-search-privacy 套件在父 gitlink 固定的 Mail 提交上运行其搜索/隐私
+// 定向测试，并把命令/输出尾部/退出码写入 300 机器可读汇总（子模块证据引用）。
 func TestPendingMailSearchPrivacy(t *testing.T) {
-	t.Skip("EvernightMail 为独立子模块（264 已在其模块内验证）；父模块 e2e 不导入子模块实现")
+	t.Skip("EvernightMail 独立子模块：父 e2e 不重复实现；300 由 r12-300-acceptance.ps1 的 mail-submodule-search-privacy 套件记录子模块证据")
 }
