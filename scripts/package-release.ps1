@@ -10,7 +10,7 @@
 # docs/ (guide/deployment/embedding/database/requirements/licenses/reference;
 # acceptance/evidence are never packaged); doc links that point to source-only
 # directories are rewritten and checked. Release notes are generated from
-# docs/release-notes/round10.md (or -ReleaseNotes) and must carry the four
+# docs/release-notes/round12.md (or -ReleaseNotes) and must carry the four
 # required headings (completed/failed/unimplemented/untested in Chinese) plus
 # version/commit/12-zip evidence.
 #
@@ -32,7 +32,7 @@ param(
     [string]$OutputDir = "",
     [string]$RepoRoot = "",
     [string]$MetadataRoot = "",
-    # Optional release-notes template; empty uses docs\release-notes\round10.md.
+    # Optional release-notes template; empty uses docs\release-notes\round12.md.
     [string]$ReleaseNotes = "",
     [switch]$SkipBinaryRun
 )
@@ -353,7 +353,7 @@ try {
                     "EvernightLogin $Version ($goos/$goarch)",
                     "See docs/README.md for the product documentation index.",
                     "See docs/deployment/samples/ for example config and deployment files.",
-                    "On Unix, add execute bits to the three files under bin/ (zip does not preserve +x).",
+                    "On Unix, add execute bits to the four files under bin/ (zip does not preserve +x).",
                     "This package contains only product binaries, product documentation, deployment samples and license documents; no database/log/key/AI files.",
                     "Source-repository-only directories (examples/, docs/acceptance/) and their links are intentionally not packaged."
                 )

@@ -65,7 +65,34 @@ sh build.sh --no-powershell            # 仅 POSIX shell + Go 的原生路径
 `scripts/package-release.ps1` 生成并用 `scripts/verify-release.ps1` 校验。`build.ps1`/
 `build.cmd` 与（检测到 PowerShell 的）`build.sh` 都委托 `scripts/build-all.ps1` 单一实现；
 `build.sh --no-powershell` 使用等价的 POSIX shell + Go 原生路径。入口参数、退出码、失败/取消
-与清理边界见 [一键构建与可追溯产物清单](docs/deployment/one-click-build.md)。
+与清理边界见 [一键构建与可追溯产物清单](docs/deployment/one-click-build.md)。构建结束时会
+打印每个二进制的绝对路径（当前主机平台单独列出），并写入 `dist/build/executables.txt`。
+
+### 运行
+
+构建完成后用根目录 `run.ps1` / `run.cmd`（Windows）或 `run.sh`（POSIX）启动产物；脚本按
+当前平台在 `dist/build/` 中定位对应程序，不重新构建、不修改源码：
+
+```powershell
+.\run.ps1                              # 无 login.yaml 进入 login-setup；有配置则启动 login-server
+.\run.ps1 -Program login-server        # 启动独立服务（serve --config login.yaml）
+.\run.ps1 -Program login-setup         # 本地初始化/维护控制台
+.\run.ps1 -Program login-server -- --help   # -- 之后的参数原样传给程序
+.\run.ps1 -List                        # 查看当前平台可用产物
+```
+
+| 参数 | 说明 |
+|---|---|
+| `-Program` | `auto`（默认）、`login-server`、`login-setup`、`loginctl`、`login-backup`、`evernightmail` |
+| `-Config` | 配置路径；缺省使用当前目录 `login.yaml`（存在时） |
+| `-Exe` | 直接指定可执行文件（未指定 `-Program` 时按文件名推断程序） |
+| `-OutputDir` | 产物根目录，默认 `dist/build` |
+| `-GoOS` / `-GoArch` | 覆盖目标平台，默认当前主机 |
+| `-List` | 列出当前平台产物后退出 |
+
+退出码：0 程序正常退出；2 参数/产物错误；3 缺少 login-server 所需配置；其余为被启动程序
+自身退出码。脚本选项需写在程序参数之前，`--` 之后的内容全部原样交给程序。产物缺失时先运行
+`build.ps1`；POSIX 无 PowerShell 时用 `sh run.sh --no-powershell ...` 走原生路径。
 
 ## 4. 本地维护控制台 login-setup（首选启动路径）
 

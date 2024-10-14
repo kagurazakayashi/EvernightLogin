@@ -99,6 +99,8 @@ case "$GO_VERSION_TEXT" in
 esac
 GO_VERSION=$(printf '%s' "$GO_VERSION_TEXT" | sed -n 's/.*go version go\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
 [ -n "$GO_VERSION" ] || fail "cannot parse go version: $GO_VERSION_TEXT"
+HOST_GOOS=$(go env GOOS | tr -d '[:space:]')
+HOST_GOARCH=$(go env GOARCH | tr -d '[:space:]')
 GOMAJOR=$(printf '%s' "$GO_VERSION" | cut -d. -f1)
 GOMINOR=$(printf '%s' "$GO_VERSION" | cut -d. -f2)
 MINMAJOR=$(printf '%s' "$MIN_GO" | cut -d. -f1)
@@ -323,6 +325,43 @@ SUMMARY="$OUTPUT_DIR/build-summary.json"
     done < "$ARTIFACT_FILE"
     printf 'TOTAL verified=%s exit=0\n' "$EXPECTED"
 } > "$OUTPUT_DIR/checklist.txt"
+
+# 编译完成后直接给出二进制绝对路径：写入 executables.txt 并输出当前主机/其他平台清单。
+EXECUTABLE_FILE="$OUTPUT_DIR/executables.txt"
+{
+    printf '# EvernightLogin/EvernightMail executables (absolute paths)\n'
+    printf '# version=%s host=%s/%s\n' "$VERSION" "$HOST_GOOS" "$HOST_GOARCH"
+    while IFS="$(printf '\t')" read -r product command goos goarch ftype arch commit size sha rel; do
+        [ -n "$product" ] || continue
+        printf '%s\t%s/%s\t%s\n' "$product" "$goos" "$goarch" "$OUTPUT_DIR/$rel"
+    done < "$ARTIFACT_FILE"
+} > "$EXECUTABLE_FILE"
+
+echo "[build] 可执行文件（当前主机 $HOST_GOOS/$HOST_GOARCH，绝对路径）:"
+HOST_COUNT=0
+while IFS="$(printf '\t')" read -r product command goos goarch ftype arch commit size sha rel; do
+    [ -n "$product" ] || continue
+    if [ "$goos/$goarch" = "$HOST_GOOS/$HOST_GOARCH" ]; then
+        printf '[build]   %-15s %s\n' "$product" "$OUTPUT_DIR/$rel"
+        HOST_COUNT=$((HOST_COUNT + 1))
+    fi
+done < "$ARTIFACT_FILE"
+if [ "$HOST_COUNT" -eq 0 ]; then
+    echo "[build]   （本次未构建当前主机平台目标）"
+fi
+
+OTHER_COUNT=0
+while IFS="$(printf '\t')" read -r product command goos goarch ftype arch commit size sha rel; do
+    [ -n "$product" ] || continue
+    if [ "$goos/$goarch" != "$HOST_GOOS/$HOST_GOARCH" ]; then
+        if [ "$OTHER_COUNT" -eq 0 ]; then
+            echo "[build] 其他平台可执行文件（绝对路径）:"
+        fi
+        printf '[build]   %-15s %-14s %s\n' "$product" "$goos/$goarch" "$OUTPUT_DIR/$rel"
+        OTHER_COUNT=$((OTHER_COUNT + 1))
+    fi
+done < "$ARTIFACT_FILE"
+echo "[build] executables: $EXECUTABLE_FILE"
 
 echo "[build] build-summary: $SUMMARY"
 echo "[build] checklist:    $OUTPUT_DIR/checklist.txt"

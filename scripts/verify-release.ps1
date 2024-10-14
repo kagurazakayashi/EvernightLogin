@@ -11,7 +11,7 @@
 #   product docs for login packages (docs/README, guide, deployment, embedding,
 #   database, requirements, licenses; reference when produced by step 245);
 # - binary magic/arch (PE/ELF/Mach-O) and size/sha256 against build-summary v1;
-# - Windows/amd64 short smoke: login-server/loginctl/login-backup/evernightmail
+# - Windows/amd64 short smoke: login-server/loginctl/login-backup/login-setup/evernightmail
 #   version commands only (no serve, no init, no port).
 #
 # Read-only, no network/git writes, temporary extraction dir always removed.
@@ -286,6 +286,8 @@ try {
         # Step 248: login packages must carry the product documentation tree.
         if ([string]$zip.product -eq "login") {
             foreach ($docRel in @("docs/README.md", "docs/guide/README.md",
+                "docs/guide/login-setup.md", "docs/guide/login-setup-cli.md",
+                "docs/guide/login-setup-ai.md",
                 "docs/deployment/README.md", "docs/embedding/README.md")) {
                 $docPath = Join-Path $packageRoot ($docRel -replace "/", "\")
                 if (-not (Test-Path -LiteralPath $docPath -PathType Leaf)) {

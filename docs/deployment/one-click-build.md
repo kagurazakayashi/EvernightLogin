@@ -55,9 +55,13 @@ dist/build/
   mail/evernightmail/<goos>_<goarch>/...
   build-summary.json           # 聚合清单（见下）
   checklist.txt                # 逐产物人读清单
+  executables.txt              # 逐产物二进制绝对路径（product<TAB>platform<TAB>path）
   verify-result.json           # 独立校验器结果（PowerShell 路径）
   build.log                    # 本次构建 stdout 记录
 ```
+
+构建完成时终端会先列出**当前主机平台**二进制的绝对路径，再列出其他平台；同一份清单也写入
+`executables.txt`，便于脚本或人工直接定位/复制产物。
 
 `build-summary.json`（format=1）至少包含：
 

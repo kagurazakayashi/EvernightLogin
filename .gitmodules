@@ -6,3 +6,6 @@
 	path = go-build-all
 	url = git@github.com:MasaeProject/go-build-all.git
 	branch = main
+[submodule "wiki"]
+	path = wiki
+	url = https://github.com/kagurazakayashi/EvernightLogin.wiki.git

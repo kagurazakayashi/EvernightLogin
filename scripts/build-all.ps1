@@ -514,6 +514,54 @@ try {
     $lines.Add(("TOTAL expected={0} verified={1} failed={2}" -f $totals.expected, $totals.verified, $totals.failed))
     [System.IO.File]::WriteAllText($checklistPath, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 
+    # ==== 可执行文件绝对路径（编译完成后直接给出二进制位置）====
+    $executableListPath = Join-Path $AbsoluteOutputDir 'executables.txt'
+    $binaries = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @($summary.artifacts)) {
+        # checklist 的 path 相对于模块输出根（login/ 或 mail/），不是构建根目录。
+        $area = 'login'
+        if ([string]$item.product -eq 'evernightmail') { $area = 'mail' }
+        $absolutePath = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $AbsoluteOutputDir $area) ([string]$item.path)))
+        $binaries.Add([pscustomobject]@{
+            product  = [string]$item.product
+            goos     = [string]$item.goos
+            goarch   = [string]$item.goarch
+            platform = ("{0}/{1}" -f $item.goos, $item.goarch)
+            path     = $absolutePath
+        })
+    }
+    $executableLines = New-Object System.Collections.Generic.List[string]
+    $executableLines.Add("# EvernightLogin/EvernightMail executables (absolute paths)")
+    $executableLines.Add(("# version={0} host={1}/{2}" -f $Version, $context.goos, $context.goarch))
+    foreach ($binary in $binaries) {
+        $executableLines.Add(("{0}`t{1}`t{2}" -f $binary.product, $binary.platform, $binary.path))
+    }
+    [System.IO.File]::WriteAllText($executableListPath, (($executableLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+
+    if ($binaries.Count -eq 0) {
+        $loginDir = Join-Path $AbsoluteOutputDir 'login'
+        $mailDir = Join-Path $AbsoluteOutputDir 'mail'
+        Write-Warn "no verified artifacts; executable paths unavailable (see $loginDir and $mailDir)"
+    } else {
+        $hostBinaries = @($binaries | Where-Object { $_.goos -eq [string]$context.goos -and $_.goarch -eq [string]$context.goarch })
+        $otherBinaries = @($binaries | Where-Object { -not ($_.goos -eq [string]$context.goos -and $_.goarch -eq [string]$context.goarch) })
+        Write-Step ("可执行文件（当前主机 {0}/{1}，绝对路径）:" -f $context.goos, $context.goarch)
+        if ($hostBinaries.Count -eq 0) {
+            Write-Step "  （本次未构建当前主机平台目标）"
+        } else {
+            foreach ($binary in $hostBinaries) {
+                Write-Step ("  {0,-15} {1}" -f $binary.product, $binary.path)
+            }
+        }
+        if ($otherBinaries.Count -gt 0) {
+            Write-Step "其他平台可执行文件（绝对路径）:"
+            foreach ($binary in $otherBinaries) {
+                Write-Step ("  {0,-15} {1,-14} {2}" -f $binary.product, $binary.platform, $binary.path)
+            }
+        }
+        Write-Step "executables:  $executableListPath"
+    }
+
     [System.IO.File]::WriteAllText($logPath, (($StdoutLog -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
     Write-Step "build-summary: $summaryPath"
     Write-Step "checklist:    $checklistPath"
